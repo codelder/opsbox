@@ -1,0 +1,32 @@
+{
+  "name": "opsbox-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "postbuild": "rm -rf ../backend/api-gateway/static && mkdir -p ../backend/api-gateway/static && cp -R out/* ../backend/api-gateway/static/",
+    "start": "next start -p 3001",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/postcss": "^4.1.11",
+    "github-markdown-css": "^5.8.1",
+    "next": "14.2.5",
+    "postcss": "^8.5.6",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-perfect-scrollbar": "^1.5.8",
+    "perfect-scrollbar": "^1.5.5",
+    "react-markdown": "^9.0.1",
+    "rehype-raw": "^7.0.0",
+    "tailwindcss": "^4.1.11",
+    "typescript": "5.4.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/typography": "^0.5.16",
+    "@types/node": "24.2.0",
+    "autoprefixer": "^10.4.21"
+  }
+}
