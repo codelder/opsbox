@@ -1,4 +1,5 @@
 use std::io::{BufRead, BufReader};
+use std::time::Instant;
 
 use axum::{
     Router,
@@ -79,7 +80,8 @@ pub async fn stream_markdown(
     State(client): State<Client>,
     Query(query): Query<SearchQuery>,
 ) -> HttpResponse<Body> {
-    println!("stream_markdown");
+    println!("stream_markdown start");
+    let start = Instant::now();
     let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
     let context_lines: usize = query.context.unwrap_or(3);
     let keyword = query.q.clone();
@@ -89,6 +91,7 @@ pub async fn stream_markdown(
     let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
     println!("send Ok(bytes::Bytes::from(# 搜索结果\n\n)))");
 
+    let start_for_fut = start;
     let fut = async move {
         match client.get_object("test", "codeler.tar.gz").send().await {
             Ok(object) => {
@@ -106,6 +109,7 @@ pub async fn stream_markdown(
 
                 // 在阻塞线程中桥接为同步 Read，边解压边解包
                 tokio::task::spawn_blocking(move || {
+                    let start_inner = start_for_fut;
                     let bucket = "test";
                     let object_name = "codeler.tar.gz";
                     let send_block = |s: &str| {
@@ -120,6 +124,7 @@ pub async fn stream_markdown(
                         Ok(e) => e,
                         Err(e) => {
                             send_block(&format!("读取 tar 条目失败: {:?}\n", e));
+                            println!("stream_markdown failed after {:?}", start_inner.elapsed());
                             return;
                         }
                     };
@@ -132,7 +137,7 @@ pub async fn stream_markdown(
                             Ok(p) => p.into_owned(),
                             Err(_) => continue,
                         };
-                        let mut reader = BufReader::new(entry);
+                        let mut reader = BufReader::with_capacity(8 * 1024, entry);
                         let sample_len;
                         let sample = match reader.fill_buf() {
                             Ok(buf) => {
@@ -193,6 +198,7 @@ pub async fn stream_markdown(
                         send_block(&buf);
                         send_block("</pre>\n\n");
                     }
+                    println!("stream_markdown completed in {:?}", start_inner.elapsed());
                 });
             }
             Err(e) => {
@@ -202,6 +208,7 @@ pub async fn stream_markdown(
                         e
                     ))))
                     .await;
+                println!("stream_markdown failed after {:?}", start_for_fut.elapsed());
             }
         }
     };
