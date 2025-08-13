@@ -1048,11 +1048,13 @@ dependencies = [
  "axum",
  "bytes",
  "flate2",
+ "futures",
  "minio",
  "serde",
  "tar",
  "tokio",
  "tokio-stream",
+ "tokio-util",
 ]
 
 [[package]]

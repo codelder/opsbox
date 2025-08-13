@@ -12,6 +12,7 @@ use flate2::read::GzDecoder;
 use minio::s3::{Client, types::S3Api};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::io::{StreamReader, SyncIoBridge};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SearchQuery {
@@ -91,22 +92,29 @@ pub async fn stream_markdown(
     let fut = async move {
         match client.get_object("test", "codeler.tar.gz").send().await {
             Ok(object) => {
-                let gz_bytes: Bytes = match object.content.to_segmented_bytes().await {
-                    Ok(seg) => seg.to_bytes(),
+                // 将 MinIO 的 ObjectContent 转为字节流
+                let (stream, _size) = match object.content.to_stream().await {
+                    Ok(pair) => pair,
                     Err(e) => {
                         let _ = tx
-                            .send(Ok(bytes::Bytes::from(format!("获取对象失败: {:?}\n", e))))
+                            .send(Ok(bytes::Bytes::from(format!("获取对象流失败: {:?}\n", e))))
                             .await;
                         return;
                     }
                 };
+                let reader = StreamReader::new(stream);
+
+                // 在阻塞线程中桥接为同步 Read，边解压边解包
                 tokio::task::spawn_blocking(move || {
                     let bucket = "test";
                     let object_name = "codeler.tar.gz";
                     let send_block = |s: &str| {
                         let _ = tx.blocking_send(Ok(bytes::Bytes::from(s.to_owned())));
                     };
-                    let gz = GzDecoder::new(gz_bytes.as_ref());
+
+                    // 将 AsyncRead 桥接为 std::io::Read
+                    let sync_reader = SyncIoBridge::new(reader);
+                    let gz = GzDecoder::new(sync_reader);
                     let mut archive = tar::Archive::new(gz);
                     let entries = match archive.entries() {
                         Ok(e) => e,

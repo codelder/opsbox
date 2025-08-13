@@ -3,6 +3,3 @@ members = [
   "api-gateway",
   "logsearch",
 ]
-
-
-
