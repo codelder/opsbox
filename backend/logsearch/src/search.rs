@@ -1,95 +1,16 @@
-use std::{
-    io::{self, BufReader, Read},
-    pin::Pin,
-    str::FromStr as _,
-};
+use std::
+    io::{self, BufRead, BufReader, Read}
+;
 
-use async_trait::async_trait;
 use flate2::read::GzDecoder;
-use minio::s3::{ClientBuilder, creds::StaticProvider, http::BaseUrl, types::S3Api as _};
 use thiserror::Error;
-use tokio::io::AsyncRead;
-use tokio_util::io::{StreamReader, SyncIoBridge};
-
-use crate::log_storage::grep_context_from_reader;
-
-pub enum Source {
-    S3 { bucket: String, key: String },
-    Local { path: String },
-    Http { url: String },
-}
 
 #[derive(Debug, Error)]
 pub enum SearchError {
-    #[error("invalid base URL: {0}")]
-    InvalidBaseUrl(String),
-    #[error("minio client build error: {0}")]
-    MinioBuild(String),
-    #[error("minio get_object error: {0}")]
-    MinioGetObject(String),
-    #[error("minio to_stream error: {0}")]
-    MinioToStream(String),
+    #[error("fill buf error: {0}")]
+    FillBuf(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
-}
-
-#[async_trait]
-pub trait ReaderProvider {
-    async fn open(&self) -> Result<Box<dyn AsyncRead + Send>, SearchError>;
-}
-
-pub struct S3ReaderProvider<'a> {
-    url: &'a str,
-    access_key: &'a str,
-    secret_key: &'a str,
-    bucket: &'a str,
-    key: &'a str,
-}
-
-impl<'a> S3ReaderProvider<'a> {
-    pub fn new(
-        url: &'a str,
-        access_key: &'a str,
-        secret_key: &'a str,
-        bucket: &'a str,
-        key: &'a str,
-    ) -> Self {
-        Self {
-            url,
-            access_key,
-            secret_key,
-            bucket,
-            key,
-        }
-    }
-}
-
-#[async_trait]
-impl<'a> ReaderProvider for S3ReaderProvider<'a> {
-    async fn open(&self) -> Result<Box<dyn AsyncRead + Send>, SearchError> {
-        let client = ClientBuilder::new(
-            BaseUrl::from_str(self.url).map_err(|e| SearchError::InvalidBaseUrl(e.to_string()))?,
-        )
-        .provider(Some(Box::new(StaticProvider::new(
-            self.access_key,
-            self.secret_key,
-            None,
-        ))))
-        .build()
-        .map_err(|e| SearchError::MinioBuild(e.to_string()))?;
-
-        let (stream, _usize) = client
-            .get_object(self.bucket, self.key)
-            .send()
-            .await
-            .map_err(|e| SearchError::MinioGetObject(e.to_string()))?
-            .content
-            .to_stream()
-            .await
-            .map_err(|e| SearchError::MinioToStream(e.to_string()))?;
-
-        Ok(Box::new(StreamReader::new(stream)))
-    }
 }
 
 pub trait Search {
@@ -100,6 +21,78 @@ pub trait Search {
         emit: impl FnMut(String),
         renderer: impl FnMut(String, Vec<String>, Vec<(usize, usize)>) -> String,
     ) -> Result<(), SearchError>;
+}
+
+fn is_probably_text(reader: &mut impl BufRead) -> bool {
+    let sample_len;
+    let sample = {
+        let Ok(buf) =  reader.fill_buf() else {return  false};
+        sample_len = buf.len().min(4096);
+        &buf[..sample_len]
+    };
+
+    if sample.is_empty() {
+        return true;
+    }
+    if sample.contains(&0) {
+        return false;
+    }
+    let printable = sample
+        .iter()
+        .filter(|b| matches!(**b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
+        .count();
+    let ratio = printable as f32 / sample.len() as f32;
+    if ratio >= 0.95 {
+        return true;
+    }
+    std::str::from_utf8(sample).is_ok()
+}
+
+fn grep_context_from_reader<R: BufRead>(
+    reader: &mut R,
+    keyword: &str,
+    context_lines: usize,
+) -> Result<Option<(Vec<String>, Vec<(usize, usize)>)>, SearchError> {
+    // 采样以判断是否为文本
+    if !is_probably_text(reader) {
+        return Ok(None);
+    }
+
+    // 读全行（按需也可改为边读边输出）
+    let lines: Vec<String> = reader
+        .lines()
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|e| SearchError::FillBuf(e.to_string()))?;
+
+    // 寻找匹配范围
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for (idx, line) in lines.iter().enumerate() {
+        if line.contains(keyword) {
+            let s = idx.saturating_sub(context_lines);
+            let e = std::cmp::min(idx + context_lines, lines.len().saturating_sub(1));
+            ranges.push((s, e));
+        }
+    }
+    if ranges.is_empty() {
+        return Ok(None);
+    }
+
+    // 合并相邻/重叠范围
+    ranges.sort_by_key(|r| r.0);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if s <= last.1 + 1 {
+                if e > last.1 {
+                    last.1 = e;
+                }
+                continue;
+            }
+        }
+        merged.push((s, e));
+    }
+
+    Ok(Some((lines, merged)))
 }
 
 impl Search for Box<dyn Read + Send> {
