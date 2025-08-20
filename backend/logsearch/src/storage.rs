@@ -1,11 +1,10 @@
 use std::{io, str::FromStr as _};
 
 use async_trait::async_trait;
-use minio::s3::{creds::StaticProvider, http::BaseUrl, types::S3Api as _, ClientBuilder};
+use minio::s3::{ClientBuilder, creds::StaticProvider, http::BaseUrl, types::S3Api as _};
 use thiserror::Error;
 use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
-
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -20,7 +19,6 @@ pub enum StorageError {
     #[error("io error: {0}")]
     Io(#[from] io::Error),
 }
-
 
 #[async_trait]
 pub trait ReaderProvider {

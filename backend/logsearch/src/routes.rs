@@ -1,4 +1,7 @@
-use crate::{search::Search, storage::{ReaderProvider as _, S3ReaderProvider}};
+use crate::{
+    search::{Search, SearchResult},
+    storage::{ReaderProvider as _, S3ReaderProvider},
+};
 use axum::{
     Router,
     body::Body,
@@ -10,7 +13,6 @@ use std::{io::Read, pin::Pin};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::io::SyncIoBridge;
-
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SearchQuery {
@@ -52,11 +54,31 @@ fn highlight_with_mark(input: &str, keyword: &str) -> String {
 }
 
 pub fn router() -> Router {
-    Router::new()
-        .route("/stream", get(stream_mark))
+    Router::new().route("/stream", get(stream_mark2))
 }
 
-pub async fn stream_mark(Query(query): Query<SearchQuery>) -> HttpResponse<Body> {
+fn render_result(result: SearchResult, query: &SearchQuery) -> String {
+    let mut buf = String::new();
+    buf.push_str(&format!(
+        "\n## 文件 s3://{}/{}::{}\n\n",
+        "test", "codeler.tar.gz", result.path
+    ));
+    buf.push_str("<pre>\n");
+    for (chunk_idx, (s, e)) in result.merged.iter().copied().enumerate() {
+        for i in s..=e {
+            use std::fmt::Write as _;
+            let highlighted = highlight_with_mark(&result.lines[i], &query.q);
+            let _ = write!(&mut buf, "{:>6} | {}\n", i + 1, highlighted);
+        }
+        if chunk_idx + 1 < result.merged.len() {
+            buf.push_str("       ...\n");
+        }
+    }
+    buf.push_str("</pre>\n\n");
+    buf
+}
+
+async fn stream_mark2(Query(query): Query<SearchQuery>) -> HttpResponse<Body> {
     let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
     let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
 
@@ -72,40 +94,17 @@ pub async fn stream_mark(Query(query): Query<SearchQuery>) -> HttpResponse<Body>
         .await
         .unwrap();
 
-        tokio::task::spawn_blocking(move || {
-            let reader_blocking: Box<dyn Read + Send> =
-                Box::new(SyncIoBridge::new(Pin::from(s3reader)));
+        let reader_blocking: Box<dyn Read + Send> =
+            Box::new(SyncIoBridge::new(Pin::from(s3reader)));
 
-            let send_block = |s: String| {
-                let _ = tx.blocking_send(Ok(bytes::Bytes::from(s.to_owned())));
-            };
+        let Ok(mut stream) = reader_blocking.search(&query.q, query.context.unwrap_or(3)) else {
+            return;
+        };
 
-            reader_blocking.search(
-                &query.q,
-                query.context.unwrap_or(3),
-                send_block,
-                |s, lines, merged| {
-                    let mut buf = String::new();
-                    buf.push_str(&format!(
-                        "\n## 文件 s3://{}/{}::{}\n\n",
-                        "test", "codeler.tar.gz", s
-                    ));
-                    buf.push_str("<pre>\n");
-                    for (chunk_idx, (s, e)) in merged.iter().copied().enumerate() {
-                        for i in s..=e {
-                            use std::fmt::Write as _;
-                            let highlighted = highlight_with_mark(&lines[i], &query.q);
-                            let _ = write!(&mut buf, "{:>6} | {}\n", i + 1, highlighted);
-                        }
-                        if chunk_idx + 1 < merged.len() {
-                            buf.push_str("       ...\n");
-                        }
-                    }
-                    buf.push_str("</pre>\n\n");
-                    buf
-                },
-            )
-        });
+        while let Some(result) = stream.recv().await {
+            let buf = render_result(result, &query);
+            let _ = tx.send(Ok(bytes::Bytes::from(buf))).await;
+        }
     };
 
     tokio::spawn(fut);

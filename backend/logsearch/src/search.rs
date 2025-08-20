@@ -1,6 +1,4 @@
-use std::
-    io::{self, BufRead, BufReader, Read}
-;
+use std::io::{self, BufRead, BufReader, Read};
 
 use flate2::read::GzDecoder;
 use thiserror::Error;
@@ -18,15 +16,15 @@ pub trait Search {
         self,
         keyword: &str,
         context_lines: usize,
-        emit: impl FnMut(String),
-        renderer: impl FnMut(String, Vec<String>, Vec<(usize, usize)>) -> String,
-    ) -> Result<(), SearchError>;
+    ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError>;
 }
 
 fn is_probably_text(reader: &mut impl BufRead) -> bool {
     let sample_len;
     let sample = {
-        let Ok(buf) =  reader.fill_buf() else {return  false};
+        let Ok(buf) = reader.fill_buf() else {
+            return false;
+        };
         sample_len = buf.len().min(4096);
         &buf[..sample_len]
     };
@@ -94,29 +92,47 @@ fn grep_context_from_reader<R: BufRead>(
 
     Ok(Some((lines, merged)))
 }
+pub struct SearchResult {
+    pub path: String,
+    pub lines: Vec<String>,
+    pub merged: Vec<(usize, usize)>,
+}
+
+impl SearchResult {
+    fn new(path: String, lines: Vec<String>, merged: Vec<(usize, usize)>) -> Self {
+        Self {
+            path,
+            lines,
+            merged,
+        }
+    }
+}
 
 impl Search for Box<dyn Read + Send> {
     fn search(
         self,
         keyword: &str,
         context_lines: usize,
-        mut emit: impl FnMut(String),
-        mut renderer: impl FnMut(String, Vec<String>, Vec<(usize, usize)>) -> String,
-    ) -> Result<(), SearchError> {
-        let mut archive = tar::Archive::new(GzDecoder::new(self));
-        for entry in archive.entries()?.flatten() {
-            let path = entry
-                .path()
-                .ok()
-                .map(|p| p.into_owned().display().to_string()) // 拿到 owned String
-                .unwrap_or_default();
-            let mut reader = BufReader::with_capacity(8192, entry);
-            if let Ok(Some((lines, merged))) =
-                grep_context_from_reader(&mut reader, keyword, context_lines)
-            {
-                emit(renderer(path, lines, merged));
+    ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
+        let keyword = keyword.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), SearchError> {
+            let mut archive = tar::Archive::new(GzDecoder::new(self));
+            for entry in archive.entries()?.flatten() {
+                let path = entry
+                    .path()
+                    .ok()
+                    .map(|p| p.into_owned().display().to_string()) // 拿到 owned String
+                    .unwrap_or_default();
+                let mut reader = BufReader::with_capacity(8192, entry);
+                if let Ok(Some((lines, merged))) =
+                    grep_context_from_reader(&mut reader, &keyword, context_lines)
+                {
+                    let _ = tx.blocking_send(SearchResult::new(path, lines, merged));
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        });
+        Ok(rx)
     }
 }
