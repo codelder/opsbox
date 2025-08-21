@@ -6,7 +6,7 @@ import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 
 export default function Page() {
-    const [q, setQ] = React.useState('连接')
+    const [q, setQ] = React.useState('a b')
     const [context, setContext] = React.useState(3)
     const [output, setOutput] = React.useState('')
     const [loading, setLoading] = React.useState(false)
@@ -19,10 +19,18 @@ export default function Page() {
         setLoading(true)
         setOutput('')
         try {
-            const params = new URLSearchParams({ q, context: String(context) })
-            const apiUrl = `http://127.0.0.1:4000/api/v1/logsearch/stream?${params.toString()}`
-            console.log('fetch:', apiUrl)
-            const res = await fetch(apiUrl, { cache: 'no-store' })
+            const apiUrl = `http://127.0.0.1:4000/api/v1/logsearch/stream`;
+            const body = {
+                q: q.split(/\s+/).filter(Boolean),
+                context,
+            };
+            console.log('fetch POST:', apiUrl, body)
+            const res = await fetch(apiUrl, {
+                method: 'POST',
+                cache: 'no-store',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            })
             if (!res.ok || !res.body) {
                 setOutput(`# 请求失败\n\n状态: ${res.status}`)
                 setLoading(false)

@@ -1,24 +1,26 @@
-use std::io::{self, BufRead, BufReader, Read};
+use std::{
+    io::{self},
+    sync::Arc,
+};
 
+use async_compression::tokio::bufread::GzipDecoder;
+use async_tar::Archive as AsyncArchive;
 use async_trait::async_trait;
-use flate2::read::GzDecoder;
-use tar::Archive;
+use futures::StreamExt;
+// use futures::io::AsyncReadExt as FuturesAsyncReadExt;
 use thiserror::Error;
+use tokio::{
+    fs,
+    io::{AsyncRead, BufReader},
+    sync::Semaphore,
+    task::JoinSet,
+};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
-    #[error("fill buf error: {0}")]
-    FillBuf(String),
     #[error("io error: {0}")]
     Io(#[from] io::Error),
-}
-
-pub trait BlockingSearch {
-    fn search(
-        self,
-        keywords: &[String],
-        context_lines: usize,
-    ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError>;
 }
 
 #[async_trait]
@@ -30,16 +32,7 @@ pub trait Search {
     ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError>;
 }
 
-fn is_probably_text(reader: &mut impl BufRead) -> bool {
-    let sample_len;
-    let sample = {
-        let Ok(buf) = reader.fill_buf() else {
-            return false;
-        };
-        sample_len = buf.len().min(4096);
-        &buf[..sample_len]
-    };
-
+fn is_probably_text_bytes(sample: &[u8]) -> bool {
     if sample.is_empty() {
         return true;
     }
@@ -57,26 +50,49 @@ fn is_probably_text(reader: &mut impl BufRead) -> bool {
     std::str::from_utf8(sample).is_ok()
 }
 
-fn grep_context_from_reader<R: BufRead>(
+pub async fn grep_context_from_reader_async<R: AsyncRead + Unpin>(
     reader: &mut R,
     keywords: &[String],
     context_lines: usize,
 ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>)>, SearchError> {
-    if !is_probably_text(reader) {
-        return Ok(None);
+    // 逐行读取，边采样边判断是否文本，避免整文件读取
+    use tokio::io::AsyncBufReadExt as _;
+    let mut buf_reader = BufReader::new(reader);
+    let mut lines: Vec<String> = Vec::new();
+    let mut sample: Vec<u8> = Vec::with_capacity(4096);
+    let mut sample_checked = false;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = buf_reader.read_line(&mut line).await?;
+        if n == 0 {
+            break;
+        }
+        if sample.len() < 4096 {
+            let bytes = line.as_bytes();
+            let take = (4096 - sample.len()).min(bytes.len());
+            sample.extend_from_slice(&bytes[..take]);
+        }
+        if !sample_checked && sample.len() >= 512 {
+            if !is_probably_text_bytes(&sample) {
+                return Ok(None);
+            }
+            sample_checked = true;
+        }
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        lines.push(trimmed.to_string());
+    }
+    if !sample_checked {
+        if !is_probably_text_bytes(&sample) {
+            return Ok(None);
+        }
     }
 
-    let lines: Vec<String> = reader
-        .lines()
-        .collect::<io::Result<Vec<_>>>()
-        .map_err(|e| SearchError::FillBuf(e.to_string()))?;
-
-    // 对每个关键词收集命中范围，任一关键词未命中则直接 None
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     for kw in keywords {
         let mut hit_any = false;
         for (idx, line) in lines.iter().enumerate() {
-            if line.contains(&kw) {
+            if line.contains(kw) {
                 hit_any = true;
                 let s = idx.saturating_sub(context_lines);
                 let e = std::cmp::min(idx + context_lines, lines.len().saturating_sub(1));
@@ -92,7 +108,6 @@ fn grep_context_from_reader<R: BufRead>(
         return Ok(None);
     }
 
-    // 合并相邻/重叠范围（与原逻辑一致）
     ranges.sort_by_key(|r| r.0);
     let mut merged: Vec<(usize, usize)> = Vec::new();
     for (s, e) in ranges {
@@ -110,52 +125,6 @@ fn grep_context_from_reader<R: BufRead>(
     Ok(Some((lines, merged)))
 }
 
-// fn grep_context_from_reader<R: BufRead>(
-//     reader: &mut R,
-//     keyword: &str,
-//     context_lines: usize,
-// ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>)>, SearchError> {
-//     // 采样以判断是否为文本
-//     if !is_probably_text(reader) {
-//         return Ok(None);
-//     }
-
-//     // 读全行（按需也可改为边读边输出）
-//     let lines: Vec<String> = reader
-//         .lines()
-//         .collect::<io::Result<Vec<_>>>()
-//         .map_err(|e| SearchError::FillBuf(e.to_string()))?;
-
-//     // 寻找匹配范围
-//     let mut ranges: Vec<(usize, usize)> = Vec::new();
-//     for (idx, line) in lines.iter().enumerate() {
-//         if line.contains(keyword) {
-//             let s = idx.saturating_sub(context_lines);
-//             let e = std::cmp::min(idx + context_lines, lines.len().saturating_sub(1));
-//             ranges.push((s, e));
-//         }
-//     }
-//     if ranges.is_empty() {
-//         return Ok(None);
-//     }
-
-//     // 合并相邻/重叠范围
-//     ranges.sort_by_key(|r| r.0);
-//     let mut merged: Vec<(usize, usize)> = Vec::new();
-//     for (s, e) in ranges {
-//         if let Some(last) = merged.last_mut() {
-//             if s <= last.1 + 1 {
-//                 if e > last.1 {
-//                     last.1 = e;
-//                 }
-//                 continue;
-//             }
-//         }
-//         merged.push((s, e));
-//     }
-
-//     Ok(Some((lines, merged)))
-// }
 pub struct SearchResult {
     pub path: String,
     pub lines: Vec<String>,
@@ -172,63 +141,6 @@ impl SearchResult {
     }
 }
 
-impl BlockingSearch for Box<dyn Read + Send> {
-    fn search(
-        self,
-        keywords: &[String],
-        context_lines: usize,
-    ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
-        let keywords_owned: Vec<String> = keywords.to_owned();
-        tokio::task::spawn_blocking(move || -> Result<(), SearchError> {
-            let mut archive = tar::Archive::new(GzDecoder::new(self));
-            for entry in archive.entries()?.flatten() {
-                let path = entry
-                    .path()
-                    .ok()
-                    .map(|p| p.into_owned().display().to_string()) // 拿到 owned String
-                    .unwrap_or_default();
-                let mut reader = BufReader::with_capacity(8192, entry);
-                if let Ok(Some((lines, merged))) =
-                    grep_context_from_reader(&mut reader, &keywords_owned, context_lines)
-                {
-                    let _ = tx.blocking_send(SearchResult::new(path, lines, merged));
-                }
-            }
-            Ok(())
-        });
-        Ok(rx)
-    }
-}
-
-impl<T: Read + Send + 'static> BlockingSearch for Archive<T> {
-    fn search(
-        mut self,
-        keywords: &[String],
-        context_lines: usize,
-    ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
-        let keywords_owned: Vec<String> = keywords.to_owned();
-        tokio::task::spawn_blocking(move || -> Result<(), SearchError> {
-            for entry in self.entries()?.flatten() {
-                let path = entry
-                    .path()
-                    .ok()
-                    .map(|p| p.into_owned().display().to_string()) // 拿到 owned String
-                    .unwrap_or_default();
-                let mut reader = BufReader::with_capacity(8192, entry);
-                if let Ok(Some((lines, merged))) =
-                    grep_context_from_reader(&mut reader, &keywords_owned, context_lines)
-                {
-                    let _ = tx.blocking_send(SearchResult::new(path, lines, merged));
-                }
-            }
-            Ok(())
-        });
-        Ok(rx)
-    }
-}
-
 #[async_trait]
 impl Search for tokio::fs::ReadDir {
     async fn search(
@@ -236,44 +148,143 @@ impl Search for tokio::fs::ReadDir {
         keywords: &[String],
         context_lines: usize,
     ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
+        let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
 
-        let keywords_owned: Vec<String> = keywords.to_owned();
+        let keywords = Arc::new(keywords.to_owned());
+        let max_concurrency = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .saturating_mul(2)
+            .min(256);
+        let semaphore = Arc::new(Semaphore::new(max_concurrency));
+
         tokio::spawn({
             let mut stack = vec![self];
+            let keywords = Arc::clone(&keywords);
+            let semaphore = Arc::clone(&semaphore);
+            let tx = tx.clone();
+
             async move {
+                let mut tasks = JoinSet::new();
+
                 while let Some(mut rd) = stack.pop() {
-                    while let Some(entry) =
-                        rd.next_entry().await.map_err(SearchError::Io)?
-                    {
-                        let path = entry.path();
-                        let fty = entry.file_type().await.map_err(SearchError::Io)?;
-                        if fty.is_dir() {
-                            if let Ok(sub) = tokio::fs::read_dir(&path).await {
-                                stack.push(sub);
-                            }
-                            continue;
-                        }
-                        if fty.is_file() {
-                            let txf = tx.clone();
-                            tokio::task::spawn_blocking(move || -> Result<(), SearchError> {
-                                let file = std::fs::File::open(&path)?;
-                                let mut reader = std::io::BufReader::with_capacity(8192, file);
-                                if let Ok(Some((lines, merged))) =
-                                    grep_context_from_reader(&mut reader, &keywords_owned, context_lines)
-                                {
-                                    let _ = txf.blocking_send(SearchResult::new(
-                                        path.display().to_string(),
-                                        lines,
-                                        merged,
-                                    ));
+                    loop {
+                        match rd.next_entry().await {
+                            Ok(Some(entry)) => {
+                                let path = entry.path();
+
+                                // 安全起见：跳过符号链接
+                                let fty = match entry.file_type().await {
+                                    Ok(t) => t,
+                                    Err(_) => continue, // 忽略该项，继续
+                                };
+                                if fty.is_symlink() {
+                                    continue;
                                 }
-                                Ok(())
-                            });
+                                if fty.is_dir() {
+                                    if let Ok(sub) = fs::read_dir(&path).await {
+                                        stack.push(sub);
+                                    }
+                                    continue;
+                                }
+                                if !fty.is_file() {
+                                    continue;
+                                }
+
+                                // 在 spawn 之前 acquire，避免 spawn 风暴
+                                let permit = match semaphore.clone().acquire_owned().await {
+                                    Ok(p) => p,
+                                    Err(_) => break, // 信号量被关闭
+                                };
+
+                                let txf = tx.clone();
+                                let kws = keywords.clone();
+
+                                tasks.spawn(async move {
+                                    let _permit = permit; // 持有期间占用并发额度
+                                    if let Ok(file) = fs::File::open(&path).await {
+                                        let mut reader = BufReader::new(file);
+                                        if let Ok(Some((lines, merged))) =
+                                            grep_context_from_reader_async(
+                                                &mut reader,
+                                                &kws,
+                                                context_lines,
+                                            )
+                                            .await
+                                        {
+                                            let _ = txf
+                                                .send(SearchResult::new(
+                                                    path.to_string_lossy().into_owned(),
+                                                    lines,
+                                                    merged,
+                                                ))
+                                                .await;
+                                        }
+                                    }
+                                });
+                            }
+                            Ok(None) => break, // 当前目录读完
+                            Err(_) => break,   // 该目录出错，跳过
                         }
                     }
                 }
-                Ok::<(), SearchError>(())
+
+                // 等待所有文件任务结束
+                while tasks.join_next().await.is_some() {}
+
+                // 彻底关闭发送端，通知接收者结束
+                drop(tx);
+
+                // 不把错误冒泡给 JoinHandle 的使用者，避免惊扰外层
+                Ok::<(), ()>(())
+            }
+        });
+
+        Ok(rx)
+    }
+}
+
+// 全异步：对 AsyncRead (如 S3 流) 进行 gzip 解压与 tar 迭代
+#[async_trait]
+impl Search for Box<dyn AsyncRead + Send + Unpin> {
+    async fn search(
+        self,
+        keywords: &[String],
+        context_lines: usize,
+    ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
+        let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
+        let keywords_owned: Vec<String> = keywords.to_owned();
+
+        tokio::spawn(async move {
+            let gz = GzipDecoder::new(BufReader::new(self));
+            //:TODO AsyncRead 不一定是 tar 格式，需要检查
+            let archive = AsyncArchive::new(gz.compat());
+            let Ok(mut entries) = archive.entries() else {
+                return;
+            };
+
+            while let Some(entry_res) = entries.next().await {
+                let Ok(entry) = entry_res else {
+                    continue;
+                };
+                let path = match entry.path() {
+                    Ok(p) => p.to_string_lossy().to_string(),
+                    Err(_) => String::new(),
+                };
+
+                // async_tar 的 Entry 实现的是 futures::io::AsyncRead，这里适配为 tokio::io::AsyncRead
+                let mut entry_compat = entry.compat();
+                let Ok(Some((lines, merged))) = grep_context_from_reader_async(
+                    &mut entry_compat,
+                    &keywords_owned,
+                    context_lines,
+                )
+                .await
+                else {
+                    continue;
+                };
+
+                let _ = tx.send(SearchResult::new(path, lines, merged)).await;
             }
         });
 

@@ -22,7 +22,7 @@ pub enum StorageError {
 
 #[async_trait]
 pub trait ReaderProvider {
-    async fn open(&self) -> Result<Box<dyn AsyncRead + Send>, StorageError>;
+    async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, StorageError>;
 }
 
 pub struct S3ReaderProvider<'a> {
@@ -53,7 +53,7 @@ impl<'a> S3ReaderProvider<'a> {
 
 #[async_trait]
 impl<'a> ReaderProvider for S3ReaderProvider<'a> {
-    async fn open(&self) -> Result<Box<dyn AsyncRead + Send>, StorageError> {
+    async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, StorageError> {
         let client = ClientBuilder::new(
             BaseUrl::from_str(self.url).map_err(|e| StorageError::InvalidBaseUrl(e.to_string()))?,
         )
