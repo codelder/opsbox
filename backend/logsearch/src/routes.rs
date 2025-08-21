@@ -1,5 +1,5 @@
 use crate::{
-    search::{Search, SearchResult},
+    search::{BlockingSearch, SearchResult},
     storage::{ReaderProvider as _, S3ReaderProvider},
 };
 use axum::{
@@ -9,6 +9,7 @@ use axum::{
     http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
     routing::get,
 };
+use flate2::read::GzDecoder;
 use std::{io::Read, pin::Pin};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -96,8 +97,10 @@ async fn stream_mark2(Query(query): Query<SearchQuery>) -> HttpResponse<Body> {
 
         let reader_blocking: Box<dyn Read + Send> =
             Box::new(SyncIoBridge::new(Pin::from(s3reader)));
+        
+        let archive = tar::Archive::new(GzDecoder::new(reader_blocking));
 
-        let Ok(mut stream) = reader_blocking.search(&query.q, query.context.unwrap_or(3)) else {
+        let Ok(mut stream) = archive.search(&query.q, query.context.unwrap_or(3)) else {
             return;
         };
 
