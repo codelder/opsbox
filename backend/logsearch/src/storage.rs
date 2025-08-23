@@ -8,10 +8,10 @@ use tokio_util::io::StreamReader;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
-    #[error("invalid base URL: {0}")]
+    #[error("url:{0}不可用")]
     InvalidBaseUrl(String),
-    #[error("minio client build error: {0}")]
-    MinioBuild(String),
+    #[error("创建MinIO客户端失败")]
+    MinioBuild,
     #[error("minio get_object error: {0}")]
     MinioGetObject(String),
     #[error("minio to_stream error: {0}")]
@@ -55,7 +55,8 @@ impl<'a> S3ReaderProvider<'a> {
 impl<'a> ReaderProvider for S3ReaderProvider<'a> {
     async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, StorageError> {
         let client = ClientBuilder::new(
-            BaseUrl::from_str(self.url).map_err(|e| StorageError::InvalidBaseUrl(e.to_string()))?,
+            BaseUrl::from_str(self.url)
+                .map_err(|_e| StorageError::InvalidBaseUrl(self.url.to_string()))?,
         )
         .provider(Some(Box::new(StaticProvider::new(
             self.access_key,
@@ -63,7 +64,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
             None,
         ))))
         .build()
-        .map_err(|e| StorageError::MinioBuild(e.to_string()))?;
+        .map_err(|_e| StorageError::MinioBuild)?;
 
         let (stream, _usize) = client
             .get_object(self.bucket, self.key)

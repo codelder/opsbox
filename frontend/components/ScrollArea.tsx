@@ -22,7 +22,7 @@ const ScrollArea = React.forwardRef<ScrollAreaHandle, Props>(function ScrollArea
 
   useEffect(() => {
     if (hostRef.current) {
-      psRef.current = new PerfectScrollbar(hostRef.current, { suppressScrollX: true })
+      psRef.current = new PerfectScrollbar(hostRef.current, { suppressScrollX: false })
     }
     return () => {
       psRef.current?.destroy()

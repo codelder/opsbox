@@ -8,3 +8,6 @@
 }
 
 html, body { height: 100%; }
+
+/* Highlight style used by MonacoSnippet */
+.monaco-mark { background: rgba(250, 204, 21, 0.35); border-radius: 2px; }

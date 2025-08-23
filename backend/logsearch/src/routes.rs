@@ -1,164 +1,86 @@
 use crate::{
-    search::{Search as _, SearchResult},
-    storage::{ReaderProvider as _, S3ReaderProvider},
+    renderer::{render_json_chunks, render_markdown},
+    search::{Search as _, SearchError},
+    storage::{ReaderProvider as _, S3ReaderProvider, StorageError},
 };
 use axum::{
     Router,
     body::Body,
-    extract::{Json, OriginalUri},
-    http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
+    extract::{Json, rejection::JsonRejection},
+    http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
     routing::post,
 };
+use problemdetails::Problem;
+use serde_json;
+use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+
+#[derive(Debug, Error)]
+pub enum AppError {
+    #[error("storage error")]
+    StorageError(StorageError),
+    #[error("search error")]
+    SearchError(SearchError),
+    #[error(transparent)]
+    BadJson(#[from] JsonRejection),
+}
+
+impl From<AppError> for Problem {
+    fn from(error: AppError) -> Self {
+        match error {
+            AppError::StorageError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
+                .with_title("Storage error")
+                .with_detail(e.to_string()),
+            AppError::SearchError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
+                .with_title("Search error")
+                .with_detail(e.to_string()),
+            AppError::BadJson(e) => problemdetails::new(StatusCode::BAD_REQUEST)
+                .with_title("Bad JSON")
+                .with_detail(e.to_string()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SearchBody {
     #[serde(default)]
-    pub q: Vec<String>,
+    pub keywords: Vec<String>,
     pub context: Option<usize>,
 }
 
-fn escape_html(input: &str) -> String {
-    let mut escaped = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
-fn highlight_with_mark(input: &str, keywords: &[String]) -> String {
-    // 过滤空关键词，避免死循环
-    let non_empty: Vec<&str> = keywords
-        .iter()
-        .map(|s| s.as_str())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if non_empty.is_empty() {
-        return escape_html(input);
-    }
-    let mut out = String::with_capacity(input.len() + 16);
-    let mut start_idx = 0usize;
-    while start_idx < input.len() {
-        let mut best_pos: Option<usize> = None;
-        let mut best_kw: &str = "";
-
-        for &kw in &non_empty {
-            if let Some(pos_rel) = input[start_idx..].find(kw) {
-                let pos_abs = start_idx + pos_rel;
-                match best_pos {
-                    None => {
-                        best_pos = Some(pos_abs);
-                        best_kw = kw;
-                    }
-                    Some(bp) => {
-                        if pos_abs < bp || (pos_abs == bp && kw.len() > best_kw.len()) {
-                            best_pos = Some(pos_abs);
-                            best_kw = kw;
-                        }
-                    }
-                }
-            }
-        }
-
-        match best_pos {
-            None => {
-                out.push_str(&escape_html(&input[start_idx..]));
-                break;
-            }
-            Some(pos) => {
-                out.push_str(&escape_html(&input[start_idx..pos]));
-                out.push_str("<mark>");
-                let end = pos + best_kw.len();
-                out.push_str(&escape_html(&input[pos..end]));
-                out.push_str("</mark>");
-                start_idx = end;
-            }
-        }
-    }
-    out
-}
-
 pub fn router() -> Router {
-    Router::new().route("/stream", post(stream_mark2))
+    Router::new()
+        .route("/stream", post(stream_mark2))
+        .route("/stream.ndjson", post(stream_ndjson))
 }
 
-fn render_result(result: SearchResult, query: &SearchBody) -> String {
-    let mut buf = String::new();
-    buf.push_str(&format!(
-        "\n## 文件 s3://{}/{}::{}\n\n",
-        "test", "codeler.tar.gz", result.path
-    ));
-    buf.push_str("<pre>\n");
-    for (chunk_idx, (s, e)) in result.merged.iter().copied().enumerate() {
-        for i in s..=e {
-            use std::fmt::Write as _;
-            let highlighted = highlight_with_mark(&result.lines[i], &query.q);
-            let _ = write!(&mut buf, "{:>6} | {}\n", i + 1, highlighted);
-        }
-        if chunk_idx + 1 < result.merged.len() {
-            buf.push_str("       ...\n");
-        }
-    }
-    buf.push_str("</pre>\n\n");
-    buf
-}
-
-async fn stream_mark2(
-    original_uri: OriginalUri,
-    body: Result<Json<SearchBody>, axum::extract::rejection::JsonRejection>,
-) -> HttpResponse<Body> {
+async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
     let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
-
-    let body = match body {
-        Ok(json) => {
-            let b = json.0;
-            eprintln!("[logsearch] body ok: q={:?}, context={:?}", b.q, b.context);
-            b
-        }
-        Err(err) => {
-            eprintln!("[logsearch] body error: {} | uri={}", err, original_uri.0);
-            return HttpResponse::builder()
-                .status(400)
-                .header(
-                    CONTENT_TYPE,
-                    HeaderValue::from_static("text/plain; charset=utf-8"),
-                )
-                .body(Body::from(format!(
-                    "body error: {}\nuri: {}\n",
-                    err, original_uri.0
-                )))
-                .unwrap();
-        }
-    };
 
     let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
 
-    let fut = async move {
-        let s3reader = S3ReaderProvider::new(
-            "http://192.168.50.61:9002",
-            "admin",
-            "G5t3o6f2",
-            "test",
-            "codeler.tar.gz",
-        )
-        .open()
-        .await
-        .unwrap();
+    let s3reader = S3ReaderProvider::new(
+        "http://192.168.50.61:9002",
+        "admin",
+        "G5t3o6f2",
+        "test",
+        "codeler.tar.gz",
+    )
+    .open()
+    .await
+    .map_err(|e| AppError::StorageError(e))?;
 
-        let Ok(mut stream) = s3reader.search(&body.q, body.context.unwrap_or(3)).await else {
+    let fut = async move {
+        let Ok(mut stream) = s3reader
+            .search(&body.keywords, body.context.unwrap_or(3))
+            .await
+        else {
             return;
         };
 
         while let Some(result) = stream.recv().await {
-            let buf = render_result(result, &body);
+            let buf = render_markdown(&result.path, result.merged, result.lines, &body.keywords);
             let _ = tx.send(Ok(bytes::Bytes::from(buf))).await;
         }
     };
@@ -166,12 +88,68 @@ async fn stream_mark2(
     tokio::spawn(fut);
 
     let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
-    HttpResponse::builder()
+
+    Ok(HttpResponse::builder()
         .status(200)
         .header(
             CONTENT_TYPE,
             HeaderValue::from_static("text/markdown; charset=utf-8"),
         )
         .body(body)
-        .unwrap()
+        .unwrap())
+}
+
+async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
+    let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
+
+    let s3reader = S3ReaderProvider::new(
+        "http://192.168.50.61:9002",
+        "admin",
+        "G5t3o6f2",
+        "test",
+        "codeler.tar.gz",
+    )
+    .open()
+    .await
+    .map_err(|e| AppError::StorageError(e))?;
+
+    let fut = async move {
+        let Ok(mut stream) = s3reader
+            .search(&body.keywords, body.context.unwrap_or(3))
+            .await
+        else {
+            return;
+        };
+
+        while let Some(result) = stream.recv().await {
+            let json_obj = render_json_chunks(
+                &result.path,
+                result.merged.clone(),
+                result.lines.clone(),
+                &body.keywords,
+            );
+            match serde_json::to_vec(&json_obj) {
+                Ok(mut v) => {
+                    v.push(b'\n'); // NDJSON: newline-delimited JSON objects
+                    let _ = tx.send(Ok(bytes::Bytes::from(v))).await;
+                }
+                Err(_) => {
+                    // skip on serialization error to keep stream alive
+                }
+            }
+        }
+    };
+
+    tokio::spawn(fut);
+
+    let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+
+    Ok(HttpResponse::builder()
+        .status(200)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+        )
+        .body(body)
+        .unwrap())
 }

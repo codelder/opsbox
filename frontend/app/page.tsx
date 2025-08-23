@@ -5,6 +5,8 @@ import ScrollArea, { type ScrollAreaHandle } from '@/components/ScrollArea'
 import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 
+import Link from 'next/link'
+
 export default function Page() {
     const [q, setQ] = React.useState('a b')
     const [context, setContext] = React.useState(3)
@@ -21,7 +23,7 @@ export default function Page() {
         try {
             const apiUrl = `http://127.0.0.1:4000/api/v1/logsearch/stream`;
             const body = {
-                q: q.split(/\s+/).filter(Boolean),
+                keywords: q.split(/\s+/).filter(Boolean),
                 context,
             };
             console.log('fetch POST:', apiUrl, body)
@@ -60,7 +62,14 @@ export default function Page() {
 
     return (
         <main className="container mx-auto max-w-7xl p-6 space-y-6">
-            <h1 className="text-2xl font-semibold">Opsbox 搜索</h1>
+            <div className="flex items-center justify-between">
+                <h1 className="text-2xl font-semibold">Opsbox 搜索</h1>
+                <nav className="text-sm flex items-center gap-3">
+                    <span className="text-zinc-200">Markdown page</span>
+                    <span className="text-zinc-400">/</span>
+                    <Link className="text-sky-400 hover:underline" href="/json">JSON page</Link>
+                </nav>
+            </div>
             <form onSubmit={runSearch} className="flex items-center gap-3">
                 <input
                     className="flex-1 rounded-md bg-zinc-900 border border-zinc-800 px-3 py-2 outline-none focus:ring-2 focus:ring-sky-500"

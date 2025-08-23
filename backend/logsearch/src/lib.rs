@@ -1,5 +1,6 @@
 pub mod routes;
 pub use routes::router;
 
+pub mod renderer;
 mod search;
-mod storage;
+pub mod storage;
