@@ -1,7 +1,7 @@
 "use client";
 
 import React from 'react'
-import ScrollArea, { type ScrollAreaHandle } from '@/components/ScrollArea'
+import ScrollArea, {type ScrollAreaHandle} from '@/components/ScrollArea'
 import ReactMarkdown from 'react-markdown'
 import rehypeRaw from 'rehype-raw'
 
@@ -23,14 +23,13 @@ export default function Page() {
         try {
             const apiUrl = `http://127.0.0.1:4000/api/v1/logsearch/stream`;
             const body = {
-                keywords: q.split(/\s+/).filter(Boolean),
-                context,
+                keywords: q.split(/\s+/).filter(Boolean), context,
             };
             console.log('fetch POST:', apiUrl, body)
             const res = await fetch(apiUrl, {
                 method: 'POST',
                 cache: 'no-store',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(body),
             })
             if (!res.ok || !res.body) {
@@ -42,7 +41,7 @@ export default function Page() {
             const decoder = new TextDecoder()
             while (true) {
                 console.log('reader.read()')
-                const { done, value } = await reader.read()
+                const {done, value} = await reader.read()
                 console.log('done', done)
                 console.log('value', value)
                 if (done) break
@@ -60,14 +59,15 @@ export default function Page() {
         }
     }
 
-    return (
-        <main className="container mx-auto max-w-7xl p-6 space-y-6">
+    return (<main className="container mx-auto max-w-7xl p-6 space-y-6">
             <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-semibold">Opsbox 搜索</h1>
                 <nav className="text-sm flex items-center gap-3">
                     <span className="text-zinc-200">Markdown page</span>
                     <span className="text-zinc-400">/</span>
                     <Link className="text-sky-400 hover:underline" href="/json">JSON page</Link>
+                    <span className="text-zinc-400">/</span>
+                    <Link className="text-sky-400 hover:underline" href="/virtual">Virtual page</Link>
                 </nav>
             </div>
             <form onSubmit={runSearch} className="flex items-center gap-3">
@@ -99,6 +99,5 @@ export default function Page() {
                     <ReactMarkdown rehypePlugins={[rehypeRaw]}>{output}</ReactMarkdown>
                 </article>
             </ScrollArea>
-        </main>
-    )
+        </main>)
 }

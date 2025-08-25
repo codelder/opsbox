@@ -125,6 +125,7 @@ pub async fn grep_context_from_reader_async<R: AsyncRead + Unpin>(
     Ok(Some((lines, merged)))
 }
 
+#[derive(Debug)]
 pub struct SearchResult {
     pub path: String,
     pub lines: Vec<String>,

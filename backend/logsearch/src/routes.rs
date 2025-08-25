@@ -64,8 +64,8 @@ async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>
         "http://192.168.50.61:9002",
         "admin",
         "G5t3o6f2",
-        "test",
-        "codeler.tar.gz",
+        "backupdr",
+        "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
     )
     .open()
     .await
@@ -106,8 +106,8 @@ async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body
         "http://192.168.50.61:9002",
         "admin",
         "G5t3o6f2",
-        "test",
-        "codeler.tar.gz",
+        "backupdr",
+        "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
     )
     .open()
     .await
@@ -122,6 +122,7 @@ async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body
         };
 
         while let Some(result) = stream.recv().await {
+            println!("result: {:?}", result);
             let json_obj = render_json_chunks(
                 &result.path,
                 result.merged.clone(),
