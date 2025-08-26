@@ -52,7 +52,7 @@ pub struct SearchBody {
 pub fn router() -> Router {
     Router::new()
         .route("/stream", post(stream_mark2))
-        .route("/stream.ndjson", post(stream_ndjson))
+        .route("/stream.ndjson", post(stream_local_ndjson))
 }
 
 async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
@@ -115,6 +115,54 @@ async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body
 
     let fut = async move {
         let Ok(mut stream) = s3reader
+            .search(&body.keywords, body.context.unwrap_or(3))
+            .await
+        else {
+            return;
+        };
+
+        while let Some(result) = stream.recv().await {
+            println!("result: {:?}", result);
+            let json_obj = render_json_chunks(
+                &result.path,
+                result.merged.clone(),
+                result.lines.clone(),
+                &body.keywords,
+            );
+            match serde_json::to_vec(&json_obj) {
+                Ok(mut v) => {
+                    v.push(b'\n'); // NDJSON: newline-delimited JSON objects
+                    let _ = tx.send(Ok(bytes::Bytes::from(v))).await;
+                }
+                Err(_) => {
+                    // skip on serialization error to keep stream alive
+                }
+            }
+        }
+    };
+
+    tokio::spawn(fut);
+
+    let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+
+    Ok(HttpResponse::builder()
+        .status(200)
+        .header(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+        )
+        .body(body)
+        .unwrap())
+}
+
+async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
+    let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
+
+    let reader = tokio::fs::File::open("/Users/wangyue/Downloads/BBIP_20_APPLOG_2025-08-18.tar.gz").await.map_err(|e| AppError::StorageError(StorageError::from(e)))?;
+
+
+    let fut = async move {
+        let Ok(mut stream) = reader
             .search(&body.keywords, body.context.unwrap_or(3))
             .await
         else {

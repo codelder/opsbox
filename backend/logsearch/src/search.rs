@@ -142,112 +142,112 @@ impl SearchResult {
     }
 }
 
-#[async_trait]
-impl Search for tokio::fs::ReadDir {
-    async fn search(
-        self,
-        keywords: &[String],
-        context_lines: usize,
-    ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
-        let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
-
-        let keywords = Arc::new(keywords.to_owned());
-        let max_concurrency = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .saturating_mul(2)
-            .min(256);
-        let semaphore = Arc::new(Semaphore::new(max_concurrency));
-
-        tokio::spawn({
-            let mut stack = vec![self];
-            let keywords = Arc::clone(&keywords);
-            let semaphore = Arc::clone(&semaphore);
-            let tx = tx.clone();
-
-            async move {
-                let mut tasks = JoinSet::new();
-
-                while let Some(mut rd) = stack.pop() {
-                    loop {
-                        match rd.next_entry().await {
-                            Ok(Some(entry)) => {
-                                let path = entry.path();
-
-                                // 安全起见：跳过符号链接
-                                let fty = match entry.file_type().await {
-                                    Ok(t) => t,
-                                    Err(_) => continue, // 忽略该项，继续
-                                };
-                                if fty.is_symlink() {
-                                    continue;
-                                }
-                                if fty.is_dir() {
-                                    if let Ok(sub) = fs::read_dir(&path).await {
-                                        stack.push(sub);
-                                    }
-                                    continue;
-                                }
-                                if !fty.is_file() {
-                                    continue;
-                                }
-
-                                // 在 spawn 之前 acquire，避免 spawn 风暴
-                                let permit = match semaphore.clone().acquire_owned().await {
-                                    Ok(p) => p,
-                                    Err(_) => break, // 信号量被关闭
-                                };
-
-                                let txf = tx.clone();
-                                let kws = keywords.clone();
-
-                                tasks.spawn(async move {
-                                    let _permit = permit; // 持有期间占用并发额度
-                                    if let Ok(file) = fs::File::open(&path).await {
-                                        let mut reader = BufReader::new(file);
-                                        if let Ok(Some((lines, merged))) =
-                                            grep_context_from_reader_async(
-                                                &mut reader,
-                                                &kws,
-                                                context_lines,
-                                            )
-                                            .await
-                                        {
-                                            let _ = txf
-                                                .send(SearchResult::new(
-                                                    path.to_string_lossy().into_owned(),
-                                                    lines,
-                                                    merged,
-                                                ))
-                                                .await;
-                                        }
-                                    }
-                                });
-                            }
-                            Ok(None) => break, // 当前目录读完
-                            Err(_) => break,   // 该目录出错，跳过
-                        }
-                    }
-                }
-
-                // 等待所有文件任务结束
-                while tasks.join_next().await.is_some() {}
-
-                // 彻底关闭发送端，通知接收者结束
-                drop(tx);
-
-                // 不把错误冒泡给 JoinHandle 的使用者，避免惊扰外层
-                Ok::<(), ()>(())
-            }
-        });
-
-        Ok(rx)
-    }
-}
+// #[async_trait]
+// impl Search for tokio::fs::ReadDir {
+//     async fn search(
+//         self,
+//         keywords: &[String],
+//         context_lines: usize,
+//     ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
+//         let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
+//
+//         let keywords = Arc::new(keywords.to_owned());
+//         let max_concurrency = std::thread::available_parallelism()
+//             .map(|n| n.get())
+//             .unwrap_or(4)
+//             .saturating_mul(2)
+//             .min(256);
+//         let semaphore = Arc::new(Semaphore::new(max_concurrency));
+//
+//         tokio::spawn({
+//             let mut stack = vec![self];
+//             let keywords = Arc::clone(&keywords);
+//             let semaphore = Arc::clone(&semaphore);
+//             let tx = tx.clone();
+//
+//             async move {
+//                 let mut tasks = JoinSet::new();
+//
+//                 while let Some(mut rd) = stack.pop() {
+//                     loop {
+//                         match rd.next_entry().await {
+//                             Ok(Some(entry)) => {
+//                                 let path = entry.path();
+//
+//                                 // 安全起见：跳过符号链接
+//                                 let fty = match entry.file_type().await {
+//                                     Ok(t) => t,
+//                                     Err(_) => continue, // 忽略该项，继续
+//                                 };
+//                                 if fty.is_symlink() {
+//                                     continue;
+//                                 }
+//                                 if fty.is_dir() {
+//                                     if let Ok(sub) = fs::read_dir(&path).await {
+//                                         stack.push(sub);
+//                                     }
+//                                     continue;
+//                                 }
+//                                 if !fty.is_file() {
+//                                     continue;
+//                                 }
+//
+//                                 // 在 spawn 之前 acquire，避免 spawn 风暴
+//                                 let permit = match semaphore.clone().acquire_owned().await {
+//                                     Ok(p) => p,
+//                                     Err(_) => break, // 信号量被关闭
+//                                 };
+//
+//                                 let txf = tx.clone();
+//                                 let kws = keywords.clone();
+//
+//                                 tasks.spawn(async move {
+//                                     let _permit = permit; // 持有期间占用并发额度
+//                                     if let Ok(file) = fs::File::open(&path).await {
+//                                         let mut reader = BufReader::new(file);
+//                                         if let Ok(Some((lines, merged))) =
+//                                             grep_context_from_reader_async(
+//                                                 &mut reader,
+//                                                 &kws,
+//                                                 context_lines,
+//                                             )
+//                                             .await
+//                                         {
+//                                             let _ = txf
+//                                                 .send(SearchResult::new(
+//                                                     path.to_string_lossy().into_owned(),
+//                                                     lines,
+//                                                     merged,
+//                                                 ))
+//                                                 .await;
+//                                         }
+//                                     }
+//                                 });
+//                             }
+//                             Ok(None) => break, // 当前目录读完
+//                             Err(_) => break,   // 该目录出错，跳过
+//                         }
+//                     }
+//                 }
+//
+//                 // 等待所有文件任务结束
+//                 while tasks.join_next().await.is_some() {}
+//
+//                 // 彻底关闭发送端，通知接收者结束
+//                 drop(tx);
+//
+//                 // 不把错误冒泡给 JoinHandle 的使用者，避免惊扰外层
+//                 Ok::<(), ()>(())
+//             }
+//         });
+//
+//         Ok(rx)
+//     }
+// }
 
 // 全异步：对 AsyncRead (如 S3 流) 进行 gzip 解压与 tar 迭代
 #[async_trait]
-impl Search for Box<dyn AsyncRead + Send + Unpin> {
+impl<T> Search for T where T: AsyncRead + Send +Unpin +'static {
     async fn search(
         self,
         keywords: &[String],
