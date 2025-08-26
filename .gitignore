@@ -1,7 +1,43 @@
-/backend/target
-/frontend/node_modules
-/frontend/.next
-/frontend/dist
-/frontend/out
-/backend/api-gateway/static
-/nohup.out
+# OS
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Environment files (keep examples tracked)
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Node / Next.js
+node_modules/
+**/node_modules/
+.next/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+.vercel/
+
+# Rust (Cargo)
+# Ignore all build output directories across workspace
+target/
+**/target/
+
+# Generic build outputs
+build/
+
+# Runtime artifacts
+nohup.out
+
+# Project-specific
+backend/api-gateway/static

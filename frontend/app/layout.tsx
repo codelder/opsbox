@@ -1,18 +1,15 @@
-import React from 'react'
-import './globals.css'
-import type { Metadata } from 'next'
+"use client";
 
-export const metadata: Metadata = {
-  title: 'Opsbox Search',
-  description: 'Stream markdown results from backend and render with highlight',
-}
+import { useDarkMode } from "@/hook/dark-mode";
+import "@/styles/fontawesome/css/all.min.css";
+import "@/styles/globals.css";
+import React from "react";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  useDarkMode();
   return (
-    <html lang="zh-CN">
-      <body className="min-h-screen bg-zinc-200 dark:bg-zinc-800 text-zinc-100 dark:text-zinc-100 antialiased">
-        {children}
-      </body>
+    <html lang="en" className={`h-full`}>
+      <body className={`h-full bg-white dark:bg-black`}>{children}</body>
     </html>
-  )
+  );
 }
