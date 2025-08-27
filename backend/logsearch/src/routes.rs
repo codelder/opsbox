@@ -1,14 +1,14 @@
 use crate::{
-    renderer::{render_json_chunks, render_markdown},
-    search::{Search as _, SearchError},
-    storage::{ReaderProvider as _, S3ReaderProvider, StorageError},
+  renderer::{render_json_chunks, render_markdown},
+  search::{Search as _, SearchError},
+  storage::{ReaderProvider as _, S3ReaderProvider, StorageError},
 };
 use axum::{
-    Router,
-    body::Body,
-    extract::{Json, rejection::JsonRejection},
-    http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
-    routing::post,
+  Router,
+  body::Body,
+  extract::{Json, rejection::JsonRejection},
+  http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
+  routing::post,
 };
 use problemdetails::Problem;
 use serde_json;
@@ -18,187 +18,182 @@ use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(Debug, Error)]
 pub enum AppError {
-    #[error("storage error")]
-    StorageError(StorageError),
-    #[error("search error")]
-    SearchError(SearchError),
-    #[error(transparent)]
-    BadJson(#[from] JsonRejection),
+  #[error("storage error")]
+  StorageError(StorageError),
+  #[error("search error")]
+  SearchError(SearchError),
+  #[error(transparent)]
+  BadJson(#[from] JsonRejection),
 }
 
 impl From<AppError> for Problem {
-    fn from(error: AppError) -> Self {
-        match error {
-            AppError::StorageError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-                .with_title("Storage error")
-                .with_detail(e.to_string()),
-            AppError::SearchError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-                .with_title("Search error")
-                .with_detail(e.to_string()),
-            AppError::BadJson(e) => problemdetails::new(StatusCode::BAD_REQUEST)
-                .with_title("Bad JSON")
-                .with_detail(e.to_string()),
-        }
+  fn from(error: AppError) -> Self {
+    match error {
+      AppError::StorageError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
+        .with_title("Storage error")
+        .with_detail(e.to_string()),
+      AppError::SearchError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
+        .with_title("Search error")
+        .with_detail(e.to_string()),
+      AppError::BadJson(e) => problemdetails::new(StatusCode::BAD_REQUEST)
+        .with_title("Bad JSON")
+        .with_detail(e.to_string()),
     }
+  }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SearchBody {
-    #[serde(default)]
-    pub keywords: Vec<String>,
-    pub context: Option<usize>,
+  #[serde(default)]
+  pub keywords: Vec<String>,
+  pub context: Option<usize>,
 }
 
 pub fn router() -> Router {
-    Router::new()
-        .route("/stream", post(stream_mark2))
-        .route("/stream.ndjson", post(stream_local_ndjson))
+  Router::new()
+    .route("/stream", post(stream_mark2))
+    .route("/stream.ndjson", post(stream_local_ndjson))
 }
 
 async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
-    let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
+  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
 
-    let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
+  let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
 
-    let s3reader = S3ReaderProvider::new(
-        "http://192.168.50.61:9002",
-        "admin",
-        "G5t3o6f2",
-        "backupdr",
-        "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
-    )
-    .open()
-    .await
-    .map_err(|e| AppError::StorageError(e))?;
+  let s3reader = S3ReaderProvider::new(
+    "http://192.168.50.61:9002",
+    "admin",
+    "G5t3o6f2",
+    "backupdr",
+    "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
+  )
+  .open()
+  .await
+  .map_err(|e| AppError::StorageError(e))?;
 
-    let fut = async move {
-        let Ok(mut stream) = s3reader
-            .search(&body.keywords, body.context.unwrap_or(3))
-            .await
-        else {
-            return;
-        };
-
-        while let Some(result) = stream.recv().await {
-            let buf = render_markdown(&result.path, result.merged, result.lines, &body.keywords);
-            let _ = tx.send(Ok(bytes::Bytes::from(buf))).await;
-        }
+  let fut = async move {
+    let Ok(mut stream) = s3reader.search(&body.keywords, body.context.unwrap_or(3)).await else {
+      return;
     };
 
-    tokio::spawn(fut);
+    while let Some(result) = stream.recv().await {
+      let buf = render_markdown(&result.path, result.merged, result.lines, &body.keywords);
+      let _ = tx.send(Ok(bytes::Bytes::from(buf))).await;
+    }
+  };
 
-    let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+  tokio::spawn(fut);
 
-    Ok(HttpResponse::builder()
-        .status(200)
-        .header(
-            CONTENT_TYPE,
-            HeaderValue::from_static("text/markdown; charset=utf-8"),
-        )
-        .body(body)
-        .unwrap())
+  let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+
+  Ok(
+    HttpResponse::builder()
+      .status(200)
+      .header(CONTENT_TYPE, HeaderValue::from_static("text/markdown; charset=utf-8"))
+      .body(body)
+      .unwrap(),
+  )
 }
 
 async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
-    let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
+  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
 
-    let s3reader = S3ReaderProvider::new(
-        "http://192.168.50.61:9002",
-        "admin",
-        "G5t3o6f2",
-        "backupdr",
-        "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
-    )
-    .open()
-    .await
-    .map_err(|e| AppError::StorageError(e))?;
+  let s3reader = S3ReaderProvider::new(
+    "http://192.168.50.61:9002",
+    "admin",
+    "G5t3o6f2",
+    "backupdr",
+    "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
+  )
+  .open()
+  .await
+  .map_err(|e| AppError::StorageError(e))?;
 
-    let fut = async move {
-        let Ok(mut stream) = s3reader
-            .search(&body.keywords, body.context.unwrap_or(3))
-            .await
-        else {
-            return;
-        };
-
-        while let Some(result) = stream.recv().await {
-            println!("result: {:?}", result);
-            let json_obj = render_json_chunks(
-                &result.path,
-                result.merged.clone(),
-                result.lines.clone(),
-                &body.keywords,
-            );
-            match serde_json::to_vec(&json_obj) {
-                Ok(mut v) => {
-                    v.push(b'\n'); // NDJSON: newline-delimited JSON objects
-                    let _ = tx.send(Ok(bytes::Bytes::from(v))).await;
-                }
-                Err(_) => {
-                    // skip on serialization error to keep stream alive
-                }
-            }
-        }
+  let fut = async move {
+    let Ok(mut stream) = s3reader.search(&body.keywords, body.context.unwrap_or(3)).await else {
+      return;
     };
 
-    tokio::spawn(fut);
+    while let Some(result) = stream.recv().await {
+      println!("result: {:?}", result);
+      let json_obj = render_json_chunks(
+        &result.path,
+        result.merged.clone(),
+        result.lines.clone(),
+        &body.keywords,
+      );
+      match serde_json::to_vec(&json_obj) {
+        Ok(mut v) => {
+          v.push(b'\n'); // NDJSON: newline-delimited JSON objects
+          let _ = tx.send(Ok(bytes::Bytes::from(v))).await;
+        }
+        Err(_) => {
+          // skip on serialization error to keep stream alive
+        }
+      }
+    }
+  };
 
-    let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+  tokio::spawn(fut);
 
-    Ok(HttpResponse::builder()
-        .status(200)
-        .header(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-        )
-        .body(body)
-        .unwrap())
+  let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+
+  Ok(
+    HttpResponse::builder()
+      .status(200)
+      .header(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+      )
+      .body(body)
+      .unwrap(),
+  )
 }
 
 async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
-    let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
+  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
 
-    let reader = tokio::fs::File::open("/Users/wangyue/Downloads/BBIP_20_APPLOG_2025-08-18.tar.gz").await.map_err(|e| AppError::StorageError(StorageError::from(e)))?;
+  let reader = tokio::fs::File::open("/Users/wangyue/Downloads/BBIP_20_APPLOG_2025-08-18.tar.gz")
+    .await
+    .map_err(|e| AppError::StorageError(StorageError::from(e)))?;
 
-
-    let fut = async move {
-        let Ok(mut stream) = reader
-            .search(&body.keywords, body.context.unwrap_or(3))
-            .await
-        else {
-            return;
-        };
-
-        while let Some(result) = stream.recv().await {
-            println!("result: {:?}", result);
-            let json_obj = render_json_chunks(
-                &result.path,
-                result.merged.clone(),
-                result.lines.clone(),
-                &body.keywords,
-            );
-            match serde_json::to_vec(&json_obj) {
-                Ok(mut v) => {
-                    v.push(b'\n'); // NDJSON: newline-delimited JSON objects
-                    let _ = tx.send(Ok(bytes::Bytes::from(v))).await;
-                }
-                Err(_) => {
-                    // skip on serialization error to keep stream alive
-                }
-            }
-        }
+  let fut = async move {
+    let Ok(mut stream) = reader.search(&body.keywords, body.context.unwrap_or(3)).await else {
+      return;
     };
 
-    tokio::spawn(fut);
+    while let Some(result) = stream.recv().await {
+      println!("result: {:?}", result);
+      let json_obj = render_json_chunks(
+        &result.path,
+        result.merged.clone(),
+        result.lines.clone(),
+        &body.keywords,
+      );
+      match serde_json::to_vec(&json_obj) {
+        Ok(mut v) => {
+          v.push(b'\n'); // NDJSON: newline-delimited JSON objects
+          let _ = tx.send(Ok(bytes::Bytes::from(v))).await;
+        }
+        Err(_) => {
+          // skip on serialization error to keep stream alive
+        }
+      }
+    }
+  };
 
-    let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+  tokio::spawn(fut);
 
-    Ok(HttpResponse::builder()
-        .status(200)
-        .header(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-        )
-        .body(body)
-        .unwrap())
+  let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+
+  Ok(
+    HttpResponse::builder()
+      .status(200)
+      .header(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+      )
+      .body(body)
+      .unwrap(),
+  )
 }
