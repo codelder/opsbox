@@ -1,86 +1,87 @@
 "use client";
 
-import Header from "@/app/(main)/header";
-import SideNav from "@/app/(main)/sidenav";
 import DarkModeToggle from "@/components/dark-toggle";
-import { Dialog, DialogPanel, Transition, TransitionChild } from "@headlessui/react";
-import { Bars3Icon, XMarkIcon } from "@heroicons/react/24/solid";
-import { Fragment, useState } from "react";
+import { Disclosure, DisclosureButton, DisclosurePanel } from "@headlessui/react";
+import { Bars3Icon, XMarkIcon } from "@heroicons/react/24/outline";
+import { ReactNode } from "react";
 import PerfectScrollbar from "react-perfect-scrollbar";
-import "react-perfect-scrollbar/dist/css/styles.css";
 
-export default function Layout({ children }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+const navigation = [
+  { name: "BBIP日志检索", href: "/log/bbip", current: true },
+  { name: "BBOS日志抽取", href: "/log/bbos", current: false },
+];
 
+function classNames(...classes) {
+  return classes.filter(Boolean).join(" ");
+}
+
+export default function Layout({ children }: { children: ReactNode }) {
   return (
-    <div className={`h-full`}>
-      <Transition show={sidebarOpen} as={Fragment}>
-        <Dialog as="div" className={`relative z-50 xl:hidden`} onClose={setSidebarOpen}>
-          <TransitionChild
-            as={Fragment}
-            enter={`transition-opacity ease-linear duration-300`}
-            enterFrom={`opacity-0`}
-            enterTo={`opacity-100`}
-            leave={`transition-opacity ease-linear duration-300`}
-            leaveFrom={`opacity-100`}
-            leaveTo={`opacity-0`}
-          >
-            <div className={`fixed inset-0 bg-slate-900/80`} />
-          </TransitionChild>
-
-          <div className={`flex1 fixed inset-0`}>
-            <TransitionChild
-              as={Fragment}
-              enter={`transition ease-in-out duration-300 transform`}
-              enterFrom={`-translate-x-full`}
-              enterTo={`translate-x-0`}
-              leave={`transition ease-in-out duration-300 transform`}
-              leaveFrom={`translate-x-0`}
-              leaveTo={`-translate-x-full`}
-            >
-              <DialogPanel className={`relative mr-16 flex w-full max-w-xs flex-1`}>
-                <TransitionChild
-                  as={Fragment}
-                  enter={`ease-in-out duration-300`}
-                  enterFrom={`opacity-0`}
-                  enterTo={`opacity-100`}
-                  leave={`ease-in-out duration-300`}
-                  leaveFrom={`opacity-100`}
-                  leaveTo={`opacity-0`}
+    <div className="h-full flex flex-col">
+      <Disclosure as="nav" className="border-b border-gray-200 dark:border-white/10 bg-white dark:bg-gray-900">
+        <div className="mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex h-16 justify-between">
+            <div className="flex shrink-0 items-center">
+              <img
+                alt="Your Company"
+                src="https://tailwindcss.com/plus-assets/img/logos/mark.svg?color=indigo&shade=600"
+                className="h-8 w-auto"
+              />
+            </div>
+            <div className="hidden sm:-my-px sm:ml-6 sm:flex sm:space-x-8">
+              {navigation.map((item) => (
+                <a
+                  key={item.name}
+                  href={item.href}
+                  aria-current={item.current ? "page" : undefined}
+                  className={classNames(
+                    item.current
+                      ? "border-indigo-600 text-gray-900 dark:text-white"
+                      : "border-transparent text-gray-500 dark:text-gray-400 hover:border-gray-300 dark:hover:border-white/20 hover:text-gray-700 dark:hover:text-gray-200",
+                    "inline-flex items-center border-b-2 px-1 pt-1 text-sm font-medium",
+                  )}
                 >
-                  <div className={`absolute top-0 left-full flex w-16 justify-center pt-5`}>
-                    <button type="button" className={`-m-2.5 p-2.5`} onClick={() => setSidebarOpen(false)}>
-                      <span className={`sr-only`}>Close sidebar</span>
-                      <XMarkIcon className={`h-6 w-6 text-white`} aria-hidden="true" />
-                    </button>
-                  </div>
-                </TransitionChild>
-                {/* Sidebar component, swap this element with another sidebar if you like */}
-                <div />
-              </DialogPanel>
-            </TransitionChild>
+                  {item.name}
+                </a>
+              ))}
+            </div>
+            <div className="flex">
+              <DarkModeToggle />
+              <div className="-mr-2 flex items-center sm:hidden">
+                {/* Mobile menu button */}
+                <DisclosureButton className="group relative inline-flex items-center justify-center rounded-md bg-white p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600">
+                  <span className="absolute -inset-0.5" />
+                  <span className="sr-only">Open main menu</span>
+                  <Bars3Icon aria-hidden="true" className="block size-6 group-data-open:hidden" />
+                  <XMarkIcon aria-hidden="true" className="hidden size-6 group-data-open:block" />
+                </DisclosureButton>
+              </div>
+            </div>
           </div>
-        </Dialog>
-      </Transition>
-      <div className={`hidden xl:fixed xl:inset-y-0 xl:z-50 xl:flex xl:w-72 xl:flex-col`}>
-        <SideNav />
-      </div>
-      <PerfectScrollbar className="xl:pl-72 h-full flex flex-col">
-        {/* Sticky search header */}
-        <div className="sticky top-0 z-40 flex h-16 shrink-0 items-center gap-x-6 border-b border-black/5 dark:border-white/5 bg-slate-100 dark:bg-slate-900 px-4 shadow-sm sm:px-6 lg:px-8">
-          <button
-            type="button"
-            className="-m-2.5 p-2.5 text-black dark:text-white xl:hidden"
-            onClick={() => setSidebarOpen(true)}
-          >
-            <span className="sr-only">Open sidebar</span>
-            <Bars3Icon className="h-5 w-5" aria-hidden="true" />
-          </button>
-          <Header />
-          <DarkModeToggle />
         </div>
-        {children}
-      </PerfectScrollbar>
+
+        <DisclosurePanel className="sm:hidden">
+          <div className="space-y-1 pt-2 pb-3">
+            {navigation.map((item) => (
+              <DisclosureButton
+                key={item.name}
+                as="a"
+                href={item.href}
+                aria-current={item.current ? "page" : undefined}
+                className={classNames(
+                  item.current
+                    ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+                    : "border-transparent text-gray-600 hover:border-gray-300 hover:bg-gray-50 hover:text-gray-800",
+                  "block border-l-4 py-2 pr-4 pl-3 text-base font-medium",
+                )}
+              >
+                {item.name}
+              </DisclosureButton>
+            ))}
+          </div>
+        </DisclosurePanel>
+      </Disclosure>
+      <PerfectScrollbar className="flex-1">{children}</PerfectScrollbar>
     </div>
   );
 }

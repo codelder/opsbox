@@ -39,6 +39,12 @@ export default function SideNav() {
       icon: DocumentMagnifyingGlassIcon,
       current: false,
     },
+    {
+      name: "日志查询",
+      href: "/bbiplog",
+      icon: DocumentMagnifyingGlassIcon,
+      current: false,
+    },
   ]);
   const pathname = usePathname();
 
@@ -60,35 +66,35 @@ export default function SideNav() {
           <li>
             <ul role="list" className="-mx-2 space-y-1">
               {navigation.map((item) => (
-                <li key={item.name}>
+                <li className={`my-3`} key={item.name}>
                   <Nav {...item} />
                 </li>
               ))}
             </ul>
           </li>
-          <li>
-            <div className="text-xs font-medium leading-6 text-slate-600 dark:text-slate-400">常 用</div>
-            <ul role="list" className="-mx-2 mt-2 space-y-1">
-              {teams.map((team) => (
-                <li key={team.name}>
-                  <a
-                    href={team.href}
-                    className={classNames(
-                      team.current
-                        ? "bg-sky-700 text-white hover:shadow-2xl"
-                        : "text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 hover:shadow-lg",
-                      "group flex gap-x-3 rounded-md p-2 text-sm leading-6",
-                    )}
-                  >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700  bg-slate-200 dark:bg-slate-800  text-[0.625rem] font-medium text-slate-600 dark:text-slate-400  group-hover:text-black dark:group-hover:text-white ">
-                      {team.initial}
-                    </span>
-                    <span className="truncate">{team.name}</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          </li>
+          {/*<li>*/}
+          {/*  <div className="text-xs font-medium leading-6 text-slate-600 dark:text-slate-400">常 用</div>*/}
+          {/*  <ul role="list" className="-mx-2 mt-2 space-y-1">*/}
+          {/*    {teams.map((team) => (*/}
+          {/*      <li key={team.name}>*/}
+          {/*        <a*/}
+          {/*          href={team.href}*/}
+          {/*          className={classNames(*/}
+          {/*            team.current*/}
+          {/*              ? "bg-sky-700 text-white hover:shadow-2xl"*/}
+          {/*              : "text-slate-700 dark:text-slate-300 hover:bg-white dark:hover:bg-slate-700 hover:shadow-lg",*/}
+          {/*            "group flex gap-x-3 rounded-md p-2 text-sm leading-6",*/}
+          {/*          )}*/}
+          {/*        >*/}
+          {/*          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700  bg-slate-200 dark:bg-slate-800  text-[0.625rem] font-medium text-slate-600 dark:text-slate-400  group-hover:text-black dark:group-hover:text-white ">*/}
+          {/*            {team.initial}*/}
+          {/*          </span>*/}
+          {/*          <span className="truncate">{team.name}</span>*/}
+          {/*        </a>*/}
+          {/*      </li>*/}
+          {/*    ))}*/}
+          {/*  </ul>*/}
+          {/*</li>*/}
           <li className="-mx-6 mt-auto">
             <Link
               href="/profile"

@@ -2,7 +2,7 @@ import Image from "next/image";
 
 export default function Coming() {
   return (
-    <main className="flex grow flex-col">
+    <main className="h-full flex grow flex-col">
       <div className="flex  flex-1 flex-col justify-center">
         <div className="flex justify-center">
           <Image
@@ -21,7 +21,7 @@ export default function Coming() {
           />
         </div>
         <div className="flex justify-center">
-          <h1 className="dark:text-slate-300 font-mono text-slate-700 mt-8 text-3xl font-semibold text-center">
+          <h1 className="dark:text-gray-300 font-mono text-gray-600 mt-8 text-4xl font-semibold text-center">
             Coming Soon
           </h1>
         </div>
