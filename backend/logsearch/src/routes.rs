@@ -55,11 +55,11 @@ pub struct SearchBody {
 
 pub fn router() -> Router {
   Router::new()
-    .route("/stream", post(stream_mark2))
+    .route("/stream", post(stream_markdown))
     .route("/stream.ndjson", post(stream_local_ndjson))
 }
 
-async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
+async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
 
   let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
@@ -75,8 +75,10 @@ async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>
   .await
   .map_err(|e| AppError::StorageError(e))?;
 
-  let spec = crate::query::QuerySpec::parse_github_like(&body.q)
+  let spec = crate::query::Query::parse_github_like(&body.q)
     .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+
+
   let highlights = spec.highlights.clone();
 
   let fut = async move {
@@ -103,65 +105,6 @@ async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>
   )
 }
 
-async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
-  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
-
-  let s3reader = S3ReaderProvider::new(
-    "http://192.168.50.61:9002",
-    "admin",
-    "G5t3o6f2",
-    "backupdr",
-    "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
-  )
-  .open()
-  .await
-  .map_err(|e| AppError::StorageError(e))?;
-
-  let spec = crate::query::QuerySpec::parse_github_like(&body.q)
-    .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
-  let highlights = spec.highlights.clone();
-
-  let fut = async move {
-    let Ok(mut stream) = s3reader.search(&spec, body.context.unwrap_or(3)).await else {
-      return;
-    };
-
-    while let Some(result) = stream.recv().await {
-      println!("result: {:?}", result);
-      let json_obj = render_json_chunks(
-        &result.path,
-        result.merged.clone(),
-        result.lines.clone(),
-        &highlights,
-      );
-      match serde_json::to_vec(&json_obj) {
-        Ok(mut v) => {
-          v.push(b'\n'); // NDJSON: newline-delimited JSON objects
-          let _ = tx.send(Ok(bytes::Bytes::from(v))).await;
-        }
-        Err(_) => {
-          // skip on serialization error to keep stream alive
-        }
-      }
-    }
-  };
-
-  tokio::spawn(fut);
-
-  let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
-
-  Ok(
-    HttpResponse::builder()
-      .status(200)
-      .header(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-      )
-      .body(body)
-      .unwrap(),
-  )
-}
-
 async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
 
@@ -169,7 +112,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
     .await
     .map_err(|e| AppError::StorageError(StorageError::from(e)))?;
 
-  let spec = crate::query::QuerySpec::parse_github_like(&body.q)
+  let spec = crate::query::Query::parse_github_like(&body.q)
     .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
   let highlights = spec.highlights.clone();
 

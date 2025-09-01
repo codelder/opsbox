@@ -23,13 +23,13 @@ pub enum SearchError {
   Io(#[from] io::Error),
 }
 
-use crate::query::QuerySpec;
+use crate::query::Query;
 
 #[async_trait]
 pub trait Search {
   async fn search(
     self,
-    spec: &QuerySpec,
+    spec: &Query,
     context_lines: usize,
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError>;
 }
@@ -52,9 +52,9 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
   std::str::from_utf8(sample).is_ok()
 }
 
-pub async fn grep_context_from_reader_async<R: AsyncRead + Unpin>(
+pub async fn grep_context<R: AsyncRead + Unpin>(
   reader: &mut R,
-  spec: &crate::query::QuerySpec,
+  spec: &crate::query::Query,
   context_lines: usize,
 ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>)>, SearchError> {
   // 逐行读取，边采样边判断是否文本，避免整文件读取
@@ -169,7 +169,7 @@ impl SearchResult {
 impl Search for tokio::fs::ReadDir {
   async fn search(
     self,
-    spec: &QuerySpec,
+    spec: &Query,
     context_lines: usize,
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
     let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
@@ -201,7 +201,7 @@ impl Search for tokio::fs::ReadDir {
 
                 // Apply path filters early if specified
                 let path_str = path.to_string_lossy();
-                if !spec_outer.path_allowed(path_str.as_ref()) {
+        if !spec_outer.path_filter.is_allowed(path_str.as_ref()) {
                   continue;
                 }
 
@@ -237,7 +237,7 @@ impl Search for tokio::fs::ReadDir {
                   if let Ok(file) = fs::File::open(&path).await {
                     let mut reader = BufReader::new(file);
                     if let Ok(Some((lines, merged))) =
-                      grep_context_from_reader_async(&mut reader, &spec_local, context_lines).await
+                      grep_context(&mut reader, &spec_local, context_lines).await
                     {
                       let _ = txf
                         .send(SearchResult::new(path.to_string_lossy().into_owned(), lines, merged))
@@ -279,7 +279,7 @@ where
 {
   async fn search(
     self,
-    spec: &QuerySpec,
+    spec: &Query,
     context_lines: usize,
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
     let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
@@ -303,14 +303,14 @@ where
         };
 
         // Path filters for tar entry
-        if !spec_owned.path_allowed(&path) {
+        if !spec_owned.path_filter.is_allowed(&path) {
           continue;
         }
 
         // async_tar 的 Entry 实现的是 futures::io::AsyncRead，这里适配为 tokio::io::AsyncRead
         let mut entry_compat = entry.compat();
         let Ok(Some((lines, merged))) =
-          grep_context_from_reader_async(&mut entry_compat, &spec_owned, context_lines).await
+          grep_context(&mut entry_compat, &spec_owned, context_lines).await
         else {
           continue;
         };
@@ -326,7 +326,7 @@ where
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::query::QuerySpec;
+  use crate::query::Query;
   use std::pin::Pin;
   use std::task::{Context, Poll};
   use tokio::io::{AsyncRead, ReadBuf};
@@ -356,9 +356,9 @@ mod tests {
   }
 
   async fn grep_with_q(input: &str, q: &str, ctx: usize) -> Option<(Vec<String>, Vec<(usize, usize)>)> {
-    let spec = QuerySpec::parse_github_like(q).expect("parse");
+    let spec = Query::parse_github_like(q).expect("parse");
     let mut r = MemReader::new(input.as_bytes());
-    grep_context_from_reader_async(&mut r, &spec, ctx).await.ok().flatten()
+    grep_context(&mut r, &spec, ctx).await.ok().flatten()
   }
 
   #[tokio::test]
@@ -404,10 +404,10 @@ foo and baz
   #[tokio::test]
   async fn grep_binary_rejected() {
     // include a NUL byte early
-    let bytes = [0x66u8, 0x6Fu8, 0x00u8, 0x61u8]; // f o \0 a
-    let spec = QuerySpec::parse_github_like("foo").unwrap();
+    let bytes = [0x66u8, 0x6Fu8, 0x00u8, 0x61u8]; // f o \\0 a
+    let spec = Query::parse_github_like("foo").unwrap();
     let mut r = MemReader::new(bytes);
-    let res = grep_context_from_reader_async(&mut r, &spec, 1).await.ok().flatten();
+    let res = grep_context(&mut r, &spec, 1).await.ok().flatten();
     assert!(res.is_none(), "binary-like content should be rejected");
   }
 
