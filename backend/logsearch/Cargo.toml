@@ -25,3 +25,5 @@ thiserror = "2"
 async-compression = { version = "0.4", features = ["tokio", "gzip"] }
 async-tar = "0.5"
 problemdetails = { version = "0.6", features = ["axum"] }
+regex = "1"
+globset = "0.4"

@@ -23,11 +23,13 @@ pub enum SearchError {
   Io(#[from] io::Error),
 }
 
+use crate::query::QuerySpec;
+
 #[async_trait]
 pub trait Search {
   async fn search(
     self,
-    keywords: &[String],
+    spec: &QuerySpec,
     context_lines: usize,
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError>;
 }
@@ -52,7 +54,7 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
 
 pub async fn grep_context_from_reader_async<R: AsyncRead + Unpin>(
   reader: &mut R,
-  keywords: &[String],
+  spec: &crate::query::QuerySpec,
   context_lines: usize,
 ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>)>, SearchError> {
   // 逐行读取，边采样边判断是否文本，避免整文件读取
@@ -88,24 +90,49 @@ pub async fn grep_context_from_reader_async<R: AsyncRead + Unpin>(
     }
   }
 
-  let mut ranges: Vec<(usize, usize)> = Vec::new();
-  for kw in keywords {
-    let mut hit_any = false;
-    for (idx, line) in lines.iter().enumerate() {
-      if line.contains(kw) {
-        hit_any = true;
-        let s = idx.saturating_sub(context_lines);
-        let e = std::cmp::min(idx + context_lines, lines.len().saturating_sub(1));
-        ranges.push((s, e));
+  // Evaluate expression at file level: whether terms occur anywhere
+  let term_count = spec.terms.len();
+  if term_count == 0 {
+    return Ok(None);
+  }
+  let mut occurs: Vec<bool> = vec![false; term_count];
+  let positive_indices = spec.positive_term_indices();
+
+  let mut matched_lines: Vec<usize> = Vec::new();
+
+  for (idx, line) in lines.iter().enumerate() {
+    let mut line_positive = false;
+    for (ti, term) in spec.terms.iter().enumerate() {
+      if !occurs[ti] && term.matches(line) {
+        occurs[ti] = true;
       }
     }
-    if !hit_any {
-      return Ok(None);
+    // include the line if it matches any positive term
+    for &pi in &positive_indices {
+      if spec.terms.get(pi).map(|t| t.matches(line)).unwrap_or(false) {
+        line_positive = true;
+        break;
+      }
+    }
+    if line_positive {
+      matched_lines.push(idx);
     }
   }
 
-  if ranges.is_empty() {
+  // File-level boolean evaluation
+  if !spec.eval_file(&occurs) {
     return Ok(None);
+  }
+
+  if matched_lines.is_empty() {
+    return Ok(None);
+  }
+
+  let mut ranges: Vec<(usize, usize)> = Vec::new();
+  for idx in matched_lines.into_iter() {
+    let s = idx.saturating_sub(context_lines);
+    let e = std::cmp::min(idx + context_lines, lines.len().saturating_sub(1));
+    ranges.push((s, e));
   }
 
   ranges.sort_by_key(|r| r.0);
@@ -142,12 +169,14 @@ impl SearchResult {
 impl Search for tokio::fs::ReadDir {
   async fn search(
     self,
-    keywords: &[String],
+    spec: &QuerySpec,
     context_lines: usize,
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
     let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
 
-    let keywords = Arc::new(keywords.to_owned());
+    // Share query spec across tasks
+    let spec_arc = Arc::new(spec.clone());
+
     let max_concurrency = std::thread::available_parallelism()
       .map(|n| n.get())
       .unwrap_or(4)
@@ -157,7 +186,7 @@ impl Search for tokio::fs::ReadDir {
 
     tokio::spawn({
       let mut stack = vec![self];
-      let keywords = Arc::clone(&keywords);
+      let spec_outer = Arc::clone(&spec_arc);
       let semaphore = Arc::clone(&semaphore);
       let tx = tx.clone();
 
@@ -169,6 +198,12 @@ impl Search for tokio::fs::ReadDir {
             match rd.next_entry().await {
               Ok(Some(entry)) => {
                 let path = entry.path();
+
+                // Apply path filters early if specified
+                let path_str = path.to_string_lossy();
+                if !spec_outer.path_allowed(path_str.as_ref()) {
+                  continue;
+                }
 
                 // 安全起见：跳过符号链接
                 let fty = match entry.file_type().await {
@@ -195,14 +230,14 @@ impl Search for tokio::fs::ReadDir {
                 };
 
                 let txf = tx.clone();
-                let kws = keywords.clone();
+                let spec_local = Arc::clone(&spec_outer);
 
                 tasks.spawn(async move {
                   let _permit = permit; // 持有期间占用并发额度
                   if let Ok(file) = fs::File::open(&path).await {
                     let mut reader = BufReader::new(file);
                     if let Ok(Some((lines, merged))) =
-                      grep_context_from_reader_async(&mut reader, &kws, context_lines).await
+                      grep_context_from_reader_async(&mut reader, &spec_local, context_lines).await
                     {
                       let _ = txf
                         .send(SearchResult::new(path.to_string_lossy().into_owned(), lines, merged))
@@ -244,11 +279,11 @@ where
 {
   async fn search(
     self,
-    keywords: &[String],
+    spec: &QuerySpec,
     context_lines: usize,
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
     let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
-    let keywords_owned: Vec<String> = keywords.to_owned();
+    let spec_owned = spec.clone();
 
     tokio::spawn(async move {
       let gz = GzipDecoder::new(BufReader::new(self));
@@ -267,10 +302,15 @@ where
           Err(_) => String::new(),
         };
 
+        // Path filters for tar entry
+        if !spec_owned.path_allowed(&path) {
+          continue;
+        }
+
         // async_tar 的 Entry 实现的是 futures::io::AsyncRead，这里适配为 tokio::io::AsyncRead
         let mut entry_compat = entry.compat();
         let Ok(Some((lines, merged))) =
-          grep_context_from_reader_async(&mut entry_compat, &keywords_owned, context_lines).await
+          grep_context_from_reader_async(&mut entry_compat, &spec_owned, context_lines).await
         else {
           continue;
         };

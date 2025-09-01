@@ -24,6 +24,8 @@ pub enum AppError {
   SearchError(SearchError),
   #[error(transparent)]
   BadJson(#[from] JsonRejection),
+  #[error("bad query")]
+  QueryParse(#[from] crate::query::ParseError),
 }
 
 impl From<AppError> for Problem {
@@ -38,14 +40,16 @@ impl From<AppError> for Problem {
       AppError::BadJson(e) => problemdetails::new(StatusCode::BAD_REQUEST)
         .with_title("Bad JSON")
         .with_detail(e.to_string()),
+      AppError::QueryParse(e) => problemdetails::new(StatusCode::BAD_REQUEST)
+        .with_title("Bad query")
+        .with_detail(e.to_string()),
     }
   }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct SearchBody {
-  #[serde(default)]
-  pub keywords: Vec<String>,
+  pub q: String,
   pub context: Option<usize>,
 }
 
@@ -71,13 +75,17 @@ async fn stream_mark2(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>
   .await
   .map_err(|e| AppError::StorageError(e))?;
 
+  let spec = crate::query::QuerySpec::parse_github_like(&body.q)
+    .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let highlights = spec.highlights.clone();
+
   let fut = async move {
-    let Ok(mut stream) = s3reader.search(&body.keywords, body.context.unwrap_or(3)).await else {
+    let Ok(mut stream) = s3reader.search(&spec, body.context.unwrap_or(3)).await else {
       return;
     };
 
     while let Some(result) = stream.recv().await {
-      let buf = render_markdown(&result.path, result.merged, result.lines, &body.keywords);
+      let buf = render_markdown(&result.path, result.merged, result.lines, &highlights);
       let _ = tx.send(Ok(bytes::Bytes::from(buf))).await;
     }
   };
@@ -109,8 +117,12 @@ async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body
   .await
   .map_err(|e| AppError::StorageError(e))?;
 
+  let spec = crate::query::QuerySpec::parse_github_like(&body.q)
+    .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let highlights = spec.highlights.clone();
+
   let fut = async move {
-    let Ok(mut stream) = s3reader.search(&body.keywords, body.context.unwrap_or(3)).await else {
+    let Ok(mut stream) = s3reader.search(&spec, body.context.unwrap_or(3)).await else {
       return;
     };
 
@@ -120,7 +132,7 @@ async fn stream_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body
         &result.path,
         result.merged.clone(),
         result.lines.clone(),
-        &body.keywords,
+        &highlights,
       );
       match serde_json::to_vec(&json_obj) {
         Ok(mut v) => {
@@ -157,8 +169,12 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
     .await
     .map_err(|e| AppError::StorageError(StorageError::from(e)))?;
 
+  let spec = crate::query::QuerySpec::parse_github_like(&body.q)
+    .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let highlights = spec.highlights.clone();
+
   let fut = async move {
-    let Ok(mut stream) = reader.search(&body.keywords, body.context.unwrap_or(3)).await else {
+    let Ok(mut stream) = reader.search(&spec, body.context.unwrap_or(3)).await else {
       return;
     };
 
@@ -168,7 +184,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
         &result.path,
         result.merged.clone(),
         result.lines.clone(),
-        &body.keywords,
+        &highlights,
       );
       match serde_json::to_vec(&json_obj) {
         Ok(mut v) => {
