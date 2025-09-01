@@ -322,3 +322,160 @@ where
     Ok(rx)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::query::QuerySpec;
+  use std::pin::Pin;
+  use std::task::{Context, Poll};
+  use tokio::io::{AsyncRead, ReadBuf};
+
+  // Simple in-memory AsyncRead for tests
+  struct MemReader {
+    buf: Vec<u8>,
+    pos: usize,
+  }
+  impl MemReader {
+    fn new<S: AsRef<[u8]>>(s: S) -> Self {
+      Self { buf: s.as_ref().to_vec(), pos: 0 }
+    }
+  }
+  impl AsyncRead for MemReader {
+    fn poll_read(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+      let remaining = self.buf.len().saturating_sub(self.pos);
+      if remaining == 0 {
+        return Poll::Ready(Ok(()));
+      }
+      let n = remaining.min(buf.remaining());
+      let end = self.pos + n;
+      buf.put_slice(&self.buf[self.pos..end]);
+      self.pos = end;
+      Poll::Ready(Ok(()))
+    }
+  }
+
+  async fn grep_with_q(input: &str, q: &str, ctx: usize) -> Option<(Vec<String>, Vec<(usize, usize)>)> {
+    let spec = QuerySpec::parse_github_like(q).expect("parse");
+    let mut r = MemReader::new(input.as_bytes());
+    grep_context_from_reader_async(&mut r, &spec, ctx).await.ok().flatten()
+  }
+
+  #[tokio::test]
+  async fn grep_basic_and_merge_context() {
+    let input = r#"line1
+line2
+error: first
+mid
+error: second
+line7
+"#;
+    let res = grep_with_q(input, "error", 1).await.expect("some");
+    let (lines, ranges) = res;
+    assert_eq!(lines.len(), 6);
+    // hits at line 3 and 5 (1-based), with ctx=1 -> ranges: [2..4] and [4..6] merged into [2..6]
+    assert_eq!(ranges, vec![(1, 5)]);
+  }
+
+  #[tokio::test]
+  async fn grep_not_excludes_file() {
+    let input = r#"error present
+but also debug here
+"#;
+    let res = grep_with_q(input, "error -debug", 1).await;
+    assert!(res.is_none(), "file must be excluded due to negated term");
+  }
+
+  #[tokio::test]
+  async fn grep_or_and_precedence() {
+    let input = r#"foo only
+baz only
+foo and baz
+"#;
+    // (foo OR bar) baz
+    let some1 = grep_with_q(input, "(foo OR bar) baz", 0).await;
+    assert!(some1.is_some(), "should match 'foo and baz'");
+
+    // bar alone shouldn't satisfy because baz also required
+    let some2 = grep_with_q("bar only\n", "(foo OR bar) baz", 0).await;
+    assert!(some2.is_none());
+  }
+
+  #[tokio::test]
+  async fn grep_binary_rejected() {
+    // include a NUL byte early
+    let bytes = [0x66u8, 0x6Fu8, 0x00u8, 0x61u8]; // f o \0 a
+    let spec = QuerySpec::parse_github_like("foo").unwrap();
+    let mut r = MemReader::new(bytes);
+    let res = grep_context_from_reader_async(&mut r, &spec, 1).await.ok().flatten();
+    assert!(res.is_none(), "binary-like content should be rejected");
+  }
+
+  #[tokio::test]
+  async fn grep_explicit_and_equivalence() {
+    let input = r#"foo here
+bar here
+foo and bar here
+"#;
+    let a = grep_with_q(input, "foo bar", 0).await;
+    let b = grep_with_q(input, "foo AND bar", 0).await;
+    assert!(a.is_some() && b.is_some());
+    assert_eq!(a.as_ref().unwrap().1, b.as_ref().unwrap().1);
+  }
+
+  #[tokio::test]
+  async fn grep_phrase_and_regex_positive() {
+    let input = r#"connection reset by peer
+ERR123 occurred
+"#;
+    // phrase OR regex
+    let some = grep_with_q(input, "\"connection reset\" OR /ERR\\d{3}/", 0).await;
+    assert!(some.is_some());
+  }
+
+  #[tokio::test]
+  async fn grep_negated_group_excludes() {
+    let input = r#"bad state
+warning present
+"#;
+    let res = grep_with_q(input, "-(bad OR warning) ok", 0).await;
+    // contains a negated term => file should be excluded regardless of ok
+    assert!(res.is_none());
+  }
+
+  #[tokio::test]
+  async fn grep_only_negation_has_no_output() {
+    let input = r#"just normal text
+"#;
+    // only NOT clause matches (as true), but no positive terms drive highlighting -> no output
+    let res = grep_with_q(input, "-error", 1).await;
+    assert!(res.is_none());
+  }
+
+  #[tokio::test]
+  async fn grep_parentheses_adjacency_is_and() {
+    let input = r#"alpha beta both
+alpha only
+beta only
+"#;
+    // (alpha) (beta) == alpha AND beta
+    let some = grep_with_q(input, "(alpha) (beta)", 0).await;
+    assert!(some.is_some());
+    let none = grep_with_q(input, "(alpha) (beta)", 0).await;
+    assert!(none.is_some());
+  }
+
+  #[tokio::test]
+  async fn grep_case_sensitivity_literal() {
+    let input = r#"Foo upper
+foo lower
+"#;
+    // literal is case-sensitive
+    let hit_lower = grep_with_q(input, "foo", 0).await;
+    assert!(hit_lower.is_some());
+    let hit_upper = grep_with_q(input, "Foo", 0).await;
+    assert!(hit_upper.is_some());
+    let miss_mixed = grep_with_q(input, "fOo", 0).await;
+    assert!(miss_mixed.is_none());
+  }
+}

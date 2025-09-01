@@ -213,6 +213,7 @@ struct Token {
 enum TokenKind {
   QualifierPath { negative: bool, pattern: String },
   Or,
+  And,
   LParen,
   RParen,
   Minus,
@@ -241,13 +242,23 @@ impl Parser {
 
   fn parse_and(&mut self, terms: &mut Vec<Term>) -> Result<Option<Expr>, ParseError> {
     let mut factors: Vec<Expr> = Vec::new();
-    while self.can_start_pref() {
-      let e = self.parse_pref(terms)?;
-      factors.push(e);
+    if !self.can_start_pref() { return Ok(None); }
+    factors.push(self.parse_pref(terms)?);
+    loop {
+      match self.peek() {
+        Some(TokenKind::And) => {
+          self.bump();
+          if !self.can_start_pref() { return Err(ParseError::UnexpectedToken); }
+          factors.push(self.parse_pref(terms)?);
+        }
+        Some(TokenKind::Minus) | Some(TokenKind::LParen) | Some(TokenKind::Term(_)) => {
+          // implicit AND (adjacent)
+          factors.push(self.parse_pref(terms)?);
+        }
+        _ => break,
+      }
     }
-    if factors.is_empty() { Ok(None) }
-    else if factors.len() == 1 { Ok(Some(factors.remove(0))) }
-    else { Ok(Some(Expr::And(factors))) }
+    if factors.len() == 1 { Ok(Some(factors.remove(0))) } else { Ok(Some(Expr::And(factors))) }
   }
 
   fn can_start_pref(&self) -> bool {
@@ -341,13 +352,26 @@ fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       }
     }
 
-    // OR operator (uppercase OR) with simple boundary check (next char non-letter or end or ')')
+    // OR operator (uppercase OR) with boundary check
     if chars[i] == 'O' {
       if let Some('R') = peek_char(&chars, i, 1) {
         match peek_char(&chars, i, 2) {
           None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some(')') => {
             tokens.push(Token { kind: TokenKind::Or });
             i += 2;
+            continue;
+          }
+          _ => {}
+        }
+      }
+    }
+    // AND operator (uppercase AND) with boundary check
+    if chars[i] == 'A' {
+      if let (Some('N'), Some('D')) = (peek_char(&chars, i, 1), peek_char(&chars, i, 2)) {
+        match peek_char(&chars, i, 3) {
+          None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some(')') => {
+            tokens.push(Token { kind: TokenKind::And });
+            i += 3;
             continue;
           }
           _ => {}
@@ -545,6 +569,99 @@ mod tests {
       Expr::And(v) => assert_eq!(v.len(), 3),
       other => panic!("expected And of 3 terms, got {:?}", other),
     }
+  }
+
+  #[test]
+  fn or_boundary_not_split() {
+    let spec = QuerySpec::parse_github_like("foo ORbar baz").expect("parse");
+    // should be parsed as AND of three literals: foo, ORbar, baz
+    assert_eq!(spec.terms.len(), 3);
+    match spec.expr.unwrap() {
+      Expr::And(v) => assert_eq!(v.len(), 3),
+      other => panic!("expected And of 3 terms, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn deep_nested_parse_and_eval() {
+    let q = "((foo OR bar) AND (baz OR (qux AND -zim))) OR -(alpha OR beta)";
+    let spec = QuerySpec::parse_github_like(q).expect("parse");
+    // helper to set occurs by literal names
+    let mut occurs = vec![false; spec.terms.len()];
+    let set = |occurs: &mut Vec<bool>, name: &str| {
+      if let Some(i) = spec.terms.iter().position(|t| matches!(t, Term::Literal(s) if s == name)) {
+        occurs[i] = true;
+      }
+    };
+
+    // Case 1: left satisfied via foo + baz
+    let mut oc1 = occurs.clone();
+    set(&mut oc1, "foo"); set(&mut oc1, "baz");
+    assert!(spec.eval_file(&oc1));
+
+    // Case 2: left satisfied via qux AND -zim
+    let mut oc2 = occurs.clone();
+    set(&mut oc2, "qux");
+    assert!(spec.eval_file(&oc2));
+
+    // Case 3: right side negation disables when alpha present and left false
+    let mut oc3 = occurs.clone();
+    set(&mut oc3, "alpha");
+    assert!(!spec.eval_file(&oc3));
+
+    // Case 4: right side true when neither alpha nor beta present and left false
+    let oc4 = occurs.clone();
+    assert!(spec.eval_file(&oc4));
+  }
+
+  #[test]
+  fn or_chain_with_and_precedence() {
+    // a OR b OR (c AND d)
+    let spec = QuerySpec::parse_github_like("a OR b OR (c d)").expect("parse");
+    let idx = |name: &str| spec.terms.iter().position(|t| matches!(t, Term::Literal(s) if s == name)).unwrap();
+    let mut oc = vec![false; spec.terms.len()];
+
+    // c alone should not satisfy
+    oc[idx("c")] = true; assert!(!spec.eval_file(&oc)); oc[idx("c")] = false;
+    // c and d together should satisfy
+    oc[idx("c")] = true; oc[idx("d")] = true; assert!(spec.eval_file(&oc)); oc = vec![false; spec.terms.len()];
+    // b alone should satisfy
+    oc[idx("b")] = true; assert!(spec.eval_file(&oc));
+  }
+
+  #[test]
+  fn group_and_negation_inside() {
+    // (a b) OR -(c OR d)
+    let spec = QuerySpec::parse_github_like("(a b) OR -(c OR d)").expect("parse");
+    let idx = |name: &str| spec.terms.iter().position(|t| matches!(t, Term::Literal(s) if s == name)).unwrap();
+
+    let mut oc = vec![false; spec.terms.len()];
+    // a & b -> true
+    oc[idx("a")] = true; oc[idx("b")] = true; assert!(spec.eval_file(&oc));
+
+    // only c -> false (right becomes false, left false)
+    let mut oc2 = vec![false; spec.terms.len()];
+    oc2[idx("c")] = true; assert!(!spec.eval_file(&oc2));
+
+    // neither c nor d and left false -> right NOT(false) == true
+    let oc3 = vec![false; spec.terms.len()];
+    assert!(spec.eval_file(&oc3));
+  }
+
+  #[test]
+  fn positive_indices_under_negation() {
+    let spec = QuerySpec::parse_github_like("-(a OR b) c").expect("parse");
+    let idxs = spec.positive_term_indices();
+    // Only 'c' should be positive
+    assert_eq!(idxs.len(), 1);
+    let lit = match &spec.terms[idxs[0]] { Term::Literal(s) => s, _ => panic!("not literal") };
+    assert_eq!(lit, "c");
+  }
+
+  #[test]
+  fn trailing_or_is_error() {
+    let err = QuerySpec::parse_github_like("foo OR ").unwrap_err();
+    matches!(err, ParseError::UnexpectedToken | ParseError::UnbalancedParens);
   }
 }
 
