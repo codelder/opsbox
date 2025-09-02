@@ -1,0 +1,7 @@
+# Workspace-wide Rust formatting configuration
+# Indentation: 2 spaces; Line width: 120 columns
+# Note: rustfmt automatically discovers this file from the crate/workspace root.
+hard_tabs = false
+tab_spaces = 2
+max_width = 120
+

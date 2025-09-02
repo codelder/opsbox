@@ -1,0 +1,17 @@
+@import "tailwindcss";
+@plugin "flowbite-react/plugin/tailwindcss";
+@source "../.flowbite-react/class-list.json";
+
+@custom-variant dark (&:where(.dark, .dark *));
+/*@plugin "@tailwindcss/typography";*/
+
+/*@theme {*/
+/*  --font-sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu,*/
+/*    Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji",*/
+/*    "Segoe UI Emoji";*/
+/*}*/
+
+/*html, body { height: 100%; }*/
+
+/*!* Highlight style used by MonacoSnippet *!*/
+/*.monaco-mark { background: rgba(250, 204, 21, 0.35); border-radius: 2px; }*/
