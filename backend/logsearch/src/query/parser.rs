@@ -1,5 +1,5 @@
-use super::{Expr, PathFilter, ParseError, Query, Term};
-use super::lexer::{tokenize, Token, TokenKind};
+use super::lexer::{Token, TokenKind, tokenize};
+use super::{Expr, ParseError, PathFilter, Query, Term};
 use globset::{Glob, GlobSetBuilder};
 use regex::Regex;
 
@@ -19,23 +19,40 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
     match t.kind {
       TokenKind::QualifierPath { negative, pattern } => {
         if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
-          let pat = if pattern.starts_with('/') || pattern.starts_with("**/") { pattern } else { format!("**/{}", pattern) };
+          let pat = if pattern.starts_with('/') || pattern.starts_with("**/") {
+            pattern
+          } else {
+            format!("**/{}", pattern)
+          };
           if negative {
             has_exclude_glob = true;
-            excludes_glob.add(Glob::new(&pat).map_err(|_| ParseError::InvalidPathPattern { pattern: pat.clone(), span: Some(t.span) })?);
+            excludes_glob.add(Glob::new(&pat).map_err(|_| ParseError::InvalidPathPattern {
+              pattern: pat.clone(),
+              span: Some(t.span),
+            })?);
           } else {
             has_include_glob = true;
-            includes_glob.add(Glob::new(&pat).map_err(|_| ParseError::InvalidPathPattern { pattern: pat.clone(), span: Some(t.span) })?);
+            includes_glob.add(Glob::new(&pat).map_err(|_| ParseError::InvalidPathPattern {
+              pattern: pat.clone(),
+              span: Some(t.span),
+            })?);
           }
         } else {
-          if negative { exclude_contains.push(pattern); } else { include_contains.push(pattern); }
+          if negative {
+            exclude_contains.push(pattern);
+          } else {
+            include_contains.push(pattern);
+          }
         }
       }
       _ => code_tokens.push(t),
     }
   }
 
-  let mut parser = Parser { tokens: code_tokens, pos: 0 };
+  let mut parser = Parser {
+    tokens: code_tokens,
+    pos: 0,
+  };
   let mut terms: Vec<Term> = Vec::new();
   let expr = parser.parse_expr(&mut terms)?;
 
@@ -44,16 +61,45 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
   if let Some(ref e) = expr {
     let mut indices = Vec::new();
     super::collect_positive_atoms(e, false, &mut indices);
-    indices.sort(); indices.dedup();
-    for &i in &indices { if let Some(s) = terms[i].display_text() { highlights.push(s); } }
+    indices.sort();
+    indices.dedup();
+    for &i in &indices {
+      if let Some(s) = terms[i].display_text() {
+        highlights.push(s);
+      }
+    }
   }
 
-  let include = if has_include_glob { Some(includes_glob.build().map_err(|_| ParseError::InvalidPathPattern { pattern: "<build>".into(), span: None })?) } else { None };
-  let exclude = if has_exclude_glob { Some(excludes_glob.build().map_err(|_| ParseError::InvalidPathPattern { pattern: "<build>".into(), span: None })?) } else { None };
+  let include = if has_include_glob {
+    Some(includes_glob.build().map_err(|_| ParseError::InvalidPathPattern {
+      pattern: "<build>".into(),
+      span: None,
+    })?)
+  } else {
+    None
+  };
+  let exclude = if has_exclude_glob {
+    Some(excludes_glob.build().map_err(|_| ParseError::InvalidPathPattern {
+      pattern: "<build>".into(),
+      span: None,
+    })?)
+  } else {
+    None
+  };
 
-  let path_filter = PathFilter { include, exclude, include_contains, exclude_contains };
+  let path_filter = PathFilter {
+    include,
+    exclude,
+    include_contains,
+    exclude_contains,
+  };
 
-  Ok(Query { terms, expr, path_filter, highlights })
+  Ok(Query {
+    terms,
+    expr,
+    path_filter,
+    highlights,
+  })
 }
 
 struct Parser {
@@ -62,45 +108,93 @@ struct Parser {
 }
 
 impl Parser {
-  fn peek_kind(&self) -> Option<&TokenKind> { self.tokens.get(self.pos).map(|t| &t.kind) }
-  fn peek_span(&self) -> Option<(usize, usize)> { self.tokens.get(self.pos).map(|t| t.span) }
-  fn bump(&mut self) -> Option<Token> { if self.pos < self.tokens.len() { let t = self.tokens[self.pos].clone(); self.pos += 1; Some(t) } else { None } }
+  fn peek_kind(&self) -> Option<&TokenKind> {
+    self.tokens.get(self.pos).map(|t| &t.kind)
+  }
+  fn peek_span(&self) -> Option<(usize, usize)> {
+    self.tokens.get(self.pos).map(|t| t.span)
+  }
+  fn bump(&mut self) -> Option<Token> {
+    if self.pos < self.tokens.len() {
+      let t = self.tokens[self.pos].clone();
+      self.pos += 1;
+      Some(t)
+    } else {
+      None
+    }
+  }
 
   fn parse_expr(&mut self, terms: &mut Vec<Term>) -> Result<Option<Expr>, ParseError> {
-    if self.pos >= self.tokens.len() { return Ok(None); }
-    let mut left = match self.parse_and(terms)? { Some(e) => e, None => return Ok(None) };
+    if self.pos >= self.tokens.len() {
+      return Ok(None);
+    }
+    let mut left = match self.parse_and(terms)? {
+      Some(e) => e,
+      None => return Ok(None),
+    };
     while matches!(self.peek_kind(), Some(TokenKind::Or)) {
       let _ = self.bump(); // consume OR
-      let right = match self.parse_and(terms)? { Some(e) => e, None => return Err(ParseError::UnexpectedToken { span: self.peek_span().unwrap_or((0,0)) }) };
-      left = match left { Expr::Or(mut v) => { v.push(right); Expr::Or(v) }, _ => Expr::Or(vec![left, right]) };
+      let right = match self.parse_and(terms)? {
+        Some(e) => e,
+        None => {
+          return Err(ParseError::UnexpectedToken {
+            span: self.peek_span().unwrap_or((0, 0)),
+          });
+        }
+      };
+      left = match left {
+        Expr::Or(mut v) => {
+          v.push(right);
+          Expr::Or(v)
+        }
+        _ => Expr::Or(vec![left, right]),
+      };
     }
     Ok(Some(left))
   }
 
   fn parse_and(&mut self, terms: &mut Vec<Term>) -> Result<Option<Expr>, ParseError> {
     let mut factors: Vec<Expr> = Vec::new();
-    if !self.can_start_pref() { return Ok(None); }
+    if !self.can_start_pref() {
+      return Ok(None);
+    }
     factors.push(self.parse_pref(terms)?);
     loop {
       match self.peek_kind() {
         Some(TokenKind::And) => {
           let _ = self.bump();
-          if !self.can_start_pref() { return Err(ParseError::UnexpectedToken { span: self.peek_span().unwrap_or((0,0)) }); }
+          if !self.can_start_pref() {
+            return Err(ParseError::UnexpectedToken {
+              span: self.peek_span().unwrap_or((0, 0)),
+            });
+          }
           factors.push(self.parse_pref(terms)?);
         }
-        Some(TokenKind::Minus) | Some(TokenKind::LParen) | Some(TokenKind::Literal(_)) | Some(TokenKind::Phrase(_)) | Some(TokenKind::RegexBody(_)) => {
+        Some(TokenKind::Minus)
+        | Some(TokenKind::LParen)
+        | Some(TokenKind::Literal(_))
+        | Some(TokenKind::Phrase(_))
+        | Some(TokenKind::RegexBody(_)) => {
           // implicit AND (adjacent)
           factors.push(self.parse_pref(terms)?);
         }
         _ => break,
       }
     }
-    if factors.len() == 1 { Ok(Some(factors.remove(0))) } else { Ok(Some(Expr::And(factors))) }
+    if factors.len() == 1 {
+      Ok(Some(factors.remove(0)))
+    } else {
+      Ok(Some(Expr::And(factors)))
+    }
   }
 
   fn can_start_pref(&self) -> bool {
     match self.peek_kind() {
-      Some(TokenKind::Minus) | Some(TokenKind::LParen) | Some(TokenKind::Literal(_)) | Some(TokenKind::Phrase(_)) | Some(TokenKind::RegexBody(_)) => true,
+      Some(TokenKind::Minus)
+      | Some(TokenKind::LParen)
+      | Some(TokenKind::Literal(_))
+      | Some(TokenKind::Phrase(_))
+      | Some(TokenKind::RegexBody(_)) => true,
       _ => false,
     }
   }
@@ -116,18 +210,46 @@ impl Parser {
 
   fn parse_atom(&mut self, terms: &mut Vec<Term>) -> Result<Expr, ParseError> {
     match self.bump() {
-      Some(Token { kind: TokenKind::LParen, span }) => {
+      Some(Token {
+        kind: TokenKind::LParen,
+        span,
+      }) => {
         let inner = self.parse_expr(terms)?;
         match self.bump() {
-          Some(Token { kind: TokenKind::RParen, .. }) => Ok(inner.unwrap_or(Expr::And(vec![]))),
+          Some(Token {
+            kind: TokenKind::RParen,
+            ..
+          }) => Ok(inner.unwrap_or(Expr::And(vec![]))),
           _ => Err(ParseError::UnbalancedParens { span }),
         }
       }
-      Some(Token { kind: TokenKind::Literal(s), .. }) => { let idx = terms.len(); terms.push(Term::Literal(s)); Ok(Expr::Atom(idx)) }
-      Some(Token { kind: TokenKind::Phrase(s), .. }) => { let idx = terms.len(); terms.push(Term::Phrase(s)); Ok(Expr::Atom(idx)) }
-      Some(Token { kind: TokenKind::RegexBody(body), span }) => {
-        let re = Regex::new(&body).map_err(|e| ParseError::InvalidRegex { message: e.to_string(), span })?;
-        let idx = terms.len(); terms.push(Term::Regex(re)); Ok(Expr::Atom(idx))
+      Some(Token {
+        kind: TokenKind::Literal(s),
+        ..
+      }) => {
+        let idx = terms.len();
+        terms.push(Term::Literal(s));
+        Ok(Expr::Atom(idx))
+      }
+      Some(Token {
+        kind: TokenKind::Phrase(s),
+        ..
+      }) => {
+        let idx = terms.len();
+        terms.push(Term::Phrase(s));
+        Ok(Expr::Atom(idx))
+      }
+      Some(Token {
+        kind: TokenKind::RegexBody(body),
+        span,
+      }) => {
+        let re = Regex::new(&body).map_err(|e| ParseError::InvalidRegex {
+          message: e.to_string(),
+          span,
+        })?;
+        let idx = terms.len();
+        terms.push(Term::Regex(re));
+        Ok(Expr::Atom(idx))
       }
       Some(Token { span, .. }) => Err(ParseError::UnexpectedToken { span }),
       None => Err(ParseError::UnexpectedToken { span: (0, 0) }),
@@ -151,12 +273,24 @@ mod tests {
     match spec.expr.unwrap() {
       Expr::Or(v) => {
         assert_eq!(v.len(), 2);
-        match &v[0] { Expr::Atom(i) => assert_eq!(*i, 0), _ => panic!("left not atom") }
+        match &v[0] {
+          Expr::Atom(i) => assert_eq!(*i, 0),
+          _ => panic!("left not atom"),
+        }
         match &v[1] {
           Expr::And(v2) => {
             assert_eq!(v2.len(), 2);
-            match &v2[0] { Expr::Atom(i) => assert_eq!(*i, 1), _ => panic!("and[0]") }
-            match &v2[1] { Expr::Not(inner) => match **inner { Expr::Atom(i) => assert_eq!(i, 2), _ => panic!("not atom") }, _ => panic!("and[1] not Not") }
+            match &v2[0] {
+              Expr::Atom(i) => assert_eq!(*i, 1),
+              _ => panic!("and[0]"),
+            }
+            match &v2[1] {
+              Expr::Not(inner) => match **inner {
+                Expr::Atom(i) => assert_eq!(i, 2),
+                _ => panic!("not atom"),
+              },
+              _ => panic!("and[1] not Not"),
+            }
           }
           _ => panic!("right not and"),
         }
@@ -230,34 +364,69 @@ mod tests {
     let spec = parse_github_like(q).expect("parse");
     let occurs = vec![false; spec.terms.len()];
     let set = |occurs: &mut Vec<bool>, name: &str| {
-      if let Some(i) = spec.terms.iter().position(|t| matches!(t, Term::Literal(s) if s == name)) { occurs[i] = true; }
+      if let Some(i) = spec
+        .terms
+        .iter()
+        .position(|t| matches!(t, Term::Literal(s) if s == name))
+      {
+        occurs[i] = true;
+      }
     };
-    let mut oc1 = occurs.clone(); set(&mut oc1, "foo"); set(&mut oc1, "baz"); assert!(spec.eval_file(&oc1));
-    let mut oc2 = occurs.clone(); set(&mut oc2, "qux"); assert!(spec.eval_file(&oc2));
-    let mut oc3 = occurs.clone(); set(&mut oc3, "alpha"); assert!(!spec.eval_file(&oc3));
-    let oc4 = occurs.clone(); assert!(spec.eval_file(&oc4));
+    let mut oc1 = occurs.clone();
+    set(&mut oc1, "foo");
+    set(&mut oc1, "baz");
+    assert!(spec.eval_file(&oc1));
+    let mut oc2 = occurs.clone();
+    set(&mut oc2, "qux");
+    assert!(spec.eval_file(&oc2));
+    let mut oc3 = occurs.clone();
+    set(&mut oc3, "alpha");
+    assert!(!spec.eval_file(&oc3));
+    let oc4 = occurs.clone();
+    assert!(spec.eval_file(&oc4));
   }
 
   #[test]
   fn or_chain_with_and_precedence() {
     let spec = parse_github_like("a OR b OR (c d)").expect("parse");
-    let idx = |name: &str| spec.terms.iter().position(|t| matches!(t, Term::Literal(s) if s == name)).unwrap();
+    let idx = |name: &str| {
+      spec
+        .terms
+        .iter()
+        .position(|t| matches!(t, Term::Literal(s) if s == name))
+        .unwrap()
+    };
     let mut oc = vec![false; spec.terms.len()];
-    oc[idx("c")] = true; assert!(!spec.eval_file(&oc)); oc[idx("c")] = false;
-    oc[idx("c")] = true; oc[idx("d")] = true; assert!(spec.eval_file(&oc)); oc = vec![false; spec.terms.len()];
-    oc[idx("b")] = true; assert!(spec.eval_file(&oc));
+    oc[idx("c")] = true;
+    assert!(!spec.eval_file(&oc));
+    oc[idx("c")] = false;
+    oc[idx("c")] = true;
+    oc[idx("d")] = true;
+    assert!(spec.eval_file(&oc));
+    oc = vec![false; spec.terms.len()];
+    oc[idx("b")] = true;
+    assert!(spec.eval_file(&oc));
   }
 
   #[test]
   fn group_and_negation_inside() {
     let spec = parse_github_like("(a b) OR -(c OR d)").expect("parse");
-    let idx = |name: &str| spec.terms.iter().position(|t| matches!(t, Term::Literal(s) if s == name)).unwrap();
+    let idx = |name: &str| {
+      spec
+        .terms
+        .iter()
+        .position(|t| matches!(t, Term::Literal(s) if s == name))
+        .unwrap()
+    };
 
     let mut oc = vec![false; spec.terms.len()];
-    oc[idx("a")] = true; oc[idx("b")] = true; assert!(spec.eval_file(&oc));
+    oc[idx("a")] = true;
+    oc[idx("b")] = true;
+    assert!(spec.eval_file(&oc));
 
     let mut oc2 = vec![false; spec.terms.len()];
-    oc2[idx("c")] = true; assert!(!spec.eval_file(&oc2));
+    oc2[idx("c")] = true;
+    assert!(!spec.eval_file(&oc2));
 
     let oc3 = vec![false; spec.terms.len()];
     assert!(spec.eval_file(&oc3));
@@ -268,14 +437,20 @@ mod tests {
     let spec = parse_github_like("-(a OR b) c").expect("parse");
     let idxes = spec.positive_term_indices();
     assert_eq!(idxes.len(), 1);
-    let lit = match &spec.terms[idxes[0]] { Term::Literal(s) => s, _ => panic!("not literal") };
+    let lit = match &spec.terms[idxes[0]] {
+      Term::Literal(s) => s,
+      _ => panic!("not literal"),
+    };
     assert_eq!(lit, "c");
   }
 
   #[test]
   fn trailing_or_is_error() {
     let err = parse_github_like("foo OR ").unwrap_err();
-    matches!(err, ParseError::UnexpectedToken { .. } | ParseError::UnbalancedParens { .. });
+    matches!(
+      err,
+      ParseError::UnexpectedToken { .. } | ParseError::UnbalancedParens { .. }
+    );
   }
 
   #[test]
@@ -287,7 +462,12 @@ mod tests {
   #[test]
   fn unknown_qualifier_is_literal() {
     let spec = parse_github_like("repo:core foo").expect("parse");
-    assert!(spec.terms.iter().any(|t| matches!(t, Term::Literal(s) if s == "repo:core")));
+    assert!(
+      spec
+        .terms
+        .iter()
+        .any(|t| matches!(t, Term::Literal(s) if s == "repo:core"))
+    );
     assert!(spec.terms.iter().any(|t| matches!(t, Term::Literal(s) if s == "foo")));
   }
 
@@ -360,4 +540,3 @@ mod tests {
     }
   }
 }
-

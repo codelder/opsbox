@@ -201,7 +201,7 @@ impl Search for tokio::fs::ReadDir {
 
                 // Apply path filters early if specified
                 let path_str = path.to_string_lossy();
-        if !spec_outer.path_filter.is_allowed(path_str.as_ref()) {
+                if !spec_outer.path_filter.is_allowed(path_str.as_ref()) {
                   continue;
                 }
 
@@ -236,9 +236,7 @@ impl Search for tokio::fs::ReadDir {
                   let _permit = permit; // 持有期间占用并发额度
                   if let Ok(file) = fs::File::open(&path).await {
                     let mut reader = BufReader::new(file);
-                    if let Ok(Some((lines, merged))) =
-                      grep_context(&mut reader, &spec_local, context_lines).await
-                    {
+                    if let Ok(Some((lines, merged))) = grep_context(&mut reader, &spec_local, context_lines).await {
                       let _ = txf
                         .send(SearchResult::new(path.to_string_lossy().into_owned(), lines, merged))
                         .await;
@@ -309,9 +307,7 @@ where
 
         // async_tar 的 Entry 实现的是 futures::io::AsyncRead，这里适配为 tokio::io::AsyncRead
         let mut entry_compat = entry.compat();
-        let Ok(Some((lines, merged))) =
-          grep_context(&mut entry_compat, &spec_owned, context_lines).await
-        else {
+        let Ok(Some((lines, merged))) = grep_context(&mut entry_compat, &spec_owned, context_lines).await else {
           continue;
         };
 
@@ -338,7 +334,10 @@ mod tests {
   }
   impl MemReader {
     fn new<S: AsRef<[u8]>>(s: S) -> Self {
-      Self { buf: s.as_ref().to_vec(), pos: 0 }
+      Self {
+        buf: s.as_ref().to_vec(),
+        pos: 0,
+      }
     }
   }
   impl AsyncRead for MemReader {

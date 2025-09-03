@@ -75,9 +75,7 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
   .await
   .map_err(|e| AppError::StorageError(e))?;
 
-  let spec = crate::query::Query::parse_github_like(&body.q)
-    .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
-
+  let spec = crate::query::Query::parse_github_like(&body.q).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
 
   let highlights = spec.highlights.clone();
 
@@ -112,8 +110,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
     .await
     .map_err(|e| AppError::StorageError(StorageError::from(e)))?;
 
-  let spec = crate::query::Query::parse_github_like(&body.q)
-    .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let spec = crate::query::Query::parse_github_like(&body.q).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
   let highlights = spec.highlights.clone();
 
   let fut = async move {
@@ -123,12 +120,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
 
     while let Some(result) = stream.recv().await {
       println!("result: {:?}", result);
-      let json_obj = render_json_chunks(
-        &result.path,
-        result.merged.clone(),
-        result.lines.clone(),
-        &highlights,
-      );
+      let json_obj = render_json_chunks(&result.path, result.merged.clone(), result.lines.clone(), &highlights);
       match serde_json::to_vec(&json_obj) {
         Ok(mut v) => {
           v.push(b'\n'); // NDJSON: newline-delimited JSON objects

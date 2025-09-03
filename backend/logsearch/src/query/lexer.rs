@@ -21,14 +21,19 @@ pub enum TokenKind {
 }
 
 fn is_boundary(next: Option<char>) -> bool {
-  matches!(next, None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some(')'))
+  matches!(
+    next,
+    None | Some(' ') | Some('\t') | Some('\n') | Some('\r') | Some(')')
+  )
 }
 
 fn eat_exact(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize, s: &str) -> bool {
   let mut backup = it.clone();
   for ch in s.chars() {
     match backup.peek().copied() {
-      Some(c) if c == ch => { backup.next(); }
+      Some(c) if c == ch => {
+        backup.next();
+      }
       _ => return false,
     }
   }
@@ -41,23 +46,37 @@ fn eat_keyword_with_boundary(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut u
   let mut backup = it.clone();
   for ch in kw.chars() {
     match backup.peek().copied() {
-      Some(c) if c == ch => { backup.next(); }
+      Some(c) if c == ch => {
+        backup.next();
+      }
       _ => return false,
     }
   }
-  if is_boundary(backup.peek().copied()) { *it = backup; *pos += kw.chars().count(); true } else { false }
+  if is_boundary(backup.peek().copied()) {
+    *it = backup;
+    *pos += kw.chars().count();
+    true
+  } else {
+    false
+  }
 }
 
 fn eat_ws(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) {
-  while matches!(it.peek(), Some(c) if c.is_whitespace()) { it.next(); *pos += 1; }
+  while matches!(it.peek(), Some(c) if c.is_whitespace()) {
+    it.next();
+    *pos += 1;
+  }
 }
 
 fn read_until_ws_paren(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> String {
   let mut s = String::new();
   while let Some(&c) = it.peek() {
-    if c.is_whitespace() || c == '(' || c == ')' { break; }
+    if c.is_whitespace() || c == '(' || c == ')' {
+      break;
+    }
     s.push(c);
-    it.next(); *pos += 1;
+    it.next();
+    *pos += 1;
   }
   s
 }
@@ -66,7 +85,9 @@ fn read_quoted(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> Strin
   let mut s = String::new();
   while let Some(c) = it.next() {
     *pos += 1;
-    if c == '"' { break; }
+    if c == '"' {
+      break;
+    }
     s.push(c);
   }
   s
@@ -77,9 +98,18 @@ fn read_regex_body(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> S
   let mut escaped = false;
   while let Some(c) = it.next() {
     *pos += 1;
-    if escaped { s.push(c); escaped = false; continue; }
-    if c == '\\' { escaped = true; continue; }
-    if c == '/' { break; }
+    if escaped {
+      s.push(c);
+      escaped = false;
+      continue;
+    }
+    if c == '\\' {
+      escaped = true;
+      continue;
+    }
+    if c == '/' {
+      break;
+    }
     s.push(c);
   }
   s
@@ -88,9 +118,12 @@ fn read_regex_body(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> S
 fn read_path_pattern(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> String {
   let mut s = String::new();
   while let Some(&c) = it.peek() {
-    if c.is_whitespace() { break; }
+    if c.is_whitespace() {
+      break;
+    }
     s.push(c);
-    it.next(); *pos += 1;
+    it.next();
+    *pos += 1;
   }
   s
 }
@@ -102,17 +135,27 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
 
   while it.peek().is_some() {
     eat_ws(&mut it, &mut pos);
-    if it.peek().is_none() { break; }
+    if it.peek().is_none() {
+      break;
+    }
 
     // Single-char parens
     if let Some('(') = it.peek().copied() {
-      let start = pos; let _ = eat_exact(&mut it, &mut pos, "(");
-      tokens.push(Token { kind: TokenKind::LParen, span: (start, pos) });
+      let start = pos;
+      let _ = eat_exact(&mut it, &mut pos, "(");
+      tokens.push(Token {
+        kind: TokenKind::LParen,
+        span: (start, pos),
+      });
       continue;
     }
     if let Some(')') = it.peek().copied() {
-      let start = pos; let _ = eat_exact(&mut it, &mut pos, ")");
-      tokens.push(Token { kind: TokenKind::RParen, span: (start, pos) });
+      let start = pos;
+      let _ = eat_exact(&mut it, &mut pos, ")");
+      tokens.push(Token {
+        kind: TokenKind::RParen,
+        span: (start, pos),
+      });
       continue;
     }
 
@@ -121,11 +164,20 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       let start = pos;
       if eat_exact(&mut it, &mut pos, "-path:") {
         let pat = read_path_pattern(&mut it, &mut pos);
-        tokens.push(Token { kind: TokenKind::QualifierPath { negative: true, pattern: pat }, span: (start, pos) });
+        tokens.push(Token {
+          kind: TokenKind::QualifierPath {
+            negative: true,
+            pattern: pat,
+          },
+          span: (start, pos),
+        });
         continue;
       } else {
         let _ = eat_exact(&mut it, &mut pos, "-");
-        tokens.push(Token { kind: TokenKind::Minus, span: (start, pos) });
+        tokens.push(Token {
+          kind: TokenKind::Minus,
+          span: (start, pos),
+        });
         continue;
       }
     }
@@ -135,7 +187,13 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       let start = pos;
       if eat_exact(&mut it, &mut pos, "path:") {
         let pat = read_path_pattern(&mut it, &mut pos);
-        tokens.push(Token { kind: TokenKind::QualifierPath { negative: false, pattern: pat }, span: (start, pos) });
+        tokens.push(Token {
+          kind: TokenKind::QualifierPath {
+            negative: false,
+            pattern: pat,
+          },
+          span: (start, pos),
+        });
         continue;
       }
     }
@@ -144,31 +202,45 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     if let Some('O') = it.peek().copied() {
       let start = pos;
       if eat_keyword_with_boundary(&mut it, &mut pos, "OR") {
-        tokens.push(Token { kind: TokenKind::Or, span: (start, pos) });
+        tokens.push(Token {
+          kind: TokenKind::Or,
+          span: (start, pos),
+        });
         continue;
       }
     }
     if let Some('A') = it.peek().copied() {
       let start = pos;
       if eat_keyword_with_boundary(&mut it, &mut pos, "AND") {
-        tokens.push(Token { kind: TokenKind::And, span: (start, pos) });
+        tokens.push(Token {
+          kind: TokenKind::And,
+          span: (start, pos),
+        });
         continue;
       }
     }
 
     // Phrase: "..."
     if let Some('"') = it.peek().copied() {
-      let start = pos; let _ = eat_exact(&mut it, &mut pos, "\"");
+      let start = pos;
+      let _ = eat_exact(&mut it, &mut pos, "\"");
       let s = read_quoted(&mut it, &mut pos);
-      tokens.push(Token { kind: TokenKind::Phrase(s), span: (start, pos) });
+      tokens.push(Token {
+        kind: TokenKind::Phrase(s),
+        span: (start, pos),
+      });
       continue;
     }
 
     // Regex: /.../
     if let Some('/') = it.peek().copied() {
-      let start = pos; let _ = eat_exact(&mut it, &mut pos, "/");
+      let start = pos;
+      let _ = eat_exact(&mut it, &mut pos, "/");
       let body = read_regex_body(&mut it, &mut pos);
-      tokens.push(Token { kind: TokenKind::RegexBody(body), span: (start, pos) });
+      tokens.push(Token {
+        kind: TokenKind::RegexBody(body),
+        span: (start, pos),
+      });
       continue;
     }
 
@@ -176,11 +248,15 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     let start = pos;
     let lit = read_until_ws_paren(&mut it, &mut pos);
     if !lit.is_empty() {
-      tokens.push(Token { kind: TokenKind::Literal(lit), span: (start, pos) });
+      tokens.push(Token {
+        kind: TokenKind::Literal(lit),
+        span: (start, pos),
+      });
       continue;
     }
 
-    it.next(); pos += 1;
+    it.next();
+    pos += 1;
   }
 
   Ok(tokens)
@@ -216,4 +292,3 @@ mod tests {
     assert!(matches!(toks[5].kind, TokenKind::Literal(ref s) if s == "baz"));
   }
 }
-

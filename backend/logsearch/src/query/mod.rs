@@ -1,7 +1,7 @@
-pub mod parser;
 mod lexer;
+pub mod parser;
 
-use globset::{GlobSet};
+use globset::GlobSet;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -9,7 +9,10 @@ pub enum ParseError {
   #[error("invalid regex at {span:?}: {message}")]
   InvalidRegex { message: String, span: (usize, usize) },
   #[error("invalid path pattern at {span:?}: {pattern}")]
-  InvalidPathPattern { pattern: String, span: Option<(usize, usize)> },
+  InvalidPathPattern {
+    pattern: String,
+    span: Option<(usize, usize)>,
+  },
   #[error("unexpected token at {span:?}")]
   UnexpectedToken { span: (usize, usize) },
   #[error("unbalanced parentheses starting at {span:?}")]
@@ -64,12 +67,22 @@ pub struct PathFilter {
 impl PathFilter {
   pub fn is_allowed(&self, path: &str) -> bool {
     if let Some(ex) = &self.exclude {
-      if ex.is_match(path) { return false; }
+      if ex.is_match(path) {
+        return false;
+      }
     }
-    if self.exclude_contains.iter().any(|s| path.contains(s)) { return false; }
-    if let Some(inc) = &self.include { if !inc.is_match(path) { return false; } }
+    if self.exclude_contains.iter().any(|s| path.contains(s)) {
+      return false;
+    }
+    if let Some(inc) = &self.include {
+      if !inc.is_match(path) {
+        return false;
+      }
+    }
     if !self.include_contains.is_empty() {
-      if !self.include_contains.iter().any(|s| path.contains(s)) { return false; }
+      if !self.include_contains.iter().any(|s| path.contains(s)) {
+        return false;
+      }
     }
     true
   }
@@ -96,7 +109,12 @@ impl Query {
       Some(Expr::And(atoms))
     };
     let highlights: Vec<String> = keywords.iter().filter(|s| !s.is_empty()).cloned().collect();
-    Self { terms, expr, path_filter: PathFilter::default(), highlights }
+    Self {
+      terms,
+      expr,
+      path_filter: PathFilter::default(),
+      highlights,
+    }
   }
 
   pub fn parse_github_like(input: &str) -> Result<Self, ParseError> {
@@ -105,8 +123,11 @@ impl Query {
 
   pub fn positive_term_indices(&self) -> Vec<usize> {
     let mut indices = Vec::new();
-    if let Some(ref e) = self.expr { collect_positive_atoms(e, false, &mut indices); }
-    indices.sort(); indices.dedup();
+    if let Some(ref e) = self.expr {
+      collect_positive_atoms(e, false, &mut indices);
+    }
+    indices.sort();
+    indices.dedup();
     indices
   }
 
@@ -121,9 +142,17 @@ impl Query {
 
 fn collect_positive_atoms(expr: &Expr, neg: bool, out: &mut Vec<usize>) {
   match expr {
-    Expr::Atom(i) => { if !neg { out.push(*i); } }
+    Expr::Atom(i) => {
+      if !neg {
+        out.push(*i);
+      }
+    }
     Expr::Not(inner) => collect_positive_atoms(inner, !neg, out),
-    Expr::And(v) | Expr::Or(v) => { for e in v { collect_positive_atoms(e, neg, out); } }
+    Expr::And(v) | Expr::Or(v) => {
+      for e in v {
+        collect_positive_atoms(e, neg, out);
+      }
+    }
   }
 }
 
@@ -135,4 +164,3 @@ fn eval_expr(expr: &Expr, f: &dyn Fn(usize) -> bool) -> bool {
     Expr::Or(v) => v.iter().any(|e| eval_expr(e, f)),
   }
 }
-
