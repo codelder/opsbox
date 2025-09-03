@@ -18,13 +18,13 @@ use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(Debug, Error)]
 pub enum AppError {
-  #[error("storage error")]
+  #[error("存储错误")]
   StorageError(StorageError),
-  #[error("search error")]
+  #[error("检索错误")]
   SearchError(SearchError),
   #[error(transparent)]
   BadJson(#[from] JsonRejection),
-  #[error("bad query")]
+  #[error("查询语法错误")]
   QueryParse(#[from] crate::query::ParseError),
 }
 
@@ -32,16 +32,16 @@ impl From<AppError> for Problem {
   fn from(error: AppError) -> Self {
     match error {
       AppError::StorageError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("Storage error")
+        .with_title("存储错误")
         .with_detail(e.to_string()),
       AppError::SearchError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("Search error")
+        .with_title("检索错误")
         .with_detail(e.to_string()),
       AppError::BadJson(e) => problemdetails::new(StatusCode::BAD_REQUEST)
-        .with_title("Bad JSON")
+        .with_title("JSON请求错误")
         .with_detail(e.to_string()),
       AppError::QueryParse(e) => problemdetails::new(StatusCode::BAD_REQUEST)
-        .with_title("Bad query")
+        .with_title("查询语法错误")
         .with_detail(e.to_string()),
     }
   }

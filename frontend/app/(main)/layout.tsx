@@ -48,7 +48,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             <div className="flex">
               <DarkModeToggle />
               <div className="-mr-2 flex items-center sm:hidden">
-                {/* Mobile menu button */}
+                {/* 移动端菜单按钮 */}
                 <DisclosureButton className="group relative inline-flex items-center justify-center rounded-md bg-white p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-500 focus:outline-2 focus:outline-offset-2 focus:outline-indigo-600">
                   <span className="absolute -inset-0.5" />
                   <span className="sr-only">Open main menu</span>

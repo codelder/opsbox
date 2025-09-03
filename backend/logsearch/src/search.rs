@@ -19,7 +19,7 @@ use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
-  #[error("io error: {0}")]
+  #[error("IO错误: {0}")]
   Io(#[from] io::Error),
 }
 
@@ -90,7 +90,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     }
   }
 
-  // Evaluate expression at file level: whether terms occur anywhere
+  // 文件级布尔计算：检查各关键字是否在文件中出现
   let term_count = spec.terms.len();
   if term_count == 0 {
     return Ok(None);
@@ -107,7 +107,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
         occurs[ti] = true;
       }
     }
-    // include the line if it matches any positive term
+    // 若该行命中任一正向关键字，则收录
     for &pi in &positive_indices {
       if spec.terms.get(pi).map(|t| t.matches(line)).unwrap_or(false) {
         line_positive = true;
@@ -119,7 +119,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     }
   }
 
-  // File-level boolean evaluation
+  // 文件级布尔求值
   if !spec.eval_file(&occurs) {
     return Ok(None);
   }
@@ -174,7 +174,7 @@ impl Search for tokio::fs::ReadDir {
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
     let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
 
-    // Share query spec across tasks
+    // 在各任务间共享查询规格
     let spec_arc = Arc::new(spec.clone());
 
     let max_concurrency = std::thread::available_parallelism()
@@ -199,7 +199,7 @@ impl Search for tokio::fs::ReadDir {
               Ok(Some(entry)) => {
                 let path = entry.path();
 
-                // Apply path filters early if specified
+                // 如已指定路径过滤器，则尽早应用
                 let path_str = path.to_string_lossy();
                 if !spec_outer.path_filter.is_allowed(path_str.as_ref()) {
                   continue;
@@ -300,7 +300,7 @@ where
           Err(_) => String::new(),
         };
 
-        // Path filters for tar entry
+        // 针对 tar 条目的路径过滤
         if !spec_owned.path_filter.is_allowed(&path) {
           continue;
         }
@@ -327,7 +327,7 @@ mod tests {
   use std::task::{Context, Poll};
   use tokio::io::{AsyncRead, ReadBuf};
 
-  // Simple in-memory AsyncRead for tests
+  // 用于测试的内存 AsyncRead 实现
   struct MemReader {
     buf: Vec<u8>,
     pos: usize,
@@ -355,7 +355,7 @@ mod tests {
   }
 
   async fn grep_with_q(input: &str, q: &str, ctx: usize) -> Option<(Vec<String>, Vec<(usize, usize)>)> {
-    let spec = Query::parse_github_like(q).expect("parse");
+    let spec = Query::parse_github_like(q).expect("解析失败");
     let mut r = MemReader::new(input.as_bytes());
     grep_context(&mut r, &spec, ctx).await.ok().flatten()
   }
@@ -369,7 +369,7 @@ mid
 error: second
 line7
 "#;
-    let res = grep_with_q(input, "error", 1).await.expect("some");
+    let res = grep_with_q(input, "error", 1).await.expect("应当有结果");
     let (lines, ranges) = res;
     assert_eq!(lines.len(), 6);
     // hits at line 3 and 5 (1-based), with ctx=1 -> ranges: [2..4] and [4..6] merged into [2..6]
@@ -382,7 +382,7 @@ line7
 but also debug here
 "#;
     let res = grep_with_q(input, "error -debug", 1).await;
-    assert!(res.is_none(), "file must be excluded due to negated term");
+    assert!(res.is_none(), "由于存在取反关键字，应当排除该文件");
   }
 
   #[tokio::test]
@@ -393,7 +393,7 @@ foo and baz
 "#;
     // (foo OR bar) baz
     let some1 = grep_with_q(input, "(foo OR bar) baz", 0).await;
-    assert!(some1.is_some(), "should match 'foo and baz'");
+    assert!(some1.is_some(), "应当匹配 'foo and baz'");
 
     // bar alone shouldn't satisfy because baz also required
     let some2 = grep_with_q("bar only\n", "(foo OR bar) baz", 0).await;
@@ -402,7 +402,7 @@ foo and baz
 
   #[tokio::test]
   async fn grep_binary_rejected() {
-    // include a NUL byte early
+    // 在早期包含一个 NUL 字节
     let bytes = [0x66u8, 0x6Fu8, 0x00u8, 0x61u8]; // f o \\0 a
     let spec = Query::parse_github_like("foo").unwrap();
     let mut r = MemReader::new(bytes);
@@ -427,7 +427,7 @@ foo and bar here
     let input = r#"connection reset by peer
 ERR123 occurred
 "#;
-    // phrase OR regex
+    // 短语 或 正则
     let some = grep_with_q(input, "\"connection reset\" OR /ERR\\d{3}/", 0).await;
     assert!(some.is_some());
   }
@@ -446,7 +446,7 @@ warning present
   async fn grep_only_negation_has_no_output() {
     let input = r#"just normal text
 "#;
-    // only NOT clause matches (as true), but no positive terms drive highlighting -> no output
+    // 只有 NOT 子句为真，但没有任一正向关键字驱动高亮 => 不输出
     let res = grep_with_q(input, "-error", 1).await;
     assert!(res.is_none());
   }
@@ -469,7 +469,7 @@ beta only
     let input = r#"Foo upper
 foo lower
 "#;
-    // literal is case-sensitive
+    // 字面量大小写敏感
     let hit_lower = grep_with_q(input, "foo", 0).await;
     assert!(hit_lower.is_some());
     let hit_upper = grep_with_q(input, "Foo", 0).await;

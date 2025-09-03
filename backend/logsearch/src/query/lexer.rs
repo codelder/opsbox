@@ -4,7 +4,7 @@ use std::iter::Peekable;
 #[derive(Debug, Clone)]
 pub struct Token {
   pub kind: TokenKind,
-  pub span: (usize, usize), // [start, end) in char offsets
+  pub span: (usize, usize), // 字符偏移范围：[start, end)
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +139,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       break;
     }
 
-    // Single-char parens
+    // 单字符括号
     if let Some('(') = it.peek().copied() {
       let start = pos;
       let _ = eat_exact(&mut it, &mut pos, "(");
@@ -159,7 +159,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       continue;
     }
 
-    // -path: qualifier or unary minus
+    // -path: 路径限定符或一元负号
     if let Some('-') = it.peek().copied() {
       let start = pos;
       if eat_exact(&mut it, &mut pos, "-path:") {
@@ -182,7 +182,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       }
     }
 
-    // path: qualifier
+    // path: 路径限定符
     if let Some('p') = it.peek().copied() {
       let start = pos;
       if eat_exact(&mut it, &mut pos, "path:") {
@@ -198,7 +198,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       }
     }
 
-    // OR / AND (uppercase) with boundary check
+    // OR / AND（需大写）并进行边界判断
     if let Some('O') = it.peek().copied() {
       let start = pos;
       if eat_keyword_with_boundary(&mut it, &mut pos, "OR") {
@@ -220,7 +220,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       }
     }
 
-    // Phrase: "..."
+    // 短语："..."
     if let Some('"') = it.peek().copied() {
       let start = pos;
       let _ = eat_exact(&mut it, &mut pos, "\"");
@@ -232,7 +232,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       continue;
     }
 
-    // Regex: /.../
+    // 正则：/.../
     if let Some('/') = it.peek().copied() {
       let start = pos;
       let _ = eat_exact(&mut it, &mut pos, "/");
@@ -244,7 +244,7 @@ pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
       continue;
     }
 
-    // Literal
+    // 字面量
     let start = pos;
     let lit = read_until_ws_paren(&mut it, &mut pos);
     if !lit.is_empty() {

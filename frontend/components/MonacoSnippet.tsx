@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import React from "react";
 
-// Lazy-load Monaco editor on client only
+// 仅在客户端按需加载 Monaco 编辑器
 const Editor = dynamic(
   () => import("@monaco-editor/react").then((m) => m.default),
   {
@@ -24,8 +24,8 @@ type Props = {
   keywords: string[];
 };
 
-// Build the editor content and a mapping from displayed line index (1-based)
-// to original line number (or null for separators)
+// 构建编辑器显示内容，并维护显示行号（从 1 开始）到原始行号的映射
+// 分隔符行使用 null 作为占位
 function buildContent(chunks: JsonChunk[]) {
   const lines: string[] = [];
   const map: (number | null)[] = [];
@@ -54,10 +54,10 @@ function computeHighlights(
   const lines = text.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const content = lines[i];
-    // Don't highlight separator lines
+    // 分隔符行不做高亮
     if (map[i] == null) continue;
     for (const kw of nonEmpty) {
-      // Find all occurrences of kw in content
+      // 在一行中查找关键字的所有出现位置
       let start = 0;
       while (true) {
         const pos = content.indexOf(kw, start);
@@ -108,10 +108,10 @@ export default function MonacoSnippet({ result, keywords }: Props) {
       });
       const decos = computeHighlights(text, map, keywords);
       if (decos.length) {
-        // Apply decorations
+        // 应用装饰（高亮）
         editor.createDecorationsCollection(decos);
       }
-      // Custom theme mark color
+      // 自定义主题中的标记颜色
       monaco.editor.defineTheme("opsbox-dark", {
         base: "vs-dark",
         inherit: true,
@@ -125,7 +125,7 @@ export default function MonacoSnippet({ result, keywords }: Props) {
     [keywords, map, text],
   );
 
-  // Compute a reasonable height based on the lines count
+// 基于行数计算一个合适的高度
   const lineCount = React.useMemo(() => text.split("\n").length, [text]);
   const height = Math.min(Math.max(lineCount * 20, 160), 600);
 

@@ -116,7 +116,7 @@ pub fn render_json_chunks(
       });
     }
     chunks.push(JsonChunk {
-      range: (s + 1, e + 1), // use 1-based line numbers for range as well
+      range: (s + 1, e + 1), // 区间也使用从 1 开始的行号
       lines: lines_vec,
     });
   }

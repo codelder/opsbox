@@ -6,7 +6,7 @@ use tower_http::services::ServeDir;
 
 #[tokio::main]
 async fn main() {
-  // CORS: allow cross-origin from any origin (adjust in production)
+  // CORS：允许任意来源跨域访问（生产环境请按需收紧）
   let cors = CorsLayer::new()
     .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
     .allow_headers(Any)
@@ -17,7 +17,7 @@ async fn main() {
     .nest("/api/v1/logsearch", logsearch_router())
     .fallback_service(
       get_service(ServeDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/static")).append_index_html_on_directories(true))
-        .handle_error(|_| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "static error") }),
+        .handle_error(|_| async { (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "静态资源错误") }),
     )
     .layer(cors);
 

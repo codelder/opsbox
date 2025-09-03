@@ -344,7 +344,7 @@ mod tests {
     let spec = parse_github_like("foo or bar").expect("parse");
     match spec.expr.unwrap() {
       Expr::And(v) => assert_eq!(v.len(), 3),
-      other => panic!("expected And of 3 terms, got {:?}", other),
+      other => panic!("期望 And 表达式包含 3 个关键字，实际为 {:?}", other),
     }
   }
 
@@ -354,7 +354,7 @@ mod tests {
     assert_eq!(spec.terms.len(), 3);
     match spec.expr.unwrap() {
       Expr::And(v) => assert_eq!(v.len(), 3),
-      other => panic!("expected And of 3 terms, got {:?}", other),
+      other => panic!("期望 And 表达式包含 3 个关键字，实际为 {:?}", other),
     }
   }
 

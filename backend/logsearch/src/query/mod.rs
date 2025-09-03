@@ -6,16 +6,16 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ParseError {
-  #[error("invalid regex at {span:?}: {message}")]
+  #[error("无效正则，位置 {span:?}：{message}")]
   InvalidRegex { message: String, span: (usize, usize) },
-  #[error("invalid path pattern at {span:?}: {pattern}")]
+  #[error("无效路径模式，位置 {span:?}：{pattern}")]
   InvalidPathPattern {
     pattern: String,
     span: Option<(usize, usize)>,
   },
-  #[error("unexpected token at {span:?}")]
+  #[error("意外的记号，位置 {span:?}")]
   UnexpectedToken { span: (usize, usize) },
-  #[error("unbalanced parentheses starting at {span:?}")]
+  #[error("括号不匹配，起始于 {span:?}")]
   UnbalancedParens { span: (usize, usize) },
 }
 
@@ -24,16 +24,16 @@ pub enum Expr {
   And(Vec<Expr>),
   Or(Vec<Expr>),
   Not(Box<Expr>),
-  Atom(usize), // index into Query.terms
+  Atom(usize), // 索引到 Query.terms（关键字列表）
 }
 
 #[derive(Debug, Clone)]
 pub enum Term {
-  // Matches a simple substring
+  // 匹配简单子串
   Literal(String),
-  // Matches an exact phrase (substring semantics)
+  // 匹配精确短语（子串语义）
   Phrase(String),
-  // Matches a regex (Rust regex syntax)
+  // 匹配正则（Rust 正则语法）
   Regex(regex::Regex),
 }
 
@@ -59,7 +59,7 @@ impl Term {
 pub struct PathFilter {
   include: Option<GlobSet>,
   exclude: Option<GlobSet>,
-  // For simple contains without wildcards
+  // 无通配符时的简单包含判断
   include_contains: Vec<String>,
   exclude_contains: Vec<String>,
 }
@@ -93,7 +93,7 @@ pub struct Query {
   pub terms: Vec<Term>,
   pub expr: Option<Expr>,
   pub path_filter: PathFilter,
-  pub highlights: Vec<String>, // strings to highlight in UI
+  pub highlights: Vec<String>, // 前端用于高亮显示的字符串
 }
 
 impl Query {
