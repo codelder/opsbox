@@ -41,3 +41,24 @@ nohup.out
 
 # Project-specific
 backend/api-gateway/static
+
+# SvelteKit / Vite (frontend)
+.svelte-kit/
+.vite/
+.output/
+.netlify/
+.wrangler/
+frontend/.svelte-kit/
+frontend/.vite/
+frontend/.output/
+frontend/.vercel/
+frontend/.netlify/
+frontend/.wrangler/
+frontend/build/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/.playwright/
+frontend/test-results/
+frontend/vite.config.js.timestamp-*
+frontend/vite.config.ts.timestamp-*

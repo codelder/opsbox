@@ -1,6 +1,0 @@
-# dependencies
-node_modules
-# build output
-.next
-out
-
