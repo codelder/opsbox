@@ -1,0 +1,29 @@
+@import 'tailwindcss';
+
+@font-face {
+    font-family: "Google Sans Code";
+    src: url("/fonts/GoogleSansCode.woff2") format("woff2");
+    font-weight: 200 900;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Google Sans Code";
+    src: url("/fonts/GoogleSansCode-Italic.woff2") format("woff2");
+    font-weight: 200 900;
+    font-style: italic;
+    font-display: swap;
+}
+
+:root {
+  --font-ui: "Google Sans Code", "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+html, body {
+    font-family: var(--font-ui), monospace;
+}
+
+label[for="search"], #logo-label {
+    font-family: var(--font-ui), sans-serif; }
+input#search {
+    font-family: var(--font-ui), sans-serif; }
