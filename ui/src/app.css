@@ -1,5 +1,7 @@
 @import 'tailwindcss';
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @font-face {
   font-family: 'Google Sans Code';
   src: url('/fonts/GoogleSansCode.woff2') format('woff2');
