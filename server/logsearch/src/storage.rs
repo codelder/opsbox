@@ -2,8 +2,8 @@ use std::{io, str::FromStr as _};
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use minio::s3::{ClientBuilder, creds::StaticProvider, http::BaseUrl, types::S3Api as _};
 use minio::s3::types::ToStream;
+use minio::s3::{ClientBuilder, creds::StaticProvider, http::BaseUrl, types::S3Api as _};
 use regex::Regex;
 use thiserror::Error;
 use tokio::io::AsyncRead;

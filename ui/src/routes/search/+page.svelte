@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { env } from '$env/dynamic/public';
 
   // 中文注释：查询字符串、结果列表、加载与错误状态
@@ -110,16 +110,18 @@
   {/if}
 
   {#if error}
-    <div class="mb-4 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+    <div
+      class="mb-4 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
+    >
       出错了：{error}
     </div>
   {/if}
-
   <!-- 中文注释：结果列表（流式追加） -->
+
   <div class="space-y-3">
     {#each results as item, i}
-      <div class="rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-        <pre class="whitespace-pre-wrap break-words text-sm leading-relaxed">{JSON.stringify(item, null, 2)}</pre>
+      <div class="rounded border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+        <pre class="text-sm leading-relaxed break-words whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
       </div>
     {/each}
 
@@ -128,4 +130,3 @@
     {/if}
   </div>
 </div>
-

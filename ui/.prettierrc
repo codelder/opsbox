@@ -9,7 +9,11 @@
     {
       "files": "*.svelte",
       "options": {
-        "parser": "svelte"
+        "parser": "svelte",
+        "svelteStrictMode": false,
+        "svelteAllowShorthand": true,
+        "svelteIndentScriptAndStyle": true,
+        "embeddedLanguageFormatting": "auto"
       }
     }
   ],

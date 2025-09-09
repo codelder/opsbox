@@ -7,8 +7,12 @@
       // 在第一时间根据本地存储或系统偏好设置暗色/浅色，避免页面闪烁
       (function () {
         try {
-          var saved = localStorage.getItem('theme');
-          var t = saved ? saved : (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          const saved = localStorage.getItem('theme');
+          const t = saved
+            ? saved
+            : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
           if (t === 'dark') document.documentElement.classList.add('dark');
           else document.documentElement.classList.remove('dark');
         } catch (e) {
