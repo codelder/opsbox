@@ -1,3 +1,4 @@
+use crate::bbip_service::derive_plan;
 use crate::{
   renderer::{render_json_chunks, render_markdown},
   search::{Search as _, SearchError},
@@ -15,7 +16,6 @@ use serde_json;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use crate::bbip_service::plan_from_q;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -107,30 +107,48 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
 async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
 
+  // 整体起始时间（仅用于粗粒度耗时调试）
+  let overall_start = std::time::Instant::now();
+
   // 通过服务从 q 中解析日期属性并生成文件路径，同时返回清理后的 q
+  let plan_start = std::time::Instant::now();
   let base_dir = "/Users/wangyue/Downloads/log";
   let buckets = ["20", "21", "22", "23"];
-  let plan = plan_from_q(base_dir, &buckets, &body.q);
-  let files = plan.files;
-  let q_for_search = plan.cleaned_q;
+  let plan = derive_plan(base_dir, &buckets, &body.q);
+  let files = plan.paths;
+  let q_for_search = plan.cleaned_query;
+  eprintln!(
+    "耗时调试: 规划完成，文件数={}，日期区间=[{}..={}], 规划耗时={:?}",
+    files.len(),
+    plan.range.start,
+    plan.range.end,
+    plan_start.elapsed()
+  );
 
+  let parse_start = std::time::Instant::now();
   let spec = crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let parse_dur = parse_start.elapsed();
   let highlights = spec.highlights.clone();
   let ctx = body.context.unwrap_or(3);
+  eprintln!("耗时调试: 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
 
   for path in files {
     let txc = tx.clone();
     let specc = spec.clone();
     let highlights_c = highlights.clone();
     tokio::spawn(async move {
+      let file_start = std::time::Instant::now();
       let Ok(reader) = tokio::fs::File::open(&path).await.map_err(|e| StorageError::from(e)) else {
+        eprintln!("耗时调试: 打开文件失败 path={}", path);
         return;
       };
 
       let Ok(mut stream) = reader.search(&specc, ctx).await else {
+        eprintln!("耗时调试: 启动检索失败 path={}", path);
         return;
       };
 
+      let mut produced: usize = 0;
       while let Some(result) = stream.recv().await {
         let json_obj = render_json_chunks(
           &format!("{}:{}", path, &result.path),
@@ -141,10 +159,19 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
         if let Ok(mut v) = serde_json::to_vec(&json_obj) {
           v.push(b'\n');
           let _ = txc.send(Ok(bytes::Bytes::from(v))).await;
+          produced += 1;
         }
       }
+      eprintln!(
+        "耗时调试: 文件处理完成 path={}，输出记录={}，耗时={:?}",
+        path,
+        produced,
+        file_start.elapsed()
+      );
     });
   }
+
+  eprintln!("耗时调试: 任务已派发，整体耗时(至返回响应构建前)={:?}", overall_start.elapsed());
 
   // 关闭原始发送端，待各并发任务结束后自动结束流
   drop(tx);
