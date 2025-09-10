@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { env } from '$env/dynamic/public';
 
   // 中文注释：查询字符串、结果列表、加载与错误状态
   let q = $state('');
+  let date = $state('');
   let results = $state<Array<Record<string, any>>>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -12,7 +13,7 @@
   let controller: AbortController | null = null;
 
   // 中文注释：启动流式搜索
-  async function startSearch(query: string) {
+  async function startSearch(query: string, dateParam: string) {
     // 清理上一次的流
     controller?.abort();
     controller = new AbortController();
@@ -27,6 +28,9 @@
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
       const endpoint = `${API_BASE}/stream.ndjson`;
 
+      const payload: Record<string, any> = { q: query };
+      if (dateParam) payload.date = dateParam;
+
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -34,7 +38,7 @@
           Accept: 'application/x-ndjson',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ q: query }),
+        body: JSON.stringify(payload),
         signal
       });
 
@@ -87,8 +91,11 @@
   onMount(() => {
     const params = new URL(window.location.href).searchParams;
     const initial = (params.get('q') || '').trim();
+    // const initialDate = (params.get('date') || '').trim();
+    const initialDate = '20250818';
     q = initial;
-    if (initial) startSearch(initial);
+    date = initialDate;
+    if (initial) startSearch(initial, initialDate);
   });
 
   onDestroy(() => {
@@ -116,12 +123,12 @@
       出错了：{error}
     </div>
   {/if}
-  <!-- 中文注释：结果列表（流式追加） -->
 
+  <!-- 中文注释：结果列表（流式追加） -->
   <div class="space-y-3">
     {#each results as item, i}
       <div class="rounded border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-        <pre class="text-sm leading-relaxed break-words whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
+        <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
       </div>
     {/each}
 
