@@ -4,37 +4,103 @@
 
   // 中文注释：查询字符串、结果列表、加载与错误状态
   let q = $state('');
-  let date = $state('');
   let results = $state<Array<Record<string, any>>>([]);
-  let loading = $state(false);
+  let loading = $state(false); // 当前是否正在读取一批
   let error = $state<string | null>(null);
 
-  // 中文注释：用于取消请求的控制器
-  let controller: AbortController | null = null;
+  // 中文注释：分页控制（每批 20 条）
+  const PAGE_SIZE = 20;
+  let hasMore = $state(true); // 是否还有更多可读
+  let paused = $state(false); // 是否处于“暂停等待加载更多”状态
 
-  // 中文注释：启动流式搜索
-  async function startSearch(query: string, dateParam: string) {
-    // 清理上一次的流
+  // 中文注释：流读取持久状态
+  let controller: AbortController | null = null; // 取消当前请求
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null; // 当前响应的 reader
+  let decoder: TextDecoder | null = null; // 统一的 TextDecoder
+  let buffer = $state(''); // 分片缓冲（可能出现半行）
+
+  // 中文注释：读取一批（最多 PAGE_SIZE 条）。读满或读到流结束就停止。
+  async function readBatch(maxItems = PAGE_SIZE) {
+    if (!reader) return;
+    loading = true;
+    paused = false;
+    let produced = 0;
+    try {
+      while (produced < maxItems && reader) {
+        const { done, value } = await reader.read();
+        if (done) {
+          // 处理尾部残留
+          const last = buffer.trim();
+          if (last) {
+            try {
+              const obj = JSON.parse(last);
+              results = [...results, obj];
+            } catch (e) {
+              console.error('解析 NDJSON 尾行失败：', e, last);
+            }
+            buffer = '';
+          }
+          hasMore = false;
+          break;
+        }
+        const dec = decoder ?? (decoder = new TextDecoder());
+        buffer += dec.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const obj = JSON.parse(trimmed);
+            results = [...results, obj];
+            produced += 1;
+            if (produced >= maxItems) {
+              break;
+            }
+          } catch (e) {
+            // 中文报错：单行解析失败不阻断整体
+            console.error('解析 NDJSON 行失败：', e, trimmed);
+          }
+        }
+      }
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return; // 主动取消
+      error = e?.message || '搜索过程中发生未知错误';
+      hasMore = false;
+      reader = null;
+    } finally {
+      loading = false;
+      // 若还有更多但已达到本批上限，则进入暂停态，等待“加载更多”
+      if (hasMore && produced >= maxItems) {
+        paused = true;
+      }
+    }
+  }
+
+  // 中文注释：启动流式搜索（重置状态并读取首批）
+  async function startSearch(query: string) {
+    // 终止上一次
     controller?.abort();
     controller = new AbortController();
     const signal = controller.signal;
 
+    // 重置状态
     results = [];
-    loading = true;
     error = null;
+    hasMore = true;
+    paused = false;
+    buffer = '';
+    decoder = null;
+    reader = null;
 
     try {
-      // 中文注释：API 基地址可通过 PUBLIC_API_BASE 配置，默认使用 /api/v1/logsearch
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
       const endpoint = `${API_BASE}/stream.ndjson`;
-
       const payload: Record<string, any> = { q: query };
-      if (dateParam) payload.date = dateParam;
 
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
-          // 中文注释：声明期待 NDJSON
           Accept: 'application/x-ndjson',
           'Content-Type': 'application/json'
         },
@@ -46,74 +112,71 @@
         throw new Error(`服务端返回异常状态：${res.status}`);
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          try {
-            const obj = JSON.parse(trimmed);
-            results = [...results, obj];
-          } catch (e) {
-            // 中文报错：单行解析失败不阻断整体
-            console.error('解析 NDJSON 行失败：', e, trimmed);
-          }
-        }
-      }
-
-      // 中文注释：处理末尾残留（无换行结尾）
-      const last = buffer.trim();
-      if (last) {
-        try {
-          const obj = JSON.parse(last);
-          results = [...results, obj];
-        } catch (e) {
-          console.error('解析 NDJSON 尾行失败：', e, last);
-        }
-      }
+      reader = res.body.getReader();
+      await readBatch(PAGE_SIZE);
     } catch (e: any) {
-      if (e?.name === 'AbortError') return; // 中文注释：主动取消不视为错误
+      if (e?.name === 'AbortError') return; // 主动取消不视为错误
       error = e?.message || '搜索过程中发生未知错误';
-    } finally {
-      loading = false;
+      hasMore = false;
+      reader = null;
     }
+  }
+
+  // 中文注释：继续读取下一批
+  async function loadMore() {
+    if (loading || !hasMore) return;
+    await readBatch(PAGE_SIZE);
   }
 
   // 中文注释：从地址栏读取 ?q=，并在客户端启动搜索
   onMount(() => {
     const params = new URL(window.location.href).searchParams;
     const initial = (params.get('q') || '').trim();
-    // const initialDate = (params.get('date') || '').trim();
-    const initialDate = '20250818';
     q = initial;
-    date = initialDate;
-    if (initial) startSearch(initial, initialDate);
+    if (initial) startSearch(initial);
   });
 
   onDestroy(() => {
     controller?.abort();
   });
+
+  // 中文注释：表单提交（支持在页面内触发新搜索）
+  function handleSubmit(e: Event) {
+    e.preventDefault();
+    const next = q.trim();
+    if (!next) return;
+    startSearch(next);
+  }
 </script>
 
 <!-- 中文注释：页面标题与状态栏 -->
 <div class="mx-auto max-w-5xl px-4 py-6">
   <h1 class="mb-4 text-xl font-semibold">搜索结果</h1>
+
+  <form class="mb-4 flex gap-2" on:submit|preventDefault={handleSubmit}>
+    <input
+      class="flex-1 rounded border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
+      placeholder="输入关键词（可包含 dt:YYYYMMDD / fdt:YYYYMMDD / tdt:YYYYMMDD）"
+      bind:value={q}
+    />
+    <button
+      class="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50"
+      disabled={loading}
+    >搜索</button>
+  </form>
+
   {#if q}
-    <p class="mb-6 text-sm text-gray-600 dark:text-gray-300">关键词：<span class="font-mono">{q}</span></p>
+    <p class="mb-4 text-sm text-gray-600 dark:text-gray-300">关键词：<span class="font-mono">{q}</span></p>
   {:else}
     <p class="mb-6 text-sm text-gray-600 dark:text-gray-300">请输入关键词后回车进行搜索。</p>
   {/if}
 
   {#if loading}
-    <div class="mb-4 text-sm text-blue-600 dark:text-blue-400">正在加载（流式传输中）…</div>
+    <div class="mb-2 text-sm text-blue-600 dark:text-blue-400">正在加载（本批）…</div>
+  {/if}
+
+  {#if paused && hasMore}
+    <div class="mb-2 text-sm text-gray-600 dark:text-gray-300">已加载 {PAGE_SIZE} 条，已暂停。</div>
   {/if}
 
   {#if error}
@@ -134,6 +197,21 @@
 
     {#if !loading && !error && results.length === 0 && q}
       <div class="text-sm text-gray-500 dark:text-gray-400">没有匹配结果。</div>
+    {/if}
+  </div>
+
+  <!-- 中文注释：分页控制按钮 -->
+  <div class="mt-6 flex items-center gap-3">
+    {#if hasMore}
+      <button
+        class="rounded bg-gray-700 px-3 py-2 text-sm text-white disabled:opacity-50"
+        on:click|preventDefault={loadMore}
+        disabled={loading}
+      >{loading ? '加载中…' : '加载更多'}</button>
+    {:else}
+      {#if results.length > 0}
+        <span class="text-sm text-gray-500 dark:text-gray-400">已到结尾。</span>
+      {/if}
     {/if}
   </div>
 </div>
