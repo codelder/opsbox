@@ -99,6 +99,76 @@
     return out;
   }
 
+  // 中文注释：长行截断（优先保留首次命中关键字），支持左右“省略号”点击展开
+  function snippet(
+    line: string,
+    keywords: string[],
+    opts: { max?: number; context?: number } = {}
+  ): { html: string; leftTrunc: boolean; rightTrunc: boolean } {
+    const max = opts.max ?? 180;
+    const ctx = opts.context ?? 50;
+    if (line.length <= max) {
+      return { html: highlight(line, keywords), leftTrunc: false, rightTrunc: false };
+    }
+    const kws = (keywords || []).filter((k) => k && k.length > 0);
+    let firstIdx = -1;
+    let firstLen = 0;
+    for (const kw of kws) {
+      const idx = line.indexOf(kw);
+      if (idx !== -1 && (firstIdx === -1 || idx < firstIdx)) {
+        firstIdx = idx;
+        firstLen = kw.length;
+      }
+    }
+    let start = 0;
+    let end = 0;
+    if (firstIdx >= 0) {
+      start = Math.max(0, firstIdx - ctx);
+      end = Math.min(line.length, firstIdx + firstLen + ctx);
+      if (end - start < max) {
+        const deficit = max - (end - start);
+        const addLeft = Math.min(start, Math.floor(deficit / 2));
+        const addRight = Math.min(line.length - end, deficit - addLeft);
+        start -= addLeft;
+        end += addRight;
+      }
+    } else {
+      start = 0;
+      end = max;
+    }
+    const leftTrunc = start > 0;
+    const rightTrunc = end < line.length;
+    const slice = line.slice(start, end);
+    return { html: highlight(slice, keywords), leftTrunc, rightTrunc };
+  }
+
+  // 中文注释：每个结果的 UI 状态（折叠、展开所有匹配、单行展开）
+  const collapsedFiles = new Set<number>();
+  const expandedAllMatches = new Set<number>();
+  const expandedLines = new Set<string>();
+  const lineKey = (fileIdx: number, chunkIdx: number, lineIdx: number) => `${fileIdx}-${chunkIdx}-${lineIdx}`;
+  function isFileCollapsed(i: number) { return collapsedFiles.has(i); }
+  function toggleFileCollapsed(i: number) { if (collapsedFiles.has(i)) collapsedFiles.delete(i); else collapsedFiles.add(i); }
+  function isFileShowAll(i: number) { return expandedAllMatches.has(i); }
+  function toggleFileShowAll(i: number) { if (expandedAllMatches.has(i)) expandedAllMatches.delete(i); else expandedAllMatches.add(i); }
+  function isLineExpanded(key: string) { return expandedLines.has(key); }
+  function expandLine(key: string) { expandedLines.add(key); }
+
+  // 中文注释：扁平化为行数组，便于“仅显示前6行”
+  function flattenLines(item: any): Array<{ no: number; text: string; _ci: number; _li: number }> {
+    const arr: Array<{ no: number; text: string; _ci: number; _li: number }> = [];
+    (item?.chunks || []).forEach((chunk: any, ci: number) => {
+      (chunk?.lines || []).forEach((ln: any, li: number) => arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li }));
+    });
+    return arr;
+  }
+  function totalMatches(item: any): number { return flattenLines(item).length; }
+  function visibleLines(item: any, fileIdx: number): Array<{ no: number; text: string; _ci: number; _li: number }> {
+    const flat = flattenLines(item);
+    if (expandedAllMatches.has(fileIdx)) return flat;
+    return flat.slice(0, Math.min(6, flat.length));
+  }
+
   // 中文注释：启动流式搜索（重置状态并读取首批）
   async function startSearch(query: string) {
     // 终止上一次
@@ -181,10 +251,8 @@
       placeholder="输入关键词（可包含 dt:YYYYMMDD / fdt:YYYYMMDD / tdt:YYYYMMDD）"
       bind:value={q}
     />
-    <button
-      class="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50"
-      disabled={loading}
-    >搜索</button>
+    <button class="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50" disabled={loading}>搜索</button
+    >
   </form>
 
   {#if q}
@@ -213,28 +281,62 @@
   <div class="space-y-6">
     {#each results as item, i}
       {#if item && item.path && item.chunks}
-        <div class="rounded border border-gray-200 dark:border-gray-700 overflow-hidden">
-          <!-- 结果头：文件路径 -->
-          <div class="flex items-center justify-between bg-gray-50 px-3 py-2 text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+        <div class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
+          <!-- 结果头：文件路径（可折叠） -->
+          <button
+            type="button"
+            class="w-full text-left flex items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+            on:click={() => toggleFileCollapsed(i)}
+          >
             <div class="truncate font-mono">{item.path}</div>
-            {#if item.keywords?.length}
-              <div class="ml-2 shrink-0 text-gray-500 dark:text-gray-400">{item.keywords.join(', ')}</div>
-            {/if}
-          </div>
+            <div class="ml-2 shrink-0 flex items-center gap-3">
+              {#if item.keywords?.length}
+                <span class="hidden sm:inline text-gray-500 dark:text-gray-400">{item.keywords.join(', ')}</span>
+              {/if}
+              <span class="text-gray-400">{isFileCollapsed(i) ? '▶' : '▼'}</span>
+            </div>
+          </button>
 
-          <!-- 代码块区域：行号 + 内容 -->
-          <div class="bg-white dark:bg-gray-800">
-            {#each item.chunks as chunk}
-              <div class="border-b border-gray-100 dark:border-gray-700">
-                {#each chunk.lines as ln}
-                  <div class="grid grid-cols-[72px_1fr] gap-0 font-mono text-[13px] leading-[20px]">
-                    <div class="select-none text-right px-3 py-0.5 text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-900 border-r border-gray-100 dark:border-gray-700">{ln.no}</div>
-                    <div class="px-3 py-0.5 whitespace-pre-wrap break-words">{@html highlight(ln.text, item.keywords)}</div>
+          {#if !isFileCollapsed(i)}
+            <!-- 代码块区域：行号 + 内容（默认仅前6行） -->
+            <div class="bg-white dark:bg-gray-800">
+              {#each visibleLines(item, i) as ln (i + '-' + ln._ci + '-' + ln._li)}
+                <div class="grid grid-cols-[72px_1fr] gap-0 font-mono text-[13px] leading-[20px]">
+                  <div class="border-r border-gray-100 bg-gray-50 px-3 py-0.5 text-right text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-500">{ln.no}</div>
+                  <div class="px-3 py-0.5 whitespace-pre-wrap break-words">
+                    {#if isLineExpanded(lineKey(i, ln._ci, ln._li))}
+                      <span>{@html highlight(ln.text, item.keywords)}</span>
+                    {:else}
+                      {#key i + '-' + ln._ci + '-' + ln._li + '-snippet'}
+                        {#let sn = snippet(ln.text, item.keywords)}
+                          {#if sn.leftTrunc}
+                            <a href="#" class="text-blue-600 hover:underline" on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a>
+                          {/if}
+                          <span>{@html sn.html}</span>
+                          {#if sn.rightTrunc}
+                            <a href="#" class="text-blue-600 hover:underline" on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a>
+                          {/if}
+                        {/let}
+                      {/key}
+                    {/if}
                   </div>
-                {/each}
+                </div>
+              {/each}
+            </div>
+
+            <!-- 卡片 foot：展开更多 matches -->
+            {#if totalMatches(item) > visibleLines(item, i).length}
+              <div class="border-t border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
+                <button class="text-blue-600 hover:underline" on:click={() => toggleFileShowAll(i)}>
+                  {#if isFileShowAll(i)}
+                    Show fewer matches
+                  {:else}
+                    Show {totalMatches(item) - visibleLines(item, i).length} more matches
+                  {/if}
+                </button>
               </div>
-            {/each}
-          </div>
+            {/if}
+          {/if}
         </div>
       {:else}
         <!-- 兼容其他对象：兜底显示 -->
@@ -255,12 +357,10 @@
       <button
         class="rounded bg-gray-700 px-3 py-2 text-sm text-white disabled:opacity-50"
         on:click|preventDefault={loadMore}
-        disabled={loading}
-      >{loading ? '加载中…' : '加载更多'}</button>
-    {:else}
-      {#if results.length > 0}
-        <span class="text-sm text-gray-500 dark:text-gray-400">已到结尾。</span>
-      {/if}
+        disabled={loading}>{loading ? '加载中…' : '加载更多'}</button
+      >
+    {:else if results.length > 0}
+      <span class="text-sm text-gray-500 dark:text-gray-400">已到结尾。</span>
     {/if}
   </div>
 </div>
