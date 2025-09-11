@@ -1,0 +1,99 @@
+# 查询字符串快速生成指南（面向大模型）
+
+目标：指导大模型把自然语言需求快速转换为检索用的查询字符串（q），不涉及系统内部实现。
+
+使用原则（必须掌握）
+- AND：空格即 AND；也可显式写 AND（两者等价）
+- OR：必须大写 OR（小写 or 视为普通词）
+- NOT：前缀 -，可作用于词或括号组（例如 -debug、-(a OR b)）
+- 分组：用括号 (...) 控制优先级（NOT > AND > OR）
+- 短语匹配：用双引号包裹精确短语 "..."（仅当用户原文使用引号或明确要求“精确短语”时才加引号；不要为普通关键词或逻辑表达式整体加引号）
+- 正则匹配：用 /.../（仅在确有正则需求时使用）
+- 路径限定：
+  - 包含：path:<pattern>
+  - 排除：-path:<pattern>
+  - 注意：必须是小写 path:，且冒号后不要有空格（path:logs/*.log）
+- 日期选择（仅用于选择文件时间范围）：
+  - 单日：dt:YYYYMMDD
+  - 区间：fdt:YYYYMMDD tdt:YYYYMMDD
+  - 若用户未提日期，通常不要主动添加日期指令
+
+构造套路（把自然语言意图映射为 q）
+- 同时出现（文件级共现）：a b（等价 a AND b；表示二者出现在同一文件中，未限定同一行）
+- 同一行同时出现（行级共现）：/(a.*b|b.*a)/（二者在同一行，顺序任意；用具体词替换 a、b）
+- 至少其一（择一）：a OR b
+- 排除某词：a -b
+- 精确短语："some phrase"
+- 复杂逻辑：用括号显式分组：(a OR b) c、-(a OR b) c
+- 路径范围：path:logs/*.log a、a -path:node_modules/
+- 正则编号/模式：/ERR\d{3}/、/user-\d+/
+- 指定日期：a dt:20250909 或 a fdt:20250901 tdt:20250907
+
+生成规范（大模型应遵循）
+- 仅输出最终 q 字符串，不加解释或多余标点
+- 若用户给出若干“可能的同义关键词”，用 OR 连接
+- 若用户给出“必须同时包含”的多个条件，用空格（AND）连接（文件级共现）
+- 当用户要求“同一行包含多个关键词”时，使用正则 /(A.*B|B.*A)/（按需替换 A、B），而不是写成 "A B"
+- 若用户表达“不要/排除”，使用前缀 -
+- 不要为用户未加引号的关键词自动加引号
+- 对“确切短语”才使用双引号；对“模式/编号”可用正则
+- 用户要求“限定目录/文件类型”时使用 path: 或其否定 -path:
+- 用户明确给出日期或日期范围时，才添加 dt/fdt/tdt 指令（YYYYMMDD）
+
+示例（从自然语言到 q）
+- 查找同时包含 error 与 timeout：
+  - error timeout
+- 查找 error 或 timeout（至少其一）：
+  - error OR timeout
+- 查找包含 error 但不包含 debug：
+  - error -debug
+- 查找精确短语 connection reset：
+  - "connection reset"
+- 查找 ERR 后跟 3 位数字：
+  - /ERR\d{3}/
+- 限定只在 logs 目录下的 .log 文件搜索 foo：
+  - path:logs/*.log foo
+- 排除 node_modules 目录内的 bar：
+  - bar -path:node_modules/
+- (foo 或 bar) 且包含 baz：
+  - (foo OR bar) baz
+- 排除 (bad 或 warning) 且包含 ok：
+  - -(bad OR warning) ok
+- 仅 2025-09-09 当日的 error：
+  - error dt:20250909
+- 2025-09-01 至 2025-09-07 范围内的 login：
+  - login fdt:20250901 tdt:20250907
+- 指定 2025-08-18 的 srsp/trace 目录下“同一行”包含 foo 和 bar：
+  - path:srsp/trace /(foo.*bar|bar.*foo)/ dt:20250818
+- Java 相关错误（同义词并列）：
+  - (exception OR error) java
+- 网络连接重置或 5xx 状态：
+  - "connection reset" OR /5\d\d/
+- 仅限前端资源目录的超时：
+  - path:frontend/** timeout
+- 查找带 user-数字 的行且不含 test：
+  - /user-\d+/ -test
+
+Do / Don’t
+- Do：用空格表达 AND；必要时加括号明确优先级
+- Do：用大写 OR 表达“或”；小写 or 不要用
+- Do：对精确短语加引号；对编号/模式用正则
+- Do：根据用户的“范围/目录/后缀”意图使用 path: 或 -path:
+- Don’t：用户未给日期时，不要随意添加 dt/fdt/tdt
+- Don’t：在 path: 后添加空格（应写 path:pattern）
+- Don’t：用 “A B” 来表达“同一行包含 A 和 B”；应使用正则 /(A.*B|B.*A)/（按需替换 A、B）
+
+少量进阶模板（可直接套用）
+- “关键词A 和 关键词B，但不要C”：
+  - 关键词A 关键词B -C
+- “关键词A 或 B，且同时包含 C 或 D”：
+  - (A OR B) (C OR D)
+- “限定在 X 路径下，包含 A，排除 B”：
+  - path:X A -B
+- “日期区间从 S 到 E，关键词 K”：
+  - K fdt:S tdt:E（S/E 为 YYYYMMDD）
+
+输出要求（供大模型执行）
+- 非常重要!!!:只输出一行 q 字符串 (不输出其他内容，包括对生成字符串的解释)
+- 若需给出多个候选方案，只输出一个最优方案
+
