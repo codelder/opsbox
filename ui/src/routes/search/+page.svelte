@@ -8,7 +8,7 @@
   // 结构类型：与后端 NDJSON 对齐
   type JsonLine = { no: number; text: string };
   type JsonChunk = { range: [number, number] | { 0: number; 1: number }; lines: JsonLine[] };
-  export type SearchJsonResult = { path: string; keywords: string[]; chunks: JsonChunk[] };
+  type SearchJsonResult = { path: string; keywords: string[]; chunks: JsonChunk[] };
   let results = $state<SearchJsonResult[]>([]);
   let loading = $state(false); // 当前是否正在读取一批
   let error = $state<string | null>(null);
@@ -111,8 +111,8 @@
     keywords: string[],
     opts: { max?: number; context?: number } = {}
   ): { html: string; leftTrunc: boolean; rightTrunc: boolean } {
-    const max = opts.max ?? 180;
-    const ctx = opts.context ?? 50;
+    const max = opts.max ?? 540;
+    const ctx = opts.context ?? 230;
     if (line.length <= max) {
       return { html: highlight(line, keywords), leftTrunc: false, rightTrunc: false };
     }
@@ -148,7 +148,7 @@
     return { html: highlight(slice, keywords), leftTrunc, rightTrunc };
   }
 
-  // 中文注释：每个结果的 UI 状态（折叠、展开所有匹配、单行展开）
+  // 每个结果的 UI 状态（折叠、展开所有匹配、单行展开）
   const collapsedFiles = new SvelteSet<number>();
   const expandedAllMatches = new SvelteSet<number>();
   const expandedLines = new SvelteSet<string>();
@@ -174,7 +174,7 @@
     expandedLines.add(key);
   }
 
-  // 中文注释：扁平化为行数组，便于“仅显示前6行”
+  // 扁平化为行数组，便于“仅显示前6行”
   function flattenLines(item: SearchJsonResult): Array<{ no: number; text: string; _ci: number; _li: number }> {
     const arr: Array<{ no: number; text: string; _ci: number; _li: number }> = [];
     (item?.chunks || []).forEach((chunk: JsonChunk, ci: number) => {
@@ -211,6 +211,8 @@
     buffer = '';
     decoder = null;
     reader = null;
+    // 启动阶段立即标记加载中（即使暂未收到任何字节）
+    loading = true;
 
     try {
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
@@ -270,18 +272,31 @@
 </script>
 
 <!-- 中文注释：页面标题与状态栏 -->
-<div class="mx-auto max-w-5xl px-4 py-6">
-  <h1 class="mb-4 text-xl font-semibold">搜索结果</h1>
-
-  <form class="mb-4 flex gap-2" on:submit|preventDefault={handleSubmit}>
-    <input
-      class="flex-1 rounded border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-      placeholder="输入关键词（可包含 dt:YYYYMMDD / fdt:YYYYMMDD / tdt:YYYYMMDD）"
-      bind:value={q}
-    />
-    <button class="rounded bg-blue-600 px-3 py-2 text-sm text-white disabled:opacity-50" disabled={loading}>搜索</button
+<div class="mx-auto max-w-[1560px] px-4 py-10">
+  <div class="flex items-center justify-between md:mask-b-from-10">
+    <label
+      for="search"
+      id="logo-label"
+      class="mr-10 mb-4 block text-2xl font-extrabold tracking-[-0.25em] italic antialiased select-none md:text-4xl"
     >
-  </form>
+      <span class="text-blue-600">L</span>
+      <span class="text-red-600">o</span>
+      <span class="text-yellow-500">G</span>
+      <span class="text-green-600">o</span>
+      <span class="text-blue-600">o</span>
+      <span class="text-red-600">g</span>
+      <span class="text-yellow-500">l</span>
+      <span class="text-green-600">e</span>
+    </label>
+
+    <form class="mb-4 flex flex-1 gap-2" onsubmit={handleSubmit}>
+      <input
+        class="h-12 flex-1 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
+        disabled={loading}
+        bind:value={q}
+      />
+    </form>
+  </div>
 
   {#if q}
     <p class="mb-4 text-sm text-gray-600 dark:text-gray-300">关键词：<span class="font-mono">{q}</span></p>
@@ -289,9 +304,7 @@
     <p class="mb-6 text-sm text-gray-600 dark:text-gray-300">请输入关键词后回车进行搜索。</p>
   {/if}
 
-  {#if loading}
-    <div class="mb-2 text-sm text-blue-600 dark:text-blue-400">正在加载（本批）…</div>
-  {/if}
+  <div class="mb-2 text-sm text-blue-600 dark:text-blue-400">{loading}</div>
 
   {#if paused && hasMore}
     <div class="mb-2 text-sm text-gray-600 dark:text-gray-300">已加载 {PAGE_SIZE} 条，已暂停。</div>
@@ -306,7 +319,11 @@
   {/if}
 
   <!-- 中文注释：结果列表（GitHub 风格） -->
-  <div class="space-y-6">
+  <div class="mt-4 text-sm text-blue-600 dark:text-blue-400">
+    {#if loading}正在加载…{/if}
+  </div>
+
+  <div class="mt-10 space-y-6">
     {#each results as item, i (item.path + '-' + i)}
       {#if item && item.path && item.chunks}
         <div class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
@@ -314,7 +331,7 @@
           <button
             type="button"
             class="flex w-full items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
-            on:click={() => toggleFileCollapsed(i)}
+            onclick={() => toggleFileCollapsed(i)}
           >
             <div class="truncate font-mono">{item.path}</div>
             <div class="ml-2 flex shrink-0 items-center gap-3">
@@ -335,25 +352,25 @@
                   >
                     {ln.no}
                   </div>
-                  <div class="px-3 py-0.5 break-words whitespace-pre-wrap">
+                  <div class="px-3 py-0.5 break-all whitespace-pre-wrap">
                     {#if isLineExpanded(lineKey(i, ln._ci, ln._li))}
                       <span>{@html highlight(ln.text, item.keywords)}</span>
                     {:else}
                       {#key i + '-' + ln._ci + '-' + ln._li + '-snippet'}
                         {@const sn = snippet(ln.text, item.keywords)}
                         {#if sn.leftTrunc}
-                          <a
-                            href="#"
+                          <button
+                            type="button"
                             class="text-blue-600 hover:underline"
-                            on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a
+                            onclick={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</button
                           >
                         {/if}
                         <span>{@html sn.html}</span>
                         {#if sn.rightTrunc}
-                          <a
-                            href="#"
+                          <button
+                            type="button"
                             class="text-blue-600 hover:underline"
-                            on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a
+                            onclick={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</button
                           >
                         {/if}
                       {/key}
@@ -368,11 +385,11 @@
               <div
                 class="border-t border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
               >
-                <button class="text-blue-600 hover:underline" on:click={() => toggleFileShowAll(i)}>
+                <button class="text-blue-600 hover:underline" onclick={() => toggleFileShowAll(i)}>
                   {#if isFileShowAll(i)}
                     Show fewer matches
                   {:else}
-                    Show {totalMatches(item) - visibleLines(item, i).length} more matches
+                    显示剩余的 {totalMatches(item) - visibleLines(item, i).length} 行
                   {/if}
                 </button>
               </div>
@@ -387,7 +404,7 @@
       {/if}
     {/each}
 
-    {#if !loading && !error && results.length === 0 && q}
+    {#if !loading && !error && results.length === 0 && q && !hasMore}
       <div class="text-sm text-gray-500 dark:text-gray-400">没有匹配结果。</div>
     {/if}
   </div>
@@ -397,7 +414,7 @@
     {#if hasMore}
       <button
         class="rounded bg-gray-700 px-3 py-2 text-sm text-white disabled:opacity-50"
-        on:click|preventDefault={loadMore}
+        onclick={loadMore}
         disabled={loading}>{loading ? '加载中…' : '加载更多'}</button
       >
     {:else if results.length > 0}
