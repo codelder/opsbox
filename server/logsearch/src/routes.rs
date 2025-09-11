@@ -54,6 +54,18 @@ pub struct SearchBody {
   pub context: Option<usize>,
 }
 
+fn stream_channel_capacity() -> usize {
+  // 允许通过环境变量覆盖，默认 256，限定在 [8, 10000]
+  let default_cap = 256usize;
+  match std::env::var("LOGSEARCH_STREAM_CH_CAP")
+    .ok()
+    .and_then(|s| s.parse::<usize>().ok())
+  {
+    Some(v) => v.clamp(8, 10_000),
+    None => default_cap,
+  }
+}
+
 pub fn router() -> Router {
   Router::new()
     .route("/stream", post(stream_markdown))
@@ -105,7 +117,9 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
 }
 
 async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
-  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
+  let cap = stream_channel_capacity();
+  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
+  eprintln!("耗时调试: 建立响应通道，容量={}", cap);
 
   // 整体起始时间（仅用于粗粒度耗时调试）
   let overall_start = std::time::Instant::now();
@@ -126,7 +140,8 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
   );
 
   let parse_start = std::time::Instant::now();
-  let spec = crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let spec =
+    crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
   let parse_dur = parse_start.elapsed();
   let highlights = spec.highlights.clone();
   let ctx = body.context.unwrap_or(3);
@@ -150,16 +165,30 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
 
       let mut produced: usize = 0;
       while let Some(result) = stream.recv().await {
+        // 如前端已停止读取，尽快退出，避免无效开销
+        if txc.is_closed() {
+          eprintln!("耗时调试: 下游通道已关闭，提前结束 path={}", path);
+          return;
+        }
         let json_obj = render_json_chunks(
           &format!("{}:{}", path, &result.path),
           result.merged.clone(),
           result.lines.clone(),
           &highlights_c,
         );
-        if let Ok(mut v) = serde_json::to_vec(&json_obj) {
-          v.push(b'\n');
-          let _ = txc.send(Ok(bytes::Bytes::from(v))).await;
-          produced += 1;
+        match serde_json::to_vec(&json_obj) {
+          Ok(mut v) => {
+            v.push(b'\n');
+            if let Err(_e) = txc.send(Ok(bytes::Bytes::from(v))).await {
+              // 接收端已关闭（客户端断开或响应结束），终止该任务
+              eprintln!("耗时调试: 发送失败(接收端关闭) path={}", path);
+              return;
+            }
+            produced += 1;
+          }
+          Err(e) => {
+            eprintln!("耗时调试: 序列化失败 path={}，err={}", path, e);
+          }
         }
       }
       eprintln!(
@@ -171,12 +200,15 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
     });
   }
 
-  eprintln!("耗时调试: 任务已派发，整体耗时(至返回响应构建前)={:?}", overall_start.elapsed());
+  eprintln!(
+    "耗时调试: 任务已派发，整体耗时(至返回响应构建前)={:?}",
+    overall_start.elapsed()
+  );
 
   // 关闭原始发送端，待各并发任务结束后自动结束流
   drop(tx);
 
-  let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
+  let body = Body::from_stream(ReceiverStream::new(rx));
 
   Ok(
     HttpResponse::builder()
