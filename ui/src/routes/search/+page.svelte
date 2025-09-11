@@ -77,6 +77,28 @@
     }
   }
 
+  // 中文注释：转义与高亮（模仿 GitHub 高亮效果，使用 <mark>）
+  function escapeHtml(s: string): string {
+    return s
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+  function escapeRegExp(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  function highlight(line: string, keywords: string[]): string {
+    let out = escapeHtml(line);
+    const kws = (keywords || []).filter((k) => k && k.length > 0);
+    for (const kw of kws) {
+      const re = new RegExp(escapeRegExp(kw), 'g');
+      out = out.replace(re, (m) => `<mark>${escapeHtml(m)}</mark>`);
+    }
+    return out;
+  }
+
   // 中文注释：启动流式搜索（重置状态并读取首批）
   async function startSearch(query: string) {
     // 终止上一次
@@ -187,12 +209,39 @@
     </div>
   {/if}
 
-  <!-- 中文注释：结果列表（流式追加） -->
-  <div class="space-y-3">
+  <!-- 中文注释：结果列表（GitHub 风格） -->
+  <div class="space-y-6">
     {#each results as item, i}
-      <div class="rounded border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-        <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
-      </div>
+      {#if item && item.path && item.chunks}
+        <div class="rounded border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <!-- 结果头：文件路径 -->
+          <div class="flex items-center justify-between bg-gray-50 px-3 py-2 text-xs text-gray-700 dark:bg-gray-900 dark:text-gray-300 border-b border-gray-200 dark:border-gray-700">
+            <div class="truncate font-mono">{item.path}</div>
+            {#if item.keywords?.length}
+              <div class="ml-2 shrink-0 text-gray-500 dark:text-gray-400">{item.keywords.join(', ')}</div>
+            {/if}
+          </div>
+
+          <!-- 代码块区域：行号 + 内容 -->
+          <div class="bg-white dark:bg-gray-800">
+            {#each item.chunks as chunk}
+              <div class="border-b border-gray-100 dark:border-gray-700">
+                {#each chunk.lines as ln}
+                  <div class="grid grid-cols-[72px_1fr] gap-0 font-mono text-[13px] leading-[20px]">
+                    <div class="select-none text-right px-3 py-0.5 text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-900 border-r border-gray-100 dark:border-gray-700">{ln.no}</div>
+                    <div class="px-3 py-0.5 whitespace-pre-wrap break-words">{@html highlight(ln.text, item.keywords)}</div>
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        </div>
+      {:else}
+        <!-- 兼容其他对象：兜底显示 -->
+        <div class="rounded border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+          <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
+        </div>
+      {/if}
     {/each}
 
     {#if !loading && !error && results.length === 0 && q}
