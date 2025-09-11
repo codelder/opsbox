@@ -69,7 +69,7 @@
                    focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-800 dark:shadow-gray-600 dark:focus:border-gray-400 dark:focus:ring-gray-400"
             id="search"
             name="q"
-            placeholder={`Try: \"connection reset\" OR /JUMPERR\\d+/ -repeater path:**/trace/*.log`}
+            placeholder="Try: &quot;connection reset&quot; OR /JUMPERR\\d+/ -repeater path:**/trace/*.log"
             type="text"
           />
         </div>
@@ -125,7 +125,7 @@
         >
         <button
           class="ml-2 underline underline-offset-2 hover:text-gray-200"
-          on:click={() => insertSnippet('\"connection reset\" OR /ERR\\d+/ -debug path:logs/*.log')}
+          on:click={() => insertSnippet('"connection reset" OR /ERR\\d+/ -debug path:logs/*.log')}
           title="插入完整示例"
           type="button"
         >

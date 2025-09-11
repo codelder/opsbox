@@ -11,7 +11,7 @@
     else root.classList.remove('dark');
     try {
       localStorage.setItem('theme', t);
-    } catch (_) {
+    } catch {
       // 在某些环境（如隐私模式）无法访问 localStorage，忽略错误
     }
   }
@@ -29,7 +29,7 @@
       const initial = saved ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       theme = initial;
       applyTheme(initial);
-    } catch (_) {
+    } catch {
       // 忽略本地存储相关错误
     }
   });

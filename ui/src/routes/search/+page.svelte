@@ -1,10 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
   import { env } from '$env/dynamic/public';
 
   // 中文注释：查询字符串、结果列表、加载与错误状态
   let q = $state('');
-  let results = $state<Array<Record<string, any>>>([]);
+  // 结构类型：与后端 NDJSON 对齐
+  type JsonLine = { no: number; text: string };
+  type JsonChunk = { range: [number, number] | { 0: number; 1: number }; lines: JsonLine[] };
+  export type SearchJsonResult = { path: string; keywords: string[]; chunks: JsonChunk[] };
+  let results = $state<SearchJsonResult[]>([]);
   let loading = $state(false); // 当前是否正在读取一批
   let error = $state<string | null>(null);
 
@@ -63,9 +68,10 @@
           }
         }
       }
-    } catch (e: any) {
-      if (e?.name === 'AbortError') return; // 主动取消
-      error = e?.message || '搜索过程中发生未知错误';
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { name?: string; message?: string }) : {};
+      if (err.name === 'AbortError') return; // 主动取消
+      error = err.message || '搜索过程中发生未知错误';
       hasMore = false;
       reader = null;
     } finally {
@@ -143,27 +149,48 @@
   }
 
   // 中文注释：每个结果的 UI 状态（折叠、展开所有匹配、单行展开）
-  const collapsedFiles = new Set<number>();
-  const expandedAllMatches = new Set<number>();
-  const expandedLines = new Set<string>();
+  const collapsedFiles = new SvelteSet<number>();
+  const expandedAllMatches = new SvelteSet<number>();
+  const expandedLines = new SvelteSet<string>();
   const lineKey = (fileIdx: number, chunkIdx: number, lineIdx: number) => `${fileIdx}-${chunkIdx}-${lineIdx}`;
-  function isFileCollapsed(i: number) { return collapsedFiles.has(i); }
-  function toggleFileCollapsed(i: number) { if (collapsedFiles.has(i)) collapsedFiles.delete(i); else collapsedFiles.add(i); }
-  function isFileShowAll(i: number) { return expandedAllMatches.has(i); }
-  function toggleFileShowAll(i: number) { if (expandedAllMatches.has(i)) expandedAllMatches.delete(i); else expandedAllMatches.add(i); }
-  function isLineExpanded(key: string) { return expandedLines.has(key); }
-  function expandLine(key: string) { expandedLines.add(key); }
+  function isFileCollapsed(i: number) {
+    return collapsedFiles.has(i);
+  }
+  function toggleFileCollapsed(i: number) {
+    if (collapsedFiles.has(i)) collapsedFiles.delete(i);
+    else collapsedFiles.add(i);
+  }
+  function isFileShowAll(i: number) {
+    return expandedAllMatches.has(i);
+  }
+  function toggleFileShowAll(i: number) {
+    if (expandedAllMatches.has(i)) expandedAllMatches.delete(i);
+    else expandedAllMatches.add(i);
+  }
+  function isLineExpanded(key: string) {
+    return expandedLines.has(key);
+  }
+  function expandLine(key: string) {
+    expandedLines.add(key);
+  }
 
   // 中文注释：扁平化为行数组，便于“仅显示前6行”
-  function flattenLines(item: any): Array<{ no: number; text: string; _ci: number; _li: number }> {
+  function flattenLines(item: SearchJsonResult): Array<{ no: number; text: string; _ci: number; _li: number }> {
     const arr: Array<{ no: number; text: string; _ci: number; _li: number }> = [];
-    (item?.chunks || []).forEach((chunk: any, ci: number) => {
-      (chunk?.lines || []).forEach((ln: any, li: number) => arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li }));
+    (item?.chunks || []).forEach((chunk: JsonChunk, ci: number) => {
+      (chunk?.lines || []).forEach((ln: JsonLine, li: number) =>
+        arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li })
+      );
     });
     return arr;
   }
-  function totalMatches(item: any): number { return flattenLines(item).length; }
-  function visibleLines(item: any, fileIdx: number): Array<{ no: number; text: string; _ci: number; _li: number }> {
+  function totalMatches(item: SearchJsonResult): number {
+    return flattenLines(item).length;
+  }
+  function visibleLines(
+    item: SearchJsonResult,
+    fileIdx: number
+  ): Array<{ no: number; text: string; _ci: number; _li: number }> {
     const flat = flattenLines(item);
     if (expandedAllMatches.has(fileIdx)) return flat;
     return flat.slice(0, Math.min(6, flat.length));
@@ -188,7 +215,7 @@
     try {
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
       const endpoint = `${API_BASE}/stream.ndjson`;
-      const payload: Record<string, any> = { q: query };
+      const payload: { q: string } = { q: query };
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -206,9 +233,10 @@
 
       reader = res.body.getReader();
       await readBatch(PAGE_SIZE);
-    } catch (e: any) {
-      if (e?.name === 'AbortError') return; // 主动取消不视为错误
-      error = e?.message || '搜索过程中发生未知错误';
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { name?: string; message?: string }) : {};
+      if (err.name === 'AbortError') return; // 主动取消不视为错误
+      error = err.message || '搜索过程中发生未知错误';
       hasMore = false;
       reader = null;
     }
@@ -279,19 +307,19 @@
 
   <!-- 中文注释：结果列表（GitHub 风格） -->
   <div class="space-y-6">
-    {#each results as item, i}
+    {#each results as item, i (item.path + '-' + i)}
       {#if item && item.path && item.chunks}
         <div class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
           <!-- 结果头：文件路径（可折叠） -->
           <button
             type="button"
-            class="w-full text-left flex items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+            class="flex w-full items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
             on:click={() => toggleFileCollapsed(i)}
           >
             <div class="truncate font-mono">{item.path}</div>
-            <div class="ml-2 shrink-0 flex items-center gap-3">
+            <div class="ml-2 flex shrink-0 items-center gap-3">
               {#if item.keywords?.length}
-                <span class="hidden sm:inline text-gray-500 dark:text-gray-400">{item.keywords.join(', ')}</span>
+                <span class="hidden text-gray-500 sm:inline dark:text-gray-400">{item.keywords.join(', ')}</span>
               {/if}
               <span class="text-gray-400">{isFileCollapsed(i) ? '▶' : '▼'}</span>
             </div>
@@ -302,21 +330,32 @@
             <div class="bg-white dark:bg-gray-800">
               {#each visibleLines(item, i) as ln (i + '-' + ln._ci + '-' + ln._li)}
                 <div class="grid grid-cols-[72px_1fr] gap-0 font-mono text-[13px] leading-[20px]">
-                  <div class="border-r border-gray-100 bg-gray-50 px-3 py-0.5 text-right text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-500">{ln.no}</div>
-                  <div class="px-3 py-0.5 whitespace-pre-wrap break-words">
+                  <div
+                    class="border-r border-gray-100 bg-gray-50 px-3 py-0.5 text-right text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-500"
+                  >
+                    {ln.no}
+                  </div>
+                  <div class="px-3 py-0.5 break-words whitespace-pre-wrap">
                     {#if isLineExpanded(lineKey(i, ln._ci, ln._li))}
                       <span>{@html highlight(ln.text, item.keywords)}</span>
                     {:else}
                       {#key i + '-' + ln._ci + '-' + ln._li + '-snippet'}
-                        {#let sn = snippet(ln.text, item.keywords)}
-                          {#if sn.leftTrunc}
-                            <a href="#" class="text-blue-600 hover:underline" on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a>
-                          {/if}
-                          <span>{@html sn.html}</span>
-                          {#if sn.rightTrunc}
-                            <a href="#" class="text-blue-600 hover:underline" on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a>
-                          {/if}
-                        {/let}
+                        {@const sn = snippet(ln.text, item.keywords)}
+                        {#if sn.leftTrunc}
+                          <a
+                            href="#"
+                            class="text-blue-600 hover:underline"
+                            on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a
+                          >
+                        {/if}
+                        <span>{@html sn.html}</span>
+                        {#if sn.rightTrunc}
+                          <a
+                            href="#"
+                            class="text-blue-600 hover:underline"
+                            on:click|preventDefault={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</a
+                          >
+                        {/if}
                       {/key}
                     {/if}
                   </div>
@@ -326,7 +365,9 @@
 
             <!-- 卡片 foot：展开更多 matches -->
             {#if totalMatches(item) > visibleLines(item, i).length}
-              <div class="border-t border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300">
+              <div
+                class="border-t border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+              >
                 <button class="text-blue-600 hover:underline" on:click={() => toggleFileShowAll(i)}>
                   {#if isFileShowAll(i)}
                     Show fewer matches
