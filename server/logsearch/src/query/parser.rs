@@ -1,7 +1,7 @@
 use super::lexer::{Token, TokenKind, tokenize};
 use super::{Expr, ParseError, PathFilter, Query, Term};
 use globset::{Glob, GlobSetBuilder};
-use regex::Regex;
+// 标准 regex 引擎直接通过路径使用：regex::Regex
 
 pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
   let tokens = tokenize(input)?;
@@ -243,12 +243,25 @@ impl Parser {
         kind: TokenKind::RegexBody(body),
         span,
       }) => {
-        let re = Regex::new(&body).map_err(|e| ParseError::InvalidRegex {
-          message: e.to_string(),
-          span,
-        })?;
+        // 根据是否包含 look-around 切换正则引擎
+        let has_lookaround = body.contains("(?=") || body.contains("(?!") || body.contains("(?<=") || body.contains("(?<!");
+        let term = if has_lookaround {
+          match fancy_regex::Regex::new(&body) {
+            Ok(r) => Term::RegexFancy(r),
+            Err(e) => {
+              return Err(ParseError::InvalidRegex { message: e.to_string(), span });
+            }
+          }
+        } else {
+          match regex::Regex::new(&body) {
+            Ok(r) => Term::RegexStd(r),
+            Err(e) => {
+              return Err(ParseError::InvalidRegex { message: e.to_string(), span });
+            }
+          }
+        };
         let idx = terms.len();
-        terms.push(Term::Regex(re));
+        terms.push(term);
         Ok(Expr::Atom(idx))
       }
       Some(Token { span, .. }) => Err(ParseError::UnexpectedToken { span }),

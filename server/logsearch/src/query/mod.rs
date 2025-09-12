@@ -33,8 +33,10 @@ pub enum Term {
   Literal(String),
   // 匹配精确短语（子串语义）
   Phrase(String),
-  // 匹配正则（Rust 正则语法）
-  Regex(regex::Regex),
+  // 标准 regex 引擎（性能更好，不支持 look-around）
+  RegexStd(regex::Regex),
+  // fancy-regex 引擎（支持 look-around，可能有回溯开销）
+  RegexFancy(fancy_regex::Regex),
 }
 
 impl Term {
@@ -42,7 +44,8 @@ impl Term {
     match self {
       Term::Literal(s) => line.contains(s),
       Term::Phrase(p) => line.contains(p),
-      Term::Regex(r) => r.is_match(line),
+      Term::RegexStd(r) => r.is_match(line),
+      Term::RegexFancy(r) => r.is_match(line).unwrap_or(false),
     }
   }
 
@@ -50,7 +53,7 @@ impl Term {
     match self {
       Term::Literal(s) => Some(s.clone()),
       Term::Phrase(p) => Some(p.clone()),
-      Term::Regex(_) => None, // skip regex for highlighting to avoid confusion
+      Term::RegexStd(_) | Term::RegexFancy(_) => None, // skip regex for highlighting to avoid confusion
     }
   }
 }
