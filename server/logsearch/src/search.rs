@@ -507,9 +507,30 @@ foo lower
   #[tokio::test]
   async fn grep_lookbehind_negative() {
     // 使用紧邻前缀以避免空格导致的误解
-    let input_hit = "zoobar end";   // bar 前不是 foo
-    let input_miss = "foobar end";  // bar 前是 foo
+    let input_hit = "zoobar end"; // bar 前不是 foo
+    let input_miss = "foobar end"; // bar 前是 foo
     assert!(grep_with_q(input_hit, r#"/(?<!foo)bar/"#, 0).await.is_some());
     assert!(grep_with_q(input_miss, r#"/(?<!foo)bar/"#, 0).await.is_none());
+  }
+
+  #[tokio::test]
+  async fn grep_lookbehind_log() {
+    // 使用紧邻前缀以避免空格导致的误解
+    let input_hit = "zoobar end"; // bar 前不是 foo
+    let input_miss = "foobar end"; // bar 前是 foo
+    // 需求：整行不得出现 foo，且同时出现 bar 与 end（顺序任意）
+    // 解释：
+    // ^(?!.*foo) —— 行首负向先行，整行不包含 foo
+    // .*(bar.*end|end.*bar) —— 同时包含 bar 与 end
+    assert!(
+      grep_with_q(input_hit, r#"/^(?!.*foo).*(?:bar.*end|end.*bar)/"#, 0)
+        .await
+        .is_some()
+    );
+    assert!(
+      grep_with_q(input_miss, r#"/^(?!.*foo).*(?:bar.*end|end.*bar)/"#, 0)
+        .await
+        .is_none()
+    );
   }
 }
