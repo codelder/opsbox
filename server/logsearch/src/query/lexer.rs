@@ -94,20 +94,25 @@ fn read_quoted(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> Strin
 }
 
 fn read_regex_body(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> String {
+  // 保留反斜杠本身，仅在遇到 \/ 时让分隔符被转义
   let mut s = String::new();
   let mut escaped = false;
   while let Some(c) = it.next() {
     *pos += 1;
     if escaped {
+      // 上一个字符是 '\\'，当前字符无论是什么都原样加入
       s.push(c);
       escaped = false;
       continue;
     }
     if c == '\\' {
+      // 记录反斜杠本身，再标记转义状态
+      s.push('\\');
       escaped = true;
       continue;
     }
     if c == '/' {
+      // 非转义的分隔符，结束
       break;
     }
     s.push(c);

@@ -477,4 +477,39 @@ foo lower
     let miss_mixed = grep_with_q(input, "fOo", 0).await;
     assert!(miss_mixed.is_none());
   }
+
+  // === look-around 支持测试（依赖 fancy-regex 动态选择） ===
+  #[tokio::test]
+  async fn grep_lookahead_positive() {
+    let input_hit = "prefix foobar suffix";
+    let input_miss = "prefix foobaz suffix";
+    assert!(grep_with_q(input_hit, r#"/foo(?=bar)/"#, 0).await.is_some());
+    assert!(grep_with_q(input_miss, r#"/foo(?=bar)/"#, 0).await.is_none());
+  }
+
+  #[tokio::test]
+  async fn grep_lookahead_negative() {
+    let input_hit = "foobaz here";
+    let input_miss = "foobar here";
+    assert!(grep_with_q(input_hit, r#"/foo(?!bar)/"#, 0).await.is_some());
+    assert!(grep_with_q(input_miss, r#"/foo(?!bar)/"#, 0).await.is_none());
+  }
+
+  #[tokio::test]
+  async fn grep_lookbehind_positive() {
+    let input_hit = "ERR123 occurred";
+    let input_miss = "E123 occurred";
+    // 数字前必须有 ERR（测试保留反斜杠后的 look-behind）
+    assert!(grep_with_q(input_hit, r#"/(?<=ERR)\d+/"#, 0).await.is_some());
+    assert!(grep_with_q(input_miss, r#"/(?<=ERR)\d+/"#, 0).await.is_none());
+  }
+
+  #[tokio::test]
+  async fn grep_lookbehind_negative() {
+    // 使用紧邻前缀以避免空格导致的误解
+    let input_hit = "zoobar end";   // bar 前不是 foo
+    let input_miss = "foobar end";  // bar 前是 foo
+    assert!(grep_with_q(input_hit, r#"/(?<!foo)bar/"#, 0).await.is_some());
+    assert!(grep_with_q(input_miss, r#"/(?<!foo)bar/"#, 0).await.is_none());
+  }
 }
