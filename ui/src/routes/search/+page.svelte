@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { env } from '$env/dynamic/public';
+  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
+  let sid = $state('');
 
   // 中文注释：查询字符串、结果列表、加载与错误状态
   let q = $state('');
@@ -216,7 +218,7 @@
 
     try {
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
-      const endpoint = `${API_BASE}/stream.ndjson`;
+      const endpoint = `${API_BASE}/stream.s3.ndjson`;
       const payload: { q: string } = { q: query };
 
       const res = await fetch(endpoint, {
@@ -233,6 +235,7 @@
         throw new Error(`服务端返回异常状态：${res.status}`);
       }
 
+      sid = res.headers.get('x-logsearch-sid') || '';
       reader = res.body.getReader();
       await readBatch(PAGE_SIZE);
     } catch (e: unknown) {
@@ -281,12 +284,12 @@
     >
       <span class="text-blue-600">L</span>
       <span class="text-red-600">o</span>
-      <span class="text-yellow-500">G</span>
-      <span class="text-green-600">o</span>
-      <span class="text-blue-600">o</span>
-      <span class="text-red-600">g</span>
-      <span class="text-yellow-500">l</span>
-      <span class="text-green-600">e</span>
+      <span class="text-yellow-500">g</span>
+      <span class="text-green-600">s</span>
+      <span class="text-blue-600">e</span>
+      <span class="text-red-600">e</span>
+      <span class="text-yellow-500">k</span>
+      <!--      <span class="text-green-600">e</span>-->
     </label>
 
     <form class="mb-4 flex flex-1 gap-2" onsubmit={handleSubmit}>
@@ -335,6 +338,14 @@
           >
             <div class="truncate font-mono">{item.path}</div>
             <div class="ml-2 flex shrink-0 items-center gap-3">
+              <a
+                class="text-blue-600 hover:underline"
+                href={`/view?sid=${encodeURIComponent(sid || '')}&file=${encodeURIComponent(item.path)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                onclick={(e) => e.stopPropagation()}
+                >打开</a
+              >
               {#if item.keywords?.length}
                 <span class="hidden text-gray-500 sm:inline dark:text-gray-400">{item.keywords.join(', ')}</span>
               {/if}

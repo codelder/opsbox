@@ -32,12 +32,12 @@
       >
         <span class="text-blue-600">L</span>
         <span class="text-red-600">o</span>
-        <span class="text-yellow-500">G</span>
-        <span class="text-green-600">o</span>
-        <span class="text-blue-600">o</span>
-        <span class="text-red-600">g</span>
-        <span class="text-yellow-500">l</span>
-        <span class="text-green-600">e</span>
+        <span class="text-yellow-500">g</span>
+        <span class="text-green-600">S</span>
+        <span class="text-blue-600">e</span>
+        <span class="text-red-600">e</span>
+        <span class="text-yellow-500">k</span>
+        <!--        <span class="text-green-600">e</span>-->
       </label>
 
       <!-- 输入框容器（相对定位），在左侧放置搜索图标 -->
