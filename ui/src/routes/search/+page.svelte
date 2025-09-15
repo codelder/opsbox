@@ -272,6 +272,17 @@
     if (!next) return;
     startSearch(next);
   }
+
+  // 中文注释：解析 item.path 为 { bucket, tar, inner }
+  function splitPath(full: string): { bucket: string | null; tar: string; inner: string | null } {
+    const idx = full.indexOf(':');
+    const tarFull = idx >= 0 ? full.slice(0, idx) : full;
+    const inner = idx >= 0 ? full.slice(idx + 1) : null;
+    const tarBase = tarFull.split('/').pop() || tarFull;
+    const m = /BBIP_(\d+)_APPLOG_/i.exec(tarBase);
+    const bucket = m ? m[1] : null;
+    return { bucket, tar: tarBase, inner };
+  }
 </script>
 
 <!-- 中文注释：页面标题与状态栏 -->
@@ -333,19 +344,32 @@
           <!-- 结果头：文件路径（可折叠） -->
           <button
             type="button"
-            class="flex w-full items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-2 text-left text-xs text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+            class="flex w-full items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-3 text-left text-[13px] text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
             onclick={() => toggleFileCollapsed(i)}
           >
-            <div class="truncate font-mono">{item.path}</div>
-            <div class="ml-2 flex shrink-0 items-center gap-3">
-              <a
-                class="text-blue-600 hover:underline"
-                href={`/view?sid=${encodeURIComponent(sid || '')}&file=${encodeURIComponent(item.path)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                onclick={(e) => e.stopPropagation()}
-                >打开</a
+            {@const parts = splitPath(item.path)}
+            <div class="flex min-w-0 items-center gap-2">
+              {#if parts.bucket}
+                <span
+                  class="inline-flex shrink-0 rounded-full border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                  >bucket {parts.bucket}</span
+                >
+              {/if}
+              <span
+                class="inline-flex shrink-0 rounded border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                >{parts.tar}</span
               >
+              {#if parts.inner}
+                <a
+                  class="truncate font-mono text-blue-600 hover:underline"
+                  href={`/view?file=${encodeURIComponent(item.path)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onclick={(e) => e.stopPropagation()}>{parts.inner}</a
+                >
+              {/if}
+            </div>
+            <div class="ml-2 flex shrink-0 items-center gap-3">
               {#if item.keywords?.length}
                 <span class="hidden text-gray-500 sm:inline dark:text-gray-400">{item.keywords.join(', ')}</span>
               {/if}
