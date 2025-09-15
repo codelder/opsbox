@@ -2,8 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import { env } from '$env/dynamic/public';
-  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
-  let sid = $state('');
+  // const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
+  // const sid = '';
 
   // 中文注释：查询字符串、结果列表、加载与错误状态
   let q = $state('');
@@ -360,12 +360,14 @@
                 >{parts.tar}</span
               >
               {#if parts.inner}
-                <a
-                  class="truncate font-mono text-blue-600 hover:underline"
-                  href={`/view?file=${encodeURIComponent(item.path)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onclick={(e) => e.stopPropagation()}>{parts.inner}</a
+                <button
+                  type="button"
+                  class="truncate text-left font-mono text-blue-600 hover:underline"
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    const url = `/view?file=${encodeURIComponent(item.path)}`;
+                    window.location.assign(url);
+                  }}>{parts.inner}</button
                 >
               {/if}
             </div>
