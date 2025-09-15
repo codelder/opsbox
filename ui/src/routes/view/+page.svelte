@@ -7,8 +7,12 @@
   let file = '';
   let sid = '';
   let total = 0;
+  // 用于分页（内部使用）
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let start = 1;
   let end = 0;
+  // 仅用于展示，可为空
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let keywords: string[] = [];
   let lines: { no: number; text: string }[] = [];
   let loading = false;
@@ -39,8 +43,9 @@
       end = data.end;
       keywords = data.keywords || [];
       lines = data.lines || [];
-    } catch (e: any) {
-      error = e?.message || '加载失败';
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      error = err.message || '加载失败';
     } finally {
       loading = false;
     }
@@ -55,8 +60,9 @@
       const data = await fetchRange(nextS, nextE);
       end = data.end;
       lines = [...lines, ...(data.lines || [])];
-    } catch (e: any) {
-      error = e?.message || '加载更多失败';
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      error = err.message || '加载更多失败';
     } finally {
       loading = false;
     }
@@ -81,14 +87,22 @@
 <div class="mx-auto max-w-[1560px] px-4 py-6">
   <h2 class="mb-2 font-mono text-sm text-gray-600 dark:text-gray-300">{file}</h2>
   {#if error}
-    <div class="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">{error}</div>
+    <div
+      class="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
+    >
+      {error}
+    </div>
   {/if}
   <div class="mb-2 text-xs text-gray-500 dark:text-gray-400">{total > 0 ? `共 ${total} 行` : ''}</div>
 
   <div class="rounded border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
     {#each lines as ln (ln.no)}
       <div class="grid grid-cols-[72px_1fr] gap-0 font-mono text-[13px] leading-[20px]">
-        <div class="border-r border-gray-100 bg-gray-50 px-3 py-0.5 text-right text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-500">{ln.no}</div>
+        <div
+          class="border-r border-gray-100 bg-gray-50 px-3 py-0.5 text-right text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-500"
+        >
+          {ln.no}
+        </div>
         <div class="px-3 py-0.5 break-all whitespace-pre-wrap">{ln.text}</div>
       </div>
     {/each}
@@ -96,7 +110,11 @@
 
   <div class="mt-4">
     {#if end < total}
-      <button class="rounded bg-gray-700 px-3 py-2 text-sm text-white disabled:opacity-50" onclick={loadMore} disabled={loading}>{loading ? '加载中…' : '加载更多'}</button>
+      <button
+        class="rounded bg-gray-700 px-3 py-2 text-sm text-white disabled:opacity-50"
+        onclick={loadMore}
+        disabled={loading}>{loading ? '加载中…' : '加载更多'}</button
+      >
     {:else}
       <span class="text-sm text-gray-500 dark:text-gray-400">已到结尾。</span>
     {/if}

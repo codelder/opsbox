@@ -218,7 +218,7 @@
 
     try {
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
-      const endpoint = `${API_BASE}/stream.s3.ndjson`;
+      const endpoint = `${API_BASE}/stream.ndjson`;
       const payload: { q: string } = { q: query };
 
       const res = await fetch(endpoint, {
@@ -235,7 +235,7 @@
         throw new Error(`服务端返回异常状态：${res.status}`);
       }
 
-      sid = res.headers.get('x-logsearch-sid') || '';
+      let sid = res.headers.get('x-logsearch-sid') || '';
       reader = res.body.getReader();
       await readBatch(PAGE_SIZE);
     } catch (e: unknown) {
@@ -279,9 +279,10 @@
     const tarFull = idx >= 0 ? full.slice(0, idx) : full;
     const inner = idx >= 0 ? full.slice(idx + 1) : null;
     const tarBase = tarFull.split('/').pop() || tarFull;
-    const m = /BBIP_(\d+)_APPLOG_/i.exec(tarBase);
-    const bucket = m ? m[1] : null;
-    return { bucket, tar: tarBase, inner };
+    // const m = /BBIP_(\d+)_APPLOG_/i.exec(tarBase);
+    // const bucket = m ? m[1] : null;
+    const bucket = full.slice(1, full.indexOf('/', 1));
+    return { bucket, tar: tarFull, inner };
   }
 </script>
 
@@ -312,30 +313,30 @@
     </form>
   </div>
 
-  {#if q}
-    <p class="mb-4 text-sm text-gray-600 dark:text-gray-300">关键词：<span class="font-mono">{q}</span></p>
-  {:else}
-    <p class="mb-6 text-sm text-gray-600 dark:text-gray-300">请输入关键词后回车进行搜索。</p>
-  {/if}
+  <!--{#if q}-->
+  <!--  <p class="mb-4 text-sm text-gray-600 dark:text-gray-300">关键词：<span class="font-mono">{q}</span></p>-->
+  <!--{:else}-->
+  <!--  <p class="mb-6 text-sm text-gray-600 dark:text-gray-300">请输入关键词后回车进行搜索。</p>-->
+  <!--{/if}-->
 
-  <div class="mb-2 text-sm text-blue-600 dark:text-blue-400">{loading}</div>
+  <!--  <div class="mb-2 text-sm text-blue-600 dark:text-blue-400">{loading}</div>-->
 
-  {#if paused && hasMore}
-    <div class="mb-2 text-sm text-gray-600 dark:text-gray-300">已加载 {PAGE_SIZE} 条，已暂停。</div>
-  {/if}
+  <!--  {#if paused && hasMore}-->
+  <!--    <div class="mb-2 text-sm text-gray-600 dark:text-gray-300">已加载 {PAGE_SIZE} 条，已暂停。</div>-->
+  <!--  {/if}-->
 
-  {#if error}
-    <div
-      class="mb-4 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
-    >
-      出错了：{error}
-    </div>
-  {/if}
+  <!--  {#if error}-->
+  <!--    <div-->
+  <!--      class="mb-4 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"-->
+  <!--    >-->
+  <!--      出错了：{error}-->
+  <!--    </div>-->
+  <!--  {/if}-->
 
   <!-- 中文注释：结果列表（GitHub 风格） -->
-  <div class="mt-4 text-sm text-blue-600 dark:text-blue-400">
-    {#if loading}正在加载…{/if}
-  </div>
+  <!--  <div class="mt-4 text-sm text-blue-600 dark:text-blue-400">-->
+  <!--    {#if loading}正在加载…{/if}-->
+  <!--  </div>-->
 
   <div class="mt-10 space-y-6">
     {#each results as item, i (item.path + '-' + i)}
