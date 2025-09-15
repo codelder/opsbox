@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::OnceLock, time::{Duration, Instant}};
+use std::{
+  collections::HashMap,
+  sync::OnceLock,
+  time::{Duration, Instant},
+};
 use tokio::sync::RwLock;
 use tokio::time as tokio_time;
 use uuid::Uuid;
@@ -32,7 +36,9 @@ pub fn new_sid() -> String {
 }
 
 impl Cache {
-  fn expired<T>(&self, e: &Entry<T>) -> bool { e.last_touch.elapsed() > self.ttl }
+  fn expired<T>(&self, e: &Entry<T>) -> bool {
+    e.last_touch.elapsed() > self.ttl
+  }
 
   fn start_cleaner_once() {
     CLEANER_STARTED.get_or_init(|| {
@@ -45,20 +51,26 @@ impl Cache {
           // 清理 keywords
           {
             let mut m = c.keywords.write().await;
-            let to_remove: Vec<String> = m.iter()
+            let to_remove: Vec<String> = m
+              .iter()
               .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
               .map(|(k, _)| k.clone())
               .collect();
-            for k in to_remove { let _ = m.remove(&k); }
+            for k in to_remove {
+              let _ = m.remove(&k);
+            }
           }
           // 清理 files
           {
             let mut m = c.files.write().await;
-            let to_remove: Vec<(String, String)> = m.iter()
+            let to_remove: Vec<(String, String)> = m
+              .iter()
               .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
               .map(|(k, _)| k.clone())
               .collect();
-            for k in to_remove { let _ = m.remove(&k); }
+            for k in to_remove {
+              let _ = m.remove(&k);
+            }
           }
         }
       });
@@ -69,33 +81,56 @@ impl Cache {
   pub async fn put_keywords(&self, sid: &str, kws: Vec<String>) {
     Self::start_cleaner_once();
     let mut map = self.keywords.write().await;
-    map.insert(sid.to_string(), Entry { last_touch: Instant::now(), value: kws });
+    map.insert(
+      sid.to_string(),
+      Entry {
+        last_touch: Instant::now(),
+        value: kws,
+      },
+    );
   }
   pub async fn get_keywords(&self, sid: &str) -> Option<Vec<String>> {
     Self::start_cleaner_once();
     let mut map = self.keywords.write().await; // write to refresh
     let e = map.get_mut(sid)?;
-    if self.expired(e) { map.remove(sid); return None; }
+    if self.expired(e) {
+      map.remove(sid);
+      return None;
+    }
     e.last_touch = Instant::now();
     Some(e.value.clone())
   }
   pub async fn put_lines(&self, sid: &str, file_id: &str, lines: Vec<String>) {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
-    map.insert((sid.to_string(), file_id.to_string()), Entry { last_touch: Instant::now(), value: lines });
+    map.insert(
+      (sid.to_string(), file_id.to_string()),
+      Entry {
+        last_touch: Instant::now(),
+        value: lines,
+      },
+    );
   }
-  pub async fn get_lines_slice(&self, sid: &str, file_id: &str, start: usize, end: usize) -> Option<(usize, Vec<String>)> {
+  pub async fn get_lines_slice(
+    &self,
+    sid: &str,
+    file_id: &str,
+    start: usize,
+    end: usize,
+  ) -> Option<(usize, Vec<String>)> {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
     let key = (sid.to_string(), file_id.to_string());
     let e = map.get_mut(&key)?;
-    if self.expired(e) { map.remove(&key); return None; }
+    if self.expired(e) {
+      map.remove(&key);
+      return None;
+    }
     e.last_touch = Instant::now();
     let total = e.value.len();
     let s = start.max(1).min(total.max(1));
     let eidx = end.max(s).min(total);
-    let slice = e.value[(s-1)..eidx].to_vec();
+    let slice = e.value[(s - 1)..eidx].to_vec();
     Some((total, slice))
   }
 }
-

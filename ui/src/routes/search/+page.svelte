@@ -14,6 +14,8 @@
   let results = $state<SearchJsonResult[]>([]);
   let loading = $state(false); // 当前是否正在读取一批
   let error = $state<string | null>(null);
+  // 中文注释：搜索会话 ID（从流接口响应头获取，供 /view 使用）
+  let sid = $state('');
 
   // 中文注释：分页控制（每批 20 条）
   const PAGE_SIZE = 20;
@@ -26,49 +28,60 @@
   let decoder: TextDecoder | null = null; // 统一的 TextDecoder
   let buffer = $state(''); // 分片缓冲（可能出现半行）
 
-  // 中文注释：读取一批（最多 PAGE_SIZE 条）。读满或读到流结束就停止。
+  // 中文注释：读取一批（最多 PAGE_SIZE 条）。
+  // 策略：优先消费缓冲区中的“完整行”，不够再读取更多字节；避免跨批次“回灌”带来的跳行。
   async function readBatch(maxItems = PAGE_SIZE) {
     if (!reader) return;
     loading = true;
     paused = false;
     let produced = 0;
     try {
+      const dec = decoder ?? (decoder = new TextDecoder());
       while (produced < maxItems && reader) {
-        const { done, value } = await reader.read();
-        if (done) {
-          // 处理尾部残留
-          const last = buffer.trim();
-          if (last) {
-            try {
-              const obj = JSON.parse(last);
-              results = [...results, obj];
-            } catch (e) {
-              console.error('解析 NDJSON 尾行失败：', e, last);
-            }
-            buffer = '';
-          }
-          hasMore = false;
-          break;
-        }
-        const dec = decoder ?? (decoder = new TextDecoder());
-        buffer += dec.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-        for (const line of lines) {
+        // 1) 先消费缓冲区中已有的完整行（以换行符为界）
+        while (produced < maxItems) {
+          const nl = buffer.indexOf('\n');
+          if (nl === -1) break; // 缓冲区中暂无完整行
+          const line = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 1);
           const trimmed = line.trim();
           if (!trimmed) continue;
           try {
             const obj = JSON.parse(trimmed);
             results = [...results, obj];
             produced += 1;
-            if (produced >= maxItems) {
-              break;
-            }
           } catch (e) {
             // 中文报错：单行解析失败不阻断整体
             console.error('解析 NDJSON 行失败：', e, trimmed);
           }
         }
+        if (produced >= maxItems) break;
+
+        // 2) 若仍未达上限，则读取更多字节补充缓冲区
+        const { done, value } = await reader.read();
+        if (done) {
+          // 流结束：尽最大努力消费缓冲区剩余内容（可能无换行）
+          const rest = buffer;
+          buffer = '';
+          if (rest) {
+            const parts = rest.split('\n');
+            for (let i = 0; i < parts.length && produced < maxItems; i++) {
+              const trimmed = parts[i].trim();
+              if (!trimmed) continue;
+              try {
+                const obj = JSON.parse(trimmed);
+                results = [...results, obj];
+                produced += 1;
+              } catch (e) {
+                // 最后一段可能不是完整 JSON，这里仅记录，不中断
+                console.error('解析 NDJSON 尾段失败：', e, trimmed);
+              }
+            }
+          }
+          hasMore = false;
+          break;
+        }
+        buffer += dec.decode(value, { stream: true });
       }
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { name?: string; message?: string }) : {};
@@ -218,7 +231,7 @@
 
     try {
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
-      const endpoint = `${API_BASE}/stream.ndjson`;
+      const endpoint = `${API_BASE}/stream.s3.ndjson`;
       const payload: { q: string } = { q: query };
 
       const res = await fetch(endpoint, {
@@ -235,7 +248,8 @@
         throw new Error(`服务端返回异常状态：${res.status}`);
       }
 
-      let sid = res.headers.get('x-logsearch-sid') || '';
+      // 中文注释：保存会话 ID，供 /view 使用
+      sid = res.headers.get('x-logsearch-sid') || '';
       reader = res.body.getReader();
       await readBatch(PAGE_SIZE);
     } catch (e: unknown) {
@@ -276,12 +290,12 @@
   // 中文注释：解析 item.path 为 { bucket, tar, inner }
   function splitPath(full: string): { bucket: string | null; tar: string; inner: string | null } {
     const idx = full.indexOf(':');
-    const tarFull = idx >= 0 ? full.slice(0, idx) : full;
+    const tarFull = idx >= 0 ? full.slice(full.indexOf('/'), idx) : full;
     const inner = idx >= 0 ? full.slice(idx + 1) : null;
     const tarBase = tarFull.split('/').pop() || tarFull;
     // const m = /BBIP_(\d+)_APPLOG_/i.exec(tarBase);
     // const bucket = m ? m[1] : null;
-    const bucket = full.slice(1, full.indexOf('/', 1));
+    const bucket = full.slice(0, full.indexOf('/', 1));
     return { bucket, tar: tarFull, inner };
   }
 </script>
@@ -360,14 +374,28 @@
                 >{splitPath(item.path).tar}</span
               >
               {#if splitPath(item.path).inner}
-                <button
-                  type="button"
-                  class="truncate text-left font-mono text-blue-600 hover:underline"
+                <span
+                  role="link"
+                  tabindex="0"
+                  class="cursor-pointer truncate text-left font-mono text-blue-600 hover:underline focus:underline focus:outline-none"
+                  title={splitPath(item.path).inner}
                   onclick={(e) => {
                     e.stopPropagation();
-                    const url = `/view?file=${encodeURIComponent(item.path)}`;
+                    // 中文注释：带上 sid 以便 /view 从缓存读取
+                    const base = '/view';
+                    const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
                     window.location.assign(url);
-                  }}>{splitPath(item.path).inner}</button
+                  }}
+                  onkeydown={(e) => {
+                    // 中文注释：无障碍支持 Enter/Space 键
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const base = '/view';
+                      const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
+                      window.location.assign(url);
+                    }
+                  }}>{splitPath(item.path).inner}</span
                 >
               {/if}
             </div>

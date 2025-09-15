@@ -244,19 +244,26 @@ impl Parser {
         span,
       }) => {
         // 根据是否包含 look-around 切换正则引擎
-        let has_lookaround = body.contains("(?=") || body.contains("(?!") || body.contains("(?<=") || body.contains("(?<!");
+        let has_lookaround =
+          body.contains("(?=") || body.contains("(?!") || body.contains("(?<=") || body.contains("(?<!");
         let term = if has_lookaround {
           match fancy_regex::Regex::new(&body) {
             Ok(r) => Term::RegexFancy(r),
             Err(e) => {
-              return Err(ParseError::InvalidRegex { message: e.to_string(), span });
+              return Err(ParseError::InvalidRegex {
+                message: e.to_string(),
+                span,
+              });
             }
           }
         } else {
           match regex::Regex::new(&body) {
             Ok(r) => Term::RegexStd(r),
             Err(e) => {
-              return Err(ParseError::InvalidRegex { message: e.to_string(), span });
+              return Err(ParseError::InvalidRegex {
+                message: e.to_string(),
+                span,
+              });
             }
           }
         };

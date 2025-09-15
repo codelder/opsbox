@@ -1,4 +1,4 @@
-import adapter from '@sveltejs/adapter-auto';
+import adapter from '@sveltejs/adapter-static';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 /** @type {import('@sveltejs/kit').Config} */
@@ -8,10 +8,15 @@ const config = {
   preprocess: vitePreprocess(),
 
   kit: {
-    // adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
-    // If your environment is not supported, or you settled on a specific environment, switch out the adapter.
-    // See https://svelte.dev/docs/kit/adapters for more information about adapters.
-    adapter: adapter()
+    // 使用静态适配器并开启 SPA fallback，以便所有路径回退到 index.html
+    // 同时将构建产物直接输出到后端的 static 目录（注意：构建会清空该目录）
+    adapter: adapter({
+      pages: '../server/api-gateway/static',
+      assets: '../server/api-gateway/static',
+      fallback: 'index.html'
+    }),
+    // 关闭自动预渲染条目，作为单页应用仅输出 fallback
+    prerender: { entries: [] }
   }
 };
 

@@ -1,4 +1,5 @@
 use crate::bbip_service::derive_plan;
+use crate::simple_cache::{cache as simple_cache, new_sid};
 use crate::{
   renderer::{render_json_chunks, render_markdown},
   search::{Search as _, SearchError},
@@ -11,13 +12,12 @@ use axum::{
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
   routing::{get, post},
 };
+use chrono::{Datelike, Duration};
 use problemdetails::Problem;
 use serde_json;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use chrono::{Datelike, Duration};
-use crate::simple_cache::{cache as simple_cache, new_sid};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -40,17 +40,31 @@ struct ViewParams {
 }
 
 async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, Problem> {
-  eprintln!("DEBUG view-request: sid={} file={} start={:?} end={:?}", params.sid, params.file, params.start, params.end);
+  eprintln!(
+    "DEBUG view-request: sid={} file={} start={:?} end={:?}",
+    params.sid, params.file, params.start, params.end
+  );
   // 读取 keywords 与行切片
   let keywords = simple_cache().get_keywords(&params.sid).await.unwrap_or_default();
-  let (total, slice) = match simple_cache().get_lines_slice(&params.sid, &params.file, params.start.unwrap_or(1), params.end.unwrap_or(1000)).await {
+  let (total, slice) = match simple_cache()
+    .get_lines_slice(
+      &params.sid,
+      &params.file,
+      params.start.unwrap_or(1),
+      params.end.unwrap_or(1000),
+    )
+    .await
+  {
     Some(v) => v,
     None => {
       eprintln!("DEBUG view-miss: sid={} file={}", params.sid, params.file);
       return Ok(
         HttpResponse::builder()
           .status(404)
-          .header(CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8"))
+          .header(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+          )
           .body(Body::from("{\"error\":\"not_found_or_expired\"}"))
           .unwrap(),
       );
@@ -62,7 +76,15 @@ async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRespons
   for (i, line) in slice.iter().enumerate() {
     out_lines.push(serde_json::json!({ "no": start + i, "text": line }));
   }
-  eprintln!("DEBUG view-hit: sid={} file={} total={} slice={} range=[{}..{}]", params.sid, params.file, total, slice.len(), start, end);
+  eprintln!(
+    "DEBUG view-hit: sid={} file={} total={} slice={} range=[{}..{}]",
+    params.sid,
+    params.file,
+    total,
+    slice.len(),
+    start,
+    end
+  );
   let obj = serde_json::json!({
     "file": params.file,
     "total": total,
@@ -75,7 +97,10 @@ async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRespons
   Ok(
     HttpResponse::builder()
       .status(200)
-      .header(CONTENT_TYPE, HeaderValue::from_static("application/json; charset=utf-8"))
+      .header(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/json; charset=utf-8"),
+      )
       .body(Body::from(body))
       .unwrap(),
   )
@@ -108,7 +133,7 @@ pub struct SearchBody {
 
 fn stream_channel_capacity() -> usize {
   // 允许通过环境变量覆盖，默认 256，限定在 [8, 10000]
-  let default_cap = 256usize;
+  let default_cap = 128usize;
   match std::env::var("LOGSEARCH_STREAM_CH_CAP")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
@@ -229,15 +254,15 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
           return;
         }
         let file_id = format!("{}:{}", path, &result.path);
-        eprintln!("DEBUG cache-put: sid={} file_id={} lines={}", sid_c, file_id, result.lines.len());
+        eprintln!(
+          "DEBUG cache-put: sid={} file_id={} lines={}",
+          sid_c,
+          file_id,
+          result.lines.len()
+        );
         simple_cache().put_lines(&sid_c, &file_id, result.lines.clone()).await;
 
-        let json_obj = render_json_chunks(
-          &file_id,
-          result.merged.clone(),
-          result.lines.clone(),
-          &highlights_c,
-        );
+        let json_obj = render_json_chunks(&file_id, result.merged.clone(), result.lines.clone(), &highlights_c);
         match serde_json::to_vec(&json_obj) {
           Ok(mut v) => {
             v.push(b'\n');
@@ -279,7 +304,10 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
         CONTENT_TYPE,
         HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
       )
-      .header("X-Logsearch-SID", HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")))
+      .header(
+        "X-Logsearch-SID",
+        HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")),
+      )
       .body(body)
       .unwrap(),
   )
@@ -308,7 +336,8 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
 
   // 解析查询
   let parse_start = std::time::Instant::now();
-  let spec = crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let spec =
+    crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
   let parse_dur = parse_start.elapsed();
   let highlights = spec.highlights.clone();
   let sid = new_sid();
@@ -336,11 +365,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
     for b in buckets {
       let key = format!(
         "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
-        y,
-        yyyymm,
-        yyyymmdd,
-        b,
-        file_name
+        y, yyyymm, yyyymmdd, b, file_name
       );
 
       let txc = tx.clone();
@@ -368,15 +393,15 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
           }
 
           let file_id = format!("{}/{}:{}", bucket_name, key, &result.path);
-          eprintln!("DEBUG cache-put: sid={} file_id={} lines={}", sid_c, file_id, result.lines.len());
+          eprintln!(
+            "DEBUG cache-put: sid={} file_id={} lines={}",
+            sid_c,
+            file_id,
+            result.lines.len()
+          );
           simple_cache().put_lines(&sid_c, &file_id, result.lines.clone()).await;
 
-          let json_obj = render_json_chunks(
-            &file_id,
-            result.merged.clone(),
-            result.lines.clone(),
-            &highlights_c,
-          );
+          let json_obj = render_json_chunks(&file_id, result.merged.clone(), result.lines.clone(), &highlights_c);
 
           match serde_json::to_vec(&json_obj) {
             Ok(mut v) => {
@@ -420,7 +445,10 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
         CONTENT_TYPE,
         HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
       )
-      .header("X-Logsearch-SID", HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")))
+      .header(
+        "X-Logsearch-SID",
+        HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")),
+      )
       .body(body)
       .unwrap(),
   )
