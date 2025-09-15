@@ -347,19 +347,18 @@
             class="flex w-full items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-3 text-left text-[13px] text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
             onclick={() => toggleFileCollapsed(i)}
           >
-            {@const parts = splitPath(item.path)}
             <div class="flex min-w-0 items-center gap-2">
-              {#if parts.bucket}
+              {#if splitPath(item.path).bucket}
                 <span
                   class="inline-flex shrink-0 rounded-full border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-                  >bucket {parts.bucket}</span
+                  >bucket {splitPath(item.path).bucket}</span
                 >
               {/if}
               <span
                 class="inline-flex shrink-0 rounded border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-                >{parts.tar}</span
+                >{splitPath(item.path).tar}</span
               >
-              {#if parts.inner}
+              {#if splitPath(item.path).inner}
                 <button
                   type="button"
                   class="truncate text-left font-mono text-blue-600 hover:underline"
@@ -367,7 +366,7 @@
                     e.stopPropagation();
                     const url = `/view?file=${encodeURIComponent(item.path)}`;
                     window.location.assign(url);
-                  }}>{parts.inner}</button
+                  }}>{splitPath(item.path).inner}</button
                 >
               {/if}
             </div>
