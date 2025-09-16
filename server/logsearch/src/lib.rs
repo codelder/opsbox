@@ -9,4 +9,5 @@ pub mod storage;
 // BBIP 文件路径生成与查询字符串处理服务
 pub mod bbip_service;
 
+pub mod settings;
 pub mod simple_cache;

@@ -1,4 +1,5 @@
 use crate::bbip_service::derive_plan;
+use crate::settings;
 use crate::simple_cache::{cache as simple_cache, new_sid};
 use crate::{
   renderer::{render_json_chunks, render_markdown},
@@ -14,7 +15,9 @@ use axum::{
 };
 use chrono::{Datelike, Duration};
 use problemdetails::Problem;
+use serde::{Deserialize, Serialize};
 use serde_json;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -29,6 +32,8 @@ pub enum AppError {
   BadJson(#[from] JsonRejection),
   #[error("查询语法错误")]
   QueryParse(#[from] crate::query::ParseError),
+  #[error("设置存储错误")]
+  Settings(#[from] settings::SettingsError),
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -121,6 +126,9 @@ impl From<AppError> for Problem {
       AppError::QueryParse(e) => problemdetails::new(StatusCode::BAD_REQUEST)
         .with_title("查询语法错误")
         .with_detail(e.to_string()),
+      AppError::Settings(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
+        .with_title("设置存储错误")
+        .with_detail(e.to_string()),
     }
   }
 }
@@ -129,6 +137,36 @@ impl From<AppError> for Problem {
 pub struct SearchBody {
   pub q: String,
   pub context: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MinioSettingsPayload {
+  endpoint: String,
+  bucket: String,
+  access_key: String,
+  secret_key: String,
+}
+
+impl From<MinioSettingsPayload> for settings::MinioSettings {
+  fn from(value: MinioSettingsPayload) -> Self {
+    Self {
+      endpoint: value.endpoint,
+      bucket: value.bucket,
+      access_key: value.access_key,
+      secret_key: value.secret_key,
+    }
+  }
+}
+
+impl From<settings::MinioSettings> for MinioSettingsPayload {
+  fn from(value: settings::MinioSettings) -> Self {
+    Self {
+      endpoint: value.endpoint,
+      bucket: value.bucket,
+      access_key: value.access_key,
+      secret_key: value.secret_key,
+    }
+  }
 }
 
 fn stream_channel_capacity() -> usize {
@@ -149,6 +187,24 @@ pub fn router() -> Router {
     .route("/stream.ndjson", post(stream_local_ndjson))
     .route("/stream.s3.ndjson", post(stream_s3_ndjson))
     .route("/view.cache.json", get(view_cache_json))
+    .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
+}
+
+async fn get_minio_settings() -> Result<Json<MinioSettingsPayload>, Problem> {
+  let payload: MinioSettingsPayload = settings::load_minio_settings()
+    .await
+    .map_err(AppError::Settings)?
+    .unwrap_or_default()
+    .into();
+  Ok(Json(payload))
+}
+
+async fn save_minio_settings(Json(payload): Json<MinioSettingsPayload>) -> Result<StatusCode, Problem> {
+  let settings: settings::MinioSettings = payload.into();
+  settings::save_minio_settings(&settings)
+    .await
+    .map_err(AppError::Settings)?;
+  Ok(StatusCode::NO_CONTENT)
 }
 
 async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
@@ -156,11 +212,15 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
 
   let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
 
+  let minio_cfg = settings::load_or_default_minio_settings()
+    .await
+    .map_err(AppError::Settings)?;
+
   let s3reader = S3ReaderProvider::new(
-    "http://192.168.50.61:9002",
-    "admin",
-    "G5t3o6f2",
-    "backupdr",
+    &minio_cfg.endpoint,
+    &minio_cfg.access_key,
+    &minio_cfg.secret_key,
+    &minio_cfg.bucket,
     "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
   )
   .open()
@@ -346,11 +406,13 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   let ctx = body.context.unwrap_or(3);
   eprintln!("耗时调试: [S3] 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
 
+  let minio_cfg = Arc::new(
+    settings::load_or_default_minio_settings()
+      .await
+      .map_err(AppError::Settings)?,
+  );
+
   // 生成 S3 对象键：每天 4 个 bucket，文件名日期 = d；前缀路径日期 = d+1
-  let endpoint = "http://192.168.50.61:9002";
-  let access_key = "admin";
-  let secret_key = "G5t3o6f2";
-  let bucket_name = "backupdr";
 
   let mut d = plan.range.start;
   while d <= plan.range.end {
@@ -372,9 +434,10 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
       let specc = spec.clone();
       let highlights_c = highlights.clone();
       let sid_c = sid.clone();
+      let cfg = Arc::clone(&minio_cfg);
       tokio::spawn(async move {
         let file_start = std::time::Instant::now();
-        let s3rp = S3ReaderProvider::new(endpoint, access_key, secret_key, bucket_name, &key);
+        let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
         let Ok(reader) = s3rp.open().await.map_err(|e| AppError::StorageError(e)) else {
           eprintln!("耗时调试: [S3] 打开对象失败 key={}", key);
           return;
@@ -392,6 +455,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
             return;
           }
 
+          let bucket_name = cfg.bucket.clone();
           let file_id = format!("{}/{}:{}", bucket_name, key, &result.path);
           eprintln!(
             "DEBUG cache-put: sid={} file_id={} lines={}",

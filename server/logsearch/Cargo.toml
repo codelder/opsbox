@@ -28,5 +28,6 @@ async-tar = "0.5"
 problemdetails = { version = "0.6", features = ["axum"] }
 regex = "1"
 fancy-regex = "0.11"
- globset = "0.4"
- chrono = { version = "0.4", default-features = false, features = ["clock"] }
+globset = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
