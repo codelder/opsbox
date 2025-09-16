@@ -62,3 +62,6 @@ ui/.playwright/
 ui/test-results/
 ui/vite.config.js.timestamp-*
 ui/vite.config.ts.timestamp-*
+
+# 本地开发数据库（不要提交）
+*.db
