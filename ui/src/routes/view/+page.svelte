@@ -32,7 +32,7 @@
   const BULK_CHUNK = 5000;
 
   const rowVirtualizer = createVirtualizer({
-    count: () => total, // 总行数
+    count: total, // 总行数
     getScrollElement: () => parentEl, // 滚动容器（初始为 null，下面用 setOptions 保持同步）
     estimateSize: () => EST_ROW, // 预估单行高度(px)
     overscan: 20, // 预加载额外行，平衡性能与滚动流畅度
@@ -288,12 +288,12 @@
           {/if}
         {:else}
           {#each vItems as item (item.key)}
+            {@const ln = getLineByIndex(item.index)}
             <div
               style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({item.start}px);"
               data-index={item.index}
             >
-              {#if getLineByIndex(item.index)}
-                {@const ln = getLineByIndex(item.index)}
+              {#if ln}
                 <div class="grid grid-cols-[72px_1fr] gap-0 font-mono text-[13px] leading-[20px]">
                   <div
                     class="border-r border-gray-100 bg-gray-50 px-3 py-0.5 text-right text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-500"
