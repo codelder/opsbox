@@ -1,4 +1,22 @@
-// 关闭 SSR：本项目为纯前端 SPA，仅在浏览器端渲染
-// 如果后续需要恢复 SSR，只需将 ssr 改为 true 并调整适配器
-export const ssr = false;
+import { redirect } from '@sveltejs/kit';
+import type { LayoutLoad } from './$types';
 
+export const load: LayoutLoad = async ({ fetch, url }) => {
+  if (url.pathname.startsWith('/settings')) {
+    return {};
+  }
+
+  try {
+    const res = await fetch('/api/v1/logsearch/settings/minio', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.configured) {
+        return {};
+      }
+    }
+  } catch {
+    // swallow fetch error and redirect to settings below
+  }
+
+  throw redirect(307, '/settings');
+};

@@ -126,9 +126,17 @@ impl From<AppError> for Problem {
       AppError::QueryParse(e) => problemdetails::new(StatusCode::BAD_REQUEST)
         .with_title("查询语法错误")
         .with_detail(e.to_string()),
-      AppError::Settings(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("设置存储错误")
-        .with_detail(e.to_string()),
+      AppError::Settings(e) => match e {
+        settings::SettingsError::NotConfigured => problemdetails::new(StatusCode::SERVICE_UNAVAILABLE)
+          .with_title("MinIO 未配置")
+          .with_detail("请先完成 MinIO 设置"),
+        settings::SettingsError::Connection(msg) => problemdetails::new(StatusCode::BAD_REQUEST)
+          .with_title("MinIO 连接失败")
+          .with_detail(msg),
+        settings::SettingsError::Database(err) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
+          .with_title("设置存储错误")
+          .with_detail(err.to_string()),
+      },
     }
   }
 }
@@ -145,6 +153,10 @@ struct MinioSettingsPayload {
   bucket: String,
   access_key: String,
   secret_key: String,
+  #[serde(default)]
+  configured: bool,
+  #[serde(default)]
+  connection_error: Option<String>,
 }
 
 impl From<MinioSettingsPayload> for settings::MinioSettings {
@@ -165,6 +177,21 @@ impl From<settings::MinioSettings> for MinioSettingsPayload {
       bucket: value.bucket,
       access_key: value.access_key,
       secret_key: value.secret_key,
+      configured: false,
+      connection_error: None,
+    }
+  }
+}
+
+impl Default for MinioSettingsPayload {
+  fn default() -> Self {
+    Self {
+      endpoint: String::new(),
+      bucket: String::new(),
+      access_key: String::new(),
+      secret_key: String::new(),
+      configured: false,
+      connection_error: None,
     }
   }
 }
@@ -191,11 +218,22 @@ pub fn router() -> Router {
 }
 
 async fn get_minio_settings() -> Result<Json<MinioSettingsPayload>, Problem> {
-  let payload: MinioSettingsPayload = settings::load_minio_settings()
-    .await
-    .map_err(AppError::Settings)?
-    .unwrap_or_default()
-    .into();
+  let settings_opt = settings::load_minio_settings().await.map_err(AppError::Settings)?;
+  let mut payload = settings_opt.clone().map_or_else(MinioSettingsPayload::default, Into::into);
+
+  if let Some(settings_value) = settings_opt {
+    match settings::verify_minio_settings(&settings_value).await {
+      Ok(_) => {
+        payload.configured = true;
+      }
+      Err(settings::SettingsError::Connection(msg)) => {
+        payload.configured = false;
+        payload.connection_error = Some(format!("无法连接 MinIO：{}", msg));
+      }
+      Err(err) => return Err(AppError::Settings(err).into()),
+    }
+  }
+
   Ok(Json(payload))
 }
 
@@ -212,7 +250,7 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
 
   let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
 
-  let minio_cfg = settings::load_or_default_minio_settings()
+  let minio_cfg = settings::load_required_minio_settings()
     .await
     .map_err(AppError::Settings)?;
 
@@ -407,7 +445,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   eprintln!("耗时调试: [S3] 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
 
   let minio_cfg = Arc::new(
-    settings::load_or_default_minio_settings()
+    settings::load_required_minio_settings()
       .await
       .map_err(AppError::Settings)?,
   );

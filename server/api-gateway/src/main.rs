@@ -7,6 +7,10 @@ use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() {
+  logsearch::ensure_initialized()
+    .await
+    .expect("初始化设置存储失败");
+
   // CORS：允许任意来源跨域访问（生产环境请按需收紧）
   let cors = CorsLayer::new()
     .allow_methods([Method::GET, Method::POST, Method::OPTIONS])

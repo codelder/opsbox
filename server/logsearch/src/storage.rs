@@ -133,3 +133,29 @@ impl<'a> S3ReaderProvider<'a> {
     Ok(keys)
   }
 }
+
+pub async fn test_minio_connection(
+  url: &str,
+  access_key: &str,
+  secret_key: &str,
+  bucket: &str,
+) -> Result<(), StorageError> {
+  let client =
+    ClientBuilder::new(BaseUrl::from_str(url).map_err(|_e| StorageError::InvalidBaseUrl(url.to_string()))?)
+      .provider(Some(Box::new(StaticProvider::new(access_key, secret_key, None))))
+      .build()
+      .map_err(|_e| StorageError::MinioBuild)?;
+
+  let mut stream = client
+    .list_objects(bucket)
+    .recursive(false)
+    .to_stream()
+    .await;
+
+  // 触发一次迭代以验证凭证与桶可访问性；桶为空也视作成功
+  if let Some(item) = stream.next().await {
+    item.map_err(|e| StorageError::MinioListObjects(e.to_string()))?;
+  }
+
+  Ok(())
+}
