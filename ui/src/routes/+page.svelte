@@ -23,7 +23,7 @@
 </script>
 
 <main class="flex min-h-[100svh] justify-center">
-  <div class="w-200 px-6 pt-28 sm:pt-36 md:pt-44">
+  <div class="w-210 px-6 pt-28 sm:pt-36 md:pt-44">
     <div class="mx-auto w-full text-center">
       <label
         class="mb-4 block text-6xl font-extrabold tracking-[-0.25em] italic antialiased select-none md:mb-10 md:text-8xl"
@@ -65,11 +65,11 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="w-full rounded-3xl border border-gray-200 bg-white py-4 pr-6 pl-12 shadow-sm transition outline-none placeholder:text-gray-500 focus:border-blue-200 focus:ring-4
-                   focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-800 dark:shadow-gray-600 dark:focus:border-gray-400 dark:focus:ring-gray-400"
+            class="w-full rounded-3xl border border-gray-200 bg-white py-4 pr-6 pl-12 text-sm shadow-sm transition outline-none placeholder:text-gray-500 focus:border-blue-200
+                   focus:ring-4 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-800 dark:shadow-gray-600 dark:focus:border-gray-400 dark:focus:ring-gray-400"
             id="search"
             name="q"
-            placeholder="Try: &quot;connection reset&quot; OR /JUMPERR\\d+/ -repeater path:**/trace/*.log"
+            placeholder='Try: (taxResult OR taxWarn) /\"9111[0-9A-Z]{14}\"/ dt:20250818 path:ptcr -path:system.log'
             type="text"
           />
         </div>
@@ -125,7 +125,7 @@
         >
         <button
           class="ml-2 underline underline-offset-2 hover:text-gray-200"
-          on:click={() => insertSnippet('"connection reset" OR /ERR\\d+/ -debug path:logs/*.log')}
+          on:click={() => insertSnippet('(taxResult OR taxWarn) /\"9111[0-9A-Z]{14}\"/ dt:20250818 path:ptcr -path:system.log')}
           title="插入完整示例"
           type="button"
         >

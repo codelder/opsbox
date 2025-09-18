@@ -480,6 +480,20 @@ mod tests {
   }
 
   #[test]
+  fn regex_matches_uniform_social_credit_code() {
+    let spec = parse_github_like("/^[0-9A-Z]{18}$/").expect("parse");
+    assert_eq!(spec.terms.len(), 1, "regex should produce a single term");
+    match &spec.terms[0] {
+      Term::RegexStd(r) => {
+        assert!(r.is_match("91110108MA7DXPY30B"), "expected valid code to match");
+        assert!(!r.is_match("91350200792232668x"), "lowercase letters should not match");
+        assert!(!r.is_match("9135020079223266"), "code shorter than 18 chars should not match");
+      }
+      other => panic!("expected RegexStd term, got {:?}", other),
+    }
+  }
+
+  #[test]
   fn unknown_qualifier_is_literal() {
     let spec = parse_github_like("repo:core foo").expect("parse");
     assert!(
