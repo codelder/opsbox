@@ -13,6 +13,11 @@ minio = "0.3.0"
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 logsearch = { path = "../logsearch" }
+# 中文注释：仍保留 CORS 中间件；不再使用文件系统静态服务
+# （但 feature 保留不影响体积，后续可移除 fs feature）
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 # 中文注释：为跨平台交叉编译启用 OpenSSL 源码内置编译（避免目标系统缺失 OpenSSL 开发包）
 openssl = { version = "0.10", features = ["vendored"] }
+# 中文注释：嵌入前端静态资源到二进制
+rust-embed = { version = "8", features = ["interpolate-folder"] }
+mime_guess = "2"

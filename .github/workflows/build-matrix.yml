@@ -120,9 +120,8 @@ jobs:
           set -eux
           ART_DIR="dist/api-gateway-windows-x86_64-msvc"
           BIN="server/target/release/api-gateway.exe"
-          mkdir -p "$ART_DIR/static"
+          mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
-          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
 
       - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
@@ -138,9 +137,8 @@ jobs:
           set -eux
           ART_DIR="dist/api-gateway-macos-10.15-x86_64"
           BIN="server/target/release/api-gateway"
-          mkdir -p "$ART_DIR/static"
+          mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
-          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
 
       - name: Upload artifact (macOS x86_64)
         if: runner.os == 'macOS' && runner.arch == 'X64'
@@ -156,9 +154,8 @@ jobs:
           set -eux
           ART_DIR="dist/api-gateway-macos-11.0-arm64"
           BIN="server/target/release/api-gateway"
-          mkdir -p "$ART_DIR/static"
+          mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
-          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
 
       - name: Upload artifact (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -175,9 +172,8 @@ jobs:
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-musl"
           BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
-          mkdir -p "$ART_DIR/static"
+          mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
-          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
 
       - name: Upload artifact (Linux, musl)
         if: runner.os == 'Linux'
@@ -193,9 +189,8 @@ jobs:
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-gnu"
           BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
-          mkdir -p "$ART_DIR/static"
+          mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
-          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
 
       - name: Upload artifact (Linux, gnu)
         if: runner.os == 'Linux'
@@ -226,11 +221,11 @@ jobs:
         run: |
           set -eux
           OUT_DIR="dist/api-gateway-macos-universal2"
-          mkdir -p "$OUT_DIR/static"
+          mkdir -p "$OUT_DIR"
           # 中文注释：合并两种架构的 Mach-O 可执行文件
-          lipo -create -output "$OUT_DIR/api-gateway" "arch_x64/api-gateway" "arch_arm64/api-gateway"
-          # 中文注释：静态资源两份一致，复用 x86_64 的即可
-          cp -r arch_x64/static/* "$OUT_DIR/static/" 2>/dev/null || true
+          lipo -create -output "$OUT_DIR/api-gateway" \
+            "arch_x64/dist/api-gateway-macos-10.15-x86_64/api-gateway" \
+            "arch_arm64/dist/api-gateway-macos-11.0-arm64/api-gateway"
 
       - name: Upload artifact (macOS universal2)
         uses: actions/upload-artifact@v4
