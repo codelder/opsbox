@@ -7,16 +7,15 @@ on:
   pull_request:
 
 jobs:
-  build:
-    # 非 tag 场景仅运行 Linux；打 tag 时运行全部矩阵
-    if: ${{ matrix.os == 'ubuntu-22.04' || startsWith(github.ref, 'refs/tags/') }}
-    name: Build (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  # 平时仅跑 Linux
+  build-linux:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    name: Build (ubuntu-22.04)
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
-        # 中文注释：选择相对旧一些/更通用的运行器以提高向后兼容性；同时加入 macos-14 以构建 arm64 切片
-        os: [ubuntu-22.04, macos-13, macos-14, windows-2022]
+        os: [ubuntu-22.04]
 
     steps:
       - name: Checkout
@@ -221,9 +220,204 @@ jobs:
           name: api-gateway-linux-x86_64-gnu
           path: dist/api-gateway-linux-x86_64-gnu
 
+  # 打 tag 时跑完整矩阵（Linux/macOS/Windows）
+  build-matrix:
+    if: startsWith(github.ref, 'refs/tags/')
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-13, macos-14, windows-2022]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare pnpm via corepack (pre)
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+
+      - name: Setup Node (for frontend)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: 'ui/pnpm-lock.yaml'
+
+      - name: Enable pnpm via corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+
+      - name: Install frontend deps
+        run: pnpm --dir ui install --frozen-lockfile
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+      - name: Build frontend
+        run: pnpm --dir ui build
+
+      - name: Setup Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            server
+
+      - name: Setup Zig (Linux)
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@v1
+        continue-on-error: true
+        with:
+          version: 0.15.1
+
+      - name: Install Zig fallback (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eux
+          if command -v zig >/dev/null 2>&1; then
+            zig version
+            exit 0
+          fi
+          ZIG_VERSION=0.15.1
+          ARCH=x86_64
+          URL="https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz"
+          TMP=$(mktemp -d)
+          curl -fsSL "$URL" -o "$TMP/zig.tar.xz"
+          mkdir -p "$HOME/zig"
+          tar -xJf "$TMP/zig.tar.xz" -C "$HOME/zig" --strip-components=1
+          echo "$HOME/zig" >> "$GITHUB_PATH"
+          "$HOME/zig/zig" version
+
+      - name: Add musl target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Add gnu target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: Build backend (Linux, musl static)
+        if: runner.os == 'Linux'
+        run: |
+          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+
+      - name: Build backend (Linux, gnu glibc 2.17)
+        if: runner.os == 'Linux'
+        run: |
+          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+
+      - name: Build backend (macOS x86_64, 10.15)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: |
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      - name: Build backend (macOS arm64, 11.0)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      - name: Build backend (Windows, MSVC)
+        if: runner.os == 'Windows'
+        run: |
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-windows-x86_64-msvc"
+          BIN="server/target/release/api-gateway.exe"
+          mkdir -p "$ART_DIR"
+          cp "$BIN" "$ART_DIR/"
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-windows-x86_64-msvc
+          path: dist/api-gateway-windows-x86_64-msvc
+
+      - name: Package artifact (macOS x86_64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-macos-10.15-x86_64"
+          BIN="server/target/release/api-gateway"
+          mkdir -p "$ART_DIR"
+          cp "$BIN" "$ART_DIR/"
+
+      - name: Upload artifact (macOS x86_64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-10.15-x86_64
+          path: dist/api-gateway-macos-10.15-x86_64
+
+      - name: Package artifact (macOS arm64)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-macos-11.0-arm64"
+          BIN="server/target/release/api-gateway"
+          mkdir -p "$ART_DIR"
+          cp "$BIN" "$ART_DIR/"
+
+      - name: Upload artifact (macOS arm64)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-11.0-arm64
+          path: dist/api-gateway-macos-11.0-arm64
+
+      - name: Package artifact (Linux, musl)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-linux-x86_64-musl"
+          BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
+          mkdir -p "$ART_DIR"
+          cp "$BIN" "$ART_DIR/"
+
+      - name: Upload artifact (Linux, musl)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-linux-x86_64-musl
+          path: dist/api-gateway-linux-x86_64-musl
+
+      - name: Package artifact (Linux, gnu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-linux-x86_64-gnu"
+          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          mkdir -p "$ART_DIR"
+          cp "$BIN" "$ART_DIR/"
+
+      - name: Upload artifact (Linux, gnu)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-linux-x86_64-gnu
+          path: dist/api-gateway-linux-x86_64-gnu
+
   macos-universal2:
     name: Mac universal2
-    needs: build
+    needs: build-matrix
     runs-on: macos-13
     if: startsWith(github.ref, 'refs/tags/')
     steps:
@@ -258,7 +452,7 @@ jobs:
 
   release:
     name: Release on tag
-    needs: [build, macos-universal2]
+    needs: [build-matrix, macos-universal2]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
