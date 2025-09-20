@@ -1,0 +1,169 @@
+mod lexer;
+pub mod parser;
+
+use globset::GlobSet;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ParseError {
+  #[error("无效正则，位置 {span:?}：{message}")]
+  InvalidRegex { message: String, span: (usize, usize) },
+  #[error("无效路径模式，位置 {span:?}：{pattern}")]
+  InvalidPathPattern {
+    pattern: String,
+    span: Option<(usize, usize)>,
+  },
+  #[error("意外的记号，位置 {span:?}")]
+  UnexpectedToken { span: (usize, usize) },
+  #[error("括号不匹配，起始于 {span:?}")]
+  UnbalancedParens { span: (usize, usize) },
+}
+
+#[derive(Debug, Clone)]
+pub enum Expr {
+  And(Vec<Expr>),
+  Or(Vec<Expr>),
+  Not(Box<Expr>),
+  Atom(usize), // 索引到 Query.terms（关键字列表）
+}
+
+#[derive(Debug, Clone)]
+pub enum Term {
+  // 匹配简单子串
+  Literal(String),
+  // 匹配精确短语（子串语义）
+  Phrase(String),
+  // 标准 regex 引擎（性能更好，不支持 look-around）
+  RegexStd(regex::Regex),
+  // fancy-regex 引擎（支持 look-around，可能有回溯开销）
+  RegexFancy(fancy_regex::Regex),
+}
+
+impl Term {
+  pub fn matches(&self, line: &str) -> bool {
+    match self {
+      Term::Literal(s) => line.contains(s),
+      Term::Phrase(p) => line.contains(p),
+      Term::RegexStd(r) => r.is_match(line),
+      Term::RegexFancy(r) => r.is_match(line).unwrap_or(false),
+    }
+  }
+
+  pub fn display_text(&self) -> Option<String> {
+    match self {
+      Term::Literal(s) => Some(s.clone()),
+      Term::Phrase(p) => Some(p.clone()),
+      Term::RegexStd(_) | Term::RegexFancy(_) => None, // skip regex for highlighting to avoid confusion
+    }
+  }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PathFilter {
+  include: Option<GlobSet>,
+  exclude: Option<GlobSet>,
+  // 无通配符时的简单包含判断
+  include_contains: Vec<String>,
+  exclude_contains: Vec<String>,
+}
+
+impl PathFilter {
+  pub fn is_allowed(&self, path: &str) -> bool {
+    if let Some(ex) = &self.exclude {
+      if ex.is_match(path) {
+        return false;
+      }
+    }
+    if self.exclude_contains.iter().any(|s| path.contains(s)) {
+      return false;
+    }
+    if let Some(inc) = &self.include {
+      if !inc.is_match(path) {
+        return false;
+      }
+    }
+    if !self.include_contains.is_empty() {
+      if !self.include_contains.iter().any(|s| path.contains(s)) {
+        return false;
+      }
+    }
+    true
+  }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Query {
+  pub terms: Vec<Term>,
+  pub expr: Option<Expr>,
+  pub path_filter: PathFilter,
+  pub highlights: Vec<String>, // 前端用于高亮显示的字符串
+}
+
+impl Query {
+  pub fn from_keywords(keywords: &[String]) -> Self {
+    let mut terms: Vec<Term> = Vec::new();
+    for s in keywords.iter().filter(|s| !s.is_empty()) {
+      terms.push(Term::Literal(s.clone()));
+    }
+    let expr = if terms.is_empty() {
+      None
+    } else {
+      let atoms: Vec<Expr> = (0..terms.len()).map(Expr::Atom).collect();
+      Some(Expr::And(atoms))
+    };
+    let highlights: Vec<String> = keywords.iter().filter(|s| !s.is_empty()).cloned().collect();
+    Self {
+      terms,
+      expr,
+      path_filter: PathFilter::default(),
+      highlights,
+    }
+  }
+
+  pub fn parse_github_like(input: &str) -> Result<Self, ParseError> {
+    parser::parse_github_like(input)
+  }
+
+  pub fn positive_term_indices(&self) -> Vec<usize> {
+    let mut indices = Vec::new();
+    if let Some(ref e) = self.expr {
+      collect_positive_atoms(e, false, &mut indices);
+    }
+    indices.sort();
+    indices.dedup();
+    indices
+  }
+
+  pub fn eval_file(&self, occurs: &[bool]) -> bool {
+    if let Some(ref e) = self.expr {
+      eval_expr(e, &|i| occurs.get(i).copied().unwrap_or(false))
+    } else {
+      false
+    }
+  }
+}
+
+fn collect_positive_atoms(expr: &Expr, neg: bool, out: &mut Vec<usize>) {
+  match expr {
+    Expr::Atom(i) => {
+      if !neg {
+        out.push(*i);
+      }
+    }
+    Expr::Not(inner) => collect_positive_atoms(inner, !neg, out),
+    Expr::And(v) | Expr::Or(v) => {
+      for e in v {
+        collect_positive_atoms(e, neg, out);
+      }
+    }
+  }
+}
+
+fn eval_expr(expr: &Expr, f: &dyn Fn(usize) -> bool) -> bool {
+  match expr {
+    Expr::Atom(i) => f(*i),
+    Expr::Not(inner) => !eval_expr(inner, f),
+    Expr::And(v) => v.iter().all(|e| eval_expr(e, f)),
+    Expr::Or(v) => v.iter().any(|e| eval_expr(e, f)),
+  }
+}

@@ -40,4 +40,28 @@ build/
 nohup.out
 
 # Project-specific
-backend/api-gateway/static
+server/api-gateway/static
+
+# SvelteKit / Vite (ui)
+.svelte-kit/
+.vite/
+.output/
+.netlify/
+.wrangler/
+ui/.svelte-kit/
+ui/.vite/
+ui/.output/
+ui/.vercel/
+ui/.netlify/
+ui/.wrangler/
+ui/build/
+ui/dist/
+ui/coverage/
+ui/playwright-report/
+ui/.playwright/
+ui/test-results/
+ui/vite.config.js.timestamp-*
+ui/vite.config.ts.timestamp-*
+
+# 本地开发数据库（不要提交）
+*.db

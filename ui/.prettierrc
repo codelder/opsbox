@@ -1,0 +1,21 @@
+{
+  "useTabs": false,
+  "singleQuote": true,
+  "trailingComma": "none",
+  "tabWidth": 2,
+  "printWidth": 120,
+  "plugins": ["prettier-plugin-svelte", "prettier-plugin-tailwindcss"],
+  "overrides": [
+    {
+      "files": "*.svelte",
+      "options": {
+        "parser": "svelte",
+        "svelteStrictMode": false,
+        "svelteAllowShorthand": true,
+        "svelteIndentScriptAndStyle": true,
+        "embeddedLanguageFormatting": "auto"
+      }
+    }
+  ],
+  "tailwindStylesheet": "./src/app.css"
+}

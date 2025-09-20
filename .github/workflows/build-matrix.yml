@@ -1,0 +1,253 @@
+name: build-matrix
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # 中文注释：选择相对旧一些/更通用的运行器以提高向后兼容性；同时加入 macos-14 以构建 arm64 切片
+        os: [ubuntu-22.04, macos-13, macos-14, windows-2022]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node (for frontend)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: 'ui/pnpm-lock.yaml'
+
+      - name: Enable pnpm via corepack
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+
+      - name: Install frontend deps
+        run: pnpm --dir ui install --frozen-lockfile
+        env:
+          # 中文注释：跳过 Playwright 浏览器下载，加速 CI
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+      - name: Build frontend
+        run: pnpm --dir ui build
+
+      - name: Setup Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # 中文注释：仅缓存 server 工作区，避免前端无关缓存
+          workspaces: |
+            server
+
+      # ========================= Linux 专用（最大化兼容） =========================
+      - name: Setup Zig (Linux)
+        if: runner.os == 'Linux'
+        uses: mlugg/setup-zig@v1
+        with:
+          # 中文注释：固定 Zig 版本以保证可复现构建
+          version: 0.15.1
+
+      - name: Install cargo-zigbuild (Linux)
+        if: runner.os == 'Linux'
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Add musl target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Add gnu target (Linux)
+        if: runner.os == 'Linux'
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: Build backend (Linux, musl static)
+        if: runner.os == 'Linux'
+        run: |
+          # 中文注释：使用 musl 静态链接，显著增强在老旧 Linux 发行版上的可运行性
+          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+
+      - name: Build backend (Linux, gnu glibc 2.17)
+        if: runner.os == 'Linux'
+        run: |
+          # 中文注释：生成以较旧 glibc 链接的非静态变体，作为兼容性备选
+          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+
+      # ========================= macOS 专用（按架构设置部署目标） =========================
+      - name: Build backend (macOS x86_64, 10.15)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        env:
+          # 中文注释：Intel 目标设置为 10.15，以便在旧系统上运行
+          MACOSX_DEPLOYMENT_TARGET: '10.15'
+        run: |
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      - name: Build backend (macOS arm64, 11.0)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        env:
+          # 中文注释：Apple Silicon 最低为 11.0
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+        run: |
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      # ========================= Windows 专用（MSVC 通用构建） =========================
+      - name: Build backend (Windows, MSVC)
+        if: runner.os == 'Windows'
+        run: |
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      # 非 Linux 平台的打包与上传
+      - name: Package artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-windows-x86_64-msvc"
+          BIN="server/target/release/api-gateway.exe"
+          mkdir -p "$ART_DIR/static"
+          cp "$BIN" "$ART_DIR/"
+          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-windows-x86_64-msvc
+          path: dist/api-gateway-windows-x86_64-msvc
+
+      - name: Package artifact (macOS x86_64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-macos-10.15-x86_64"
+          BIN="server/target/release/api-gateway"
+          mkdir -p "$ART_DIR/static"
+          cp "$BIN" "$ART_DIR/"
+          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
+
+      - name: Upload artifact (macOS x86_64)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-10.15-x86_64
+          path: dist/api-gateway-macos-10.15-x86_64
+
+      - name: Package artifact (macOS arm64)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-macos-11.0-arm64"
+          BIN="server/target/release/api-gateway"
+          mkdir -p "$ART_DIR/static"
+          cp "$BIN" "$ART_DIR/"
+          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
+
+      - name: Upload artifact (macOS arm64)
+        if: runner.os == 'macOS' && runner.arch == 'ARM64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-11.0-arm64
+          path: dist/api-gateway-macos-11.0-arm64
+
+      # Linux 平台分别打包 musl 与 gnu 两种产物
+      - name: Package artifact (Linux, musl)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-linux-x86_64-musl"
+          BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
+          mkdir -p "$ART_DIR/static"
+          cp "$BIN" "$ART_DIR/"
+          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
+
+      - name: Upload artifact (Linux, musl)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-linux-x86_64-musl
+          path: dist/api-gateway-linux-x86_64-musl
+
+      - name: Package artifact (Linux, gnu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-linux-x86_64-gnu"
+          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          mkdir -p "$ART_DIR/static"
+          cp "$BIN" "$ART_DIR/"
+          cp -r server/api-gateway/static/* "$ART_DIR/static/" 2>/dev/null || true
+
+      - name: Upload artifact (Linux, gnu)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-linux-x86_64-gnu
+          path: dist/api-gateway-linux-x86_64-gnu
+
+  macos-universal2:
+    name: Mac universal2
+    needs: build
+    runs-on: macos-13
+    steps:
+      - name: Download macOS x86_64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: api-gateway-macos-10.15-x86_64
+          path: arch_x64
+
+      - name: Download macOS arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: api-gateway-macos-11.0-arm64
+          path: arch_arm64
+
+      - name: Create universal2 binary
+        shell: bash
+        run: |
+          set -eux
+          OUT_DIR="dist/api-gateway-macos-universal2"
+          mkdir -p "$OUT_DIR/static"
+          # 中文注释：合并两种架构的 Mach-O 可执行文件
+          lipo -create -output "$OUT_DIR/api-gateway" "arch_x64/api-gateway" "arch_arm64/api-gateway"
+          # 中文注释：静态资源两份一致，复用 x86_64 的即可
+          cp -r arch_x64/static/* "$OUT_DIR/static/" 2>/dev/null || true
+
+      - name: Upload artifact (macOS universal2)
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-universal2
+          path: dist/api-gateway-macos-universal2
+
+  release:
+    name: Release on tag
+    needs: [build, macos-universal2]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: api-gateway-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: artifacts/**/*
