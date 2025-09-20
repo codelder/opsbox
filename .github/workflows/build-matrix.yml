@@ -20,6 +20,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 提前激活 pnpm，避免 setup-node 在启用 pnpm 缓存时找不到 pnpm
+      - name: Prepare pnpm via corepack (pre)
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+
       - name: Setup Node (for frontend)
         uses: actions/setup-node@v4
         with:
