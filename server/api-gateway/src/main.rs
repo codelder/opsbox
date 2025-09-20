@@ -42,7 +42,7 @@ fn serve_embedded(path: &str) -> Option<Response> {
   }
 }
 
-async fn spa_fallback(uri: http::Uri) -> impl IntoResponse {
+async fn spa_fallback(uri: http::Uri) -> Response {
   let path = uri.path();
   if let Some(resp) = serve_embedded(path) {
     return resp;
@@ -51,7 +51,11 @@ async fn spa_fallback(uri: http::Uri) -> impl IntoResponse {
   if let Some(resp) = serve_embedded("index.html") {
     return resp;
   }
-  (StatusCode::NOT_FOUND, "404 Not Found")
+  http::Response::builder()
+    .status(StatusCode::NOT_FOUND)
+    .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+    .body(axum::body::Body::from("404 Not Found"))
+    .unwrap()
 }
 
 #[tokio::main]
