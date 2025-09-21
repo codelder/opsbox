@@ -51,6 +51,8 @@ jobs:
       - name: Setup Rust toolchain (stable)
         id: rust-toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90.0'
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
@@ -76,6 +78,17 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-musl
 
+      - name: Restore sccache (Linux)
+        if: runner.os == 'Linux'
+        id: cache-sccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: .sccache
+          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
+          restore-keys: |
+            sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
+            sccache-${{ runner.os }}-v1
+
       - name: Add gnu target (Linux)
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
@@ -97,8 +110,21 @@ jobs:
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
         run: |
+          set -euxo pipefail
+          # 中文注释：安装 sccache（如未安装）并启用
+          if ! command -v sccache >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y sccache
+          fi
+          export RUSTC_WRAPPER=sccache
+          export SCCACHE_DIR="$PWD/.sccache"
+          export SCCACHE_CACHE_SIZE=2G
+          # 中文注释：统一目标目录，避免路径差异导致的指纹失配
+          export CARGO_TARGET_DIR="$PWD/server/target"
           # 中文注释：使用 musl 静态链接，显著增强在老旧 Linux 发行版上的可运行性
           cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          # 打印 sccache 统计供诊断
+          sccache --show-stats || true
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
@@ -121,6 +147,19 @@ jobs:
             export CARGO_HOME="$PWD/.cargo-gnu"
             export RUSTUP_HOME="$PWD/.rustup-gnu"
             export CARGO_TARGET_DIR="$PWD/server/target"
+            # 中文注释：容器内准备 sccache（下载预编译二进制，不依赖系统包管理）
+            mkdir -p "$PWD/.tools"
+            if [ ! -x "$PWD/.tools/sccache" ]; then
+              curl -sSL -o sccache.tgz https://github.com/mozilla/sccache/releases/download/v0.7.6/sccache-v0.7.6-x86_64-unknown-linux-musl.tar.gz
+              tar -xzf sccache.tgz --strip-components=1 -C "$PWD/.tools" || mkdir -p "$PWD/.tools" && tar -xzf sccache.tgz -C "$PWD/.tools" --strip-components=1
+              mv "$PWD/.tools/sccache-v0.7.6-x86_64-unknown-linux-musl/sccache" "$PWD/.tools/sccache" 2>/dev/null || true
+              rm -rf sccache.tgz "$PWD/.tools/sccache-v0.7.6-x86_64-unknown-linux-musl" 2>/dev/null || true
+              chmod +x "$PWD/.tools/sccache" || true
+            fi
+            export PATH="$PWD/.tools:$PATH"
+            export RUSTC_WRAPPER=sccache
+            export SCCACHE_DIR="$PWD/.sccache"
+            export SCCACHE_CACHE_SIZE=2G
 
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             # 中文注释：必须 source $CARGO_HOME/env，而不是 $HOME/.cargo/env
@@ -132,9 +171,10 @@ jobs:
             export OPENSSL_STATIC=1
 
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+            sccache --show-stats || true
 
             # 中文注释：将缓存目录改为宿主机用户所有，避免后续保存缓存时权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/.cargo-gnu" "$PWD/.rustup-gnu" || true
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/.cargo-gnu" "$PWD/.rustup-gnu" "$PWD/.sccache" || true
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
 
@@ -143,8 +183,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo chown -R $(id -u):$(id -g) .cargo-gnu .rustup-gnu || true
-          chmod -R a+rX .cargo-gnu .rustup-gnu || true
+          sudo chown -R $(id -u):$(id -g) .cargo-gnu .rustup-gnu .sccache || true
+          chmod -R a+rX .cargo-gnu .rustup-gnu .sccache || true
 
       - name: Save cargo cache for GNU build inside container (on miss)
         if: runner.os == 'Linux' && steps.cache-gnu-cargo-restore.outputs.cache-hit != 'true'
@@ -154,6 +194,13 @@ jobs:
             .cargo-gnu
             .rustup-gnu
           key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
+
+      - name: Save sccache (Linux)
+        if: runner.os == 'Linux' && steps.cache-sccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .sccache
+          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
@@ -342,6 +389,8 @@ jobs:
 
       - name: Setup Rust toolchain (stable)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90.0'
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
