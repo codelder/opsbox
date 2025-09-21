@@ -126,6 +126,35 @@ jobs:
           # 打印 sccache 统计供诊断
           sccache --show-stats || true
 
+      - name: Cache manylinux2014 image (restore)
+        if: runner.os == 'Linux'
+        id: cache-manylinux-restore
+        uses: actions/cache/restore@v4
+        with:
+          # 中文注释：缓存 manylinux2014 镜像的 docker save tar 文件
+          path: .cache/docker-images/manylinux2014_x86_64.tar
+          key: docker-img-manylinux2014_x86_64-latest-v1
+
+      - name: Ensure manylinux2014 image present
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p .cache/docker-images
+          if [ -f .cache/docker-images/manylinux2014_x86_64.tar ]; then
+            docker load -i .cache/docker-images/manylinux2014_x86_64.tar
+          else
+            docker pull quay.io/pypa/manylinux2014_x86_64:latest
+            docker save quay.io/pypa/manylinux2014_x86_64:latest -o .cache/docker-images/manylinux2014_x86_64.tar
+          fi
+
+      - name: Cache manylinux2014 image (save on miss)
+        if: runner.os == 'Linux' && steps.cache-manylinux-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/docker-images/manylinux2014_x86_64.tar
+          key: docker-img-manylinux2014_x86_64-latest-v1
+
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
         run: |
