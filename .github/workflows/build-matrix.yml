@@ -106,7 +106,7 @@ jobs:
           set -euxo pipefail
           docker run --rm \
             -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
-            -v "$PWD":/work -w /work quay.io/pypa/manylinux2014_x86_64 bash -lc '
+            -v "$PWD":"$PWD" -w "$PWD" quay.io/pypa/manylinux2014_x86_64 bash -lc '
             set -euxo pipefail
             # 中文注释：补齐 OpenSSL 源码构建所需依赖（perl 模块/编译工具链）
             yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
@@ -117,10 +117,10 @@ jobs:
               set -u
             fi
 
-            # 中文注释：将容器内 Cargo/Rustup 主目录放在挂载的工作区，以便 actions/cache 持久化
-            export CARGO_HOME=/work/.cargo-gnu
-            export RUSTUP_HOME=/work/.rustup-gnu
-            export CARGO_TARGET_DIR=/work/server/target
+            # 中文注释：将容器内 Cargo/Rustup 主目录放在挂载的工作区（与宿主机绝对路径相同），以便 actions/cache 持久化且避免路径指纹导致的重编译
+            export CARGO_HOME="$PWD/.cargo-gnu"
+            export RUSTUP_HOME="$PWD/.rustup-gnu"
+            export CARGO_TARGET_DIR="$PWD/server/target"
 
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             # 中文注释：必须 source $CARGO_HOME/env，而不是 $HOME/.cargo/env
@@ -134,7 +134,7 @@ jobs:
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
 
             # 中文注释：将缓存目录改为宿主机用户所有，避免后续保存缓存时权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} /work/.cargo-gnu /work/.rustup-gnu || true
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/.cargo-gnu" "$PWD/.rustup-gnu" || true
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
 
