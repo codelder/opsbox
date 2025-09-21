@@ -206,7 +206,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          # 中文注释：GNU 构建在 manylinux 容器中使用 CARGO_TARGET_DIR=server/target-gnu
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
           echo "== Version needs (readelf -V) =="
@@ -223,7 +225,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          # 中文注释：优先检查 target-gnu 目录，回退到默认 target
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
