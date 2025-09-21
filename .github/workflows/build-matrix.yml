@@ -189,14 +189,16 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: server/target-musl
-          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          retention-days: 14
 
       - name: Save target cache (gnu)
         if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
           path: server/target-gnu
-          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          retention-days: 14
 
 
 
