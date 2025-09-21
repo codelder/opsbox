@@ -1,9 +1,9 @@
 use axum::http;
 use axum::http::{
-  Method, StatusCode,
   header::{CACHE_CONTROL, CONTENT_TYPE},
+  StatusCode,
 };
-use axum::{Router, response::Response, routing::get};
+use axum::{response::Response, routing::get, Router};
 use logsearch::router as logsearch_router;
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
@@ -74,7 +74,7 @@ async fn main() {
   // CORS 已禁用：如需启用，请在此处添加 CorsLayer
 
   let app = Router::new()
-    .route("/healthz", get(|| async { "ok" }))
+    .route("/healthy", get(|| async { "ok" }))
     .nest("/api/v1/logsearch", logsearch_router())
     .fallback(get(spa_fallback));
 
