@@ -172,6 +172,19 @@ jobs:
               set -u
             fi
 
+            # 中文注释：确保 OpenSSL 构建所需 Perl 模块存在（IPC::Cmd 与 Text::Template）
+            # 先尝试从系统包安装，不可用时使用 cpanminus 兜底
+            if ! perl -MIPC::Cmd -e 1 2>/dev/null; then
+              yum -y install perl-IPC-Cmd || true
+            fi
+            if ! perl -MText::Template -e 1 2>/dev/null; then
+              yum -y install perl-Text-Template || true
+            fi
+            if ! perl -MIPC::Cmd -MText::Template -e 1 2>/dev/null; then
+              curl -sL https://cpanmin.us | perl - App::cpanminus
+              cpanm --notest IPC::Cmd Text::Template
+            fi
+
             # 中文注释：将容器内 Cargo/Rustup 主目录放在挂载的工作区（与宿主机绝对路径相同），以便 actions/cache 持久化且避免路径指纹导致的重编译
             export CARGO_HOME="$PWD/.cargo-gnu"
             export RUSTUP_HOME="$PWD/.rustup-gnu"
