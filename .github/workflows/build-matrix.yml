@@ -106,6 +106,8 @@ jobs:
           readelf -V "$BIN" || true
           echo "== Distinct GLIBC symbol versions =="
           objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu || true
+          echo "== Symbols requiring GLIBC_2.29/2.28/2.27 (if any) =="
+          objdump -T "$BIN" | grep -E 'GLIBC_2\.29|GLIBC_2\.28|GLIBC_2\.27' || true
           echo "== ldd resolution on runner (for reference) =="
           ldd "$BIN" || true
 
@@ -325,6 +327,8 @@ jobs:
           readelf -V "$BIN" || true
           echo "== Distinct GLIBC symbol versions =="
           objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu || true
+          echo "== Symbols requiring GLIBC_2.29/2.28/2.27 (if any) =="
+          objdump -T "$BIN" | grep -E 'GLIBC_2\.29|GLIBC_2\.28|GLIBC_2\.27' || true
           echo "== ldd resolution on runner (for reference) =="
           ldd "$BIN" || true
 
