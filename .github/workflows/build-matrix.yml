@@ -224,8 +224,8 @@ jobs:
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
             sccache --show-stats || true
 
-            # 中文注释：将缓存目录改为宿主机用户所有，避免后续保存缓存时权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/.cargo-gnu" "$PWD/.rustup-gnu" "$PWD/.sccache" || true
+            # 中文注释：将缓存与构建产物目录改为宿主机用户所有，避免后续保存缓存时权限问题
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/.cargo-gnu" "$PWD/.rustup-gnu" "$PWD/.sccache" "$PWD/server/target" || true
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
 
@@ -234,8 +234,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          sudo chown -R $(id -u):$(id -g) .cargo-gnu .rustup-gnu .sccache || true
-          chmod -R a+rX .cargo-gnu .rustup-gnu .sccache || true
+          sudo chown -R $(id -u):$(id -g) .cargo-gnu .rustup-gnu .sccache server/target || true
+          chmod -R a+rX .cargo-gnu .rustup-gnu .sccache server/target || true
 
       - name: Save cargo cache for GNU build inside container (on miss)
         if: runner.os == 'Linux' && steps.cache-gnu-cargo-restore.outputs.cache-hit != 'true'
