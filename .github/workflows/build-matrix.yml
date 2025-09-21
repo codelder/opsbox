@@ -84,10 +84,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .sccache
-          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
+          # 中文注释：使用“前缀恢复 + 唯一保存”策略
+          # 主 key 仅用于命中不存在的占位符；实际通过 restore-keys 前缀找到最近一次保存的条目
+          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-primary
           restore-keys: |
-            sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
-            sccache-${{ runner.os }}-v1
+            sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            sccache-${{ runner.os }}-
 
       - name: Add gnu target (Linux)
         if: runner.os == 'Linux'
@@ -246,12 +248,13 @@ jobs:
             .rustup-gnu
           key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
 
-      - name: Save sccache (Linux)
-        if: runner.os == 'Linux' && steps.cache-sccache-restore.outputs.cache-hit != 'true'
+      - name: Save sccache (Linux, always)
+        if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
           path: .sccache
-          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
+          # 中文注释：每次使用唯一 key（绑定 run_id），确保本次编译产生的新对象被持久化
+          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ github.run_id }}
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
