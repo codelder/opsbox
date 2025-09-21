@@ -104,7 +104,9 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euxo pipefail
-          docker run --rm -v "$PWD":/work -w /work quay.io/pypa/manylinux2014_x86_64 bash -lc '
+          docker run --rm \
+            -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
+            -v "$PWD":/work -w /work quay.io/pypa/manylinux2014_x86_64 bash -lc '
             set -euxo pipefail
             # 中文注释：补齐 OpenSSL 源码构建所需依赖（perl 模块/编译工具链）
             yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
@@ -130,8 +132,19 @@ jobs:
             export OPENSSL_STATIC=1
 
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+
+            # 中文注释：将缓存目录改为宿主机用户所有，避免后续保存缓存时权限问题
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} /work/.cargo-gnu /work/.rustup-gnu || true
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
+
+      - name: Fix permissions for cached dirs (host)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo chown -R $(id -u):$(id -g) .cargo-gnu .rustup-gnu || true
+          chmod -R a+rX .cargo-gnu .rustup-gnu || true
 
       - name: Save cargo cache for GNU build inside container (on miss)
         if: runner.os == 'Linux' && steps.cache-gnu-cargo-restore.outputs.cache-hit != 'true'
