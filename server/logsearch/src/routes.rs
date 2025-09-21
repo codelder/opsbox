@@ -13,7 +13,6 @@ use axum::{
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
   routing::{get, post},
 };
-use serde::Deserialize as _;
 use chrono::{Datelike, Duration};
 use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
