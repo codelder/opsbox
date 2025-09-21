@@ -93,8 +93,12 @@ jobs:
             set -euxo pipefail
             # 中文注释：补齐 OpenSSL 源码构建所需依赖（perl 模块/编译工具链）
             yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
-            # 中文注释：启用 devtoolset-10，提供较新的 GCC/LD
-            source /opt/rh/devtoolset-10/enable || true
+            # 中文注释：启用 devtoolset-10，提供较新的 GCC/LD（注意：devtoolset 的 enable 脚本在 set -u 下会触发 MANPATH 未定义报错）
+            if [ -f /opt/rh/devtoolset-10/enable ]; then
+              set +u
+              source /opt/rh/devtoolset-10/enable
+              set -u
+            fi
 
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             source "$HOME/.cargo/env"
