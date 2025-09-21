@@ -342,7 +342,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
