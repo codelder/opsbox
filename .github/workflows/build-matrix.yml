@@ -391,17 +391,10 @@ jobs:
         run: pnpm --dir ui build
 
       - name: Setup Rust toolchain (stable)
+        id: rust-toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.90.0'
-
-
-      - name: Setup Zig (Linux)
-        if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.1
-          use-cache: false
 
 
       - name: Add musl target (Linux)
@@ -412,6 +405,28 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
+      # 缓存 target-musl 目录（宿主环境）
+      - name: Restore target cache (musl)
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-musl-${{ runner.os }}-
+
+      # 缓存 target-gnu 目录（manylinux 容器环境）
+      - name: Restore target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-gnu-${{ runner.os }}-
+
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
         run: |
@@ -420,12 +435,78 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
           cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
 
+      - name: Ensure manylinux2014 image present
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker pull quay.io/pypa/manylinux2014_x86_64:latest
+
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
-        env:
-          ZIG_TARGET: x86_64-linux-gnu.2.17
         run: |
-          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+          set -euxo pipefail
+          docker run --rm \
+            -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
+            -v "$PWD":"$PWD" -w "$PWD" quay.io/pypa/manylinux2014_x86_64 bash -lc '
+            set -euxo pipefail
+            # 中文注释：补齐 OpenSSL 源码构建所需依赖（perl 模块/编译工具链）
+            yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
+            # 中文注释：启用 devtoolset-10，提供较新的 GCC/LD（注意：devtoolset 的 enable 脚本在 set -u 下会触发 MANPATH 未定义报错）
+            if [ -f /opt/rh/devtoolset-10/enable ]; then
+              set +u
+              source /opt/rh/devtoolset-10/enable
+              set -u
+            fi
+
+            # 中文注释：确保 OpenSSL 构建所需 Perl 模块存在（IPC::Cmd 与 Text::Template）
+            # 先尝试从系统包安装，不可用时使用 cpanminus 兜底
+            if ! perl -MIPC::Cmd -e 1 2>/dev/null; then
+              yum -y install perl-IPC-Cmd || true
+            fi
+            if ! perl -MText::Template -e 1 2>/dev/null; then
+              yum -y install perl-Text-Template || true
+            fi
+            if ! perl -MIPC::Cmd -MText::Template -e 1 2>/dev/null; then
+              curl -sL https://cpanmin.us | perl - App::cpanminus
+              cpanm --notest IPC::Cmd Text::Template
+            fi
+
+            # 中文注释：统一目标目录（gnu 专用），避免与宿主产物混用
+            export CARGO_TARGET_DIR="$PWD/server/target-gnu"
+
+            # 安装 Rust 并加载环境，固定版本与宿主一致
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            source "$HOME/.cargo/env"
+            rustup toolchain install 1.90.0 --profile minimal --no-self-update
+            rustup default 1.90.0
+            rustc --version --verbose
+            cargo --version
+
+            # 显式启用静态 OpenSSL（vendored）
+            export OPENSSL_STATIC=1
+
+            cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+
+            # 修正构建产物权限，避免宿主权限问题
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target-gnu" || true
+          '
+          ls -l server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
+
+      # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
+      - name: Save target cache (musl)
+        if: runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Save target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
@@ -450,7 +531,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
@@ -541,7 +623,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-musl"
-          BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
+          BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
