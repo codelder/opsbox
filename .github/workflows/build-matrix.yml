@@ -12,8 +12,6 @@ jobs:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     name: Build (ubuntu-22.04)
     runs-on: ubuntu-22.04
-    container:
-      image: quay.io/pypa/manylinux2014_x86_64
     strategy:
       fail-fast: false
       matrix:
@@ -22,10 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install basics (manylinux2014)
-        run: |
-          yum -y install curl xz tar git which binutils
 
       # 提前激活 pnpm，避免 setup-node 在启用 pnpm 缓存时找不到 pnpm
       - name: Prepare pnpm via corepack (pre)
@@ -94,8 +88,17 @@ jobs:
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
         run: |
-          # 中文注释：manylinux2014 基于 CentOS7 (glibc 2.17)，GNU 变体可直接使用常规构建
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+          set -euxo pipefail
+          docker run --rm -v "$PWD":/work -w /work quay.io/pypa/manylinux2014_x86_64 bash -lc '
+            set -euxo pipefail
+            yum -y install curl git xz tar which binutils
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+            source "$HOME/.cargo/env"
+            rustc --version
+            cargo --version
+            cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+          '
+          ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
