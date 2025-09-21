@@ -320,7 +320,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-musl"
-BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
+          BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
           [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
@@ -427,7 +427,7 @@ BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
         shell: bash
         run: |
           set -euxo pipefail
-BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
           [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
@@ -553,7 +553,7 @@ BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
           [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
