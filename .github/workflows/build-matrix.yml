@@ -62,29 +62,10 @@ jobs:
       - name: Setup Zig (Linux)
         if: runner.os == 'Linux'
         uses: mlugg/setup-zig@v2
-        continue-on-error: true
         with:
           # 中文注释：固定 Zig 版本以保证可复现构建
           version: 0.15.1
 
-      - name: Install Zig fallback (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -eux
-          if command -v zig >/dev/null 2>&1; then
-            zig version
-            exit 0
-          fi
-          ZIG_VERSION=0.15.1
-          ARCH=x86_64
-          URL="https://ziglang.org/download/${ZIG_VERSION}/zig-${ARCH}-linux-${ZIG_VERSION}.tar.xz"
-          TMP=$(mktemp -d)
-          curl -fsSL "$URL" -o "$TMP/zig.tar.xz"
-          mkdir -p "$HOME/zig"
-          tar -xJf "$TMP/zig.tar.xz" -C "$HOME/zig" --strip-components=1
-          echo "$HOME/zig" >> "$GITHUB_PATH"
-          "$HOME/zig/zig" version
 
       - name: Install cargo-zigbuild (Linux)
         if: runner.os == 'Linux'
@@ -270,28 +251,9 @@ jobs:
       - name: Setup Zig (Linux)
         if: runner.os == 'Linux'
         uses: mlugg/setup-zig@v2
-        continue-on-error: true
         with:
           version: 0.15.1
 
-      - name: Install Zig fallback (Linux)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -eux
-          if command -v zig >/dev/null 2>&1; then
-            zig version
-            exit 0
-          fi
-          ZIG_VERSION=0.15.1
-          ARCH=x86_64
-          URL="https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${ARCH}-${ZIG_VERSION}.tar.xz"
-          TMP=$(mktemp -d)
-          curl -fsSL "$URL" -o "$TMP/zig.tar.xz"
-          mkdir -p "$HOME/zig"
-          tar -xJf "$TMP/zig.tar.xz" -C "$HOME/zig" --strip-components=1
-          echo "$HOME/zig" >> "$GITHUB_PATH"
-          "$HOME/zig/zig" version
 
       - name: Add musl target (Linux)
         if: runner.os == 'Linux'
