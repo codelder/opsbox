@@ -31,8 +31,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: 'ui/pnpm-lock.yaml'
 
       - name: Enable pnpm via corepack
         run: |
@@ -54,12 +52,6 @@ jobs:
         with:
           toolchain: '1.90.0'
 
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          # 中文注释：仅缓存 server 工作区，避免前端无关缓存
-          workspaces: |
-            server
 
       # ========================= Linux 专用（最大化兼容） =========================
 
@@ -67,36 +59,11 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-musl
 
-      - name: Restore sccache (Linux)
-        if: runner.os == 'Linux'
-        id: cache-sccache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: .sccache
-          # 中文注释：使用“前缀恢复 + 唯一保存”策略
-          # 主 key 仅用于命中不存在的占位符；实际通过 restore-keys 前缀找到最近一次保存的条目
-          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-primary
-          restore-keys: |
-            sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
-            sccache-${{ runner.os }}-
 
       - name: Add gnu target (Linux)
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
-      - name: Restore cargo cache for GNU build inside container
-        if: runner.os == 'Linux'
-        id: cache-gnu-cargo-restore
-        uses: actions/cache/restore@v4
-        with:
-          # 中文注释：缓存 manylinux 容器内使用的 Cargo 主目录（registry、git 索引、下载缓存等）与 RUSTUP_HOME
-          path: |
-            .cargo-gnu
-            .rustup-gnu
-          key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
-          restore-keys: |
-            cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
-            cargo-gnu-${{ runner.os }}-v1
 
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
@@ -136,34 +103,14 @@ jobs:
           # 打印 sccache 统计供诊断，并写入 Job Summary
           sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
 
-      - name: Cache manylinux2014 image (restore)
-        if: runner.os == 'Linux'
-        id: cache-manylinux-restore
-        uses: actions/cache/restore@v4
-        with:
-          # 中文注释：缓存 manylinux2014 镜像的 docker save tar 文件
-          path: .cache/docker-images/manylinux2014_x86_64.tar
-          key: docker-img-manylinux2014_x86_64-latest-v1
 
       - name: Ensure manylinux2014 image present
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p .cache/docker-images
-          if [ -f .cache/docker-images/manylinux2014_x86_64.tar ]; then
-            docker load -i .cache/docker-images/manylinux2014_x86_64.tar
-          else
-            docker pull quay.io/pypa/manylinux2014_x86_64:latest
-            docker save quay.io/pypa/manylinux2014_x86_64:latest -o .cache/docker-images/manylinux2014_x86_64.tar
-          fi
+          docker pull quay.io/pypa/manylinux2014_x86_64:latest
 
-      - name: Cache manylinux2014 image (save on miss)
-        if: runner.os == 'Linux' && steps.cache-manylinux-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: .cache/docker-images/manylinux2014_x86_64.tar
-          key: docker-img-manylinux2014_x86_64-latest-v1
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
@@ -171,7 +118,6 @@ jobs:
           set -euxo pipefail
           docker run --rm \
             -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
-            -e GITHUB_STEP_SUMMARY="$GITHUB_STEP_SUMMARY" \
             -v "$PWD":"$PWD" -w "$PWD" quay.io/pypa/manylinux2014_x86_64 bash -lc '
             set -euxo pipefail
             # 中文注释：补齐 OpenSSL 源码构建所需依赖（perl 模块/编译工具链）
@@ -196,71 +142,27 @@ jobs:
               cpanm --notest IPC::Cmd Text::Template
             fi
 
-            # 中文注释：将容器内 Cargo/Rustup 主目录放在挂载的工作区（与宿主机绝对路径相同），以便 actions/cache 持久化且避免路径指纹导致的重编译
-            export CARGO_HOME="$PWD/.cargo-gnu"
-            export RUSTUP_HOME="$PWD/.rustup-gnu"
+            # 中文注释：统一目标目录；禁用跨运行持久化目录
             export CARGO_TARGET_DIR="$PWD/server/target"
-            # 中文注释：容器内准备 sccache（下载预编译二进制，不依赖系统包管理）
-            mkdir -p "$PWD/.tools"
-            if [ ! -x "$PWD/.tools/sccache" ]; then
-              curl -sSL -o sccache.tgz https://github.com/mozilla/sccache/releases/download/v0.7.6/sccache-v0.7.6-x86_64-unknown-linux-musl.tar.gz
-              tar -xzf sccache.tgz --strip-components=1 -C "$PWD/.tools" || mkdir -p "$PWD/.tools" && tar -xzf sccache.tgz -C "$PWD/.tools" --strip-components=1
-              mv "$PWD/.tools/sccache-v0.7.6-x86_64-unknown-linux-musl/sccache" "$PWD/.tools/sccache" 2>/dev/null || true
-              rm -rf sccache.tgz "$PWD/.tools/sccache-v0.7.6-x86_64-unknown-linux-musl" 2>/dev/null || true
-              chmod +x "$PWD/.tools/sccache" || true
-            fi
-            export PATH="$PWD/.tools:$PATH"
-            export RUSTC_WRAPPER=sccache
-            export SCCACHE_DIR="$PWD/.sccache"
-            export SCCACHE_CACHE_SIZE=2G
-            # 中文注释：让容器内 C/C++ 也走 sccache（使用 gcc/g++）
-            export CC="sccache gcc"
-            export CXX="sccache g++"
-            # 中文注释：启动 sccache 守护（如未启动）
-            sccache --start-server || true
 
+            # 安装 Rust 并加载环境
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            # 中文注释：必须 source $CARGO_HOME/env，而不是 $HOME/.cargo/env
-            source "$CARGO_HOME/env"
+            source "$HOME/.cargo/env"
             rustc --version
             cargo --version
 
-            # 中文注释：显式启用静态 OpenSSL（vendored），避免系统 OpenSSL 兼容性问题
+            # 显式启用静态 OpenSSL（vendored）
             export OPENSSL_STATIC=1
 
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
-            # 打印 sccache 统计供诊断，并写入 Job Summary（通过传入的 GITHUB_STEP_SUMMARY 文件路径）
-            sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
 
-            # 中文注释：将缓存与构建产物目录改为宿主机用户所有，避免后续保存缓存时权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/.cargo-gnu" "$PWD/.rustup-gnu" "$PWD/.sccache" "$PWD/server/target" || true
+            # 修正构建产物权限，避免宿主权限问题
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target" || true
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
 
-      - name: Fix permissions for cached dirs (host)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo chown -R $(id -u):$(id -g) .cargo-gnu .rustup-gnu .sccache server/target || true
-          chmod -R a+rX .cargo-gnu .rustup-gnu .sccache server/target || true
 
-      - name: Save cargo cache for GNU build inside container (on miss)
-        if: runner.os == 'Linux' && steps.cache-gnu-cargo-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            .cargo-gnu
-            .rustup-gnu
-          key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
 
-      - name: Save sccache (Linux, always)
-        if: runner.os == 'Linux'
-        uses: actions/cache/save@v4
-        with:
-          path: .sccache
-          # 中文注释：每次使用唯一 key（绑定 run_id），确保本次编译产生的新对象被持久化
-          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ github.run_id }}
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
@@ -431,8 +333,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: 'ui/pnpm-lock.yaml'
 
       - name: Enable pnpm via corepack
         run: |
@@ -452,17 +352,13 @@ jobs:
         with:
           toolchain: '1.90.0'
 
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            server
 
       - name: Setup Zig (Linux)
         if: runner.os == 'Linux'
         uses: mlugg/setup-zig@v2
         with:
           version: 0.15.1
+          use-cache: false
 
 
       - name: Add musl target (Linux)
