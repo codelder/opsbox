@@ -64,6 +64,17 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
+      # 仅缓存 target（musl）以复用依赖编译产物
+      - name: Restore target cache (musl)
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target/x86_64-unknown-linux-musl
+          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-musl-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-musl-
+            target-${{ runner.os }}-x86_64-unknown-linux-musl-
+
 
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
@@ -103,6 +114,14 @@ jobs:
           # 打印 sccache 统计供诊断，并写入 Job Summary
           sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
 
+      # 保存 target（musl）缓存
+      - name: Save target cache (musl)
+        if: runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target/x86_64-unknown-linux-musl
+          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-musl-${{ hashFiles('server/Cargo.lock') }}
+
 
       - name: Ensure manylinux2014 image present
         if: runner.os == 'Linux'
@@ -111,6 +130,17 @@ jobs:
           set -euxo pipefail
           docker pull quay.io/pypa/manylinux2014_x86_64:latest
 
+
+      # 仅缓存 target（gnu）以复用依赖编译产物
+      - name: Restore target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target/x86_64-unknown-linux-gnu
+          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-gnu-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-gnu-
+            target-${{ runner.os }}-x86_64-unknown-linux-gnu-
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
@@ -160,6 +190,14 @@ jobs:
             chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target" || true
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
+
+      # 保存 target（gnu）缓存
+      - name: Save target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target/x86_64-unknown-linux-gnu
+          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-gnu-${{ hashFiles('server/Cargo.lock') }}
 
 
 
