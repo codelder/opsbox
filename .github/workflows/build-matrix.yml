@@ -62,17 +62,6 @@ jobs:
             server
 
       # ========================= Linux 专用（最大化兼容） =========================
-      - name: Setup Zig (Linux)
-        if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v2
-        with:
-          # 中文注释：固定 Zig 版本以保证可复现构建
-          version: 0.15.1
-
-
-      - name: Install cargo-zigbuild (Linux)
-        if: runner.os == 'Linux'
-        run: cargo install cargo-zigbuild --locked
 
       - name: Add musl target (Linux)
         if: runner.os == 'Linux'
@@ -127,6 +116,9 @@ jobs:
               export PATH="$PWD/.tools:$PATH"
             fi
           fi
+          # 中文注释：安装 musl 交叉工具链
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools pkg-config
           # 中文注释：启动 sccache 守护（如未启动）
           sccache --start-server || true
           export RUSTC_WRAPPER=sccache
@@ -134,16 +126,13 @@ jobs:
           export SCCACHE_CACHE_SIZE=2G
           # 中文注释：统一目标目录，避免路径差异导致的指纹失配
           export CARGO_TARGET_DIR="$PWD/server/target"
-          # 中文注释：让 C/C++ 也走 sccache（使用 Zig 作为 cc/c++/ar/ranlib）
-          ZIG=$(command -v zig || true)
-          if [ -n "${ZIG:-}" ]; then
-            export CC="sccache $ZIG cc"
-            export CXX="sccache $ZIG c++"
-            export AR="$ZIG ar"
-            export RANLIB="$ZIG ranlib"
-          fi
-          # 中文注释：使用 musl 静态链接，显著增强在老旧 Linux 发行版上的可运行性
-          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          # 中文注释：让 C/C++ 也走 sccache（使用 musl-gcc）。若存在 musl-g++ 则一并设置。
+          if command -v musl-gcc >/dev/null 2>&1; then export CC="sccache musl-gcc"; fi
+          if command -v musl-g++ >/dev/null 2>&1; then export CXX="sccache musl-g++"; fi
+          # 中文注释：静态 OpenSSL（vendored），避免系统依赖
+          export OPENSSL_STATIC=1
+          # 中文注释：使用传统 cargo build 进行 musl 静态构建
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
           # 打印 sccache 统计供诊断，并写入 Job Summary
           sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
 
@@ -487,7 +476,10 @@ jobs:
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
         run: |
-          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          set -euxo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools pkg-config
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
