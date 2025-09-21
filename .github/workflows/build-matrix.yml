@@ -61,7 +61,7 @@ jobs:
       # ========================= Linux 专用（最大化兼容） =========================
       - name: Setup Zig (Linux)
         if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         continue-on-error: true
         with:
           # 中文注释：固定 Zig 版本以保证可复现构建
@@ -269,7 +269,7 @@ jobs:
 
       - name: Setup Zig (Linux)
         if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v1
+        uses: mlugg/setup-zig@v2
         continue-on-error: true
         with:
           version: 0.15.1
