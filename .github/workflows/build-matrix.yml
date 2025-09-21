@@ -113,7 +113,7 @@ jobs:
           export RUSTC_WRAPPER=sccache
           export SCCACHE_DIR="$PWD/.sccache"
           export SCCACHE_CACHE_SIZE=2G
-# 中文注释：统一目标目录（musl 专用），避免与 manylinux 宿主产物混用
+          # 中文注释：统一目标目录（musl 专用），避免与 manylinux 宿主产物混用
           export CARGO_TARGET_DIR="$PWD/server/target-musl"
           # 中文注释：让 C/C++ 也走 sccache（使用 musl-gcc）。若存在 musl-g++ 则一并设置。
           if command -v musl-gcc >/dev/null 2>&1; then export CC="sccache musl-gcc"; fi
