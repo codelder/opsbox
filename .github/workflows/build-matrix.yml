@@ -64,16 +64,17 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
-      # 仅缓存 target（musl）以复用依赖编译产物
-      - name: Restore target cache (musl)
+      # 仅缓存 target（全部）以复用依赖与目标产物
+      - name: Restore target cache (all)
         if: runner.os == 'Linux'
+        id: cache-target-restore
         uses: actions/cache/restore@v4
         with:
-          path: server/target/x86_64-unknown-linux-musl
-          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-musl-${{ hashFiles('server/Cargo.lock') }}
+          path: server/target
+          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-primary
           restore-keys: |
-            target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-musl-
-            target-${{ runner.os }}-x86_64-unknown-linux-musl-
+            target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-${{ runner.os }}-
 
 
       - name: Build backend (Linux, musl static)
@@ -111,16 +112,6 @@ jobs:
           export OPENSSL_STATIC=1
           # 中文注释：使用传统 cargo build 进行 musl 静态构建
           cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
-          # 打印 sccache 统计供诊断，并写入 Job Summary
-          sccache --show-stats | tee -a "$GITHUB_STEP_SUMMARY" || true
-
-      # 保存 target（musl）缓存
-      - name: Save target cache (musl)
-        if: runner.os == 'Linux'
-        uses: actions/cache/save@v4
-        with:
-          path: server/target/x86_64-unknown-linux-musl
-          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-musl-${{ hashFiles('server/Cargo.lock') }}
 
 
       - name: Ensure manylinux2014 image present
@@ -130,17 +121,6 @@ jobs:
           set -euxo pipefail
           docker pull quay.io/pypa/manylinux2014_x86_64:latest
 
-
-      # 仅缓存 target（gnu）以复用依赖编译产物
-      - name: Restore target cache (gnu)
-        if: runner.os == 'Linux'
-        uses: actions/cache/restore@v4
-        with:
-          path: server/target/x86_64-unknown-linux-gnu
-          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-gnu-${{ hashFiles('server/Cargo.lock') }}
-          restore-keys: |
-            target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-gnu-
-            target-${{ runner.os }}-x86_64-unknown-linux-gnu-
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
@@ -191,13 +171,13 @@ jobs:
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
 
-      # 保存 target（gnu）缓存
-      - name: Save target cache (gnu)
+      # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
+      - name: Save target cache (all)
         if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
-          path: server/target/x86_64-unknown-linux-gnu
-          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-x86_64-unknown-linux-gnu-${{ hashFiles('server/Cargo.lock') }}
+          path: server/target
+          key: target-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ github.run_id }}
 
 
 
