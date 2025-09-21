@@ -85,8 +85,10 @@ jobs:
         id: cache-gnu-cargo-restore
         uses: actions/cache/restore@v4
         with:
-          # 中文注释：缓存 manylinux 容器内使用的 Cargo 主目录（registry、git 索引、下载缓存等）
-          path: .cargo-gnu
+          # 中文注释：缓存 manylinux 容器内使用的 Cargo 主目录（registry、git 索引、下载缓存等）与 RUSTUP_HOME
+          path: |
+            .cargo-gnu
+            .rustup-gnu
           key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
           restore-keys: |
             cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
@@ -113,12 +115,14 @@ jobs:
               set -u
             fi
 
-            # 中文注释：将容器内 Cargo 主目录放在挂载的工作区，以便 actions/cache 持久化
+            # 中文注释：将容器内 Cargo/Rustup 主目录放在挂载的工作区，以便 actions/cache 持久化
             export CARGO_HOME=/work/.cargo-gnu
+            export RUSTUP_HOME=/work/.rustup-gnu
             export CARGO_TARGET_DIR=/work/server/target
 
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            source "$HOME/.cargo/env"
+            # 中文注释：必须 source $CARGO_HOME/env，而不是 $HOME/.cargo/env
+            source "$CARGO_HOME/env"
             rustc --version
             cargo --version
 
@@ -133,7 +137,9 @@ jobs:
         if: runner.os == 'Linux' && steps.cache-gnu-cargo-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: .cargo-gnu
+          path: |
+            .cargo-gnu
+            .rustup-gnu
           key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
 
       - name: Diagnose GLIBC requirements (Linux)
