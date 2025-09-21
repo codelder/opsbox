@@ -94,6 +94,21 @@ jobs:
           # 中文注释：生成以较旧 glibc 链接的非静态变体，作为兼容性备选
           cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
 
+      - name: Diagnose GLIBC requirements (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          echo "== DT_NEEDED and version references =="
+          objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
+          echo "== Version needs (readelf -V) =="
+          readelf -V "$BIN" || true
+          echo "== Distinct GLIBC symbol versions =="
+          objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu || true
+          echo "== ldd resolution on runner (for reference) =="
+          ldd "$BIN" || true
+
       - name: Verify GLIBC baseline (<= 2.17) [Linux]
         if: runner.os == 'Linux'
         shell: bash
@@ -297,6 +312,21 @@ jobs:
           ZIG_TARGET: x86_64-linux-gnu.2.17
         run: |
           cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+
+      - name: Diagnose GLIBC requirements (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          echo "== DT_NEEDED and version references =="
+          objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
+          echo "== Version needs (readelf -V) =="
+          readelf -V "$BIN" || true
+          echo "== Distinct GLIBC symbol versions =="
+          objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sort -Vu || true
+          echo "== ldd resolution on runner (for reference) =="
+          ldd "$BIN" || true
 
       - name: Verify GLIBC baseline (<= 2.17) [Linux]
         if: runner.os == 'Linux'
