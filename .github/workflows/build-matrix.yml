@@ -91,11 +91,19 @@ jobs:
           set -euxo pipefail
           docker run --rm -v "$PWD":/work -w /work quay.io/pypa/manylinux2014_x86_64 bash -lc '
             set -euxo pipefail
-            yum -y install curl git xz tar which binutils
+            # 中文注释：补齐 OpenSSL 源码构建所需依赖（perl 模块/编译工具链）
+            yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
+            # 中文注释：启用 devtoolset-10，提供较新的 GCC/LD
+            source /opt/rh/devtoolset-10/enable || true
+
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             source "$HOME/.cargo/env"
             rustc --version
             cargo --version
+
+            # 中文注释：显式启用静态 OpenSSL（vendored），避免系统 OpenSSL 兼容性问题
+            export OPENSSL_STATIC=1
+
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
