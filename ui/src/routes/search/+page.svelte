@@ -381,21 +381,23 @@
                   title={splitPath(item.path).inner}
                   onclick={(e) => {
                     e.stopPropagation();
-                    // 中文注释：带上 sid 以便 /view 从缓存读取
+                    // 中文注释：带上 sid 以便 /view 从缓存读取；在新标签页打开
                     const base = '/view';
                     const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
-                    window.location.assign(url);
+                    window.open(url, '_blank', 'noopener');
                   }}
                   onkeydown={(e) => {
-                    // 中文注释：无障碍支持 Enter/Space 键
+                    // 中文注释：无障碍支持 Enter/Space 键（新标签页打开）
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
                       e.stopPropagation();
                       const base = '/view';
                       const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
-                      window.location.assign(url);
+                      window.open(url, '_blank', 'noopener');
                     }
-                  }}>{splitPath(item.path).inner}</span
+                  }}
+                >
+                  {splitPath(item.path).inner}</span
                 >
               {/if}
             </div>

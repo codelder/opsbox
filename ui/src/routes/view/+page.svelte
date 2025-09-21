@@ -186,6 +186,33 @@
     }
   }
 
+  // 中文注释：派生下载文件名（将不合法的文件名字符替换为下划线）
+  function deriveDownloadName(): string {
+    const base = (file || 'log.txt').trim();
+    const safe = base.replace(/[\\/:*?"<>|]+/g, '_');
+    return safe || 'log.txt';
+  }
+
+  // 中文注释：下载当前视图的完整原始文本（不含行号）
+  function downloadCurrentFile() {
+    try {
+      if (!lines || lines.length === 0) return;
+      const content = lines.map((ln) => ln?.text ?? '').join('\n');
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = deriveDownloadName();
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      error = err.message || '下载失败';
+    }
+  }
+
   onMount(() => {
     const params = new URL(window.location.href).searchParams;
     file = (params.get('file') || '').trim();
@@ -245,7 +272,15 @@
 </script>
 
 <div class="mx-auto max-w-[1560px] px-4 py-6">
-  <h2 class="mb-2 font-mono text-sm text-gray-600 dark:text-gray-300">{file}</h2>
+  <div class="mb-2 flex items-center justify-between">
+    <h2 class="font-mono text-sm text-gray-600 dark:text-gray-300">{file}</h2>
+    <button
+      class="rounded bg-gray-700 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+      onclick={downloadCurrentFile}
+      disabled={loading || total <= 0}
+      title="下载当前文件"
+    >下载</button>
+  </div>
   {#if error}
     <div
       class="mb-3 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
