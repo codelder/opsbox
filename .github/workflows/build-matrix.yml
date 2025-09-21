@@ -405,6 +405,30 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
+      # 缓存 target（macOS 主机）
+      - name: Restore target cache (macOS host)
+        if: runner.os == 'macOS'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-host-${{ runner.os }}-${{ runner.arch }}-
+            target-host-${{ runner.os }}-
+
+      # 缓存 target（Windows 主机）
+      - name: Restore target cache (Windows host)
+        if: runner.os == 'Windows'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-host-${{ runner.os }}-${{ runner.arch }}-
+            target-host-${{ runner.os }}-
+
       # 缓存 target-musl 目录（宿主环境）
       - name: Restore target cache (musl)
         if: runner.os == 'Linux'
@@ -561,10 +585,26 @@ jobs:
         run: |
           cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
 
+      # 保存 target（macOS 主机）
+      - name: Save target cache (macOS host)
+        if: runner.os == 'macOS'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+
       - name: Build backend (Windows, MSVC)
         if: runner.os == 'Windows'
         run: |
           cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      # 保存 target（Windows 主机）
+      - name: Save target cache (Windows host)
+        if: runner.os == 'Windows'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
