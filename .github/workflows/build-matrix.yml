@@ -87,6 +87,9 @@ jobs:
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
+        env:
+          # 中文注释：强制 Zig 以 glibc 2.17 作为最低兼容基线
+          ZIG_TARGET: x86_64-linux-gnu.2.17
         run: |
           # 中文注释：生成以较旧 glibc 链接的非静态变体，作为兼容性备选
           cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
@@ -101,7 +104,7 @@ jobs:
             echo "GNU artifact not found: $BIN" >&2
             exit 1
           fi
-          max=$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9][^ ]*' | sed 's/GLIBC_//' | sort -V | tail -1 || true)
+          max=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -V | tail -1 || true)
           echo "Detected max GLIBC symbol: ${max:-none}"
           if [ -n "${max:-}" ]; then
             top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
@@ -290,6 +293,8 @@ jobs:
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
+        env:
+          ZIG_TARGET: x86_64-linux-gnu.2.17
         run: |
           cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
 
@@ -303,7 +308,7 @@ jobs:
             echo "GNU artifact not found: $BIN" >&2
             exit 1
           fi
-          max=$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9][^ ]*' | sed 's/GLIBC_//' | sort -V | tail -1 || true)
+          max=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -V | tail -1 || true)
           echo "Detected max GLIBC symbol: ${max:-none}"
           if [ -n "${max:-}" ]; then
             top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
