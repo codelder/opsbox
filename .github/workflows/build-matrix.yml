@@ -31,8 +31,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: 'ui/pnpm-lock.yaml'
 
       - name: Enable pnpm via corepack
         run: |
@@ -54,60 +52,40 @@ jobs:
         with:
           toolchain: '1.90.0'
 
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          # 中文注释：仅缓存 server 工作区，避免前端无关缓存
-          workspaces: |
-            server
 
       # ========================= Linux 专用（最大化兼容） =========================
-      - name: Setup Zig (Linux)
-        if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v2
-        with:
-          # 中文注释：固定 Zig 版本以保证可复现构建
-          version: 0.15.1
-
-
-      - name: Install cargo-zigbuild (Linux)
-        if: runner.os == 'Linux'
-        run: cargo install cargo-zigbuild --locked
 
       - name: Add musl target (Linux)
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-musl
 
-      - name: Restore sccache (Linux)
-        if: runner.os == 'Linux'
-        id: cache-sccache-restore
-        uses: actions/cache/restore@v4
-        with:
-          path: .sccache
-          # 中文注释：使用“前缀恢复 + 唯一保存”策略
-          # 主 key 仅用于命中不存在的占位符；实际通过 restore-keys 前缀找到最近一次保存的条目
-          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-primary
-          restore-keys: |
-            sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
-            sccache-${{ runner.os }}-
 
       - name: Add gnu target (Linux)
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
-      - name: Restore cargo cache for GNU build inside container
+# 缓存 target-musl 目录（宿主环境）
+      - name: Restore target cache (musl)
         if: runner.os == 'Linux'
-        id: cache-gnu-cargo-restore
         uses: actions/cache/restore@v4
         with:
-          # 中文注释：缓存 manylinux 容器内使用的 Cargo 主目录（registry、git 索引、下载缓存等）与 RUSTUP_HOME
-          path: |
-            .cargo-gnu
-            .rustup-gnu
-          key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
+          path: server/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: |
-            cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
-            cargo-gnu-${{ runner.os }}-v1
+            target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-musl-${{ runner.os }}-
+
+      # 缓存 target-gnu 目录（manylinux 容器环境）
+      - name: Restore target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-gnu-${{ runner.os }}-
+
 
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
@@ -127,44 +105,32 @@ jobs:
               export PATH="$PWD/.tools:$PATH"
             fi
           fi
+          # 中文注释：安装 musl 交叉工具链
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools pkg-config
+          # 中文注释：启动 sccache 守护（如未启动）
+          sccache --start-server || true
           export RUSTC_WRAPPER=sccache
           export SCCACHE_DIR="$PWD/.sccache"
           export SCCACHE_CACHE_SIZE=2G
-          # 中文注释：统一目标目录，避免路径差异导致的指纹失配
-          export CARGO_TARGET_DIR="$PWD/server/target"
-          # 中文注释：使用 musl 静态链接，显著增强在老旧 Linux 发行版上的可运行性
-          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
-          # 打印 sccache 统计供诊断
-          sccache --show-stats || true
+          # 中文注释：统一目标目录（musl 专用），避免与 manylinux 宿主产物混用
+          export CARGO_TARGET_DIR="$PWD/server/target-musl"
+          # 中文注释：让 C/C++ 也走 sccache（使用 musl-gcc）。若存在 musl-g++ 则一并设置。
+          if command -v musl-gcc >/dev/null 2>&1; then export CC="sccache musl-gcc"; fi
+          if command -v musl-g++ >/dev/null 2>&1; then export CXX="sccache musl-g++"; fi
+          # 中文注释：静态 OpenSSL（vendored），避免系统依赖
+          export OPENSSL_STATIC=1
+          # 中文注释：使用传统 cargo build 进行 musl 静态构建
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
 
-      - name: Cache manylinux2014 image (restore)
-        if: runner.os == 'Linux'
-        id: cache-manylinux-restore
-        uses: actions/cache/restore@v4
-        with:
-          # 中文注释：缓存 manylinux2014 镜像的 docker save tar 文件
-          path: .cache/docker-images/manylinux2014_x86_64.tar
-          key: docker-img-manylinux2014_x86_64-latest-v1
 
       - name: Ensure manylinux2014 image present
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p .cache/docker-images
-          if [ -f .cache/docker-images/manylinux2014_x86_64.tar ]; then
-            docker load -i .cache/docker-images/manylinux2014_x86_64.tar
-          else
-            docker pull quay.io/pypa/manylinux2014_x86_64:latest
-            docker save quay.io/pypa/manylinux2014_x86_64:latest -o .cache/docker-images/manylinux2014_x86_64.tar
-          fi
+          docker pull quay.io/pypa/manylinux2014_x86_64:latest
 
-      - name: Cache manylinux2014 image (save on miss)
-        if: runner.os == 'Linux' && steps.cache-manylinux-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: .cache/docker-images/manylinux2014_x86_64.tar
-          key: docker-img-manylinux2014_x86_64-latest-v1
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
@@ -196,72 +162,53 @@ jobs:
               cpanm --notest IPC::Cmd Text::Template
             fi
 
-            # 中文注释：将容器内 Cargo/Rustup 主目录放在挂载的工作区（与宿主机绝对路径相同），以便 actions/cache 持久化且避免路径指纹导致的重编译
-            export CARGO_HOME="$PWD/.cargo-gnu"
-            export RUSTUP_HOME="$PWD/.rustup-gnu"
-            export CARGO_TARGET_DIR="$PWD/server/target"
-            # 中文注释：容器内准备 sccache（下载预编译二进制，不依赖系统包管理）
-            mkdir -p "$PWD/.tools"
-            if [ ! -x "$PWD/.tools/sccache" ]; then
-              curl -sSL -o sccache.tgz https://github.com/mozilla/sccache/releases/download/v0.7.6/sccache-v0.7.6-x86_64-unknown-linux-musl.tar.gz
-              tar -xzf sccache.tgz --strip-components=1 -C "$PWD/.tools" || mkdir -p "$PWD/.tools" && tar -xzf sccache.tgz -C "$PWD/.tools" --strip-components=1
-              mv "$PWD/.tools/sccache-v0.7.6-x86_64-unknown-linux-musl/sccache" "$PWD/.tools/sccache" 2>/dev/null || true
-              rm -rf sccache.tgz "$PWD/.tools/sccache-v0.7.6-x86_64-unknown-linux-musl" 2>/dev/null || true
-              chmod +x "$PWD/.tools/sccache" || true
-            fi
-            export PATH="$PWD/.tools:$PATH"
-            export RUSTC_WRAPPER=sccache
-            export SCCACHE_DIR="$PWD/.sccache"
-            export SCCACHE_CACHE_SIZE=2G
+            # 中文注释：统一目标目录（gnu 专用），避免与宿主产物混用
+            export CARGO_TARGET_DIR="$PWD/server/target-gnu"
 
-            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-            # 中文注释：必须 source $CARGO_HOME/env，而不是 $HOME/.cargo/env
-            source "$CARGO_HOME/env"
-            rustc --version
+            # 安装 Rust 并加载环境，固定版本与宿主一致
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            source "$HOME/.cargo/env"
+            rustup toolchain install 1.90.0 --profile minimal --no-self-update
+            rustup default 1.90.0
+            rustc --version --verbose
             cargo --version
 
-            # 中文注释：显式启用静态 OpenSSL（vendored），避免系统 OpenSSL 兼容性问题
+            # 显式启用静态 OpenSSL（vendored）
             export OPENSSL_STATIC=1
 
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
-            sccache --show-stats || true
 
-            # 中文注释：将缓存与构建产物目录改为宿主机用户所有，避免后续保存缓存时权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/.cargo-gnu" "$PWD/.rustup-gnu" "$PWD/.sccache" "$PWD/server/target" || true
+            # 修正构建产物权限，避免宿主权限问题
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target-gnu" || true
           '
-          ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
+          ls -l server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
 
-      - name: Fix permissions for cached dirs (host)
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euxo pipefail
-          sudo chown -R $(id -u):$(id -g) .cargo-gnu .rustup-gnu .sccache server/target || true
-          chmod -R a+rX .cargo-gnu .rustup-gnu .sccache server/target || true
-
-      - name: Save cargo cache for GNU build inside container (on miss)
-        if: runner.os == 'Linux' && steps.cache-gnu-cargo-restore.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            .cargo-gnu
-            .rustup-gnu
-          key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
-
-      - name: Save sccache (Linux, always)
+      # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
+      - name: Save target cache (musl)
         if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
-          path: .sccache
-          # 中文注释：每次使用唯一 key（绑定 run_id），确保本次编译产生的新对象被持久化
-          key: sccache-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ github.run_id }}
+          path: server/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Save target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+
+
+
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          # 中文注释：GNU 构建在 manylinux 容器中使用 CARGO_TARGET_DIR=server/target-gnu
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
           echo "== Version needs (readelf -V) =="
@@ -278,7 +225,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          # 中文注释：优先检查 target-gnu 目录，回退到默认 target
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
@@ -375,7 +324,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-musl"
-          BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
+          BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -392,7 +342,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -425,8 +376,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: 'ui/pnpm-lock.yaml'
 
       - name: Enable pnpm via corepack
         run: |
@@ -442,21 +391,10 @@ jobs:
         run: pnpm --dir ui build
 
       - name: Setup Rust toolchain (stable)
+        id: rust-toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: '1.90.0'
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            server
-
-      - name: Setup Zig (Linux)
-        if: runner.os == 'Linux'
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.1
 
 
       - name: Add musl target (Linux)
@@ -467,24 +405,116 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
+      # 缓存 target-musl 目录（宿主环境）
+      - name: Restore target cache (musl)
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-musl-${{ runner.os }}-
+
+      # 缓存 target-gnu 目录（manylinux 容器环境）
+      - name: Restore target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-gnu-${{ runner.os }}-
+
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
         run: |
-          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          set -euxo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools pkg-config
+          cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+
+      - name: Ensure manylinux2014 image present
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker pull quay.io/pypa/manylinux2014_x86_64:latest
 
       - name: Build backend (Linux, gnu glibc 2.17)
         if: runner.os == 'Linux'
-        env:
-          ZIG_TARGET: x86_64-linux-gnu.2.17
         run: |
-          cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+          set -euxo pipefail
+          docker run --rm \
+            -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
+            -v "$PWD":"$PWD" -w "$PWD" quay.io/pypa/manylinux2014_x86_64 bash -lc '
+            set -euxo pipefail
+            # 中文注释：补齐 OpenSSL 源码构建所需依赖（perl 模块/编译工具链）
+            yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
+            # 中文注释：启用 devtoolset-10，提供较新的 GCC/LD（注意：devtoolset 的 enable 脚本在 set -u 下会触发 MANPATH 未定义报错）
+            if [ -f /opt/rh/devtoolset-10/enable ]; then
+              set +u
+              source /opt/rh/devtoolset-10/enable
+              set -u
+            fi
+
+            # 中文注释：确保 OpenSSL 构建所需 Perl 模块存在（IPC::Cmd 与 Text::Template）
+            # 先尝试从系统包安装，不可用时使用 cpanminus 兜底
+            if ! perl -MIPC::Cmd -e 1 2>/dev/null; then
+              yum -y install perl-IPC-Cmd || true
+            fi
+            if ! perl -MText::Template -e 1 2>/dev/null; then
+              yum -y install perl-Text-Template || true
+            fi
+            if ! perl -MIPC::Cmd -MText::Template -e 1 2>/dev/null; then
+              curl -sL https://cpanmin.us | perl - App::cpanminus
+              cpanm --notest IPC::Cmd Text::Template
+            fi
+
+            # 中文注释：统一目标目录（gnu 专用），避免与宿主产物混用
+            export CARGO_TARGET_DIR="$PWD/server/target-gnu"
+
+            # 安装 Rust 并加载环境，固定版本与宿主一致
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            source "$HOME/.cargo/env"
+            rustup toolchain install 1.90.0 --profile minimal --no-self-update
+            rustup default 1.90.0
+            rustc --version --verbose
+            cargo --version
+
+            # 显式启用静态 OpenSSL（vendored）
+            export OPENSSL_STATIC=1
+
+            cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+
+            # 修正构建产物权限，避免宿主权限问题
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target-gnu" || true
+          '
+          ls -l server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
+
+      # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
+      - name: Save target cache (musl)
+        if: runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Save target cache (gnu)
+        if: runner.os == 'Linux'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
           echo "== Version needs (readelf -V) =="
@@ -501,7 +531,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
@@ -592,7 +623,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-musl"
-          BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
+          BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -609,7 +641,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 

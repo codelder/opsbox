@@ -261,6 +261,7 @@
     }
   }
 
+
   // 中文注释：继续读取下一批
   async function loadMore() {
     if (loading || !hasMore) return;
@@ -319,11 +320,14 @@
     </label>
 
     <form class="mb-4 flex flex-1 gap-2" onsubmit={handleSubmit}>
-      <input
-        class="h-12 flex-1 rounded-2xl border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-        disabled={loading}
-        bind:value={q}
-      />
+      <div class="relative flex-1">
+        <input
+          class="h-12 w-full rounded-2xl border border-gray-300 bg-white pl-3 pr-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
+          disabled={loading}
+          bind:value={q}
+          placeholder="输入查询串或自然语言…"
+        />
+      </div>
     </form>
   </div>
 

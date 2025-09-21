@@ -147,6 +147,9 @@ pub struct SearchBody {
   pub context: Option<usize>,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct NL2QOut { q: String }
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MinioSettingsPayload {
   endpoint: String,
@@ -215,6 +218,8 @@ pub fn router() -> Router {
     .route("/stream.s3.ndjson", post(stream_s3_ndjson))
     .route("/view.cache.json", get(view_cache_json))
     .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
+    // 中文注释：自然语言 → 查询字符串
+    .route("/nl2q", post(nl2q))
 }
 
 async fn get_minio_settings() -> Result<Json<MinioSettingsPayload>, Problem> {
@@ -280,7 +285,7 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
     }
   };
 
-  tokio::spawn(fut);
+tokio::spawn(fut);
 
   let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
 
@@ -291,6 +296,14 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
       .body(body)
       .unwrap(),
   )
+}
+
+// 中文注释：NL → Q 端点，实现将自然语言转换为查询字符串
+async fn nl2q(Json(body): Json<crate::nl2q::NLBody>) -> Result<Json<NL2QOut>, Problem> {
+  let q = crate::nl2q::call_ollama(&body.nl)
+    .await
+    .map_err(|e| problemdetails::new(StatusCode::BAD_GATEWAY).with_title("AI 生成失败").with_detail(e.to_string()))?;
+  Ok(Json(NL2QOut { q }))
 }
 
 async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
