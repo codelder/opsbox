@@ -720,14 +720,23 @@ jobs:
       - name: Create universal2 binary
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
           OUT_DIR="dist/api-gateway-macos-universal2"
           mkdir -p "$OUT_DIR"
+          # 中文注释：下载的工件解压后的结构可能包含或不包含 dist 前缀，此处使用 find 动态查找
+          X64_BIN=$(find arch_x64 -type f -name api-gateway | head -n1 || true)
+          ARM_BIN=$(find arch_arm64 -type f -name api-gateway | head -n1 || true)
+          if [ -z "${X64_BIN:-}" ] || [ -z "${ARM_BIN:-}" ]; then
+            echo "未找到需要合并的二进制：X64='${X64_BIN:-}' ARM='${ARM_BIN:-}'" >&2
+            echo "目录结构 (前 3 层)：" >&2
+            find arch_x64 -maxdepth 3 -type d -print >&2 || true
+            find arch_arm64 -maxdepth 3 -type d -print >&2 || true
+            exit 1
+          fi
+          echo "x64 bin: $X64_BIN" >&2
+          echo "arm64 bin: $ARM_BIN" >&2
           # 中文注释：合并两种架构的 Mach-O 可执行文件
-          # 中文注释：下载的工件会被解压到指定目录（arch_x64 / arch_arm64），其下一级为工件名目录
-          lipo -create -output "$OUT_DIR/api-gateway" \
-            "arch_x64/api-gateway-macos-10.15-x86_64/api-gateway" \
-            "arch_arm64/api-gateway-macos-11.0-arm64/api-gateway"
+          lipo -create -output "$OUT_DIR/api-gateway" "$X64_BIN" "$ARM_BIN"
 
       - name: Upload artifact (macOS universal2)
         uses: actions/upload-artifact@v4
