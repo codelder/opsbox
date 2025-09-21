@@ -678,9 +678,10 @@ jobs:
           OUT_DIR="dist/api-gateway-macos-universal2"
           mkdir -p "$OUT_DIR"
           # 中文注释：合并两种架构的 Mach-O 可执行文件
+          # 中文注释：下载的工件会被解压到指定目录（arch_x64 / arch_arm64），其下一级为工件名目录
           lipo -create -output "$OUT_DIR/api-gateway" \
-            "arch_x64/dist/api-gateway-macos-10.15-x86_64/api-gateway" \
-            "arch_arm64/dist/api-gateway-macos-11.0-arm64/api-gateway"
+            "arch_x64/api-gateway-macos-10.15-x86_64/api-gateway" \
+            "arch_arm64/api-gateway-macos-11.0-arm64/api-gateway"
 
       - name: Upload artifact (macOS universal2)
         uses: actions/upload-artifact@v4
