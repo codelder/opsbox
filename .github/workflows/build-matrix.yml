@@ -49,6 +49,7 @@ jobs:
         run: pnpm --dir ui build
 
       - name: Setup Rust toolchain (stable)
+        id: rust-toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache cargo build
@@ -79,6 +80,18 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
+      - name: Restore cargo cache for GNU build inside container
+        if: runner.os == 'Linux'
+        id: cache-gnu-cargo-restore
+        uses: actions/cache/restore@v4
+        with:
+          # 中文注释：缓存 manylinux 容器内使用的 Cargo 主目录（registry、git 索引、下载缓存等）
+          path: .cargo-gnu
+          key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
+          restore-keys: |
+            cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-v1
+            cargo-gnu-${{ runner.os }}-v1
+
       - name: Build backend (Linux, musl static)
         if: runner.os == 'Linux'
         run: |
@@ -100,6 +113,10 @@ jobs:
               set -u
             fi
 
+            # 中文注释：将容器内 Cargo 主目录放在挂载的工作区，以便 actions/cache 持久化
+            export CARGO_HOME=/work/.cargo-gnu
+            export CARGO_TARGET_DIR=/work/server/target
+
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             source "$HOME/.cargo/env"
             rustc --version
@@ -111,6 +128,13 @@ jobs:
             cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
           '
           ls -l server/target/x86_64-unknown-linux-gnu/release/api-gateway || true
+
+      - name: Save cargo cache for GNU build inside container (on miss)
+        if: runner.os == 'Linux' && steps.cache-gnu-cargo-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cargo-gnu
+          key: cargo-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-v1
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
