@@ -91,6 +91,26 @@ jobs:
           # 中文注释：生成以较旧 glibc 链接的非静态变体，作为兼容性备选
           cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
 
+      - name: Verify GLIBC baseline (<= 2.17) [Linux]
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          if [ ! -f "$BIN" ]; then
+            echo "GNU artifact not found: $BIN" >&2
+            exit 1
+          fi
+          max=$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9][^ ]*' | sed 's/GLIBC_//' | sort -V | tail -1 || true)
+          echo "Detected max GLIBC symbol: ${max:-none}"
+          if [ -n "${max:-}" ]; then
+            top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
+            if [ "$top" != "2.17" ]; then
+              echo "Requires newer than GLIBC_2.17 (found GLIBC_$max)" >&2
+              exit 1
+            fi
+          fi
+
       # ========================= macOS 专用（按架构设置部署目标） =========================
       - name: Build backend (macOS x86_64, 10.15)
         if: runner.os == 'macOS' && runner.arch == 'X64'
@@ -272,6 +292,26 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           cargo zigbuild --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+
+      - name: Verify GLIBC baseline (<= 2.17) [Linux]
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          if [ ! -f "$BIN" ]; then
+            echo "GNU artifact not found: $BIN" >&2
+            exit 1
+          fi
+          max=$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9][^ ]*' | sed 's/GLIBC_//' | sort -V | tail -1 || true)
+          echo "Detected max GLIBC symbol: ${max:-none}"
+          if [ -n "${max:-}" ]; then
+            top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
+            if [ "$top" != "2.17" ]; then
+              echo "Requires newer than GLIBC_2.17 (found GLIBC_$max)" >&2
+              exit 1
+            fi
+          fi
 
       - name: Build backend (macOS x86_64, 10.15)
         if: runner.os == 'macOS' && runner.arch == 'X64'
