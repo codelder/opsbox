@@ -7,6 +7,11 @@ use axum::{response::Response, routing::get, Router};
 use logsearch::router as logsearch_router;
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
+use std::net::SocketAddr;
+use clap::{Parser, Subcommand};
+use std::path::{Path, PathBuf};
+use std::{fs, io};
+use log::LevelFilter;
 
 // 中文注释：将 server/api-gateway/static 目录在编译期打包进二进制
 #[derive(RustEmbed)]
@@ -51,6 +56,74 @@ fn serve_embedded(path: &str) -> Option<Response> {
   }
 }
 
+/// 中文注释：将字符串解析为端口（u16），提供中文错误信息
+fn port_parser(s: &str) -> Result<u16, String> {
+  s.parse::<u16>()
+    .map_err(|_| format!("无效的端口号：{s}"))
+}
+
+/// 中文注释：将字符串解析为 SocketAddr，提供中文错误信息
+fn addr_parser(s: &str) -> Result<SocketAddr, String> {
+  s.parse::<SocketAddr>()
+    .map_err(|_| format!("无效的地址：{s}，请使用 HOST:PORT 或 [IPv6]:PORT 格式"))
+}
+
+/// 中文注释：子命令定义（使用 clap）
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+  /// 中文注释：启动服务（默认后台运行，可通过 --daemon=false 前台运行）
+  Start {
+    /// 中文注释：是否后台运行（默认 true，仅类 Unix 支持）
+    #[arg(long, short = 'd', default_value_t = true)]
+    daemon: bool,
+    /// 中文注释：PID 文件路径（默认：~/.opsbox/api-gateway.pid）
+    #[arg(long, value_name = "FILE")]
+    pid_file: Option<PathBuf>,
+  },
+  /// 中文注释：停止服务（通过 PID 文件定位进程）
+  Stop {
+    /// 中文注释：PID 文件路径（默认：~/.opsbox/api-gateway.pid）
+    #[arg(long, value_name = "FILE")]
+    pid_file: Option<PathBuf>,
+    /// 中文注释：强制停止（发送 SIGKILL）
+    #[arg(long, short = 'f', default_value_t = false)]
+    force: bool,
+  },
+}
+
+/// 中文注释：命令行选项（使用 clap）
+#[derive(Parser, Debug)]
+#[command(
+  name = "api-gateway",
+  version,
+  disable_version_flag = true,
+  about = "LogSearch API 网关（内置前端静态资源）。支持通过参数设置监听地址/端口，并可选择后台运行（Unix）。",
+  long_about = None
+)]
+struct Cli {
+  #[arg(global = true, long, short = 'H', value_name = "HOST", default_value = "127.0.0.1", help = "监听地址（默认 127.0.0.1）")]
+  host: String,
+
+  #[arg(global = true, long, short = 'P', value_name = "PORT", default_value_t = 4000, value_parser = port_parser, help = "监听端口（默认 4000）")]
+  port: u16,
+
+  #[arg(global = true, long, short = 'a', value_name = "HOST:PORT", value_parser = addr_parser, help = "完整地址（优先于 --host/--port），如 0.0.0.0:8080 或 [::]:8080")]
+  addr: Option<SocketAddr>,
+
+  #[arg(long, short = 'd', default_value_t = false, help = "后台运行（仅 类Unix 支持）")]
+  daemon: bool,
+
+  #[arg(global = true, long = "log-level", value_name = "LEVEL", help = "日志级别：error|warn|info|debug|trace")]
+  log_level: Option<String>,
+
+  #[arg(global = true, short = 'V', action = clap::ArgAction::Count, help = "增加日志详细程度（可叠加，如 -V/-VV/-VVV）")]
+  verbose: u8,
+
+  /// 中文注释：管理子命令（start/stop）
+  #[command(subcommand)]
+  cmd: Option<Commands>,
+}
+
 async fn spa_fallback(uri: http::Uri) -> Response {
   let path = uri.path();
   if let Some(resp) = serve_embedded(path) {
@@ -67,8 +140,77 @@ async fn spa_fallback(uri: http::Uri) -> Response {
     .unwrap()
 }
 
-#[tokio::main]
-async fn main() {
+#[cfg(unix)]
+fn default_pid_file() -> PathBuf {
+  let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+  let dir = PathBuf::from(home).join(".opsbox");
+  let _ = fs::create_dir_all(&dir);
+  dir.join("api-gateway.pid")
+}
+
+#[cfg(unix)]
+fn default_log_file() -> PathBuf {
+  let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+  let dir = PathBuf::from(home).join(".opsbox");
+  let _ = fs::create_dir_all(&dir);
+  dir.join("api-gateway.log")
+}
+
+#[cfg(unix)]
+fn ensure_parent_dir(path: &Path) {
+  if let Some(parent) = path.parent() {
+    let _ = fs::create_dir_all(parent);
+  }
+}
+
+#[cfg(unix)]
+fn resolve_pid_path(opt: &Option<PathBuf>) -> PathBuf {
+  if let Some(p) = opt {
+    // 简单处理 ~ 前缀（zsh/bash 一般会自行展开，此处兜底）
+    let s = p.to_string_lossy();
+    if s.starts_with("~/") {
+      let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+      return PathBuf::from(home).join(&s[2..]);
+    }
+    p.clone()
+  } else {
+    default_pid_file()
+  }
+}
+
+#[cfg(unix)]
+fn signal_name(force: bool) -> &'static str { if force { "SIGKILL" } else { "SIGTERM" } }
+
+#[cfg(unix)]
+unsafe fn kill_check(pid: libc::pid_t, sig: libc::c_int) -> io::Result<()> {
+  if libc::kill(pid, sig) == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+
+/// 中文注释：停止进程（Unix），通过 PID 文件发送 SIGTERM/SIGKILL（同步实现）
+#[cfg(unix)]
+fn stop_unix(pid_path: PathBuf, force: bool) -> io::Result<()> {
+  let txt = fs::read_to_string(&pid_path)?;
+  let pid: libc::pid_t = txt.trim().parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "PID 文件内容无效"))?;
+  // 发送信号
+  unsafe {
+    kill_check(pid, if force { libc::SIGKILL } else { libc::SIGTERM })?;
+  }
+  // 等待最多 5 秒确认进程退出
+  let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+  while std::time::Instant::now() < deadline {
+    let alive = unsafe { libc::kill(pid, 0) == 0 };
+    if !alive { break; }
+    std::thread::sleep(std::time::Duration::from_millis(100));
+  }
+  // 移除 PID 文件
+  let _ = fs::remove_file(&pid_path);
+  Ok(())
+}
+
+async fn run_server(addr: SocketAddr) {
+  // 初始化依赖（例如存储等）
+  log::info!("启动服务，监听地址 = {}", addr);
   logsearch::ensure_initialized().await.expect("初始化设置存储失败");
 
   // CORS 已禁用：如需启用，请在此处添加 CorsLayer
@@ -78,6 +220,137 @@ async fn main() {
     .nest("/api/v1/logsearch", logsearch_router())
     .fallback(get(spa_fallback));
 
-  let listener = tokio::net::TcpListener::bind("127.0.0.1:4000").await.unwrap();
-  axum::serve(listener, app).await.unwrap();
+  let listener = tokio::net::TcpListener::bind(addr).await.expect("监听地址绑定失败");
+  axum::serve(listener, app).await.expect("服务启动失败");
+}
+
+fn level_from_str(s: &str) -> Option<LevelFilter> {
+  match s.to_ascii_lowercase().as_str() {
+    "error" => Some(LevelFilter::Error),
+    "warn" | "warning" => Some(LevelFilter::Warn),
+    "info" => Some(LevelFilter::Info),
+    "debug" => Some(LevelFilter::Debug),
+    "trace" => Some(LevelFilter::Trace),
+    _ => None,
+  }
+}
+
+fn verbosity_to_level(v: u8) -> LevelFilter {
+  match v {
+    0 => LevelFilter::Info,
+    1 => LevelFilter::Debug,
+    _ => LevelFilter::Trace,
+  }
+}
+
+fn choose_level(cli: &Cli) -> LevelFilter {
+  let mut level = cli
+    .log_level
+    .as_deref()
+    .and_then(level_from_str)
+    .unwrap_or(LevelFilter::Info);
+  let vlevel = verbosity_to_level(cli.verbose);
+  if vlevel > level { level = vlevel; }
+  level
+}
+
+fn init_logger(cli: &Cli) {
+  // 若用户设置了 RUST_LOG，则尊重该环境变量；否则使用我们计算出的 level 作为全局默认
+  let mut builder = if std::env::var("RUST_LOG").is_ok() {
+    env_logger::Builder::from_env(env_logger::Env::default())
+  } else {
+    let mut b = env_logger::Builder::new();
+    b.filter_level(choose_level(cli));
+    b
+  };
+  // 初始化（忽略二次初始化错误）
+  let _ = builder.try_init();
+}
+
+fn main() {
+  // 中文注释：解析命令行参数（地址、后台模式、以及子命令）
+  let cli = Cli::parse();
+
+  // 子命令：stop（优先处理后直接退出）
+  if let Some(Commands::Stop { pid_file, force }) = &cli.cmd {
+    #[cfg(unix)]
+    {
+      let path = resolve_pid_path(pid_file);
+      match stop_unix(path.clone(), *force) {
+        Ok(()) => {
+          eprintln!("已发送 {}，服务停止流程已触发（如仍存活请使用 --force）", signal_name(*force));
+          return;
+        }
+        Err(e) => {
+          eprintln!("停止失败：{e}");
+          std::process::exit(2);
+        }
+      }
+    }
+    #[cfg(not(unix))]
+    {
+      eprintln!("当前操作系统不支持内置 stop，请使用系统服务管理或任务管理器");
+      std::process::exit(2);
+    }
+  }
+
+  // 计算最终监听地址
+  let addr = if let Some(a) = cli.addr { a } else {
+    format!("{}:{}", cli.host, cli.port)
+      .parse::<SocketAddr>()
+      .expect("组合地址无效")
+  };
+
+  // 判断是否需要后台运行，以及 PID 文件
+  #[cfg(unix)]
+  {
+    let mut need_daemon = cli.daemon;
+    let mut pid_path: PathBuf = default_pid_file();
+    if let Some(Commands::Start { daemon, pid_file }) = &cli.cmd {
+      need_daemon = *daemon;
+      if let Some(p) = pid_file {
+        pid_path = resolve_pid_path(&Some(p.clone()));
+      }
+    }
+
+    if need_daemon {
+      use daemonize::Daemonize;
+      // 中文注释：保持当前工作目录，避免因 chdir("/") 导致的相对路径问题
+      let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+      ensure_parent_dir(&pid_path);
+      // 中文注释：准备日志文件，重定向 stdout/stderr，便于排障
+      let log_path = default_log_file();
+      let _ = fs::create_dir_all(log_path.parent().unwrap_or(Path::new(".")));
+      let stdout = fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap();
+      let stderr = fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap();
+
+      let d = Daemonize::new()
+        .pid_file(pid_path.clone())
+        .working_directory(cwd)
+        .stdout(stdout)
+        .stderr(stderr);
+
+      if let Err(e) = d.start() {
+        eprintln!("后台运行失败：{e}");
+        std::process::exit(1);
+      }
+    }
+  }
+  #[cfg(not(unix))]
+  {
+    if cli.daemon || matches!(cli.cmd, Some(Commands::Start { daemon: true, .. })) {
+      eprintln!("当前操作系统不支持内置后台运行，请使用 nohup/& 或系统服务方式。");
+      std::process::exit(2);
+    }
+  }
+
+  // 中文注释：初始化日志（使用 env_logger），允许通过 --log-level 与 -V/-VV/-VVV 控制详细程度
+  init_logger(&cli);
+
+  // 中文注释：在（可能的）守护化之后，再创建 Tokio 运行时并启动服务器
+  let rt = tokio::runtime::Builder::new_multi_thread()
+    .enable_all()
+    .build()
+    .expect("创建 Tokio 运行时失败");
+  rt.block_on(run_server(addr));
 }

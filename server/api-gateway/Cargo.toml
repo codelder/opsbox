@@ -21,3 +21,14 @@ openssl = { version = "0.10", features = ["vendored"] }
 # 中文注释：嵌入前端静态资源到二进制（无需任何特性）
 rust-embed = { version = "8" }
 mime_guess = "2"
+# 中文注释：命令行解析库（带派生宏）
+clap = { version = "4.5", features = ["derive"] }
+# 中文注释：统一日志初始化与级别过滤
+log = "0.4"
+env_logger = "0.11"
+
+[target.'cfg(unix)'.dependencies]
+# 中文注释：仅在类 Unix 系统上启用后台守护能力
+daemonize = "0.5"
+# 中文注释：用于 stop 子命令向进程发送信号
+libc = "0.2"

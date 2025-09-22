@@ -37,3 +37,5 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-r
 libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 # 中文注释：Ollama Rust 客户端
 ollama-rs = "0.3"
+# 中文注释：统一日志宏
+log = "0.4"

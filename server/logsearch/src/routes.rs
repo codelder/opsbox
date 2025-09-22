@@ -45,8 +45,8 @@ struct ViewParams {
 }
 
 async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, Problem> {
-  eprintln!(
-    "DEBUG view-request: sid={} file={} start={:?} end={:?}",
+  log::debug!(
+    "view-request: sid={} file={} start={:?} end={:?}",
     params.sid, params.file, params.start, params.end
   );
   // 读取 keywords 与行切片
@@ -62,7 +62,7 @@ async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRespons
   {
     Some(v) => v,
     None => {
-      eprintln!("DEBUG view-miss: sid={} file={}", params.sid, params.file);
+      log::debug!("view-miss: sid={} file={}", params.sid, params.file);
       return Ok(
         HttpResponse::builder()
           .status(404)
@@ -81,8 +81,8 @@ async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRespons
   for (i, line) in slice.iter().enumerate() {
     out_lines.push(serde_json::json!({ "no": start + i, "text": line }));
   }
-  eprintln!(
-    "DEBUG view-hit: sid={} file={} total={} slice={} range=[{}..{}]",
+  log::debug!(
+    "view-hit: sid={} file={} total={} slice={} range=[{}..{}]",
     params.sid,
     params.file,
     total,
@@ -309,7 +309,7 @@ async fn nl2q(Json(body): Json<crate::nl2q::NLBody>) -> Result<Json<NL2QOut>, Pr
 async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
   let cap = stream_channel_capacity();
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
-  eprintln!("耗时调试: 建立响应通道，容量={}", cap);
+  log::debug!("profiling: 建立响应通道，容量={}", cap);
 
   // 整体起始时间（仅用于粗粒度耗时调试）
   let overall_start = std::time::Instant::now();
@@ -321,8 +321,8 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
   let plan = derive_plan(base_dir, &buckets, &body.q);
   let files = plan.paths;
   let q_for_search = plan.cleaned_query;
-  eprintln!(
-    "耗时调试: 规划完成，文件数={}，日期区间=[{}..={}], 规划耗时={:?}",
+  log::debug!(
+    "profiling: 规划完成，文件数={}，日期区间=[{}..={}], 规划耗时={:?}",
     files.len(),
     plan.range.start,
     plan.range.end,
@@ -336,9 +336,9 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
   let highlights = spec.highlights.clone();
   let sid = new_sid();
   simple_cache().put_keywords(&sid, highlights.clone()).await;
-  eprintln!("DEBUG cache-keywords: sid={} keywords={:?}", sid, highlights);
+  log::debug!("cache-keywords: sid={} keywords={:?}", sid, highlights);
   let ctx = body.context.unwrap_or(3);
-  eprintln!("耗时调试: 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
+  log::debug!("profiling: 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
 
   for path in files {
     let txc = tx.clone();
@@ -348,12 +348,12 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
     tokio::spawn(async move {
       let file_start = std::time::Instant::now();
       let Ok(reader) = tokio::fs::File::open(&path).await.map_err(|e| StorageError::from(e)) else {
-        eprintln!("耗时调试: 打开文件失败 path={}", path);
+        log::warn!("profiling: 打开文件失败 path={}", path);
         return;
       };
 
       let Ok(mut stream) = reader.search(&specc, ctx).await else {
-        eprintln!("耗时调试: 启动检索失败 path={}", path);
+        log::warn!("profiling: 启动检索失败 path={}", path);
         return;
       };
 
@@ -361,12 +361,12 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
       while let Some(result) = stream.recv().await {
         // 如前端已停止读取，尽快退出，避免无效开销
         if txc.is_closed() {
-          eprintln!("耗时调试: 下游通道已关闭，提前结束 path={}", path);
+          log::debug!("profiling: 下游通道已关闭，提前结束 path={}", path);
           return;
         }
         let file_id = format!("{}:{}", path, &result.path);
-        eprintln!(
-          "DEBUG cache-put: sid={} file_id={} lines={}",
+        log::debug!(
+          "cache-put: sid={} file_id={} lines={}",
           sid_c,
           file_id,
           result.lines.len()
@@ -379,18 +379,18 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
             v.push(b'\n');
             if let Err(_e) = txc.send(Ok(bytes::Bytes::from(v))).await {
               // 接收端已关闭（客户端断开或响应结束），终止该任务
-              eprintln!("耗时调试: 发送失败(接收端关闭) path={}", path);
+            log::debug!("profiling: 发送失败(接收端关闭) path={}", path);
               return;
             }
             produced += 1;
           }
           Err(e) => {
-            eprintln!("耗时调试: 序列化失败 path={}，err={}", path, e);
+            log::warn!("profiling: 序列化失败 path={}，err={}", path, e);
           }
         }
       }
-      eprintln!(
-        "耗时调试: 文件处理完成 path={}，输出记录={}，耗时={:?}",
+      log::debug!(
+        "profiling: 文件处理完成 path={}，输出记录={}，耗时={:?}",
         path,
         produced,
         file_start.elapsed()
@@ -398,8 +398,8 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
     });
   }
 
-  eprintln!(
-    "耗时调试: 任务已派发，整体耗时(至返回响应构建前)={:?}",
+  log::debug!(
+    "profiling: 任务已派发，整体耗时(至返回响应构建前)={:?}",
     overall_start.elapsed()
   );
 
@@ -427,7 +427,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
 async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
   let cap = stream_channel_capacity();
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
-  eprintln!("耗时调试: [S3] 建立响应通道，容量={}", cap);
+  log::debug!("profiling: [S3] 建立响应通道，容量={}", cap);
 
   // 粗粒度耗时
   let overall_start = std::time::Instant::now();
@@ -438,8 +438,8 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   let buckets = ["20", "21", "22", "23"];
   let plan = derive_plan(base_dir, &buckets, &body.q);
   let q_for_search = plan.cleaned_query;
-  eprintln!(
-    "耗时调试: [S3] 规划完成，日期区间=[{}..={}], 规划耗时={:?}",
+  log::debug!(
+    "profiling: [S3] 规划完成，日期区间=[{}..={}], 规划耗时={:?}",
     plan.range.start,
     plan.range.end,
     plan_start.elapsed()
@@ -453,9 +453,9 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   let highlights = spec.highlights.clone();
   let sid = new_sid();
   simple_cache().put_keywords(&sid, highlights.clone()).await;
-  eprintln!("DEBUG cache-keywords: sid={} keywords={:?}", sid, highlights);
+  log::debug!("cache-keywords: sid={} keywords={:?}", sid, highlights);
   let ctx = body.context.unwrap_or(3);
-  eprintln!("耗时调试: [S3] 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
+  log::debug!("profiling: [S3] 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
 
   let minio_cfg = Arc::new(
     settings::load_required_minio_settings()
@@ -490,26 +490,26 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
         let file_start = std::time::Instant::now();
         let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
         let Ok(reader) = s3rp.open().await.map_err(|e| AppError::StorageError(e)) else {
-          eprintln!("耗时调试: [S3] 打开对象失败 key={}", key);
+          log::warn!("profiling: [S3] 打开对象失败 key={}", key);
           return;
         };
 
         let Ok(mut stream) = reader.search(&specc, ctx).await else {
-          eprintln!("耗时调试: [S3] 启动检索失败 key={}", key);
+          log::warn!("profiling: [S3] 启动检索失败 key={}", key);
           return;
         };
 
         let mut produced: usize = 0;
         while let Some(result) = stream.recv().await {
           if txc.is_closed() {
-            eprintln!("耗时调试: [S3] 下游通道已关闭，提前结束 key={}", key);
+          log::debug!("profiling: [S3] 下游通道已关闭，提前结束 key={}", key);
             return;
           }
 
           let bucket_name = cfg.bucket.clone();
           let file_id = format!("{}/{}:{}", bucket_name, key, &result.path);
-          eprintln!(
-            "DEBUG cache-put: sid={} file_id={} lines={}",
+          log::debug!(
+            "cache-put: sid={} file_id={} lines={}",
             sid_c,
             file_id,
             result.lines.len()

@@ -67,7 +67,7 @@ pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
 
 
   let mut q = resp.response.trim().to_string();
-  println!("{}", &q);
+  log::debug!("NL2Q raw output: {}", &q);
 
   // 中文注释：先移除 <think> 思考片段，再做其它清理
   q = strip_think_sections(&q).trim().to_string();
