@@ -231,7 +231,7 @@
 
     try {
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
-      const endpoint = `${API_BASE}/stream.ndjson`;
+      const endpoint = `${API_BASE}/stream.s3.ndjson`;
       const payload: { q: string } = { q: query };
 
       const res = await fetch(endpoint, {
@@ -260,7 +260,6 @@
       reader = null;
     }
   }
-
 
   // 中文注释：继续读取下一批
   async function loadMore() {
@@ -316,13 +315,12 @@
       <span class="text-blue-600">e</span>
       <span class="text-red-600">e</span>
       <span class="text-yellow-500">k</span>
-      <!--      <span class="text-green-600">e</span>-->
     </label>
 
     <form class="mb-4 flex flex-1 gap-2" onsubmit={handleSubmit}>
       <div class="relative flex-1">
         <input
-          class="h-12 w-full rounded-2xl border border-gray-300 bg-white pl-3 pr-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
+          class="h-12 w-full rounded-2xl border border-gray-300 bg-white py-2 pr-3 pl-3 text-sm dark:border-gray-700 dark:bg-gray-900"
           disabled={loading}
           bind:value={q}
           placeholder="输入查询串或自然语言…"
@@ -330,31 +328,6 @@
       </div>
     </form>
   </div>
-
-  <!--{#if q}-->
-  <!--  <p class="mb-4 text-sm text-gray-600 dark:text-gray-300">关键词：<span class="font-mono">{q}</span></p>-->
-  <!--{:else}-->
-  <!--  <p class="mb-6 text-sm text-gray-600 dark:text-gray-300">请输入关键词后回车进行搜索。</p>-->
-  <!--{/if}-->
-
-  <!--  <div class="mb-2 text-sm text-blue-600 dark:text-blue-400">{loading}</div>-->
-
-  <!--  {#if paused && hasMore}-->
-  <!--    <div class="mb-2 text-sm text-gray-600 dark:text-gray-300">已加载 {PAGE_SIZE} 条，已暂停。</div>-->
-  <!--  {/if}-->
-
-  <!--  {#if error}-->
-  <!--    <div-->
-  <!--      class="mb-4 rounded border border-red-300 bg-red-50 p-3 text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"-->
-  <!--    >-->
-  <!--      出错了：{error}-->
-  <!--    </div>-->
-  <!--  {/if}-->
-
-  <!-- 中文注释：结果列表（GitHub 风格） -->
-  <!--  <div class="mt-4 text-sm text-blue-600 dark:text-blue-400">-->
-  <!--    {#if loading}正在加载…{/if}-->
-  <!--  </div>-->
 
   <div class="mt-10 space-y-6">
     {#each results as item, i (item.path + '-' + i)}

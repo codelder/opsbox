@@ -70,7 +70,7 @@
         <span class="text-blue-600">L</span>
         <span class="text-red-600">o</span>
         <span class="text-yellow-500">g</span>
-        <span class="text-green-600">S</span>
+        <span class="text-green-600">s</span>
         <span class="text-blue-600">e</span>
         <span class="text-red-600">e</span>
         <span class="text-yellow-500">k</span>
@@ -106,14 +106,14 @@
                    focus:ring-4 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-800 dark:shadow-gray-600 dark:focus:border-gray-400 dark:focus:ring-gray-400"
             id="search"
             name="q"
-            placeholder='Try: (taxResult OR taxWarn) /\"9111[0-9A-Z]{14}\"/ dt:20250818 path:ptcr -path:system.log'
+            placeholder="Try: (taxResult OR taxWarn) /\"9111[0-9A-Z]{14}\"/ dt:20250818 path:ptcr -path:system.log"
             type="text"
           />
 
           <!-- 右侧模式切换按钮：默认 AI；切换为“表达式”时，回车按 q 直接检索 -->
           <button
             type="button"
-            class="absolute right-2 top-1/2 -translate-y-1/2 inline-flex h-8 items-center gap-1 rounded-full border border-gray-300 bg-white px-2 text-[12px] text-gray-700 hover:bg-gray-50 active:scale-95 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+            class="absolute top-1/2 right-2 inline-flex h-8 -translate-y-1/2 items-center gap-1 rounded-full border border-gray-300 bg-white px-2 text-[12px] text-gray-700 hover:bg-gray-50 active:scale-95 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
             title={aiMode ? 'AI 模式：回车将按自然语言生成查询串' : '表达式模式：回车将按查询串直接检索'}
             onclick={() => (aiMode = !aiMode)}
             disabled={aiLoading}
@@ -185,7 +185,8 @@
         >
         <button
           class="ml-2 underline underline-offset-2 hover:text-gray-200"
-          onclick={() => insertSnippet('(taxResult OR taxWarn) /\\"9111[0-9A-Z]{14}\\"/ dt:20250818 path:ptcr -path:system.log')}
+          onclick={() =>
+            insertSnippet('(taxResult OR taxWarn) /\\"9111[0-9A-Z]{14}\\"/ dt:20250818 path:ptcr -path:system.log')}
           title="插入完整示例"
           type="button"
         >

@@ -1,4 +1,5 @@
 use chrono::{Datelike, Local, NaiveDate};
+use log::{debug, info};
 
 /// 日期区间（保证 start <= end）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,13 +105,20 @@ fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, D
 /// 从查询字符串推导文件选择计划（基于系统“今天”来计算“前一日”）
 pub fn derive_plan(base_dir: &str, buckets: &[&str], q_raw: &str) -> PathPlan {
   let today = Local::now().naive_local().date();
+  info!("BBIP计划生成: base_dir='{}', buckets={:?}, 原始查询='{}'", base_dir, buckets, q_raw);
   derive_plan_with_today(base_dir, buckets, q_raw, today)
 }
 
 /// 同 derive_plan，但可注入 today 以便测试
 pub fn derive_plan_with_today(base_dir: &str, buckets: &[&str], q_raw: &str, today: NaiveDate) -> PathPlan {
+  debug!("BBIP计划生成(自定义今天): today={}, 查询='{}'", today, q_raw);
+  
   let (cleaned_query, range) = parse_date_directives_from_query(q_raw, today);
+  debug!("日期解析结果: 清理后查询='{}', 日期区间={:?}", cleaned_query, range);
+  
   let paths = build_paths(base_dir, buckets, range);
+  info!("BBIP计划生成完成: 生成{}个文件路径", paths.len());
+  
   PathPlan {
     cleaned_query,
     range,

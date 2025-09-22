@@ -300,9 +300,17 @@ tokio::spawn(fut);
 
 // 中文注释：NL → Q 端点，实现将自然语言转换为查询字符串
 async fn nl2q(Json(body): Json<crate::nl2q::NLBody>) -> Result<Json<NL2QOut>, Problem> {
+  log::info!("NL2Q API请求: {}", body.nl);
+  
+  let start = std::time::Instant::now();
   let q = crate::nl2q::call_ollama(&body.nl)
     .await
-    .map_err(|e| problemdetails::new(StatusCode::BAD_GATEWAY).with_title("AI 生成失败").with_detail(e.to_string()))?;
+    .map_err(|e| {
+      log::error!("NL2Q API失败: {}", e);
+      problemdetails::new(StatusCode::BAD_GATEWAY).with_title("AI 生成失败").with_detail(e.to_string())
+    })?;
+  
+  log::info!("NL2Q API成功: {} -> '{}', 耗时: {:?}", body.nl, q, start.elapsed());
   Ok(Json(NL2QOut { q }))
 }
 
@@ -522,19 +530,19 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
             Ok(mut v) => {
               v.push(b'\n');
               if let Err(_e) = txc.send(Ok(bytes::Bytes::from(v))).await {
-                eprintln!("耗时调试: [S3] 发送失败(接收端关闭) key={}", key);
+                log::debug!("profiling: [S3] 发送失败(接收端关闭) key={}", key);
                 return;
               }
               produced += 1;
             }
             Err(e) => {
-              eprintln!("耗时调试: [S3] 序列化失败 key={}，err={}", key, e);
+              log::warn!("profiling: [S3] 序列化失败 key={}，err={}", key, e);
             }
           }
         }
 
-        eprintln!(
-          "耗时调试: [S3] 对象处理完成 key={}，输出记录={}，耗时={:?}",
+        log::debug!(
+          "profiling: [S3] 对象处理完成 key={}，输出记录={}，耗时={:?}",
           key,
           produced,
           file_start.elapsed()
@@ -545,8 +553,8 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
     d = d + Duration::days(1);
   }
 
-  eprintln!(
-    "耗时调试: [S3] 任务已派发，整体耗时(至返回响应构建前)={:?}",
+  log::debug!(
+    "profiling: [S3] 任务已派发，整体耗时(至返回响应构建前)={:?}",
     overall_start.elapsed()
   );
 

@@ -16,6 +16,7 @@ use tokio::{
   task::JoinSet,
 };
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use log::{debug, info, warn, error};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -57,6 +58,8 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   spec: &crate::query::Query,
   context_lines: usize,
 ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>)>, SearchError> {
+  debug!("开始文本搜索，上下文行数: {}, 搜索条件数: {}", context_lines, spec.terms.len());
+  
   // 逐行读取，边采样边判断是否文本，避免整文件读取
   use tokio::io::AsyncBufReadExt as _;
   let mut buf_reader = BufReader::new(reader);
@@ -77,8 +80,10 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     }
     if !sample_checked && sample.len() >= 512 {
       if !is_probably_text_bytes(&sample) {
+        debug!("文件不是文本格式，跳过搜索");
         return Ok(None);
       }
+      debug!("文件确认为文本格式，继续搜索");
       sample_checked = true;
     }
     let trimmed = line.trim_end_matches(['\r', '\n']);
@@ -86,13 +91,18 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   }
   if !sample_checked {
     if !is_probably_text_bytes(&sample) {
+      debug!("最终样本检查：文件不是文本格式");
       return Ok(None);
     }
+    debug!("最终样本检查：确认为文本文件");
   }
 
+  debug!("读取完成，共{}'行，开始执行搜索逻辑", lines.len());
+  
   // 文件级布尔计算：检查各关键字是否在文件中出现
   let term_count = spec.terms.len();
   if term_count == 0 {
+    warn!("搜索条件为空，返回无结果");
     return Ok(None);
   }
   let mut occurs: Vec<bool> = vec![false; term_count];
@@ -120,13 +130,18 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   }
 
   // 文件级布尔求值
+  debug!("执行文件级布尔计算，关键字出现状态: {:?}", occurs);
   if !spec.eval_file(&occurs) {
+    debug!("文件级布尔求值不满足，跳过文件");
     return Ok(None);
   }
 
   if matched_lines.is_empty() {
+    debug!("无匹配行，跳过文件");
     return Ok(None);
   }
+  
+  info!("找到{}行匹配结果，开始生成上下文区间", matched_lines.len());
 
   let mut ranges: Vec<(usize, usize)> = Vec::new();
   for idx in matched_lines.into_iter() {

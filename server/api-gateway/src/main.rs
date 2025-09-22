@@ -94,6 +94,7 @@ pub enum Commands {
 /// 中文注释：命令行选项（使用 clap）
 #[derive(Parser, Debug)]
 #[command(
+  author = "wangyue",
   name = "api-gateway",
   version,
   disable_version_flag = true,
@@ -179,30 +180,49 @@ fn resolve_pid_path(opt: &Option<PathBuf>) -> PathBuf {
 }
 
 #[cfg(unix)]
+use nix::sys::signal::{self, Signal};
+#[cfg(unix)]
+use nix::unistd::Pid;
+
+#[cfg(unix)]
 fn signal_name(force: bool) -> &'static str { if force { "SIGKILL" } else { "SIGTERM" } }
 
 #[cfg(unix)]
-unsafe fn kill_check(pid: libc::pid_t, sig: libc::c_int) -> io::Result<()> {
-  if libc::kill(pid, sig) == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+fn send_signal_to_process(pid: Pid, sig: Signal) -> io::Result<()> {
+  signal::kill(pid, sig).map_err(|e| {
+    io::Error::new(
+      io::ErrorKind::Other,
+      format!("发送信号失败: {}", e)
+    )
+  })
 }
 
+#[cfg(unix)] 
+fn check_process_alive(pid: Pid) -> bool {
+  // 发送信号0来检查进程是否存活（不会实际杀死进程）
+  signal::kill(pid, None).is_ok()
+}
 
-/// 中文注释：停止进程（Unix），通过 PID 文件发送 SIGTERM/SIGKILL（同步实现）
+/// 中文注释：停止进程（Unix），通过 PID 文件发送 SIGTERM/SIGKILL（同步实现，无unsafe）
 #[cfg(unix)]
 fn stop_unix(pid_path: PathBuf, force: bool) -> io::Result<()> {
   let txt = fs::read_to_string(&pid_path)?;
-  let pid: libc::pid_t = txt.trim().parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "PID 文件内容无效"))?;
+  let pid_num: i32 = txt.trim().parse().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "PID 文件内容无效"))?;
+  let pid = Pid::from_raw(pid_num);
+  
   // 发送信号
-  unsafe {
-    kill_check(pid, if force { libc::SIGKILL } else { libc::SIGTERM })?;
-  }
+  let signal = if force { Signal::SIGKILL } else { Signal::SIGTERM };
+  send_signal_to_process(pid, signal)?;
+  
   // 等待最多 5 秒确认进程退出
   let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
   while std::time::Instant::now() < deadline {
-    let alive = unsafe { libc::kill(pid, 0) == 0 };
-    if !alive { break; }
+    if !check_process_alive(pid) { 
+      break; 
+    }
     std::thread::sleep(std::time::Duration::from_millis(100));
   }
+  
   // 移除 PID 文件
   let _ = fs::remove_file(&pid_path);
   Ok(())
