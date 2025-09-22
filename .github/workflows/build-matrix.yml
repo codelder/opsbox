@@ -405,6 +405,30 @@ jobs:
         if: runner.os == 'Linux'
         run: rustup target add x86_64-unknown-linux-gnu
 
+      # 缓存 target（macOS 主机）
+      - name: Restore target cache (macOS host)
+        if: runner.os == 'macOS'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-host-${{ runner.os }}-${{ runner.arch }}-
+            target-host-${{ runner.os }}-
+
+      # 缓存 target（Windows 主机）
+      - name: Restore target cache (Windows host)
+        if: runner.os == 'Windows'
+        uses: actions/cache/restore@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          restore-keys: |
+            target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-
+            target-host-${{ runner.os }}-${{ runner.arch }}-
+            target-host-${{ runner.os }}-
+
       # 缓存 target-musl 目录（宿主环境）
       - name: Restore target cache (musl)
         if: runner.os == 'Linux'
@@ -433,6 +457,8 @@ jobs:
           set -euxo pipefail
           sudo apt-get update -y
           sudo apt-get install -y musl-tools pkg-config
+          # 中文注释：统一目标目录（musl 专用），与非 tag 流程保持一致，便于缓存
+          export CARGO_TARGET_DIR="$PWD/server/target-musl"
           cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
 
       - name: Ensure manylinux2014 image present
@@ -561,10 +587,26 @@ jobs:
         run: |
           cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
 
+      # 保存 target（macOS 主机）
+      - name: Save target cache (macOS host)
+        if: runner.os == 'macOS'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+
       - name: Build backend (Windows, MSVC)
         if: runner.os == 'Windows'
         run: |
           cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+
+      # 保存 target（Windows 主机）
+      - name: Save target cache (Windows host)
+        if: runner.os == 'Windows'
+        uses: actions/cache/save@v4
+        with:
+          path: server/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
@@ -661,12 +703,16 @@ jobs:
     steps:
       - name: Download macOS x86_64 artifact
         uses: actions/download-artifact@v4
+        env:
+          NODE_NO_WARNINGS: '1'
         with:
           name: api-gateway-macos-10.15-x86_64
           path: arch_x64
 
       - name: Download macOS arm64 artifact
         uses: actions/download-artifact@v4
+        env:
+          NODE_NO_WARNINGS: '1'
         with:
           name: api-gateway-macos-11.0-arm64
           path: arch_arm64
@@ -674,13 +720,23 @@ jobs:
       - name: Create universal2 binary
         shell: bash
         run: |
-          set -eux
+          set -euxo pipefail
           OUT_DIR="dist/api-gateway-macos-universal2"
           mkdir -p "$OUT_DIR"
+          # 中文注释：下载的工件解压后的结构可能包含或不包含 dist 前缀，此处使用 find 动态查找
+          X64_BIN=$(find arch_x64 -type f -name api-gateway | head -n1 || true)
+          ARM_BIN=$(find arch_arm64 -type f -name api-gateway | head -n1 || true)
+          if [ -z "${X64_BIN:-}" ] || [ -z "${ARM_BIN:-}" ]; then
+            echo "未找到需要合并的二进制：X64='${X64_BIN:-}' ARM='${ARM_BIN:-}'" >&2
+            echo "目录结构 (前 3 层)：" >&2
+            find arch_x64 -maxdepth 3 -type d -print >&2 || true
+            find arch_arm64 -maxdepth 3 -type d -print >&2 || true
+            exit 1
+          fi
+          echo "x64 bin: $X64_BIN" >&2
+          echo "arm64 bin: $ARM_BIN" >&2
           # 中文注释：合并两种架构的 Mach-O 可执行文件
-          lipo -create -output "$OUT_DIR/api-gateway" \
-            "arch_x64/dist/api-gateway-macos-10.15-x86_64/api-gateway" \
-            "arch_arm64/dist/api-gateway-macos-11.0-arm64/api-gateway"
+          lipo -create -output "$OUT_DIR/api-gateway" "$X64_BIN" "$ARM_BIN"
 
       - name: Upload artifact (macOS universal2)
         uses: actions/upload-artifact@v4
@@ -709,3 +765,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: artifacts/**/*
+          prerelease: true
