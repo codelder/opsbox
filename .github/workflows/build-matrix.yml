@@ -703,8 +703,6 @@ jobs:
     steps:
       - name: Download macOS x86_64 artifact
         uses: actions/download-artifact@v4
-        env:
-          NODE_NO_WARNINGS: '1'
         with:
           name: api-gateway-macos-10.15-x86_64
           path: arch_x64
