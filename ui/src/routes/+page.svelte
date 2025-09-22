@@ -106,7 +106,7 @@
                    focus:ring-4 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-800 dark:shadow-gray-600 dark:focus:border-gray-400 dark:focus:ring-gray-400"
             id="search"
             name="q"
-            placeholder="Try: (taxResult OR taxWarn) /\"9111[0-9A-Z]{14}\"/ dt:20250818 path:ptcr -path:system.log"
+            placeholder="Try: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
             type="text"
           />
 
@@ -186,7 +186,7 @@
         <button
           class="ml-2 underline underline-offset-2 hover:text-gray-200"
           onclick={() =>
-            insertSnippet('(taxResult OR taxWarn) /\\"9111[0-9A-Z]{14}\\"/ dt:20250818 path:ptcr -path:system.log')}
+            insertSnippet('(taxResult OR taxWarn) /\"9111[0-9A-Z]{14}\"/ dt:20250818 path:ptcr -path:system.log')}
           title="插入完整示例"
           type="button"
         >

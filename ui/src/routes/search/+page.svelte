@@ -157,6 +157,17 @@
       start = 0;
       end = max;
     }
+
+    // 中文注释：对齐截取边界，避免从单词中间开始或结束
+    if (start > 0 && line[start] !== ' ' && line[start - 1] !== ' ') {
+      // 向前找到空格或行首
+      const prevSpace = line.lastIndexOf(' ', start);
+      if (prevSpace >= 0 && start - prevSpace < 20) {
+        // 只在近20个字符内调整
+        start = prevSpace; // 保留空格，不跳过
+      }
+    }
+
     const leftTrunc = start > 0;
     const rightTrunc = end < line.length;
     const slice = line.slice(start, end);
@@ -179,8 +190,28 @@
     return expandedAllMatches.has(i);
   }
   function toggleFileShowAll(i: number) {
-    if (expandedAllMatches.has(i)) expandedAllMatches.delete(i);
-    else expandedAllMatches.add(i);
+    const wasExpanded = expandedAllMatches.has(i);
+    if (wasExpanded) {
+      expandedAllMatches.delete(i);
+      // 收起时，延迟滚动以等待DOM更新
+      setTimeout(() => {
+        const cardElement = document.querySelector(`[data-result-card="${i}"]`);
+        if (cardElement) {
+          cardElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+            inline: 'nearest'
+          });
+          // 添加临时高亮效果
+          cardElement.classList.add('highlight-card');
+          setTimeout(() => {
+            cardElement.classList.remove('highlight-card');
+          }, 2000);
+        }
+      }, 100);
+    } else {
+      expandedAllMatches.add(i);
+    }
   }
   function isLineExpanded(key: string) {
     return expandedLines.has(key);
@@ -189,7 +220,7 @@
     expandedLines.add(key);
   }
 
-  // 扁平化为行数组，便于“仅显示前6行”
+  // 扁平化为行数组，便于“仅显示前7行”
   function flattenLines(item: SearchJsonResult): Array<{ no: number; text: string; _ci: number; _li: number }> {
     const arr: Array<{ no: number; text: string; _ci: number; _li: number }> = [];
     (item?.chunks || []).forEach((chunk: JsonChunk, ci: number) => {
@@ -208,7 +239,7 @@
   ): Array<{ no: number; text: string; _ci: number; _li: number }> {
     const flat = flattenLines(item);
     if (expandedAllMatches.has(fileIdx)) return flat;
-    return flat.slice(0, Math.min(6, flat.length));
+    return flat.slice(0, Math.min(7, flat.length));
   }
 
   // 中文注释：启动流式搜索（重置状态并读取首批）
@@ -301,168 +332,506 @@
 </script>
 
 <!-- 中文注释：页面标题与状态栏 -->
-<div class="mx-auto max-w-[1560px] px-4 py-10">
-  <div class="flex items-center justify-between md:mask-b-from-10">
-    <label
-      for="search"
-      id="logo-label"
-      class="mr-10 mb-4 block text-2xl font-extrabold tracking-[-0.25em] italic antialiased select-none md:text-4xl"
-    >
-      <span class="text-blue-600">L</span>
-      <span class="text-red-600">o</span>
-      <span class="text-yellow-500">g</span>
-      <span class="text-green-600">s</span>
-      <span class="text-blue-600">e</span>
-      <span class="text-red-600">e</span>
-      <span class="text-yellow-500">k</span>
-    </label>
-
-    <form class="mb-4 flex flex-1 gap-2" onsubmit={handleSubmit}>
-      <div class="relative flex-1">
-        <input
-          class="h-12 w-full rounded-2xl border border-gray-300 bg-white py-2 pr-3 pl-3 text-sm dark:border-gray-700 dark:bg-gray-900"
-          disabled={loading}
-          bind:value={q}
-          placeholder="输入查询串或自然语言…"
-        />
+<div class="min-h-screen bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
+  <div class="mx-auto max-w-[1560px] px-4 py-8">
+    <!-- 顶部区域重新设计 -->
+    <div class="mb-12">
+      <!-- Logo 区域 -->
+      <div class="mb-8 text-center">
+        <label
+          for="search"
+          id="logo-label"
+          class="inline-block transform cursor-pointer text-4xl font-extrabold tracking-[-0.25em] italic antialiased transition-transform duration-300 select-none hover:scale-105 md:text-6xl"
+        >
+          <span class="text-blue-600 drop-shadow-sm">L</span>
+          <span class="text-red-600 drop-shadow-sm">o</span>
+          <span class="text-yellow-500 drop-shadow-sm">g</span>
+          <span class="text-green-600 drop-shadow-sm">s</span>
+          <span class="text-blue-600 drop-shadow-sm">e</span>
+          <span class="text-red-600 drop-shadow-sm">e</span>
+          <span class="text-yellow-500 drop-shadow-sm">k</span>
+        </label>
+        <p class="mt-3 text-lg font-medium text-gray-600 dark:text-gray-300">快速搜索和浏览日志文件</p>
       </div>
-    </form>
-  </div>
 
-  <div class="mt-10 space-y-6">
-    {#each results as item, i (item.path + '-' + i)}
-      {#if item && item.path && item.chunks}
-        <div class="overflow-hidden rounded border border-gray-200 dark:border-gray-700">
-          <!-- 结果头：文件路径（可折叠） -->
-          <button
-            type="button"
-            class="flex w-full items-center justify-between border-b border-gray-200 bg-gray-50 px-3 py-3 text-left text-[13px] text-gray-700 hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
-            onclick={() => toggleFileCollapsed(i)}
-          >
-            <div class="flex min-w-0 items-center gap-2">
-              {#if splitPath(item.path).bucket}
-                <span
-                  class="inline-flex shrink-0 rounded-full border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-                  >bucket {splitPath(item.path).bucket}</span
-                >
-              {/if}
-              <span
-                class="inline-flex shrink-0 rounded border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-                >{splitPath(item.path).tar}</span
-              >
-              {#if splitPath(item.path).inner}
-                <span
-                  role="link"
-                  tabindex="0"
-                  class="cursor-pointer truncate text-left font-mono text-blue-600 hover:underline focus:underline focus:outline-none"
-                  title={splitPath(item.path).inner}
-                  onclick={(e) => {
-                    e.stopPropagation();
-                    // 中文注释：带上 sid 以便 /view 从缓存读取；在新标签页打开
-                    const base = '/view';
-                    const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
-                    window.open(url, '_blank', 'noopener');
-                  }}
-                  onkeydown={(e) => {
-                    // 中文注释：无障碍支持 Enter/Space 键（新标签页打开）
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      const base = '/view';
-                      const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
-                      window.open(url, '_blank', 'noopener');
-                    }
-                  }}
-                >
-                  {splitPath(item.path).inner}</span
-                >
-              {/if}
+      <!-- 搜索框区域 -->
+      <form class="mx-auto max-w-4xl" onsubmit={handleSubmit}>
+        <div class="group relative">
+          <div class="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center pl-4">
+            <svg
+              class="h-6 w-6 text-gray-400 transition-colors duration-200 group-focus-within:text-blue-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="m21 21-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+              />
+            </svg>
+          </div>
+          <input
+            id="search"
+            class="h-16 w-full rounded-3xl border-0 bg-white/90 py-4 pr-16 pl-14 text-lg placeholder-gray-500 shadow-2xl ring-1 shadow-gray-200/50 ring-gray-200/50 backdrop-blur-sm transition-all duration-300 hover:shadow-blue-200/25 hover:ring-blue-300/50 focus:bg-white focus:ring-2 focus:shadow-blue-300/30 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/90 dark:text-white dark:placeholder-gray-400 dark:shadow-gray-900/30 dark:ring-gray-600/50 dark:hover:ring-blue-400/50 dark:focus:ring-blue-400"
+            disabled={loading}
+            bind:value={q}
+            placeholder="输入查询串或自然语言搜索…"
+            autocomplete="off"
+          />
+          {#if loading}
+            <div class="absolute inset-y-0 right-0 flex items-center pr-5">
+              <div class="h-7 w-7 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
             </div>
-            <div class="ml-2 flex shrink-0 items-center gap-3">
-              {#if item.keywords?.length}
-                <span class="hidden text-gray-500 sm:inline dark:text-gray-400">{item.keywords.join(', ')}</span>
-              {/if}
-              <span class="text-gray-400">{isFileCollapsed(i) ? '▶' : '▼'}</span>
-            </div>
-          </button>
-
-          {#if !isFileCollapsed(i)}
-            <!-- 代码块区域：行号 + 内容（默认仅前6行） -->
-            <div class="bg-white dark:bg-gray-800">
-              {#each visibleLines(item, i) as ln (i + '-' + ln._ci + '-' + ln._li)}
-                <div class="grid grid-cols-[72px_1fr] gap-0 font-mono text-[13px] leading-[20px]">
-                  <div
-                    class="border-r border-gray-100 bg-gray-50 px-3 py-0.5 text-right text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-500"
-                  >
-                    {ln.no}
-                  </div>
-                  <div class="px-3 py-0.5 break-all whitespace-pre-wrap">
-                    {#if isLineExpanded(lineKey(i, ln._ci, ln._li))}
-                      <span>{@html highlight(ln.text, item.keywords)}</span>
-                    {:else}
-                      {#key i + '-' + ln._ci + '-' + ln._li + '-snippet'}
-                        {@const sn = snippet(ln.text, item.keywords)}
-                        {#if sn.leftTrunc}
-                          <button
-                            type="button"
-                            class="text-blue-600 hover:underline"
-                            onclick={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</button
-                          >
-                        {/if}
-                        <span>{@html sn.html}</span>
-                        {#if sn.rightTrunc}
-                          <button
-                            type="button"
-                            class="text-blue-600 hover:underline"
-                            onclick={() => expandLine(lineKey(i, ln._ci, ln._li))}>&hellip;</button
-                          >
-                        {/if}
-                      {/key}
-                    {/if}
-                  </div>
-                </div>
-              {/each}
-            </div>
-
-            <!-- 卡片 foot：展开更多 matches -->
-            {#if totalMatches(item) > visibleLines(item, i).length}
-              <div
-                class="border-t border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
-              >
-                <button class="text-blue-600 hover:underline" onclick={() => toggleFileShowAll(i)}>
-                  {#if isFileShowAll(i)}
-                    Show fewer matches
-                  {:else}
-                    显示剩余的 {totalMatches(item) - visibleLines(item, i).length} 行
-                  {/if}
-                </button>
-              </div>
-            {/if}
+          {:else if q}
+            <button
+              type="button"
+              class="absolute inset-y-0 right-0 flex items-center pr-5 text-gray-400 transition-colors duration-200 hover:text-gray-600"
+              onclick={() => {
+                q = '';
+                results = [];
+              }}
+              aria-label="清除搜索内容"
+            >
+              <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           {/if}
         </div>
-      {:else}
-        <!-- 兼容其他对象：兜底显示 -->
-        <div class="rounded border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
-          <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
+      </form>
+    </div>
+
+    <!-- 结果区域 -->
+    <div class="space-y-8">
+      {#each results as item, i (item.path + '-' + i)}
+        {#if item && item.path && item.chunks}
+          <div
+            class="group overflow-hidden rounded-2xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
+            data-result-card={i}
+          >
+            <!-- 结果头：文件路径（可折叠）- 重新设计为多层级布局 -->
+            <button
+              type="button"
+              class="w-full border-b border-slate-200 bg-gradient-to-r from-slate-50 to-gray-100 px-6 py-6 text-left text-sm text-slate-700 transition-all duration-200 hover:from-slate-100 hover:to-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:outline-none focus:ring-inset dark:border-gray-700/50 dark:from-gray-800/50 dark:to-gray-700/50 dark:text-gray-300 dark:hover:from-gray-700/50 dark:hover:to-gray-600/50"
+              onclick={() => toggleFileCollapsed(i)}
+            >
+              <!-- 容器：小屏纵向排列，大屏左右分布 -->
+              <div class="flex w-full flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <!-- 左侧：标题 + 元信息 -->
+                <div class="min-w-0 flex-1">
+                  <!-- 主标题（inner 作为重点信息）：字号更大，颜色更深 -->
+                  {#if splitPath(item.path).inner}
+                    <div class="mb-2 flex items-start gap-2">
+                      <span
+                        role="link"
+                        tabindex="0"
+                        class="group/link cursor-pointer font-mono text-base leading-tight font-semibold text-slate-900 transition-colors duration-200 hover:text-blue-700 md:text-lg lg:text-xl dark:text-gray-100 dark:hover:text-blue-300"
+                        title={splitPath(item.path).inner}
+                        onclick={(e) => {
+                          e.stopPropagation();
+                          // 中文注释：带上 sid 以便 /view 从缓存读取；在新标签页打开
+                          const base = '/view';
+                          const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
+                          window.open(url, '_blank', 'noopener');
+                        }}
+                        onkeydown={(e) => {
+                          // 中文注释：无障碍支持 Enter/Space 键（新标签页打开）
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const base = '/view';
+                            const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
+                            window.open(url, '_blank', 'noopener');
+                          }
+                        }}
+                      >
+                        <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1"
+                          >{splitPath(item.path).inner}</span
+                        >
+                      </span>
+                      <svg
+                        class="mt-1 h-4 w-4 shrink-0 text-blue-600 opacity-0 transition-opacity duration-200 group-hover/link:opacity-100 dark:text-blue-400"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          stroke-width="2"
+                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                        />
+                      </svg>
+                    </div>
+                  {:else}
+                    <!-- 如果没有 inner，显示完整路径作为主标题 -->
+                    <div class="mb-2">
+                      <span
+                        class="font-mono text-base leading-tight font-semibold text-slate-900 md:text-lg dark:text-gray-100"
+                      >
+                        {item.path}
+                      </span>
+                    </div>
+                  {/if}
+
+                  <!-- 元信息行：允许换行，字号更小，灰度更轻 -->
+                  <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-gray-400">
+                    {#if splitPath(item.path).bucket}
+                      <span
+                        class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800"
+                      >
+                        <svg class="mr-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                          <path
+                            d="M3 4a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1H4a1 1 0 01-1-1v-3zM10 4a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1V4zM10 10a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-3z"
+                          />
+                        </svg>
+                        bucket {splitPath(item.path).bucket}
+                      </span>
+                    {/if}
+
+                    <span
+                      class="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-700 ring-1 ring-gray-200 dark:bg-gray-700/50 dark:text-gray-300 dark:ring-gray-600"
+                    >
+                      <svg class="mr-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                        <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
+                      </svg>
+                      {splitPath(item.path).tar}
+                    </span>
+
+                    {#if item.keywords?.length}
+                      <!-- 关键词放在元信息行，尺寸更小，可多行换行 -->
+                      <div class="flex flex-wrap items-center gap-1.5">
+                        {#each item.keywords.slice(0, 4) as keyword}
+                          <span
+                            class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-800 ring-1 ring-yellow-600/20 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-500/20"
+                            >{keyword}</span
+                          >
+                        {/each}
+                        {#if item.keywords.length > 4}
+                          <span class="text-[11px] text-gray-500 dark:text-gray-400">+{item.keywords.length - 4}</span>
+                        {/if}
+                      </div>
+                    {/if}
+
+                    <!-- 统计信息：匹配行数 -->
+                    <span
+                      class="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800"
+                    >
+                      <svg class="mr-1 h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4" />
+                      </svg>
+                      {totalMatches(item)} 行匹配
+                    </span>
+                  </div>
+                </div>
+
+                <!-- 右侧：折叠箭头（与标题对齐） -->
+                <div class="mt-2 flex shrink-0 items-center md:mt-0">
+                  <div
+                    class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200/60 transition-colors duration-200 group-hover:bg-gray-300/60 dark:bg-gray-600/50 dark:group-hover:bg-gray-500/50"
+                  >
+                    <svg
+                      class="h-4 w-4 text-gray-700 transition-transform duration-200 {isFileCollapsed(i)
+                        ? ''
+                        : 'rotate-180'} dark:text-gray-200"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </button>
+
+            {#if !isFileCollapsed(i)}
+              <!-- 代码块区域：行号 + 内容（默认仅前7行） -->
+              <div
+                class="overflow-hidden bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
+              >
+                {#each visibleLines(item, i) as ln (i + '-' + ln._ci + '-' + ln._li)}
+                  <div
+                    class="group/line grid grid-cols-[80px_1fr] gap-0 font-mono text-sm leading-[24px] transition-colors duration-150 hover:bg-blue-50/40 dark:hover:bg-blue-900/10"
+                  >
+                    <div
+                      class="border-r border-slate-300 bg-gradient-to-r from-slate-100 to-slate-50 px-4 py-2 text-right font-medium text-slate-600 transition-all duration-150 select-none group-hover/line:from-blue-100 group-hover/line:to-blue-50 group-hover/line:text-blue-700 dark:border-gray-700/60 dark:from-gray-800/80 dark:to-gray-900/80 dark:text-gray-400 dark:group-hover/line:from-blue-900/20 dark:group-hover/line:to-blue-800/20 dark:group-hover/line:text-blue-400"
+                    >
+                      {ln.no}
+                    </div>
+                    <div
+                      class="code-content bg-white px-4 py-2 text-slate-900 transition-colors duration-150 group-hover/line:bg-blue-50/20 group-hover/line:text-slate-950 dark:bg-transparent dark:text-gray-200 dark:group-hover/line:text-gray-100"
+                    >
+                      {#if isLineExpanded(lineKey(i, ln._ci, ln._li))}
+                        <span class="code-content-text">{@html highlight(ln.text, item.keywords)}</span>
+                      {:else}
+                        {#key i + '-' + ln._ci + '-' + ln._li + '-snippet'}
+                          {@const sn = snippet(ln.text, item.keywords)}
+                          {#if sn.leftTrunc}
+                            <button
+                              type="button"
+                              class="group/expand mx-0.5 inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-700 transition-all duration-200 hover:border-blue-300 hover:bg-blue-100 hover:text-blue-800 focus:ring-2 focus:ring-blue-500/20 focus:outline-none dark:border-blue-700/50 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-800/50 dark:hover:text-blue-200"
+                              onclick={() => expandLine(lineKey(i, ln._ci, ln._li))}
+                              title="展开显示完整内容"
+                            >
+                              <svg
+                                class="mr-1 h-3 w-3 transition-transform duration-200 group-hover/expand:scale-105"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="2"
+                                  d="M15 19l-7-7 7-7"
+                                />
+                              </svg>
+                              <span>…</span>
+                            </button>
+                          {/if}
+                          <span class="code-content-text">{@html sn.html}</span>
+                          {#if sn.rightTrunc}
+                            <button
+                              type="button"
+                              class="group/expand mx-0.5 inline-flex items-center rounded-md border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-700 transition-all duration-200 hover:border-blue-300 hover:bg-blue-100 hover:text-blue-800 focus:ring-2 focus:ring-blue-500/20 focus:outline-none dark:border-blue-700/50 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-800/50 dark:hover:text-blue-200"
+                              onclick={() => expandLine(lineKey(i, ln._ci, ln._li))}
+                              title="展开显示完整内容"
+                            >
+                              <span>…</span>
+                              <svg
+                                class="ml-1 h-3 w-3 transition-transform duration-200 group-hover/expand:scale-105"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="2"
+                                  d="M9 5l7 7-7 7"
+                                />
+                              </svg>
+                            </button>
+                          {/if}
+                        {/key}
+                      {/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+
+              <!-- 卡片 foot：展开更多 matches -->
+              {#if totalMatches(item) > 7}
+                <div
+                  class="border-t border-slate-200 bg-gradient-to-r from-slate-100 to-gray-100 px-6 py-4 dark:border-gray-700/50 dark:from-gray-800/80 dark:to-gray-700/80"
+                >
+                  <button
+                    class="group inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium text-blue-600 transition-all duration-200 hover:bg-blue-50 hover:text-blue-700 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 focus:ring-offset-gray-50 focus:outline-none dark:text-blue-400 dark:hover:bg-blue-900/20 dark:hover:text-blue-300 dark:focus:ring-offset-gray-800"
+                    onclick={() => toggleFileShowAll(i)}
+                  >
+                    {#if isFileShowAll(i)}
+                      <svg
+                        class="mr-2 h-4 w-4 transition-transform duration-200 group-hover:-translate-y-0.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                      </svg>
+                      收起显示前 7 行
+                    {:else}
+                      <svg
+                        class="mr-2 h-4 w-4 transition-transform duration-200 group-hover:translate-y-0.5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                      </svg>
+                      显示剩余的
+                      <span
+                        class="mx-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-900/50 dark:text-blue-200"
+                        >{totalMatches(item) - 7}</span
+                      > 行匹配
+                    {/if}
+                  </button>
+                </div>
+              {/if}
+            {/if}
+          </div>
+        {:else}
+          <!-- 兼容其他对象：兜底显示 -->
+          <div class="rounded border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800">
+            <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
+          </div>
+        {/if}
+      {/each}
+
+      <!-- 空状态和错误状态 -->
+      {#if error}
+        <div class="mx-auto max-w-md text-center">
+          <div class="rounded-2xl bg-red-50 p-8 shadow-lg ring-1 ring-red-200 dark:bg-red-900/20 dark:ring-red-800/50">
+            <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
+              <svg class="h-8 w-8 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
+                />
+              </svg>
+            </div>
+            <h3 class="mt-4 text-lg font-semibold text-red-900 dark:text-red-200">搜索出错</h3>
+            <p class="mt-2 text-sm text-red-700 dark:text-red-300">{error}</p>
+            <button
+              class="mt-4 inline-flex items-center rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:outline-none"
+              onclick={() => {
+                error = null;
+                q && startSearch(q);
+              }}
+            >
+              <svg class="mr-2 -ml-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+              重新搜索
+            </button>
+          </div>
+        </div>
+      {:else if !loading && results.length === 0 && q && !hasMore}
+        <div class="mx-auto max-w-md text-center">
+          <div class="rounded-2xl bg-gray-50 p-8 shadow-lg ring-1 ring-gray-200 dark:bg-gray-800/50 dark:ring-gray-700">
+            <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
+              <svg class="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+            </div>
+            <h3 class="mt-4 text-lg font-semibold text-gray-900 dark:text-gray-200">无匹配结果</h3>
+            <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">尝试使用不同的关键词或更广泛的搜索词汇</p>
+          </div>
+        </div>
+      {:else if !loading && !error && results.length === 0 && !q}
+        <div class="mx-auto max-w-lg text-center">
+          <div
+            class="rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 p-8 shadow-lg ring-1 ring-blue-200 dark:from-blue-900/20 dark:to-indigo-900/20 dark:ring-blue-800/50"
+          >
+            <div
+              class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-800/50 dark:to-indigo-800/50"
+            >
+              <svg
+                class="h-8 w-8 text-blue-600 dark:text-blue-400"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+            </div>
+            <h3 class="mt-4 text-xl font-semibold text-blue-900 dark:text-blue-200">开始搜索</h3>
+            <p class="mt-2 text-sm text-blue-700 dark:text-blue-300">
+              在上方输入框中输入关键词或自然语言查询，开始搜索日志
+            </p>
+          </div>
         </div>
       {/if}
-    {/each}
+    </div>
 
-    {#if !loading && !error && results.length === 0 && q && !hasMore}
-      <div class="text-sm text-gray-500 dark:text-gray-400">没有匹配结果。</div>
-    {/if}
-  </div>
-
-  <!-- 中文注释：分页控制按钮 -->
-  <div class="mt-6 flex items-center gap-3">
-    {#if hasMore}
-      <button
-        class="rounded bg-gray-700 px-3 py-2 text-sm text-white disabled:opacity-50"
-        onclick={loadMore}
-        disabled={loading}>{loading ? '加载中…' : '加载更多'}</button
-      >
-    {:else if results.length > 0}
-      <span class="text-sm text-gray-500 dark:text-gray-400">已到结尾。</span>
-    {/if}
+    <!-- 中文注释：分页控制按钮 -->
+    <div class="mt-12 flex items-center justify-center">
+      {#if hasMore}
+        <button
+          class="group inline-flex items-center rounded-2xl bg-gradient-to-r from-blue-600 to-blue-700 px-8 py-4 text-base font-semibold text-white shadow-xl shadow-blue-500/25 transition-all duration-300 hover:from-blue-700 hover:to-blue-800 hover:shadow-2xl hover:shadow-blue-500/30 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-50 focus:outline-none disabled:from-gray-400 disabled:to-gray-500 disabled:shadow-gray-400/25 dark:focus:ring-offset-gray-900 dark:disabled:from-gray-600 dark:disabled:to-gray-700"
+          onclick={loadMore}
+          disabled={loading}
+        >
+          {#if loading}
+            <div class="mr-3 h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+            加载中…
+          {:else}
+            <svg
+              class="mr-3 h-5 w-5 transition-transform duration-200 group-hover:translate-y-0.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+            </svg>
+            加载更多结果
+          {/if}
+        </button>
+      {:else if results.length > 0}
+        <div class="text-center">
+          <div
+            class="inline-flex items-center rounded-full bg-green-100 px-6 py-3 text-sm font-medium text-green-800 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800/50"
+          >
+            <svg class="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            已显示所有搜索结果
+          </div>
+        </div>
+      {/if}
+    </div>
   </div>
 </div>
+
+<style>
+  :global(.highlight-card) {
+    border: 3px solid rgba(59, 130, 246, 0.5);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+    animation: highlight-pulse 2s ease-in-out;
+  }
+
+  :global(.dark .highlight-card) {
+    border: 3px solid rgba(96, 165, 250, 0.5);
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+  }
+
+  .code-content {
+    font-family: var(--font-ui);
+    font-feature-settings:
+      'liga' 0,
+      'calt' 0;
+    font-variant-ligatures: none;
+  }
+
+  .code-content-text {
+    white-space: pre-wrap;
+    word-break: break-all;
+    display: inline;
+  }
+
+  @keyframes highlight-pulse {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+    50% {
+      transform: scale(1.002);
+      opacity: 0.95;
+    }
+  }
+</style>
