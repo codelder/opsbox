@@ -1,10 +1,11 @@
 <script lang="ts">
   import { env } from '$env/dynamic/public';
+  import { IconRobot, IconFunction } from '@tabler/icons-svelte';
   // 工具函数：将片段插入到输入框光标位置
   let inputEl: HTMLInputElement | null = null;
 
   // 首页搜索框模式：true=AI（自然语言），false=表达式（查询串）
-  let aiMode = $state(true);
+  let aiMode = $state(false);
   let aiLoading = $state(false);
 
   /**
@@ -110,11 +111,12 @@
             type="text"
           />
 
-          <!-- 右侧模式切换按钮：默认 AI；切换为“表达式”时，回车按 q 直接检索 -->
+          <!-- 右侧模式切换按钮：默认 表达式；切换为“AI”时，回车将按自然语言生成查询串 -->
           <button
             type="button"
-            class="absolute top-1/2 right-2 inline-flex h-8 -translate-y-1/2 items-center gap-1 rounded-full border border-gray-300 bg-white px-2 text-[12px] text-gray-700 hover:bg-gray-50 active:scale-95 disabled:opacity-60 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+            class="absolute top-1/2 right-2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center text-gray-600 hover:text-gray-800 active:scale-95 disabled:opacity-60 dark:text-gray-300 hover:dark:text-gray-100"
             title={aiMode ? 'AI 模式：回车将按自然语言生成查询串' : '表达式模式：回车将按查询串直接检索'}
+            aria-label={aiMode ? 'AI 模式' : '表达式模式'}
             onclick={() => (aiMode = !aiMode)}
             disabled={aiLoading}
           >
@@ -125,11 +127,9 @@
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>
             {:else if aiMode}
-              <!-- AI 图案：简单文字/图标 -->
-              <span class="font-semibold">AI</span>
+              <IconRobot size={24} stroke={2} aria-hidden="true" />
             {:else}
-              <!-- 表达式图案：fx -->
-              <span class="font-semibold">fx</span>
+              <IconFunction size={24} stroke={2} aria-hidden="true" />
             {/if}
           </button>
         </div>

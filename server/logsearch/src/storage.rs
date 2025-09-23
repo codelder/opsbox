@@ -76,7 +76,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
 
     debug!("MinIO客户端创建成功，开始获取对象");
     
-    let (stream, file_size) = client
+    let (stream, _file_size) = client
       .get_object(self.bucket, self.key)
       .send()
       .await

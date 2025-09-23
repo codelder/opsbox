@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
+  "packageManager": "pnpm@10.17.1",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
@@ -47,6 +48,7 @@
     ]
   },
   "dependencies": {
+    "@tabler/icons-svelte": "3.40.0",
     "@tanstack/svelte-virtual": "^3.13.12",
     "perfect-scrollbar": "^1.5.6"
   }
