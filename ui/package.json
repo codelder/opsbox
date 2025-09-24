@@ -48,7 +48,7 @@
     ]
   },
   "dependencies": {
-    "@tabler/icons-svelte": "3.40.0",
+    "@tabler/icons-svelte": "3.35",
     "@tanstack/svelte-virtual": "^3.13.12",
     "perfect-scrollbar": "^1.5.6"
   }
