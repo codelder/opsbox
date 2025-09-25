@@ -198,5 +198,8 @@ pub async fn verify_minio_settings(settings: &MinioSettings) -> Result<(), Setti
       "网络通信错误：{}",
       err
     ))),
+    Err(StorageError::ConnectionTimeout) => Err(SettingsError::Connection(
+      "连接超时，请检查网络或 MinIO 服务状态".to_string(),
+    )),
   }
 }

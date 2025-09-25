@@ -39,3 +39,5 @@ libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 ollama-rs = "0.3"
 # 中文注释：统一日志宏
 log = "0.4"
+# 中文注释：用于全局单例客户端缓存
+once_cell = "1.20"

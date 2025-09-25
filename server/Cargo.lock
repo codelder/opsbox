@@ -1573,6 +1573,7 @@ dependencies = [
  "log",
  "minio",
  "ollama-rs",
+ "once_cell",
  "openssl",
  "problemdetails",
  "regex",
