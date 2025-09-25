@@ -38,21 +38,31 @@
       return;
     }
     // AI 模式：先调用 nl2q，再跳转
+    aiLoading = true;
     try {
-      aiLoading = true;
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
       const res = await fetch(`${API_BASE}/nl2q`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ nl: text })
       });
-      if (!res.ok) throw new Error(`AI 服务异常：${res.status}`);
+
+      if (!res.ok) {
+        console.error('AI 生成失败：AI 服务异常', res.status);
+        return;
+      }
+
       const data = (await res.json()) as { q?: string };
       const q = (data?.q || '').trim();
-      if (!q) throw new Error('AI 返回空结果');
+
+      if (!q) {
+        console.error('AI 生成失败：AI 返回空结果');
+        return;
+      }
+
       window.location.href = `/search?q=${encodeURIComponent(q)}`;
     } catch (err) {
-      // 轻量提示：保持在首页，不打断输入
+      // 网络或其他异常
       console.error('AI 生成失败：', err);
     } finally {
       aiLoading = false;
@@ -91,11 +101,12 @@
               stroke="currentColor"
               stroke-linecap="round"
               stroke-linejoin="round"
+              fill="none"
               stroke-width="2"
               viewBox="0 0 24 24"
               xmlns="http://www.w3.org/2000/svg"
             >
-              <circle cx="11" cy="11" fill="none" r="8"></circle>
+              <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" x2="16.65" y1="21" y2="16.65"></line>
             </svg>
           </span>
@@ -122,7 +133,7 @@
           >
             {#if aiLoading}
               <!-- 中文注释：简易加载指示器 -->
-              <svg class="h-4 w-4 animate-spin text-gray-500" viewBox="0 0 24 24" fill="none">
+              <svg class="h-4 w-4 animate-spin text-gray-500" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>
@@ -186,7 +197,7 @@
         <button
           class="ml-2 underline underline-offset-2 hover:text-gray-200"
           onclick={() =>
-            insertSnippet('(taxResult OR taxWarn) /\"9111[0-9A-Z]{14}\"/ dt:20250818 path:ptcr -path:system.log')}
+            insertSnippet('(taxResult OR taxWarn) /"9111[0-9A-Z]{14}"/ dt:20250818 path:ptcr -path:system.log')}
           title="插入完整示例"
           type="button"
         >

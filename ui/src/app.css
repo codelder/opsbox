@@ -5,7 +5,7 @@
 .ps__rail-y {
   display: block;
   opacity: 0.6;
-  width: 14px;  /* 稍宽一些便于点击 */
+  width: 14px; /* 稍宽一些便于点击 */
   right: 0;
 }
 .ps:hover > .ps__rail-y,
@@ -16,8 +16,8 @@
 
 .ps__thumb-y {
   background-color: #9ca3af; /* slate-400 */
-  width: 10px;                /* 拇指宽度 */
-  min-height: 28px;           /* 最小高度 */
+  width: 10px; /* 拇指宽度 */
+  min-height: 28px; /* 最小高度 */
   border-radius: 6px;
 }
 .dark .ps__thumb-y {

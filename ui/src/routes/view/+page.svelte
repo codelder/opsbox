@@ -7,79 +7,129 @@
 
   const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
 
-  let file = '';
-  let sid = '';
-  let total = 0;
+  // 中文注释：使用 Svelte 5 Runes 语法定义响应式状态
+  let file = $state('');
+  let sid = $state('');
+  let total = $state(0);
   // 用于分页（内部使用）
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  let start = 1;
-  let end = 0;
+  // let start = $state(1); // 暂未使用
+  let end = $state(0);
   // 仅用于展示，可为空
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  let keywords: string[] = [];
-  let lines: { no: number; text: string }[] = [];
-  let loading = false;
-  let error: string | null = null;
+  let keywords = $state<string[]>([]);
+  let lines = $state<{ no: number; text: string }[]>([]);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
+
+  // 中文注释：PerfectScrollbar 类型定义
+  interface PerfectScrollbarInstance {
+    update?: () => void;
+    destroy?: () => void;
+  }
 
   // 中文注释：虚拟滚动容器与虚拟化器
-  let parentEl: HTMLDivElement | null = null;
+  let parentEl = $state<HTMLDivElement | null>(null);
   // 中文注释：PerfectScrollbar 实例
-  let ps: any = null;
+  let ps = $state<PerfectScrollbarInstance | null>(null);
   // 中文注释：统一行高预估，供虚拟器与兜底高度计算复用
   // 行样式为 text-xs + leading-[16px] + py-0.5(上下各2px)，综合约 16px
   const EST_ROW = 16;
   // 中文注释：批量抓取的块大小（一次性加载全部时的每批行数）
-  const BULK_CHUNK = 5000;
+  // const BULK_CHUNK = 5000; // 暂未使用
 
   const rowVirtualizer = createVirtualizer({
-    count: total, // 总行数
+    count: 0, // 初始为 0，在 effect 中更新
     getScrollElement: () => parentEl, // 滚动容器（初始为 null，下面用 setOptions 保持同步）
     estimateSize: () => EST_ROW, // 预估单行高度(px)
     overscan: 20, // 预加载额外行，平衡性能与滚动流畅度
     // 中文注释：启用真实高度测量，避免底部出现多余空白或无法触底
-    measureElement: (el: HTMLElement) => el.getBoundingClientRect().height
+    measureElement: (el: HTMLElement) => el.getBoundingClientRect().height,
+    getItemKey: (index: number) => index
+  });
+
+  // 中文注释：虚拟项缓存，使用 $derived 自动计算
+  let vItems = $derived(browser ? $rowVirtualizer.getVirtualItems() : []);
+
+  // 中文注释：更新虚拟器的总行数
+  $effect(() => {
+    try {
+      const v = get(rowVirtualizer);
+      v?.setOptions?.({ count: total });
+    } catch {
+      // 错误处理：静默忽略
+    }
   });
 
   // 中文注释：确保在 parentEl 绑定后，虚拟器获得滚动容器引用
-  $: if (browser) {
-    try {
-      const v = get(rowVirtualizer);
-      v?.setOptions?.({ getScrollElement: () => parentEl });
-    } catch {}
-  }
+  $effect(() => {
+    if (browser && parentEl !== undefined) {
+      try {
+        const v = get(rowVirtualizer);
+        v?.setOptions?.({ getScrollElement: () => parentEl });
+      } catch {
+        // 错误处理：静默忽略
+      }
+    }
+  });
 
-  // 中文注释：虚拟项缓存，避免在模板中使用 {@const}
-  let vItems: Array<{ index: number; start: number; key: any }> = [];
-  $: vItems = browser ? $rowVirtualizer.getVirtualItems() : [];
+  // 中文注释：检查是否需要加载更多的副作用
+  $effect(() => {
+    if (vItems.length > 0) {
+      checkNeedLoadMore();
+    }
+  });
 
   // 中文注释：内容变化时更新 PerfectScrollbar（仅浏览器环境）
-  $: if (browser && ps) {
-    // 依赖以下状态变化触发更新
-    void vItems;
-    void lines.length;
-    void end;
-    void total;
-    try {
-      // 放到下一帧，避免布局抖动
-      requestAnimationFrame(() => ps?.update?.());
-    } catch {}
-  }
+  $effect(() => {
+    if (browser && ps) {
+      // 依赖以下状态变化触发更新
+      vItems;
+      lines.length;
+      end;
+      total;
+      try {
+        // 放到下一帧，避免布局抖动
+        requestAnimationFrame(() => ps?.update?.());
+      } catch {
+        // 错误处理：静默忽略
+      }
+    }
+  });
 
   // 中文注释：当容器可用但尚未初始化时，初始化 PerfectScrollbar
-  $: if (browser && parentEl && !ps) {
-    import('perfect-scrollbar')
-      .then((mod) => {
-        const PerfectScrollbar = (mod as any).default || (mod as any);
-        try {
-          ps = new PerfectScrollbar(parentEl!, { suppressScrollX: true });
-          if (parentEl) {
-            parentEl.style.position = parentEl.style.position || 'relative';
-            parentEl.style.overflow = 'hidden';
+  // 中文注释：初始化 PerfectScrollbar 的函数（避免无限循环）
+  let psInitialized = $state(false);
+  function initializePerfectScrollbar() {
+    if (browser && parentEl && !ps && !psInitialized) {
+      import('perfect-scrollbar')
+        .then((mod) => {
+          const PerfectScrollbarClass = (mod as { default?: unknown }).default || mod;
+          try {
+            psInitialized = true;
+            ps = new (PerfectScrollbarClass as new (
+              el: Element,
+              opts: Record<string, unknown>
+            ) => PerfectScrollbarInstance)(parentEl!, { suppressScrollX: true });
+            if (parentEl) {
+              parentEl.style.position = parentEl.style.position || 'relative';
+              parentEl.style.overflow = 'hidden';
+            }
+          } catch {
+            psInitialized = false;
+            // 错误处理：静默忽略
           }
-        } catch {}
-      })
-      .catch(() => {});
+        })
+        .catch(() => {
+          // 错误处理：静默忍受加载失败
+        });
+    }
   }
+
+  // 在 parentEl 变化时调用初始化
+  $effect(() => {
+    if (parentEl) {
+      initializePerfectScrollbar();
+    }
+  });
 
   // 中文注释：滚动触底兜底（即使虚拟器未就绪也能触发加载更多）
   function handleScroll() {
@@ -98,25 +148,31 @@
     return rec ?? null;
   }
 
-  // 中文注释：接近底部自动加载更多
-  $: {
-    const items = $rowVirtualizer.getVirtualItems();
-    if (items.length && total > 0 && !loading) {
-      const maxIndex = items[items.length - 1].index; // 0-based
-      const maxLineNo = maxIndex + 1; // 1-based
-      if (maxLineNo > end - 50 && end < total) {
-        // 当视口接近已加载末尾 50 行内时，触发加载更多
-        loadMore();
+  // 中文注释：接近底部自动加载更多（使用函数避免无限循环）
+  let lastCheckedEnd = $state(0);
+  let checkLoadTimeout = $state<ReturnType<typeof setTimeout> | null>(null);
+  function checkNeedLoadMore() {
+    if (checkLoadTimeout) clearTimeout(checkLoadTimeout);
+    checkLoadTimeout = setTimeout(() => {
+      const items = $rowVirtualizer.getVirtualItems();
+      if (items.length && total > 0 && !loading && end !== lastCheckedEnd) {
+        const maxIndex = items[items.length - 1].index; // 0-based
+        const maxLineNo = maxIndex + 1; // 1-based
+        if (maxLineNo > end - 50 && end < total) {
+          lastCheckedEnd = end;
+          // 当视口接近已加载末尾 50 行内时，触发加载更多
+          loadMore();
+        }
       }
-    }
+    }, 100);
   }
 
-  async function fetchRange(s: number, e: number) {
-    const url = `${API_BASE}/view.cache.json?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(file)}&start=${s}&end=${e}`;
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return data as {
+  async function fetchRange(
+    s: number,
+    e: number
+  ): Promise<{
+    success: boolean;
+    data?: {
       file: string;
       total: number;
       start: number;
@@ -124,27 +180,60 @@
       keywords: string[];
       lines: { no: number; text: string }[];
     };
+    error?: string;
+  }> {
+    const url = `${API_BASE}/view.cache.json?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(file)}&start=${s}&end=${e}`;
+    try {
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!res.ok) {
+        return { success: false, error: `HTTP ${res.status}` };
+      }
+      const data = (await res.json()) as {
+        file: string;
+        total: number;
+        start: number;
+        end: number;
+        keywords: string[];
+        lines: { no: number; text: string }[];
+      };
+      return { success: true, data };
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      return { success: false, error: err.message || '网络请求失败' };
+    }
   }
 
   async function loadInitial() {
+    loading = true;
     try {
-      loading = true;
       // 第一步：获取总行数与文件信息（轻量请求）
-      const meta = await fetchRange(1, 1);
+      const metaResult = await fetchRange(1, 1);
+      if (!metaResult.success) {
+        error = metaResult.error || '加载失败';
+        return;
+      }
+
+      const meta = metaResult.data!;
       file = meta.file;
       total = meta.total;
 
       if (total <= 0) {
         // 无内容
-        start = 0;
+        // start = 0; // 暂未使用
         end = 0;
         lines = [];
         return;
       }
 
       // 第二步：一次性加载全部行
-      const full = await fetchRange(1, total);
-      start = full.start;
+      const fullResult = await fetchRange(1, total);
+      if (!fullResult.success) {
+        error = fullResult.error || '加载失败';
+        return;
+      }
+
+      const full = fullResult.data!;
+      // start = full.start; // 暂未使用
       end = full.end;
       keywords = full.keywords || [];
       lines = full.lines || [];
@@ -157,10 +246,14 @@
             try {
               v?.measure?.();
               ps?.update?.();
-            } catch {}
+            } catch {
+              // 错误处理：静默忽略
+            }
           });
         }
-      } catch {}
+      } catch {
+        // 错误处理：静默忽略
+      }
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
       error = err.message || '加载失败';
@@ -171,11 +264,18 @@
 
   async function loadMore() {
     if (end >= total) return;
+    loading = true;
     try {
-      loading = true;
       const nextS = end + 1;
       const nextE = Math.min(nextS + 999, total);
-      const data = await fetchRange(nextS, nextE);
+      const result = await fetchRange(nextS, nextE);
+
+      if (!result.success) {
+        error = result.error || '加载更多失败';
+        return;
+      }
+
+      const data = result.data!;
       end = data.end;
       lines = [...lines, ...(data.lines || [])];
     } catch (e: unknown) {
@@ -198,24 +298,25 @@
   function escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
   }
-  function highlight(line: string, keywords: string[]): string {
-    let out = escapeHtml(line);
-    const kws = (keywords || []).filter((k) => k && k.length > 0);
-    for (const kw of kws) {
-      const re = new RegExp(escapeRegExp(kw), 'g');
-      out = out.replace(re, (m) => `<mark>${escapeHtml(m)}</mark>`);
-    }
-    return out;
-  }
+  // highlight 函数暂未使用，保留以备未来使用
+  // function highlight(line: string, keywords: string[]): string {
+  //   let out = escapeHtml(line);
+  //   const kws = (keywords || []).filter((k) => k && k.length > 0);
+  //   for (const kw of kws) {
+  //     const re = new RegExp(escapeRegExp(kw), 'g');
+  //     out = out.replace(re, (m) => `<mark>${escapeHtml(m)}</mark>`);
+  //   }
+  //   return out;
+  // }
 
   // 关键词高亮函数，用于在正文中高亮显示搜索关键词
   function highlightKeywords(text: string): string {
     if (!keywords || keywords.length === 0 || !text) {
       return escapeHtml(text);
     }
-    
+
     let result = escapeHtml(text);
-    
+
     // 对每个关键词进行高亮处理
     for (const keyword of keywords) {
       if (keyword && keyword.trim()) {
@@ -227,7 +328,7 @@
         });
       }
     }
-    
+
     return result;
   }
 
@@ -313,7 +414,9 @@
         try {
           const v = get(rowVirtualizer);
           v?.scrollToIndex?.(0);
-        } catch {}
+        } catch {
+          // 错误处理：静默忽略
+        }
       });
     }
 
@@ -321,9 +424,12 @@
     if (browser && parentEl) {
       import('perfect-scrollbar')
         .then((mod) => {
-          const PerfectScrollbar = (mod as any).default || (mod as any);
+          const PerfectScrollbarClass2 = (mod as { default?: unknown }).default || mod;
           try {
-            ps = new PerfectScrollbar(parentEl, {
+            ps = new (PerfectScrollbarClass2 as new (
+              el: Element,
+              opts: Record<string, unknown>
+            ) => PerfectScrollbarInstance)(parentEl!, {
               suppressScrollX: true,
               minScrollbarLength: 28,
               maxScrollbarLength: 200,
@@ -336,17 +442,26 @@
               parentEl.style.overflow = 'hidden';
               parentEl.style.paddingRight = parentEl.style.paddingRight || '8px';
             }
-          } catch {}
+          } catch {
+            // 错误处理：静默忽略
+          }
         })
-        .catch(() => {});
+        .catch(() => {
+          // 错误处理：静默忍受加载失败
+        });
     }
   });
 
   onDestroy(() => {
     try {
       ps?.destroy?.();
-    } catch {}
+    } catch {
+      // 错误处理：静默忽略
+    }
     ps = null;
+    if (checkLoadTimeout) {
+      clearTimeout(checkLoadTimeout);
+    }
   });
 </script>
 
@@ -359,7 +474,7 @@
       <div class="mx-auto mb-4 max-w-md flex-shrink-0 text-center">
         <div class="rounded-xl bg-red-50 p-4 shadow-lg ring-1 ring-red-200 dark:bg-red-900/20 dark:ring-red-800/50">
           <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
-            <svg class="h-6 w-6 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="h-6 w-6 text-red-600 dark:text-red-400" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -393,7 +508,7 @@
                 {extractFileName(file)}
               </h2>
               {#if extractTarName(file)}
-                <p class="mt-0.5 text-[11px] text-slate-500 dark:text-gray-400 font-mono break-all">
+                <p class="mt-0.5 font-mono text-[11px] break-all text-slate-500 dark:text-gray-400">
                   来自: {extractTarName(file)}
                 </p>
               {/if}
@@ -402,7 +517,7 @@
                   <span
                     class="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800"
                   >
-                    <svg class="mr-1 h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg class="mr-1 h-2.5 w-2.5" viewBox="0 0 24 24" stroke="currentColor">
                       <path
                         stroke-linecap="round"
                         stroke-linejoin="round"
@@ -415,7 +530,7 @@
                   <span
                     class="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-700 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800"
                   >
-                    <svg class="mr-1 h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg class="mr-1 h-2.5 w-2.5" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4" />
                     </svg>
                     已加载 {end} 行
@@ -423,7 +538,7 @@
 
                   {#if keywords?.length}
                     <!-- 关键词显示 -->
-                    {#each keywords.slice(0, 3) as keyword}
+                    {#each keywords.slice(0, 3) as keyword (keyword)}
                       <span
                         class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-[10px] font-medium text-yellow-800 ring-1 ring-yellow-600/20 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-500/20"
                         >{keyword}</span
@@ -460,7 +575,7 @@
                 disabled={loading || total <= 0}
                 title="下载当前文件"
               >
-                <svg class="mr-1.5 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg class="mr-1.5 h-4 w-4" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -566,7 +681,7 @@
                 {extractFileName(file)}
               </h2>
               {#if extractTarName(file)}
-                <p class="mt-0.5 text-[11px] text-slate-500 dark:text-gray-400 font-mono break-all">
+                <p class="mt-0.5 font-mono text-[11px] break-all text-slate-500 dark:text-gray-400">
                   来自: {extractTarName(file)}
                 </p>
               {/if}
@@ -575,15 +690,20 @@
                   <span
                     class="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800"
                   >
-                    <svg class="mr-1 h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    <svg class="mr-1 h-2.5 w-2.5" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                      />
                     </svg>
                     {total}
                   </span>
                   <span
                     class="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-700 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800"
                   >
-                    <svg class="mr-1 h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <svg class="mr-1 h-2.5 w-2.5" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4" />
                     </svg>
                     {end}
@@ -591,7 +711,7 @@
 
                   {#if keywords?.length}
                     <!-- 关键词显示 -->
-                    {#each keywords.slice(0, 3) as keyword}
+                    {#each keywords.slice(0, 3) as keyword (keyword)}
                       <span
                         class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-[10px] font-medium text-yellow-800 ring-1 ring-yellow-600/20 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-500/20"
                         >{keyword}</span
@@ -628,7 +748,7 @@
                 disabled={loading || total <= 0}
                 title="下载当前文件"
               >
-                <svg class="mr-1.5 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg class="mr-1.5 h-4 w-4" viewBox="0 0 24 24" stroke="currentColor">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
@@ -670,7 +790,7 @@
 
 <style>
   .code-content {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), monospace;
     font-feature-settings:
       'liga' 0,
       'calt' 0;

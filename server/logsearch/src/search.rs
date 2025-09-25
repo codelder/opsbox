@@ -367,10 +367,6 @@ where
                 warn!("跳过损坏条目 (第 {} 个): {}", processed_entries, error);
                 continue;
               }
-              ErrorAction::Continue => {
-                debug!("预期错误，继续处理: {}", error);
-                continue;
-              }
             }
           }
         };
@@ -441,7 +437,6 @@ struct TarErrorTracker {
 #[derive(Debug)]
 struct ErrorInfo {
     count: usize,
-    first_seen: std::time::Instant,
     last_seen: std::time::Instant,
     retry_count: u32,
 }
@@ -451,7 +446,6 @@ enum ErrorAction {
     AbortProcessing,                                    // 终止整个处理
     RetryWithBackoff { delay: std::time::Duration, attempt: u32 }, // 重试
     SkipEntry,                                         // 跳过当前条目
-    Continue,                                          // 继续处理
 }
 
 impl TarErrorTracker {
@@ -495,7 +489,6 @@ impl TarErrorTracker {
             let error_info = self.error_fingerprints.entry(fingerprint.clone())
                 .or_insert(ErrorInfo {
                     count: 0,
-                    first_seen: now,
                     last_seen: now,
                     retry_count: 0,
                 });

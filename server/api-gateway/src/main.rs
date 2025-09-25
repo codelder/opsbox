@@ -240,8 +240,33 @@ async fn run_server(addr: SocketAddr) {
     .nest("/api/v1/logsearch", logsearch_router())
     .fallback(get(spa_fallback));
 
+  // 中文注释：优雅关闭信号（支持 Unix 的 SIGTERM/SIGINT 以及通用的 Ctrl-C）
+  async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+      use tokio::signal::unix::{signal, SignalKind};
+      let mut sigterm = signal(SignalKind::terminate()).expect("无法监听 SIGTERM");
+      let mut sigint = signal(SignalKind::interrupt()).expect("无法监听 SIGINT");
+      tokio::select! {
+        _ = sigterm.recv() => {},
+        _ = sigint.recv() => {},
+        _ = tokio::signal::ctrl_c() => {},
+      }
+    }
+    #[cfg(not(unix))]
+    {
+      let _ = tokio::signal::ctrl_c().await;
+    }
+    log::info!("收到关闭信号，开始优雅关闭 ...");
+    // 中文注释：通知后台清理任务退出
+    logsearch::simple_cache::Cache::stop_cleaner();
+  }
+
   let listener = tokio::net::TcpListener::bind(addr).await.expect("监听地址绑定失败");
-  axum::serve(listener, app).await.expect("服务启动失败");
+  axum::serve(listener, app)
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .expect("服务启动失败");
 }
 
 fn level_from_str(s: &str) -> Option<LevelFilter> {

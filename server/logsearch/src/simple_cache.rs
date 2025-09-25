@@ -5,6 +5,7 @@ use std::{
 };
 use tokio::sync::RwLock;
 use tokio::time as tokio_time;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,7 @@ pub struct Cache {
 
 static GLOBAL: OnceLock<Cache> = OnceLock::new();
 static CLEANER_STARTED: OnceLock<()> = OnceLock::new();
+static CLEANER_CANCEL: OnceLock<CancellationToken> = OnceLock::new();
 
 pub fn cache() -> &'static Cache {
   GLOBAL.get_or_init(|| Cache {
@@ -42,34 +44,43 @@ impl Cache {
 
   fn start_cleaner_once() {
     CLEANER_STARTED.get_or_init(|| {
-      tokio::spawn(async {
+      // 中文注释：使用取消令牌支持优雅关闭后台清理任务
+      let token = CLEANER_CANCEL.get_or_init(|| CancellationToken::new()).clone();
+      tokio::spawn(async move {
         let interval = Duration::from_secs(60);
         loop {
-          tokio_time::sleep(interval).await;
-          let c = cache();
-          let now = Instant::now();
-          // 清理 keywords
-          {
-            let mut m = c.keywords.write().await;
-            let to_remove: Vec<String> = m
-              .iter()
-              .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
-              .map(|(k, _)| k.clone())
-              .collect();
-            for k in to_remove {
-              let _ = m.remove(&k);
+          tokio::select! {
+            _ = tokio_time::sleep(interval) => {
+              let c = cache();
+              let now = Instant::now();
+              // 清理 keywords
+              {
+                let mut m = c.keywords.write().await;
+                let to_remove: Vec<String> = m
+                  .iter()
+                  .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
+                  .map(|(k, _)| k.clone())
+                  .collect();
+                for k in to_remove {
+                  let _ = m.remove(&k);
+                }
+              }
+              // 清理 files
+              {
+                let mut m = c.files.write().await;
+                let to_remove: Vec<(String, String)> = m
+                  .iter()
+                  .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
+                  .map(|(k, _)| k.clone())
+                  .collect();
+                for k in to_remove {
+                  let _ = m.remove(&k);
+                }
+              }
             }
-          }
-          // 清理 files
-          {
-            let mut m = c.files.write().await;
-            let to_remove: Vec<(String, String)> = m
-              .iter()
-              .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
-              .map(|(k, _)| k.clone())
-              .collect();
-            for k in to_remove {
-              let _ = m.remove(&k);
+            // 中文注释：收到关闭信号时退出循环
+            _ = token.cancelled() => {
+              break;
             }
           }
         }
@@ -132,5 +143,12 @@ impl Cache {
     let eidx = end.max(s).min(total);
     let slice = e.value[(s - 1)..eidx].to_vec();
     Some((total, slice))
+  }
+
+  /// 中文注释：停止后台清理任务（用于优雅关闭）
+  pub fn stop_cleaner() {
+    if let Some(token) = CLEANER_CANCEL.get() {
+      token.cancel();
+    }
   }
 }

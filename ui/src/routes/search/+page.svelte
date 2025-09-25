@@ -20,7 +20,7 @@
   // 中文注释：分页控制（每批 20 条）
   const PAGE_SIZE = 20;
   let hasMore = $state(true); // 是否还有更多可读
-  let paused = $state(false); // 是否处于“暂停等待加载更多”状态
+  // let paused = $state(false); // 是否处于"暂停等待加载更多"状态（暂未使用）
 
   // 中文注释：流读取持久状态
   let controller: AbortController | null = null; // 取消当前请求
@@ -33,7 +33,7 @@
   async function readBatch(maxItems = PAGE_SIZE) {
     if (!reader) return;
     loading = true;
-    paused = false;
+    // paused = false; // 暂未使用
     let produced = 0;
     try {
       const dec = decoder ?? (decoder = new TextDecoder());
@@ -93,7 +93,7 @@
       loading = false;
       // 若还有更多但已达到本批上限，则进入暂停态，等待“加载更多”
       if (hasMore && produced >= maxItems) {
-        paused = true;
+        // paused = true; // 暂未使用
       }
     }
   }
@@ -253,7 +253,7 @@
     results = [];
     error = null;
     hasMore = true;
-    paused = false;
+    // paused = false; // 暂未使用
     buffer = '';
     decoder = null;
     reader = null;
@@ -276,7 +276,10 @@
       });
 
       if (!res.ok || !res.body) {
-        throw new Error(`服务端返回异常状态：${res.status}`);
+        error = `服务端返回异常状态：${res.status}`;
+        hasMore = false;
+        reader = null;
+        return;
       }
 
       // 中文注释：保存会话 ID，供 /view 使用
@@ -323,7 +326,7 @@
     const idx = full.indexOf(':');
     const tarFull = idx >= 0 ? full.slice(full.indexOf('/'), idx) : full;
     const inner = idx >= 0 ? full.slice(idx + 1) : null;
-    const tarBase = tarFull.split('/').pop() || tarFull;
+    // const tarBase = tarFull.split('/').pop() || tarFull; // 暂未使用
     // const m = /BBIP_(\d+)_APPLOG_/i.exec(tarBase);
     // const bucket = m ? m[1] : null;
     const bucket = full.slice(0, full.indexOf('/', 1));
@@ -360,7 +363,6 @@
           <div class="pointer-events-none absolute inset-y-0 left-0 z-10 flex items-center pl-4">
             <svg
               class="h-6 w-6 text-gray-400 transition-colors duration-200 group-focus-within:text-blue-500"
-              fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
@@ -394,7 +396,7 @@
               }}
               aria-label="清除搜索内容"
             >
-              <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg class="h-6 w-6" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -418,12 +420,12 @@
               onclick={() => toggleFileCollapsed(i)}
             >
               <!-- 容器：小屏纵向排列，大屏左右分布 -->
-              <div class="flex w-full flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <span class="flex w-full flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <!-- 左侧：标题 + 元信息 -->
-                <div class="min-w-0 flex-1">
+                <span class="min-w-0 flex-1">
                   <!-- 主标题（inner 作为重点信息）：字号更大，颜色更深 -->
                   {#if splitPath(item.path).inner}
-                    <div class="mb-2 flex items-start gap-2">
+                    <span class="mb-2 flex items-start gap-2">
                       <span
                         role="link"
                         tabindex="0"
@@ -453,7 +455,6 @@
                       </span>
                       <svg
                         class="mt-1 h-4 w-4 shrink-0 text-blue-600 opacity-0 transition-opacity duration-200 group-hover/link:opacity-100 dark:text-blue-400"
-                        fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
                       >
@@ -464,20 +465,20 @@
                           d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
                         />
                       </svg>
-                    </div>
+                    </span>
                   {:else}
                     <!-- 如果没有 inner，显示完整路径作为主标题 -->
-                    <div class="mb-2">
+                    <span class="mb-2">
                       <span
                         class="font-mono text-base leading-tight font-semibold text-slate-900 md:text-lg dark:text-gray-100"
                       >
                         {item.path}
                       </span>
-                    </div>
+                    </span>
                   {/if}
 
                   <!-- 元信息行：允许换行，字号更小，灰度更轻 -->
-                  <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-gray-400">
+                  <span class="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-gray-400">
                     {#if splitPath(item.path).bucket}
                       <span
                         class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800"
@@ -502,8 +503,8 @@
 
                     {#if item.keywords?.length}
                       <!-- 关键词放在元信息行，尺寸更小，可多行换行 -->
-                      <div class="flex flex-wrap items-center gap-1.5">
-                        {#each item.keywords.slice(0, 4) as keyword}
+                      <span class="flex flex-wrap items-center gap-1.5">
+                        {#each item.keywords.slice(0, 4) as keyword (keyword)}
                           <span
                             class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-800 ring-1 ring-yellow-600/20 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-500/20"
                             >{keyword}</span
@@ -512,39 +513,38 @@
                         {#if item.keywords.length > 4}
                           <span class="text-[11px] text-gray-500 dark:text-gray-400">+{item.keywords.length - 4}</span>
                         {/if}
-                      </div>
+                      </span>
                     {/if}
 
                     <!-- 统计信息：匹配行数 -->
                     <span
                       class="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800"
                     >
-                      <svg class="mr-1 h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <svg class="mr-1 h-3 w-3" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4" />
                       </svg>
                       {totalMatches(item)} 行匹配
                     </span>
-                  </div>
-                </div>
+                  </span>
+                </span>
 
                 <!-- 右侧：折叠箭头（与标题对齐） -->
-                <div class="mt-2 flex shrink-0 items-center md:mt-0">
-                  <div
+                <span class="mt-2 flex shrink-0 items-center md:mt-0">
+                  <span
                     class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200/60 transition-colors duration-200 group-hover:bg-gray-300/60 dark:bg-gray-600/50 dark:group-hover:bg-gray-500/50"
                   >
                     <svg
                       class="h-4 w-4 text-gray-700 transition-transform duration-200 {isFileCollapsed(i)
                         ? ''
                         : 'rotate-180'} dark:text-gray-200"
-                      fill="none"
                       viewBox="0 0 24 24"
                       stroke="currentColor"
                     >
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                     </svg>
-                  </div>
-                </div>
-              </div>
+                  </span>
+                </span>
+              </span>
             </button>
 
             {#if !isFileCollapsed(i)}
@@ -578,7 +578,6 @@
                             >
                               <svg
                                 class="mr-1 h-3 w-3 transition-transform duration-200 group-hover/expand:scale-105"
-                                fill="none"
                                 viewBox="0 0 24 24"
                                 stroke="currentColor"
                               >
@@ -603,7 +602,6 @@
                               <span>…</span>
                               <svg
                                 class="ml-1 h-3 w-3 transition-transform duration-200 group-hover/expand:scale-105"
-                                fill="none"
                                 viewBox="0 0 24 24"
                                 stroke="currentColor"
                               >
@@ -635,7 +633,6 @@
                     {#if isFileShowAll(i)}
                       <svg
                         class="mr-2 h-4 w-4 transition-transform duration-200 group-hover:-translate-y-0.5"
-                        fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
                       >
@@ -645,7 +642,6 @@
                     {:else}
                       <svg
                         class="mr-2 h-4 w-4 transition-transform duration-200 group-hover:translate-y-0.5"
-                        fill="none"
                         viewBox="0 0 24 24"
                         stroke="currentColor"
                       >
@@ -675,7 +671,7 @@
         <div class="mx-auto max-w-md text-center">
           <div class="rounded-2xl bg-red-50 p-8 shadow-lg ring-1 ring-red-200 dark:bg-red-900/20 dark:ring-red-800/50">
             <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
-              <svg class="h-8 w-8 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg class="h-8 w-8 text-red-600 dark:text-red-400" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -690,10 +686,10 @@
               class="mt-4 inline-flex items-center rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors duration-200 hover:bg-red-700 focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:outline-none"
               onclick={() => {
                 error = null;
-                q && startSearch(q);
+                if (q) startSearch(q);
               }}
             >
-              <svg class="mr-2 -ml-1 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg class="mr-2 -ml-1 h-4 w-4" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -709,7 +705,7 @@
         <div class="mx-auto max-w-md text-center">
           <div class="rounded-2xl bg-gray-50 p-8 shadow-lg ring-1 ring-gray-200 dark:bg-gray-800/50 dark:ring-gray-700">
             <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
-              <svg class="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg class="h-8 w-8 text-gray-400" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -730,12 +726,7 @@
             <div
               class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-800/50 dark:to-indigo-800/50"
             >
-              <svg
-                class="h-8 w-8 text-blue-600 dark:text-blue-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
+              <svg class="h-8 w-8 text-blue-600 dark:text-blue-400" viewBox="0 0 24 24" stroke="currentColor">
                 <path
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -767,7 +758,6 @@
           {:else}
             <svg
               class="mr-3 h-5 w-5 transition-transform duration-200 group-hover:translate-y-0.5"
-              fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
             >
@@ -781,7 +771,7 @@
           <div
             class="inline-flex items-center rounded-full bg-green-100 px-6 py-3 text-sm font-medium text-green-800 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800/50"
           >
-            <svg class="mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg class="mr-2 h-4 w-4" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 stroke-linecap="round"
                 stroke-linejoin="round"
@@ -798,19 +788,21 @@
 </div>
 
 <style>
+  /* 动态添加的临时高亮效果类，用于搜索结果卡片收起时的视觉反馈 - Used dynamically in toggleFileShowAll() */
   :global(.highlight-card) {
     border: 3px solid rgba(59, 130, 246, 0.5);
     box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
     animation: highlight-pulse 2s ease-in-out;
   }
 
+  /* 动态添加的临时高亮效果类，用于搜索结果卡片收起时的视觉反馈 - Used dynamically in toggleFileShowAll() */
   :global(.dark .highlight-card) {
     border: 3px solid rgba(96, 165, 250, 0.5);
     box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
   }
 
   .code-content {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), monospace;
     font-feature-settings:
       'liga' 0,
       'calt' 0;
