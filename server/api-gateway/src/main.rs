@@ -12,6 +12,8 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 use log::LevelFilter;
+use tower_http::cors::{Any, CorsLayer};
+use http::header::{ACCEPT};
 
 // 中文注释：将 server/api-gateway/static 目录在编译期打包进二进制
 #[derive(RustEmbed)]
@@ -239,6 +241,14 @@ async fn run_server(addr: SocketAddr) {
     .route("/healthy", get(|| async { "ok" }))
     .nest("/api/v1/logsearch", logsearch_router())
     .fallback(get(spa_fallback));
+
+  // 中文注释：启用 CORS（主要用于开发阶段前端与后端不同源时读取自定义头 X-Logsearch-SID）
+  let cors = CorsLayer::new()
+    .allow_origin(Any)
+    .allow_methods([http::Method::GET, http::Method::POST, http::Method::OPTIONS])
+    .allow_headers([CONTENT_TYPE, ACCEPT])
+    .expose_headers([http::header::HeaderName::from_static("x-logsearch-sid")]);
+  let app = app.layer(cors);
 
   // 中文注释：优雅关闭信号（支持 Unix 的 SIGTERM/SIGINT 以及通用的 Ctrl-C）
   async fn shutdown_signal() {

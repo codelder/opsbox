@@ -19,6 +19,8 @@
   let lines = $state<{ no: number; text: string }[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  // 中文注释：首屏加载触发标志，避免重复加载
+  let initTriggered = $state(false);
 
   // 中文注释：PerfectScrollbar 类型定义
   interface PerfectScrollbarInstance {
@@ -184,7 +186,9 @@
   }> {
     const url = `${API_BASE}/view.cache.json?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(file)}&start=${s}&end=${e}`;
     try {
+      console.log('[view] fetchRange ->', { url, s, e, sid, file });
       const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      console.log('[view] fetchRange status', res.status);
       if (!res.ok) {
         return { success: false, error: `HTTP ${res.status}` };
       }
@@ -196,14 +200,17 @@
         keywords: string[];
         lines: { no: number; text: string }[];
       };
+      console.log('[view] fetchRange ok', { total: data.total, start: data.start, end: data.end });
       return { success: true, data };
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      console.error('[view] fetchRange error', err);
       return { success: false, error: err.message || '网络请求失败' };
     }
   }
 
   async function loadInitial() {
+    console.log('[view] loadInitial start', { sid, file });
     loading = true;
     try {
       // 第一步：获取总行数与文件信息（轻量请求）
@@ -216,6 +223,7 @@
       const meta = metaResult.data!;
       file = meta.file;
       total = meta.total;
+      console.log('[view] meta loaded', { total });
 
       if (total <= 0) {
         // 无内容
@@ -237,6 +245,7 @@
       end = full.end;
       keywords = full.keywords || [];
       lines = full.lines || [];
+      console.log('[view] full loaded', { end, lines: lines.length });
 
       // 中文注释：数据填充后强制重新测量，确保总高度与内容精确匹配，消除底部多余空白
       try {
@@ -394,17 +403,22 @@
   }
 
   onMount(() => {
+    console.log('[view] onMount');
     const params = new URL(window.location.href).searchParams;
     file = (params.get('file') || '').trim();
     sid = (params.get('sid') || '').trim();
+    console.log('[view] parsed params', { sid, file });
     if (!file) {
+      console.error('[view] 缺少 file 参数');
       error = '缺少 file 参数';
       return;
     }
     if (!sid) {
+      console.error('[view] 缺少 sid 参数');
       error = '缺少 sid 参数';
       return;
     }
+    initTriggered = true;
     loadInitial();
 
     // 中文注释：首屏渲染后，确保虚拟器定位到起始行，避免初次 items 为空
@@ -449,6 +463,16 @@
         .catch(() => {
           // 错误处理：静默忍受加载失败
         });
+    }
+  });
+
+  // 中文注释：兜底副作用——当解析到 sid 与 file 且尚未触发初始化时，自动调用一次加载
+  $effect(() => {
+    if (browser && !initTriggered && !loading && lines.length === 0 && sid && file) {
+      console.log('[view] fallback $effect triggers loadInitial', { sid, file });
+      initTriggered = true;
+      // 避免在同一 tick 内与其它副作用冲突，下一轮微任务触发
+      Promise.resolve().then(() => loadInitial());
     }
   });
 
