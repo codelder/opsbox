@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  // 迁移到 Svelte 5 Runes：不再使用 onMount
   import { invalidate } from '$app/navigation';
   import { env } from '$env/dynamic/public';
 
@@ -51,7 +51,11 @@
     }
   }
 
-  onMount(() => {
+  // 使用一次性 $effect 启动设置拉取
+  let settingsInit = $state(false);
+  $effect(() => {
+    if (settingsInit) return;
+    settingsInit = true;
     fetchSettings();
   });
 

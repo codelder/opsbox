@@ -1,6 +1,4 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-
   // 主题状态，可取 'light' 或 'dark'
   let theme = $state<'light' | 'dark'>('light');
 
@@ -22,8 +20,11 @@
     applyTheme(theme);
   }
 
-  // 客户端挂载后初始化主题
-  onMount(() => {
+  // 使用 Runes 的 $effect 在客户端初始化主题（一次性）
+  let themeInit = $state(false);
+  $effect(() => {
+    if (themeInit) return;
+    themeInit = true;
     try {
       const saved = localStorage.getItem('theme') as 'light' | 'dark' | null;
       const initial = saved ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -58,6 +59,7 @@
     <svg
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
+      fill="none"
       stroke="currentColor"
       stroke-width="1.5"
       class="h-5 w-5"

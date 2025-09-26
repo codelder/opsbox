@@ -311,7 +311,7 @@ where
       let mut error_tracker = TarErrorTracker::new();
       let processing_start = std::time::Instant::now();
       let max_processing_time = std::time::Duration::from_secs(300); // 5分钟超时
-      let max_entries = 10_000; // 最大处理条目数
+      // let max_entries = 10_000; // 最大处理条目数
       
       let mut processed_entries = 0;
       let mut successful_entries = 0;
@@ -322,10 +322,10 @@ where
           warn!("tar 流处理超时 ({}s)，已处理 {} 个条目", max_processing_time.as_secs(), processed_entries);
           break;
         }
-        if processed_entries >= max_entries {
-          warn!("达到最大条目数限制 ({}), 终止处理", max_entries);
-          break;
-        }
+        // if processed_entries >= max_entries {
+        //   warn!("达到最大条目数限制 ({}), 终止处理", max_entries);
+        //   break;
+        // }
 
         // 2. 为单次条目读取添加超时保护
         let entry_timeout = std::time::Duration::from_secs(30);

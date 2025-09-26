@@ -1,6 +1,9 @@
 import { redirect } from '@sveltejs/kit';
 import type { LayoutLoad } from './$types';
 
+export const ssr = false;
+export const csr = true;
+
 export const load: LayoutLoad = async ({ fetch, url }) => {
   if (url.pathname.startsWith('/settings')) {
     return {};

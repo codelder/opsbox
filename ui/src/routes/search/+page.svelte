@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  // 迁移到 Svelte 5 Runes：不再使用 onMount/onDestroy
   import { SvelteSet } from 'svelte/reactivity';
   import { env } from '$env/dynamic/public';
   // const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
@@ -302,15 +302,22 @@
   }
 
   // 中文注释：从地址栏读取 ?q=，并在客户端启动搜索
-  onMount(() => {
+  // 一次性 $effect：读取 URL 查询并启动搜索
+  let searchInit = $state(false);
+  $effect(() => {
+    if (searchInit) return;
+    searchInit = true;
     const params = new URL(window.location.href).searchParams;
     const initial = (params.get('q') || '').trim();
     q = initial;
     if (initial) startSearch(initial);
   });
 
-  onDestroy(() => {
-    controller?.abort();
+  // 卸载清理：使用 $effect 的清理函数
+  $effect(() => {
+    return () => {
+      controller?.abort();
+    };
   });
 
   // 中文注释：表单提交（支持在页面内触发新搜索）
