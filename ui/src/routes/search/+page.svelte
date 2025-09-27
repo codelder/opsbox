@@ -18,7 +18,7 @@
   let sid = $state('');
 
   // 中文注释：分页控制（每批 20 条）
-  const PAGE_SIZE = 20;
+  const PAGE_SIZE = 1;
   let hasMore = $state(true); // 是否还有更多可读
   // let paused = $state(false); // 是否处于"暂停等待加载更多"状态（暂未使用）
 
@@ -81,6 +81,7 @@
           hasMore = false;
           break;
         }
+        console.log('profiling: 读取更多字节：', dec.decode(value, { stream: true }).split('\n').length);
         buffer += dec.decode(value, { stream: true });
       }
     } catch (e: unknown) {
@@ -375,6 +376,7 @@
             >
               <path
                 stroke-linecap="round"
+                fill="none"
                 stroke-linejoin="round"
                 stroke-width="2"
                 d="m21 21-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"

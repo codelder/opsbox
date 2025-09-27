@@ -21,10 +21,8 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
-  // 中文注释：虚拟滚动容器与虚拟化器
+  // 中文注释：虚拟滚动容器引用
   let parentEl = $state<HTMLDivElement | null>(null);
-  // 中文注释：PerfectScrollbar 实例
-  let ps = $state<any>(null);
   // 中文注释：统一行高预估，供虚拟器与兜底高度计算复用
   // 行样式为 text-[13px] + leading-[20px] + py-1，综合约 32px
   const EST_ROW = 32;
@@ -55,35 +53,15 @@
     browser ? $rowVirtualizer.getVirtualItems() : []
   );
 
-  // 中文注释：统一调度滚动与虚拟器更新，避免重复测量
+  // 中文注释：统一调度虚拟器测量
   function scheduleVirtualUpdate() {
     if (!browser) return;
     requestAnimationFrame(() => {
-      try {
-        ps?.update?.();
-      } catch {}
       try {
         get(rowVirtualizer)?.measure?.();
       } catch {}
     });
   }
-
-  // 中文注释：当容器可用但尚未初始化时，初始化 PerfectScrollbar
-  $effect(() => {
-    const el = parentEl;
-    if (!browser || !el || ps) return;
-    import('perfect-scrollbar')
-      .then((mod) => {
-        const PerfectScrollbar = (mod as any).default || (mod as any);
-        try {
-          ps = new PerfectScrollbar(el, { suppressScrollX: true });
-          el.style.position = el.style.position || 'relative';
-          el.style.overflow = 'hidden';
-          scheduleVirtualUpdate();
-        } catch {}
-      })
-      .catch(() => {});
-  });
 
   // 中文注释：滚动触底兜底（即使虚拟器未就绪也能触发加载更多）
   function handleScroll() {
@@ -339,42 +317,83 @@
       });
     }
 
-    // 中文注释：初始化 PerfectScrollbar（仅浏览器端）
+    // 中文注释：使用原生滚动条时，确保容器允许滚动
     const el = parentEl;
     if (browser && el) {
-      import('perfect-scrollbar')
-        .then((mod) => {
-          const PerfectScrollbar = (mod as any).default || (mod as any);
-          try {
-            ps = new PerfectScrollbar(el, {
-              suppressScrollX: true,
-              minScrollbarLength: 28,
-              maxScrollbarLength: 200,
-              wheelPropagation: false,
-              wheelSpeed: 1
-            });
-            // 确保容器样式符合 PS 要求
-            el.style.position = el.style.position || 'relative';
-            el.style.overflow = 'hidden';
-            el.style.paddingRight = el.style.paddingRight || '8px';
-            scheduleVirtualUpdate();
-          } catch {}
-        })
-        .catch(() => {});
+      el.style.overflow = el.style.overflow || 'auto';
+      el.style.position = el.style.position || 'relative';
     }
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (!browser) return;
+      const el = parentEl;
+      if (!el) return;
+      if (!event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) {
+          return;
+        }
+      }
+
+      const viewHeight = el.clientHeight;
+      const half = viewHeight / 2;
+      const full = viewHeight;
+
+      const scrollBy = (delta: number) => {
+        const next = Math.max(0, Math.min(el.scrollHeight, el.scrollTop + delta));
+        el.scrollTo({ top: next, behavior: 'smooth' });
+      };
+
+      const scrollToEdge = (edge: 'top' | 'bottom') => {
+        const top = edge === 'top' ? 0 : el.scrollHeight;
+        el.scrollTo({ top, behavior: 'smooth' });
+      };
+
+      switch (event.key.toLowerCase()) {
+        case 'g':
+          event.preventDefault();
+          if (event.shiftKey) scrollToEdge('top');
+          else scrollToEdge('bottom');
+          break;
+        case 'u':
+          event.preventDefault();
+          scrollBy(-half);
+          break;
+        case 'd':
+          event.preventDefault();
+          scrollBy(half);
+          break;
+        case 'b':
+          event.preventDefault();
+          scrollBy(-full);
+          break;
+        case 'f':
+          event.preventDefault();
+          scrollBy(full);
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeydown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeydown);
+    };
   });
 
   onDestroy(() => {
-    try {
-      ps?.destroy?.();
-    } catch {}
-    ps = null;
+    // 当前使用原生滚动条，无需销毁额外实例
   });
 </script>
 
 <!-- 中文注释：页面标题与状态栏 -->
-<div class="min-h-screen bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
-  <div class="mx-auto max-w-[1560px] px-4 py-12">
+<div class="h-screen overflow-hidden bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
+  <div class="mx-auto flex h-full max-w-[1560px] flex-col px-4 py-8">
     {#if error}
       <div class="mx-auto mb-6 max-w-md text-center">
         <div class="rounded-xl bg-red-50 p-4 shadow-lg ring-1 ring-red-200 dark:bg-red-900/20 dark:ring-red-800/50">
@@ -394,10 +413,10 @@
       </div>
     {/if}
 
-    <div class="flex flex-col gap-10">
+    <div class="flex flex-1 flex-col gap-10 min-h-0">
       <!-- 主内容卡片：文件信息 + 虚拟滚动容器 -->
       <div
-        class="flex flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
+        class="flex flex-1 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
       >
         <!-- 文件信息标题栏 -->
         <div
@@ -496,7 +515,7 @@
 
         <!-- 虚拟滚动内容区域 -->
         <div
-          class="ps relative h-[70vh] min-h-[420px] max-h-[calc(100vh-320px)] bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
+          class="relative flex-1 min-h-0 overflow-auto bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
           bind:this={parentEl}
           onscroll={handleScroll}
         >

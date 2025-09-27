@@ -39,7 +39,7 @@
   </button>
 
   <ThemeToggle />
-  <main class="pt-16">
+  <main >
     {@render children?.()}
   </main>
 </div>

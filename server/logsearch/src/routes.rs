@@ -11,12 +11,15 @@ use axum::{
   body::Body,
   extract::{Json, Query, rejection::JsonRejection},
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
+  response::sse::{Event, Sse},
   routing::{get, post},
 };
 use chrono::{Datelike, Duration};
+use futures_util::stream::StreamExt;
 use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use std::convert::Infallible;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -47,7 +50,10 @@ struct ViewParams {
 async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, Problem> {
   log::debug!(
     "view-request: sid={} file={} start={:?} end={:?}",
-    params.sid, params.file, params.start, params.end
+    params.sid,
+    params.file,
+    params.start,
+    params.end
   );
   // 读取 keywords 与行切片
   let keywords = simple_cache().get_keywords(&params.sid).await.unwrap_or_default();
@@ -148,7 +154,9 @@ pub struct SearchBody {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
-struct NL2QOut { q: String }
+struct NL2QOut {
+  q: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MinioSettingsPayload {
@@ -201,7 +209,7 @@ impl Default for MinioSettingsPayload {
 
 fn stream_channel_capacity() -> usize {
   // 允许通过环境变量覆盖，默认 256，限定在 [8, 10000]
-  let default_cap = 128usize;
+  let default_cap = 1usize;
   match std::env::var("LOGSEARCH_STREAM_CH_CAP")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
@@ -216,6 +224,7 @@ pub fn router() -> Router {
     .route("/stream", post(stream_markdown))
     .route("/stream.ndjson", post(stream_local_ndjson))
     .route("/stream.s3.ndjson", post(stream_s3_ndjson))
+    .route("/stream.s3.sse", get(stream_s3_sse))
     .route("/view.cache.json", get(view_cache_json))
     .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
     // 中文注释：自然语言 → 查询字符串
@@ -224,7 +233,9 @@ pub fn router() -> Router {
 
 async fn get_minio_settings() -> Result<Json<MinioSettingsPayload>, Problem> {
   let settings_opt = settings::load_minio_settings().await.map_err(AppError::Settings)?;
-  let mut payload = settings_opt.clone().map_or_else(MinioSettingsPayload::default, Into::into);
+  let mut payload = settings_opt
+    .clone()
+    .map_or_else(MinioSettingsPayload::default, Into::into);
 
   if let Some(settings_value) = settings_opt {
     match settings::verify_minio_settings(&settings_value).await {
@@ -285,7 +296,7 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
     }
   };
 
-tokio::spawn(fut);
+  tokio::spawn(fut);
 
   let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
 
@@ -301,15 +312,15 @@ tokio::spawn(fut);
 // 中文注释：NL → Q 端点，实现将自然语言转换为查询字符串
 async fn nl2q(Json(body): Json<crate::nl2q::NLBody>) -> Result<Json<NL2QOut>, Problem> {
   log::info!("NL2Q API请求: {}", body.nl);
-  
+
   let start = std::time::Instant::now();
-  let q = crate::nl2q::call_ollama(&body.nl)
-    .await
-    .map_err(|e| {
-      log::error!("NL2Q API失败: {}", e);
-      problemdetails::new(StatusCode::BAD_GATEWAY).with_title("AI 生成失败").with_detail(e.to_string())
-    })?;
-  
+  let q = crate::nl2q::call_ollama(&body.nl).await.map_err(|e| {
+    log::error!("NL2Q API失败: {}", e);
+    problemdetails::new(StatusCode::BAD_GATEWAY)
+      .with_title("AI 生成失败")
+      .with_detail(e.to_string())
+  })?;
+
   log::info!("NL2Q API成功: {} -> '{}', 耗时: {:?}", body.nl, q, start.elapsed());
   Ok(Json(NL2QOut { q }))
 }
@@ -387,10 +398,11 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
             v.push(b'\n');
             if let Err(_e) = txc.send(Ok(bytes::Bytes::from(v))).await {
               // 接收端已关闭（客户端断开或响应结束），终止该任务
-            log::debug!("profiling: 发送失败(接收端关闭) path={}", path);
+              log::debug!("profiling: 发送失败(接收端关闭) path={}", path);
               return;
             }
             produced += 1;
+            log::debug!("profiling: 发送成功 path={}，输出记录={}", path, produced);
           }
           Err(e) => {
             log::warn!("profiling: 序列化失败 path={}，err={}", path, e);
@@ -434,7 +446,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
 
 async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
   let cap = stream_channel_capacity();
-  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
+  let (tx, rx) =  mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
   log::debug!("profiling: [S3] 建立响应通道，容量={}", cap);
 
   // 粗粒度耗时
@@ -510,7 +522,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
         let mut produced: usize = 0;
         while let Some(result) = stream.recv().await {
           if txc.is_closed() {
-          log::debug!("profiling: [S3] 下游通道已关闭，提前结束 key={}", key);
+            log::debug!("profiling: [S3] 下游通道已关闭，提前结束 key={}", key);
             return;
           }
 
@@ -534,6 +546,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
                 return;
               }
               produced += 1;
+              log::info!("profiling: 发送成功 path={}，输出记录={}", &result.path, produced);
             }
             Err(e) => {
               log::warn!("profiling: [S3] 序列化失败 key={}，err={}", key, e);
@@ -575,4 +588,95 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
       .body(body)
       .unwrap(),
   )
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SseQuery {
+  q: String,
+  context: Option<usize>,
+}
+
+// 中文注释：S3 流式搜索（SSE 版本），每条结果作为一个 SSE data 事件（JSON）
+async fn stream_s3_sse(
+  Query(params): Query<SseQuery>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, Problem> {
+  let cap = stream_channel_capacity();
+  let (tx, rx) = mpsc::channel::<String>(cap);
+
+  // 解析日期计划（仅用于日期区间与清理后的查询）
+  let base_dir = "/unused/for/s3";
+  let buckets = ["20", "21", "22", "23"];
+  let plan = derive_plan(base_dir, &buckets, &params.q);
+  let q_for_search = plan.cleaned_query;
+
+  // 解析查询
+  let spec =
+    crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let highlights = spec.highlights.clone();
+  let sid = new_sid();
+  simple_cache().put_keywords(&sid, highlights.clone()).await;
+  let ctx = params.context.unwrap_or(3);
+
+  // 发送 meta 事件（包含 sid）
+  let _ = tx.send(serde_json::json!({"type":"meta","sid": sid}).to_string()).await;
+
+  let minio_cfg = Arc::new(
+    settings::load_required_minio_settings()
+      .await
+      .map_err(AppError::Settings)?,
+  );
+
+  // 遍历日期区间/桶并发搜索
+  let mut d = plan.range.start;
+  while d <= plan.range.end {
+    let dp1 = d + Duration::days(1);
+    let y = dp1.year();
+    let m = dp1.month();
+    let day = dp1.day();
+    let yyyymm = format!("{:04}{:02}", y, m);
+    let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
+    let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
+
+    for b in ["20", "21", "22", "23"] {
+      let key = format!(
+        "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
+        y, yyyymm, yyyymmdd, b, file_name
+      );
+
+      let txc = tx.clone();
+      let specc = spec.clone();
+      let highlights_c = highlights.clone();
+      let sid_c = sid.clone();
+      let cfg = Arc::clone(&minio_cfg);
+      tokio::spawn(async move {
+        let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
+        let Ok(reader) = s3rp.open().await.map_err(|e| AppError::StorageError(e)) else {
+          return;
+        };
+        let Ok(mut stream) = reader.search(&specc, ctx).await else {
+          return;
+        };
+
+        while let Some(result) = stream.recv().await {
+          if txc.is_closed() {
+            return;
+          }
+          let bucket_name = cfg.bucket.clone();
+          let file_id = format!("{}/{}:{}", bucket_name, key, &result.path);
+          simple_cache().put_lines(&sid_c, &file_id, result.lines.clone()).await;
+          let json_obj = render_json_chunks(&file_id, result.merged.clone(), result.lines.clone(), &highlights_c);
+          if let Ok(s) = serde_json::to_string(&json_obj) {
+            let _ = txc.send(s).await;
+          }
+        }
+      });
+    }
+
+    d = d + Duration::days(1);
+  }
+
+  drop(tx);
+
+  let event_stream = ReceiverStream::new(rx).map(|data| Ok(Event::default().data(data)));
+  Ok(Sse::new(event_stream))
 }
