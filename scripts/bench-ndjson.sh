@@ -2,8 +2,8 @@
 # 中文注释：NDJSON 流式检索一键压测脚本
 # 功能：
 # 1) 重启 api-gateway 并设置 CPU 并发上限
-# 2) 执行 120 秒的 CPU=16 压测并导出自适应护栏日志为 CSV
-# 3) 对 CPU=8、12、16 分别执行 30 秒对比压测并打印吞吐汇总（Markdown 表）
+# 2) 执行 LONG_SECS(默认120) 秒的 CPU=16 压测并导出自适应护栏日志为 CSV
+# 3) 对 CPU=8、12、16 分别执行 SHORT_SECS(默认30) 秒对比压测并打印吞吐汇总（Markdown 表）
 #
 # 使用：
 #   bash scripts/bench-ndjson.sh
@@ -16,6 +16,8 @@
 #   MINIO_TIMEOUT  MinIO 超时秒数（默认：60）
 #   MINIO_RETRIES  MinIO 最大重试次数（默认：5）
 #   CPU_SERIES     对比压测的 CPU 并发列表（逗号分隔，默认：8,12,16）
+#   LONG_SECS      长测时长（默认：120）
+#   SHORT_SECS     短测时长（默认：30）
 #   BIN_PATH       api-gateway 二进制路径（默认：server/target/release/api-gateway）
 #   LOG_PATH       日志文件路径（默认：~/.opsbox/api-gateway.log）
 
@@ -34,6 +36,8 @@ STREAM_CH_CAP="${STREAM_CH_CAP:-256}"
 MINIO_TIMEOUT="${MINIO_TIMEOUT:-60}"
 MINIO_RETRIES="${MINIO_RETRIES:-5}"
 CPU_SERIES="${CPU_SERIES:-8,12,16}"
+LONG_SECS="${LONG_SECS:-120}"
+SHORT_SECS="${SHORT_SECS:-30}"
 QUERY_JSON_DEFAULT='{"q":"error fdt:20250816 tdt:20250819"}'
 QUERY_JSON="${QUERY_JSON:-$QUERY_JSON_DEFAULT}"
 
@@ -98,15 +102,15 @@ run_stream_test() {
 main() {
   local results=""
 
-  # 1) CPU=16，120秒并导出 CSV
+  # 1) CPU=16，长测并导出 CSV
   restart_with_cpu 16
-  local r1; r1=$(run_stream_test 120 csv 16); echo "$r1"; results+=$'\n'; results+="$r1"
+  local r1; r1=$(run_stream_test "$LONG_SECS" csv 16); echo "$r1"; results+=$'\n'; results+="$r1"
 
-  # 2) CPU 系列短测 30 秒（默认：8、12、16）
+  # 2) CPU 系列短测（默认：8、12、16）
   IFS=',' read -r -a CPUS <<< "$CPU_SERIES"
   for c in "${CPUS[@]}"; do
     restart_with_cpu "$c"
-    local rr; rr=$(run_stream_test 30 short "$c"); echo "$rr"; results+=$'\n'; results+="$rr"
+    local rr; rr=$(run_stream_test "$SHORT_SECS" short "$c"); echo "$rr"; results+=$'\n'; results+="$rr"
   done
 
   # 打印 Markdown 汇总表
