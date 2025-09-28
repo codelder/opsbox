@@ -11,15 +11,12 @@ use axum::{
   body::Body,
   extract::{Json, Query, rejection::JsonRejection},
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
-  response::sse::{Event, Sse},
   routing::{get, post},
 };
 use chrono::{Datelike, Duration};
-use futures_util::stream::StreamExt;
 use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
 use serde_json;
-use std::convert::Infallible;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
@@ -242,7 +239,6 @@ pub fn router() -> Router {
     .route("/stream", post(stream_markdown))
     .route("/stream.ndjson", post(stream_local_ndjson))
     .route("/stream.s3.ndjson", post(stream_s3_ndjson))
-    .route("/stream.s3.sse", get(stream_s3_sse))
     .route("/view.cache.json", get(view_cache_json))
     .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
     // 中文注释：自然语言 → 查询字符串
@@ -703,109 +699,3 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   )
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-struct SseQuery {
-  q: String,
-  context: Option<usize>,
-}
-
-// 中文注释：S3 流式搜索（SSE 版本），每条结果作为一个 SSE data 事件（JSON）
-async fn stream_s3_sse(
-  Query(params): Query<SseQuery>,
-) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, Problem> {
-  let cap = stream_channel_capacity();
-  let (tx, rx) = mpsc::channel::<String>(cap);
-
-  // 中文注释：分层限流（SSE 版本也同样应用）
-  let io_sem = Arc::new(tokio::sync::Semaphore::new(s3_max_concurrency()));
-  let cpu_sem = Arc::new(tokio::sync::Semaphore::new(cpu_max_concurrency()));
-
-  // 解析日期计划（仅用于日期区间与清理后的查询）
-  let base_dir = "/unused/for/s3";
-  let buckets = ["20", "21", "22", "23"];
-  let plan = derive_plan(base_dir, &buckets, &params.q);
-  let q_for_search = plan.cleaned_query;
-
-  // 解析查询
-  let spec =
-    crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
-  let highlights = spec.highlights.clone();
-  let sid = new_sid();
-  simple_cache().put_keywords(&sid, highlights.clone()).await;
-  let ctx = params.context.unwrap_or(3);
-
-  // 发送 meta 事件（包含 sid）
-  let _ = tx.send(serde_json::json!({"type":"meta","sid": sid}).to_string()).await;
-
-  let minio_cfg = Arc::new(
-    settings::load_required_minio_settings()
-      .await
-      .map_err(AppError::Settings)?,
-  );
-
-  // 遍历日期区间/桶并发搜索
-  let mut d = plan.range.start;
-  while d <= plan.range.end {
-    let dp1 = d + Duration::days(1);
-    let y = dp1.year();
-    let m = dp1.month();
-    let day = dp1.day();
-    let yyyymm = format!("{:04}{:02}", y, m);
-    let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
-    let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
-
-    for b in ["20", "21", "22", "23"] {
-      let key = format!(
-        "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
-        y, yyyymm, yyyymmdd, b, file_name
-      );
-
-      let txc = tx.clone();
-      let specc = spec.clone();
-      let highlights_c = highlights.clone();
-      let sid_c = sid.clone();
-      let cfg = Arc::clone(&minio_cfg);
-      let io_sem_c = io_sem.clone();
-      let cpu_sem_c = cpu_sem.clone();
-      tokio::spawn(async move {
-        // IO 许可
-        let _io_permit = match io_sem_c.acquire_owned().await {
-          Ok(p) => p,
-          Err(_) => { return; }
-        };
-        let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
-        let Ok(reader) = s3rp.open().await.map_err(|e| AppError::StorageError(e)) else {
-          return;
-        };
-        // CPU 许可
-        let _cpu_permit = match cpu_sem_c.acquire_owned().await {
-          Ok(p) => p,
-          Err(_) => { return; }
-        };
-        let Ok(mut stream) = reader.search(&specc, ctx).await else {
-          return;
-        };
-
-        while let Some(result) = stream.recv().await {
-          if txc.is_closed() {
-            return;
-          }
-          let bucket_name = cfg.bucket.clone();
-          let file_id = format!("{}/{}:{}", bucket_name, key, &result.path);
-          simple_cache().put_lines(&sid_c, &file_id, result.lines.clone()).await;
-          let json_obj = render_json_chunks(&file_id, result.merged.clone(), result.lines.clone(), &highlights_c);
-          if let Ok(s) = serde_json::to_string(&json_obj) {
-            let _ = txc.send(s).await;
-          }
-        }
-      });
-    }
-
-    d = d + Duration::days(1);
-  }
-
-  drop(tx);
-
-  let event_stream = ReceiverStream::new(rx).map(|data| Ok(Event::default().data(data)));
-  Ok(Sse::new(event_stream))
-}
