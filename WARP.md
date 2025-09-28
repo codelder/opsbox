@@ -87,4 +87,27 @@ Conventions and notes
 - Align with CI toolchain versions when possible: Rust 1.90.0 and Node 20.
 - Frontend build will delete and repopulate server/api-gateway/static. Rebuild frontend whenever UI changes must be reflected in the embedded binary.
 - api-gateway embeds static assets at compile time; after changing UI, you must rebuild the backend to ship updated assets.
+
+Performance benchmarking (NDJSON)
+- Purpose: measure end-to-end throughput and observe the adaptive CPU guard while streaming NDJSON from S3/MinIO.
+- Script: scripts/bench-ndjson.sh
+  - What it does:
+    - Restarts api-gateway with given CPU concurrency limit
+    - Runs a 120s test at CPU=16 and exports adaptive logs to a CSV in $HOME
+    - Runs 30s tests at CPU=8,12,16 and prints a Markdown summary (lines, duration, avg tput)
+  - Usage (macOS/Linux):
+    - bash scripts/bench-ndjson.sh
+  - Tunables via env vars:
+    - QUERY_JSON (default: {"q":"error fdt:20250816 tdt:20250819"})
+    - ADDR (default: 127.0.0.1:4000)
+    - WORKER_THREADS (default: 16)
+    - S3_MAX_CONC (default: 12)
+    - STREAM_CH_CAP (default: 256)
+    - MINIO_TIMEOUT (default: 60)
+    - MINIO_RETRIES (default: 5)
+    - CPU_SERIES (default: 8,12,16)
+    - BIN_PATH, LOG_PATH to override binary/log locations
+- Output:
+  - CSV: ~/adaptive_120s_cpu16.csv (columns: time_iso,target,effective,err_rate_percent,tp_per_s)
+  - Markdown table printed to terminal summarizing lines/duration/avg throughput
 - For local debugging of API without embedding UI, run frontend dev server with proxy and run api-gateway in dev.
