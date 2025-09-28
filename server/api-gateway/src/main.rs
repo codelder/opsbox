@@ -132,7 +132,7 @@ struct Cli {
   #[arg(long = "cpu-concurrency", value_name = "N", help = "CPU 解压/检索最大并发（覆盖 LOGSEARCH_CPU_CONCURRENCY）")]
   cpu_concurrency: Option<usize>,
 
-  #[arg(long = "stream-ch-cap", value_name = "N", help = "NDJSON/SSE 输出通道容量（覆盖 LOGSEARCH_STREAM_CH_CAP）")]
+  #[arg(long = "stream-ch-cap", value_name = "N", help = "NDJSON 输出通道容量（覆盖 LOGSEARCH_STREAM_CH_CAP）")]
   stream_ch_cap: Option<usize>,
 
   #[arg(long = "minio-timeout-sec", value_name = "SECS", help = "MinIO 操作超时秒数（覆盖 LOGSEARCH_MINIO_TIMEOUT_SEC）")]
