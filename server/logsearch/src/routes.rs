@@ -24,6 +24,7 @@ use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -208,15 +209,32 @@ impl Default for MinioSettingsPayload {
 }
 
 fn stream_channel_capacity() -> usize {
-  // 允许通过环境变量覆盖，默认 256，限定在 [8, 10000]
-  let default_cap = 1usize;
-  match std::env::var("LOGSEARCH_STREAM_CH_CAP")
+  // 优先使用全局调参；未设置则回退到环境变量；再回退到默认值
+  if let Some(t) = crate::tuning::get() { return t.stream_ch_cap.clamp(8, 10_000); }
+  match std::env::var("LOGSEARCH_STREAM_CH_CAP").ok().and_then(|s| s.parse::<usize>().ok()) {
+    Some(v) => v.clamp(8, 10_000),
+    None => 256usize,
+  }
+}
+
+// 中文注释：读取 S3 IO 并发上限（限制同时打开/读取的对象数）
+fn s3_max_concurrency() -> usize {
+  if let Some(t) = crate::tuning::get() { return t.s3_max_concurrency.clamp(1, 128); }
+  std::env::var("LOGSEARCH_S3_MAX_CONCURRENCY")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
-  {
-    Some(v) => v.clamp(8, 10_000),
-    None => default_cap,
-  }
+    .map(|v| v.clamp(1, 128))
+    .unwrap_or(12)
+}
+
+// 中文注释：读取 CPU 并发上限（限制同时进行解压/检索的任务数）
+fn cpu_max_concurrency() -> usize {
+  if let Some(t) = crate::tuning::get() { return t.cpu_concurrency.clamp(1, 128); }
+  std::env::var("LOGSEARCH_CPU_CONCURRENCY")
+    .ok()
+    .and_then(|s| s.parse::<usize>().ok())
+    .map(|v| v.clamp(1, 128))
+    .unwrap_or(16)
 }
 
 pub fn router() -> Router {
@@ -446,8 +464,77 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
 
 async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
   let cap = stream_channel_capacity();
-  let (tx, rx) =  mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
+  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
   log::debug!("profiling: [S3] 建立响应通道，容量={}", cap);
+
+  // 中文注释：分层限流——IO 并发与 CPU 并发
+  let io_sem = Arc::new(tokio::sync::Semaphore::new(s3_max_concurrency()));
+  let cpu_max = cpu_max_concurrency();
+  let cpu_sem = Arc::new(tokio::sync::Semaphore::new(cpu_max));
+
+  // 中文注释：自适应护栏 - 统计与控制器
+  struct Stats { produced: AtomicU64, s3_errors: AtomicU64 }
+  impl Stats { fn new() -> Self { Self { produced: AtomicU64::new(0), s3_errors: AtomicU64::new(0) } } }
+  let stats = Arc::new(Stats::new());
+  struct CpuController { max: usize, target: usize, held: Vec<tokio::sync::OwnedSemaphorePermit> }
+  impl CpuController { fn current_effective(&self) -> usize { self.max.saturating_sub(self.held.len()) } }
+  let cpu_ctrl = Arc::new(tokio::sync::Mutex::new(CpuController { max: cpu_max, target: cpu_max.min(2), held: Vec::new() }));
+
+  // 中文注释：后台调节任务（每 3s 调整一次，AIMD 策略）
+  {
+    let stats_c = Arc::clone(&stats);
+    let cpu_sem_c = Arc::clone(&cpu_sem);
+    let cpu_ctrl_c = Arc::clone(&cpu_ctrl);
+    tokio::spawn(async move {
+      let mut prev_prod = 0u64;
+      let mut prev_err = 0u64;
+      let mut prev_tp = 0.0f64;
+      loop {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let prod = stats_c.produced.load(Ordering::Relaxed);
+        let err = stats_c.s3_errors.load(Ordering::Relaxed);
+        let dprod = prod.saturating_sub(prev_prod);
+        let derr = err.saturating_sub(prev_err);
+        prev_prod = prod; prev_err = err;
+        let denom = (dprod + derr) as f64;
+        let err_rate = if denom > 0.0 { derr as f64 / denom } else { 0.0 };
+        let tp = dprod as f64 / 3.0; // 条/秒
+
+        let mut ctrl = cpu_ctrl_c.lock().await;
+        let cur_eff = ctrl.current_effective();
+        // 决策：高错误率则乘性减小；否则若吞吐不下降则加一
+        if err_rate > 0.02 && cur_eff > 1 {
+          let new_target = ((cur_eff as f64) * 0.7).floor().max(1.0) as usize;
+          ctrl.target = new_target;
+        } else if tp >= prev_tp * 0.98 && ctrl.target < ctrl.max {
+          ctrl.target += 1;
+        }
+        prev_tp = tp;
+
+        // 通过持有/释放许可来收敛到目标（仅在 [1..=max] 范围内调整）
+        let desired_held = ctrl.max.saturating_sub(ctrl.target);
+        if desired_held > ctrl.held.len() {
+          let need = desired_held - ctrl.held.len();
+          for _ in 0..need {
+            match cpu_sem_c.clone().try_acquire_owned() {
+              Ok(p) => ctrl.held.push(p),
+              Err(_) => break, // 无可用许可，下一轮再试
+            }
+          }
+        } else if desired_held < ctrl.held.len() {
+          let release = ctrl.held.len() - desired_held;
+          for _ in 0..release { let _ = ctrl.held.pop(); } // drop -> 释放许可
+        }
+        log::debug!(
+          "adaptive: cpu target={} effective={} err_rate={:.3}% tp={:.2}/s",
+          ctrl.target,
+          ctrl.current_effective(),
+          err_rate * 100.0,
+          tp
+        );
+      }
+    });
+  }
 
   // 粗粒度耗时
   let overall_start = std::time::Instant::now();
@@ -506,16 +593,41 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
       let highlights_c = highlights.clone();
       let sid_c = sid.clone();
       let cfg = Arc::clone(&minio_cfg);
+      let io_sem_c = io_sem.clone();
+      let cpu_sem_c = cpu_sem.clone();
+      let stats_c2 = Arc::clone(&stats);
       tokio::spawn(async move {
         let file_start = std::time::Instant::now();
+
+        // 中文注释：获取 IO 并发许可，限制同时打开/读取的对象数
+        let _io_permit = match io_sem_c.acquire_owned().await {
+          Ok(p) => p,
+          Err(_) => {
+            log::warn!("profiling: [S3] 获取 IO 许可失败，跳过 key={}", key);
+            return;
+          }
+        };
+
         let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
         let Ok(reader) = s3rp.open().await.map_err(|e| AppError::StorageError(e)) else {
           log::warn!("profiling: [S3] 打开对象失败 key={}", key);
+          // 统计：S3 错误
+          stats_c2.s3_errors.fetch_add(1, Ordering::Relaxed);
           return;
+        };
+
+        // 中文注释：获取 CPU 并发许可，限制同时进行解压/检索的任务数
+        let _cpu_permit = match cpu_sem_c.acquire_owned().await {
+          Ok(p) => p,
+          Err(_) => {
+            log::warn!("profiling: [S3] 获取 CPU 许可失败，跳过 key={}", key);
+            return;
+          }
         };
 
         let Ok(mut stream) = reader.search(&specc, ctx).await else {
           log::warn!("profiling: [S3] 启动检索失败 key={}", key);
+          stats_c2.s3_errors.fetch_add(1, Ordering::Relaxed);
           return;
         };
 
@@ -546,6 +658,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
                 return;
               }
               produced += 1;
+              stats_c2.produced.fetch_add(1, Ordering::Relaxed);
               log::info!("profiling: 发送成功 path={}，输出记录={}", &result.path, produced);
             }
             Err(e) => {
@@ -603,6 +716,10 @@ async fn stream_s3_sse(
   let cap = stream_channel_capacity();
   let (tx, rx) = mpsc::channel::<String>(cap);
 
+  // 中文注释：分层限流（SSE 版本也同样应用）
+  let io_sem = Arc::new(tokio::sync::Semaphore::new(s3_max_concurrency()));
+  let cpu_sem = Arc::new(tokio::sync::Semaphore::new(cpu_max_concurrency()));
+
   // 解析日期计划（仅用于日期区间与清理后的查询）
   let base_dir = "/unused/for/s3";
   let buckets = ["20", "21", "22", "23"];
@@ -648,10 +765,22 @@ async fn stream_s3_sse(
       let highlights_c = highlights.clone();
       let sid_c = sid.clone();
       let cfg = Arc::clone(&minio_cfg);
+      let io_sem_c = io_sem.clone();
+      let cpu_sem_c = cpu_sem.clone();
       tokio::spawn(async move {
+        // IO 许可
+        let _io_permit = match io_sem_c.acquire_owned().await {
+          Ok(p) => p,
+          Err(_) => { return; }
+        };
         let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
         let Ok(reader) = s3rp.open().await.map_err(|e| AppError::StorageError(e)) else {
           return;
+        };
+        // CPU 许可
+        let _cpu_permit = match cpu_sem_c.acquire_owned().await {
+          Ok(p) => p,
+          Err(_) => { return; }
         };
         let Ok(mut stream) = reader.search(&specc, ctx).await else {
           return;

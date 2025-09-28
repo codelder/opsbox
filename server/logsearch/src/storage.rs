@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::io::AsyncRead;
 use tokio::time;
 use tokio_util::io::StreamReader;
-use log::{debug, info, error};
+use log::{debug, info, warn, error};
 use once_cell::sync::OnceCell;
 
 #[derive(Debug, Error)]
@@ -35,8 +35,16 @@ pub enum StorageError {
 // 中文注释：全局 MinIO 客户端缓存
 static MINIO_CLIENT_CACHE: OnceCell<Arc<minio::s3::Client>> = OnceCell::new();
 
-// 中文注释：MinIO 操作超时配置
-const MINIO_TIMEOUT: Duration = Duration::from_secs(30);
+// 中文注释：MinIO 操作超时配置（可由环境变量 LOGSEARCH_MINIO_TIMEOUT_SEC 覆盖，默认 60 秒）
+fn minio_timeout() -> Duration {
+  if let Some(t) = crate::tuning::get() { return Duration::from_secs(t.minio_timeout_sec.clamp(5, 300)); }
+  let secs = std::env::var("LOGSEARCH_MINIO_TIMEOUT_SEC")
+    .ok()
+    .and_then(|s| s.parse::<u64>().ok())
+    .unwrap_or(60)
+    .clamp(5, 300);
+  Duration::from_secs(secs)
+}
 
 // 中文注释：创建或获取缓存的 MinIO 客户端
 fn get_or_create_minio_client(
@@ -120,35 +128,63 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
     let client = get_or_create_minio_client(self.url, self.access_key, self.secret_key)?;
 
     debug!("MinIO客户端获取成功，开始获取对象");
-    
-    // 中文注释：使用超时包装获取对象操作
-    let get_result = time::timeout(MINIO_TIMEOUT, async {
-      client
-        .get_object(self.bucket, self.key)
-        .send()
-        .await
-        .map_err(|e| {
-          error!("获取S3对象失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
-          StorageError::MinioGetObject(e.to_string())
-        })?
-        .content
-        .to_stream()
-        .await
-        .map_err(|e| {
-          error!("S3对象转换为流失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
-          StorageError::MinioToStream(e.to_string())
-        })
-    })
-    .await
-    .map_err(|_| {
-      error!("获取S3对象超时: bucket={}, key={}", self.bucket, self.key);
-      StorageError::ConnectionTimeout
-    })??;
-    
-    let (stream, _file_size) = get_result;
 
-    info!("S3对象打开成功: bucket={}, key={}", self.bucket, self.key);
-    Ok(Box::new(StreamReader::new(stream)))
+    // 中文注释：最多重试次数（指数退避），可由环境变量 LOGSEARCH_MINIO_MAX_ATTEMPTS 覆盖，默认 5 次
+    let max_attempts: u32 = if let Some(t) = crate::tuning::get() {
+      t.minio_max_attempts.clamp(1, 20)
+    } else {
+      std::env::var("LOGSEARCH_MINIO_MAX_ATTEMPTS").ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(5).clamp(1, 20)
+    };
+
+    let mut attempt: u32 = 0;
+    loop {
+      let timeout = minio_timeout();
+      let fut = async {
+        client
+          .get_object(self.bucket, self.key)
+          .send()
+          .await
+          .map_err(|e| {
+            error!("获取S3对象失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
+            StorageError::MinioGetObject(e.to_string())
+          })?
+          .content
+          .to_stream()
+          .await
+          .map_err(|e| {
+            error!("S3对象转换为流失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
+            StorageError::MinioToStream(e.to_string())
+          })
+      };
+
+      match time::timeout(timeout, fut).await {
+        Ok(Ok((stream, _file_size))) => {
+          info!("S3对象打开成功: bucket={}, key={}", self.bucket, self.key);
+          return Ok(Box::new(StreamReader::new(stream)));
+        }
+        Ok(Err(e)) => {
+          attempt += 1;
+          if attempt >= max_attempts {
+            return Err(e);
+          }
+          let base_ms = 100u64.saturating_mul(1u64 << attempt.min(6));
+          let delay = Duration::from_millis(base_ms);
+          warn!("获取S3对象失败，准备重试 第{}/{}次，延迟 {:?}", attempt, max_attempts, delay);
+          time::sleep(delay).await;
+        }
+        Err(_) => {
+          attempt += 1;
+          if attempt >= max_attempts {
+            error!("获取S3对象超时(重试到达上限): bucket={}, key={}", self.bucket, self.key);
+            return Err(StorageError::ConnectionTimeout);
+          }
+          let base_ms = 100u64.saturating_mul(1u64 << attempt.min(6));
+          let delay = Duration::from_millis(base_ms);
+          warn!("获取S3对象超时，准备重试 第{}/{}次，延迟 {:?}", attempt, max_attempts, delay);
+          time::sleep(delay).await;
+        }
+      }
+    }
   }
 }
 
@@ -183,7 +219,7 @@ impl<'a> S3ReaderProvider<'a> {
     };
 
     // 中文注释：使用超时包装列举操作
-    let list_result = time::timeout(MINIO_TIMEOUT, async {
+    let list_result = time::timeout(minio_timeout(), async {
       let mut stream = client
         .list_objects(self.bucket)
         .prefix(Some(prefix.to_string()))
@@ -242,7 +278,7 @@ pub async fn test_minio_connection(
   debug!("尝试列举桶内对象以验证连接");
   
   // 中文注释：使用超时包装连接测试
-  time::timeout(MINIO_TIMEOUT, async {
+  time::timeout(minio_timeout(), async {
     let mut stream = client
       .list_objects(bucket)
       .recursive(false)

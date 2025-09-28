@@ -122,6 +122,25 @@ struct Cli {
   #[arg(global = true, short = 'V', action = clap::ArgAction::Count, help = "增加日志详细程度（可叠加，如 -V/-VV/-VVV）")]
   verbose: u8,
 
+  // ====== 性能与资源参数（命令行>环境变量>默认值）======
+  #[arg(long = "worker-threads", value_name = "N", help = "Tokio 工作线程数（覆盖 LOGSEARCH_WORKER_THREADS）")]
+  worker_threads: Option<usize>,
+
+  #[arg(long = "s3-max-concurrency", value_name = "N", help = "S3/MinIO 最大并发（覆盖 LOGSEARCH_S3_MAX_CONCURRENCY）")]
+  s3_max_concurrency: Option<usize>,
+
+  #[arg(long = "cpu-concurrency", value_name = "N", help = "CPU 解压/检索最大并发（覆盖 LOGSEARCH_CPU_CONCURRENCY）")]
+  cpu_concurrency: Option<usize>,
+
+  #[arg(long = "stream-ch-cap", value_name = "N", help = "NDJSON/SSE 输出通道容量（覆盖 LOGSEARCH_STREAM_CH_CAP）")]
+  stream_ch_cap: Option<usize>,
+
+  #[arg(long = "minio-timeout-sec", value_name = "SECS", help = "MinIO 操作超时秒数（覆盖 LOGSEARCH_MINIO_TIMEOUT_SEC）")]
+  minio_timeout_sec: Option<u64>,
+
+  #[arg(long = "minio-max-attempts", value_name = "N", help = "MinIO 获取对象最大重试次数（覆盖 LOGSEARCH_MINIO_MAX_ATTEMPTS）")]
+  minio_max_attempts: Option<u32>,
+
   /// 中文注释：管理子命令（start/stop）
   #[command(subcommand)]
   cmd: Option<Commands>,
@@ -402,8 +421,54 @@ fn main() {
   // 中文注释：初始化日志（使用 env_logger），允许通过 --log-level 与 -V/-VV/-VVV 控制详细程度
   init_logger(&cli);
 
+  // ====== 参数整合（命令行 > 环境变量 > 默认值）======
+  let env_or = |k: &str| std::env::var(k).ok();
+
+  // S3/CPU/通道容量/MinIO 参数
+  let s3_max_conc = cli.s3_max_concurrency
+    .or_else(|| env_or("LOGSEARCH_S3_MAX_CONCURRENCY").and_then(|s| s.parse().ok()))
+    .unwrap_or(12)
+    .clamp(1, 128);
+  let cpu_conc = cli.cpu_concurrency
+    .or_else(|| env_or("LOGSEARCH_CPU_CONCURRENCY").and_then(|s| s.parse().ok()))
+    .unwrap_or_else(|| {
+      // 默认：16（保守）；如需自动按核数推导可在此改进
+      16
+    })
+    .clamp(1, 128);
+  let stream_ch_cap = cli.stream_ch_cap
+    .or_else(|| env_or("LOGSEARCH_STREAM_CH_CAP").and_then(|s| s.parse().ok()))
+    .unwrap_or(256)
+    .clamp(8, 10_000);
+  let minio_timeout_sec = cli.minio_timeout_sec
+    .or_else(|| env_or("LOGSEARCH_MINIO_TIMEOUT_SEC").and_then(|s| s.parse().ok()))
+    .unwrap_or(60)
+    .clamp(5, 300);
+  let minio_max_attempts = cli.minio_max_attempts
+    .or_else(|| env_or("LOGSEARCH_MINIO_MAX_ATTEMPTS").and_then(|s| s.parse().ok()))
+    .unwrap_or(5)
+    .clamp(1, 20);
+
+  // worker_threads 默认：min(物理核数, cpu_conc+2, 18)
+  let phys = num_cpus::get_physical().max(1);
+  let default_workers = phys.min(cpu_conc + 2).min(18).max(2);
+  let worker_threads = cli.worker_threads
+    .or_else(|| env_or("LOGSEARCH_WORKER_THREADS").and_then(|s| s.parse().ok()))
+    .unwrap_or(default_workers)
+    .clamp(2, 64);
+
+  // 将最终值注入 logsearch 调参（避免通过环境变量、也无需 unsafe）
+  let _ = logsearch::tuning::set(logsearch::tuning::Tuning {
+    s3_max_concurrency: s3_max_conc,
+    cpu_concurrency: cpu_conc,
+    stream_ch_cap: stream_ch_cap,
+    minio_timeout_sec: minio_timeout_sec,
+    minio_max_attempts: minio_max_attempts,
+  });
+
   // 中文注释：在（可能的）守护化之后，再创建 Tokio 运行时并启动服务器
   let rt = tokio::runtime::Builder::new_multi_thread()
+    .worker_threads(worker_threads)
     .enable_all()
     .build()
     .expect("创建 Tokio 运行时失败");
