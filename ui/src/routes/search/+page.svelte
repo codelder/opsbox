@@ -263,7 +263,7 @@
 
     try {
       const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
-      const endpoint = `${API_BASE}/stream.s3.ndjson`;
+      const endpoint = `${API_BASE}/stream.ndjson`;
       const payload: { q: string } = { q: query };
 
       const res = await fetch(endpoint, {

@@ -38,7 +38,7 @@ MINIO_RETRIES="${MINIO_RETRIES:-5}"
 CPU_SERIES="${CPU_SERIES:-8,12,16}"
 LONG_SECS="${LONG_SECS:-120}"
 SHORT_SECS="${SHORT_SECS:-30}"
-QUERY_JSON_DEFAULT='{"q":"error fdt:20250816 tdt:20250819"}'
+QUERY_JSON_DEFAULT='{"q":"error fdt:20250816 tdt:20250822"}'
 QUERY_JSON="${QUERY_JSON:-$QUERY_JSON_DEFAULT}"
 
 BASE_ARGS=(
@@ -58,15 +58,22 @@ restart_with_cpu() {
   pids=$(pgrep -f "$BIN" || true)
   if [ -n "$pids" ]; then
     kill -TERM $pids || true
-    for i in {1..50}; do sleep 0.1; alive=$(ps -o pid= -p $pids 2>/dev/null | tr -d " "); [ -z "$alive" ] && break; done
-    alive=$(ps -o pid= -p $pids 2>/dev/null | tr -d " ")
+    for i in {1..50}; do
+      sleep 0.1
+      alive=$(ps -o pid= -p $pids 2>/dev/null | tr -d " " || true)
+      [ -z "$alive" ] && break
+    done
+    alive=$(ps -o pid= -p $pids 2>/dev/null | tr -d " " || true)
     [ -n "$alive" ] && kill -KILL $alive || true
   fi
   nohup "$BIN" "${BASE_ARGS[@]}" --cpu-concurrency "$cpu" >> "$LOG" 2>&1 &
   local newpid=$!
   for i in {1..50}; do
     sleep 0.2
-    curl -sS "http://$ADDR/healthy" | grep -q "ok" && break
+    # 中文注释：在 set -euo pipefail 下，使用 if 包裹避免因 grep 返回非零而退出
+    if curl -sS "http://$ADDR/healthy" | grep -q "ok"; then
+      break
+    fi
   done
   echo "restarted pid=$newpid cpu=$cpu"
 }
@@ -79,18 +86,20 @@ run_stream_test() {
   local before_lines t0 t1 lines dur
   before_lines=$(wc -l < "$LOG" | tr -d " ")
   t0=$(date +%s)
-  lines=$(curl -sS -N --max-time "$seconds" \
+  # 中文注释：在 set -euo pipefail 下，允许 curl 因 --max-time 返回非零但仍统计已有输出
+  lines=$(( $( (curl -sS -N --max-time "$seconds" \
     -H "Accept: application/x-ndjson" -H "Content-Type: application/json" \
-    --data-binary @"$tmp" "http://$ADDR/api/v1/logsearch/stream.s3.ndjson" | wc -l | tr -d " ")
+    --data-binary @"$tmp" "http://$ADDR/api/v1/logsearch/stream.s3.ndjson" || true) | wc -l | tr -d " ") ))
   t1=$(date +%s); dur=$((t1 - t0)); rm -f "$tmp"
 
   # 中文注释：导出自适应护栏日志（仅 label 包含 csv 的情况）
   if [[ "$label" == *csv* ]]; then
     local out="$HOME/adaptive_${seconds}s_cpu${cpu}.csv"
+    # 中文注释：先写表头，再追加匹配到的 adaptive 行；若无匹配，不影响生成
+    printf "%s\n" "time_iso,target,effective,err_rate_percent,tp_per_s" > "$out"
     tail -n +$((before_lines+1)) "$LOG" | \
       grep -E "adaptive: cpu target=" | \
-      sed -E 's/^\[([^]]+)\].*cpu target=([0-9]+) effective=([0-9]+) err_rate=([0-9.]+)% tp=([0-9.]+)\/s.*/\1,\2,\3,\4,\5/' | \
-      awk 'BEGIN{print "time_iso,target,effective,err_rate_percent,tp_per_s"} {print}' > "$out"
+      sed -E 's/^\[([^]]+)\].*cpu target=([0-9]+) effective=([0-9]+) err_rate=([0-9.]+)% tp=([0-9.]+)\/s.*/\1,\2,\3,\4,\5/' >> "$out" || true
     echo "csv=$out"
   fi
 

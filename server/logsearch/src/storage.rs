@@ -10,7 +10,9 @@ use tokio::io::AsyncRead;
 use tokio::time;
 use tokio_util::io::StreamReader;
 use log::{debug, info, warn, error};
-use once_cell::sync::OnceCell;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -32,8 +34,8 @@ pub enum StorageError {
   ConnectionTimeout,
 }
 
-// 中文注释：全局 MinIO 客户端缓存
-static MINIO_CLIENT_CACHE: OnceCell<Arc<minio::s3::Client>> = OnceCell::new();
+// 中文注释：全局 MinIO 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
+static MINIO_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<minio::s3::Client>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 // 中文注释：MinIO 操作超时配置（可由环境变量 LOGSEARCH_MINIO_TIMEOUT_SEC 覆盖，默认 60 秒）
 fn minio_timeout() -> Duration {
@@ -46,20 +48,27 @@ fn minio_timeout() -> Duration {
   Duration::from_secs(secs)
 }
 
-// 中文注释：创建或获取缓存的 MinIO 客户端
+// 中文注释：创建或获取缓存的 MinIO 客户端（按 url+access_key 缓存）
 fn get_or_create_minio_client(
   url: &str,
   access_key: &str,
   secret_key: &str,
 ) -> Result<Arc<minio::s3::Client>, StorageError> {
-  // 如果已经初始化，直接返回缓存的客户端
-  if let Some(client) = MINIO_CLIENT_CACHE.get() {
-    return Ok(Arc::clone(client));
+  let key = format!("{}|{}", url, access_key);
+  // 命中缓存则直接返回
+  if let Some(existing) = MINIO_CLIENT_CACHE.lock().unwrap().get(&key).cloned() {
+    return Ok(existing);
   }
 
   info!("创建 MinIO 客户端: url={}", url);
+
+  // 中文注释：记录当前 NO_PROXY，便于排查是否因代理导致连接失败
+  let no_proxy_dbg = std::env::var("NO_PROXY").ok().or_else(|| std::env::var("no_proxy").ok());
+  let http_proxy_dbg = std::env::var("HTTP_PROXY").ok().or_else(|| std::env::var("http_proxy").ok());
+  let https_proxy_dbg = std::env::var("HTTPS_PROXY").ok().or_else(|| std::env::var("https_proxy").ok());
+  debug!("网络代理环境: HTTP_PROXY={:?} HTTPS_PROXY={:?} NO_PROXY={:?}", http_proxy_dbg, https_proxy_dbg, no_proxy_dbg);
   
-  // 中文注释：配置超时参数
+  // 中文注释：配置基础 URL
   let base_url = BaseUrl::from_str(url).map_err(|_e| {
     error!("MinIO URL解析失败: {}", url);
     StorageError::InvalidBaseUrl(url.to_string())
@@ -72,9 +81,6 @@ fn get_or_create_minio_client(
       None,
     ))));
 
-  // 中文注释：设置 HTTP 客户端超时
-  // 注意：具体 API 可能因 minio crate 版本而异
-  // 这里的示例假设支持设置 timeout，如果不支持需要其他方法
   let client = builder
     .build()
     .map_err(|_e| {
@@ -83,13 +89,8 @@ fn get_or_create_minio_client(
     })?;
 
   let client = Arc::new(client);
-  
-  // 中文注释：尝试将客户端存入缓存（只有第一次才会成功）
-  if let Err(_) = MINIO_CLIENT_CACHE.set(Arc::clone(&client)) {
-    // 其他线程已经初始化了，返回缓存中的客户端
-    return Ok(Arc::clone(MINIO_CLIENT_CACHE.get().unwrap()));
-  }
-  
+  // 写入缓存（覆盖同 key）
+  MINIO_CLIENT_CACHE.lock().unwrap().insert(key, Arc::clone(&client));
   info!("MinIO 客户端创建并缓存成功");
   Ok(client)
 }
@@ -234,7 +235,7 @@ impl<'a> S3ReaderProvider<'a> {
       
       while let Some(item) = stream.next().await {
         let obj = item.map_err(|e| {
-          error!("列举对象出错: error={}", e);
+          error!("列举对象出错: error={:?}", e);
           StorageError::MinioListObjects(e.to_string())
         })?;
         // 在 minio 0.3.x 中，对象键通常通过 `name` 字段提供
@@ -288,7 +289,7 @@ pub async fn test_minio_connection(
     // 触发一次迭代以验证凭证与桶可访问性；桶为空也视作成功
     if let Some(item) = stream.next().await {
       item.map_err(|e| {
-        error!("MinIO连接测试失败: {}", e);
+        error!("MinIO连接测试失败: {:?}", e);
         StorageError::MinioListObjects(e.to_string())
       })?;
       debug!("找到至少一个对象，连接正常");

@@ -341,6 +341,52 @@ fn init_logger(cli: &Cli) {
   let _ = builder.try_init();
 }
 
+fn init_network_env() {
+  // 中文注释：打印并标准化代理相关环境变量，便于定位 release 与 debug 行为差异
+  let get = |k: &str| std::env::var(k).ok();
+  let http_proxy = get("HTTP_PROXY").or_else(|| get("http_proxy"));
+  let https_proxy = get("HTTPS_PROXY").or_else(|| get("https_proxy"));
+  let no_proxy = get("NO_PROXY").or_else(|| get("no_proxy"));
+  log::info!(
+    "代理环境: HTTP_PROXY={:?} HTTPS_PROXY={:?} NO_PROXY={:?}",
+    http_proxy.as_deref().unwrap_or("").replace(|c: char| c.is_ascii_control(), ""),
+    https_proxy.as_deref().unwrap_or("").replace(|c: char| c.is_ascii_control(), ""),
+    no_proxy.as_deref().unwrap_or("")
+  );
+
+  // 中文注释：当显式开启 LOGSEARCH_AUTO_NO_PROXY，且 NO_PROXY 未设置时，自动填入内网与本地网段
+  let auto = std::env::var("LOGSEARCH_AUTO_NO_PROXY")
+    .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
+    .unwrap_or(false);
+  if auto && no_proxy.is_none() {
+    // 常见内网与本地地址范围
+    let defaults = "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16";
+    // 中文注释：在 Rust 2024 + 受限环境下 set_var 可能被标记为 unsafe；此处仅影响当前进程环境
+    unsafe {
+      std::env::set_var("NO_PROXY", defaults);
+      // 同时设置小写以适配部分依赖库的读取习惯
+      std::env::set_var("no_proxy", defaults);
+    }
+    log::warn!("NO_PROXY 未设置，已根据 LOGSEARCH_AUTO_NO_PROXY 自动设为: {}", defaults);
+  }
+
+  // 中文注释：如检测到空的 HTTP(S)_PROXY 值，主动移除，避免底层库解析异常
+  let is_empty = |v: &Option<String>| v.as_ref().map(|s| s.trim().is_empty()).unwrap_or(false);
+  if auto && (is_empty(&http_proxy) || is_empty(&https_proxy)) {
+    unsafe {
+      if is_empty(&http_proxy) {
+        std::env::remove_var("HTTP_PROXY");
+        std::env::remove_var("http_proxy");
+      }
+      if is_empty(&https_proxy) {
+        std::env::remove_var("HTTPS_PROXY");
+        std::env::remove_var("https_proxy");
+      }
+    }
+    log::info!("检测到空代理环境变量，已移除空的 HTTP(S)_PROXY 以避免误解析");
+  }
+}
+
 fn main() {
   // 中文注释：解析命令行参数（地址、后台模式、以及子命令）
   let cli = Cli::parse();
@@ -420,6 +466,8 @@ fn main() {
 
   // 中文注释：初始化日志（使用 env_logger），允许通过 --log-level 与 -V/-VV/-VVV 控制详细程度
   init_logger(&cli);
+  // 中文注释：初始化网络环境（打印代理设置；可选自动填充 NO_PROXY）
+  init_network_env();
 
   // ====== 参数整合（命令行 > 环境变量 > 默认值）======
   let env_or = |k: &str| std::env::var(k).ok();
