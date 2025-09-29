@@ -18,7 +18,7 @@
   let sid = $state('');
 
   // 中文注释：分页控制（每批 20 条）
-  const PAGE_SIZE = 1;
+  const PAGE_SIZE = 20;
   let hasMore = $state(true); // 是否还有更多可读
   // let paused = $state(false); // 是否处于"暂停等待加载更多"状态（暂未使用）
 

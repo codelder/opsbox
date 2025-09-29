@@ -97,6 +97,7 @@ Performance benchmarking (NDJSON)
     - Runs 30s tests at CPU=8,12,16 and prints a Markdown summary (lines, duration, avg tput)
   - Usage (macOS/Linux):
     - bash scripts/bench-ndjson.sh
+    - JEMALLOC_AGGRESSIVE=1 bash scripts/bench-ndjson.sh  # enable jemalloc aggressive reclaim preset
   - Tunables via env vars:
     - QUERY_JSON (default: {"q":"error fdt:20250816 tdt:20250819"})
     - ADDR (default: 127.0.0.1:4000)
@@ -106,6 +107,8 @@ Performance benchmarking (NDJSON)
     - MINIO_TIMEOUT (default: 60)
     - MINIO_RETRIES (default: 5)
     - CPU_SERIES (default: 8,12,16)
+    - JEMALLOC_AGGRESSIVE: if set to 1/true/yes and MALLOC_CONF is unset, applies MALLOC_CONF=background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0
+    - MALLOC_CONF: if set, takes precedence for jemalloc tuning (e.g., background_thread:true,dirty_decay_ms:100,muzzy_decay_ms:100)
     - BIN_PATH, LOG_PATH to override binary/log locations
 - Output:
   - CSV: ~/adaptive_120s_cpu16.csv (columns: time_iso,target,effective,err_rate_percent,tp_per_s)

@@ -15,6 +15,11 @@ use log::LevelFilter;
 use tower_http::cors::{Any, CorsLayer};
 use http::header::{ACCEPT};
 
+// 中文注释：全局内存分配器固定为 mimalloc（不再支持切换）
+use mimalloc::MiMalloc;
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 // 中文注释：将 server/api-gateway/static 目录在编译期打包进二进制
 #[derive(RustEmbed)]
 #[folder = "static"]

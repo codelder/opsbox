@@ -20,6 +20,8 @@
 #   SHORT_SECS     短测时长（默认：30）
 #   BIN_PATH       api-gateway 二进制路径（默认：server/target/release/api-gateway）
 #   LOG_PATH       日志文件路径（默认：~/.opsbox/api-gateway.log）
+#   JEMALLOC_AGGRESSIVE 若为 1/true/yes，则为进程设置更积极回收的 MALLOC_CONF
+#   MALLOC_CONF    如已事先设置，则优先使用该值（覆盖 aggressive 预设）
 
 set -euo pipefail
 
@@ -40,6 +42,18 @@ LONG_SECS="${LONG_SECS:-120}"
 SHORT_SECS="${SHORT_SECS:-30}"
 QUERY_JSON_DEFAULT='{"q":"error fdt:20250816 tdt:20250822"}'
 QUERY_JSON="${QUERY_JSON:-$QUERY_JSON_DEFAULT}"
+
+# 中文注释：可选启用 jemalloc 的“积极回收”配置
+# 触发条件：JEMALLOC_AGGRESSIVE=1|true|yes，且未显式设置 MALLOC_CONF
+AGG="${JEMALLOC_AGGRESSIVE:-}"
+if [[ "$AGG" == "1" || "$AGG" == "true" || "$AGG" == "TRUE" || "$AGG" == "yes" || "$AGG" == "YES" ]]; then
+  if [[ -z "${MALLOC_CONF:-}" ]]; then
+    export MALLOC_CONF="background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0"
+    echo "[bench-ndjson] jemalloc aggressive enabled; MALLOC_CONF=${MALLOC_CONF}"
+  else
+    echo "[bench-ndjson] JEMALLOC_AGGRESSIVE set but MALLOC_CONF already present; respecting MALLOC_CONF=${MALLOC_CONF}"
+  fi
+fi
 
 BASE_ARGS=(
   --addr "$ADDR"
