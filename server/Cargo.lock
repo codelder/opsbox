@@ -1588,6 +1588,7 @@ dependencies = [
  "ollama-rs",
  "once_cell",
  "openssl",
+ "opsbox-core",
  "problemdetails",
  "regex",
  "serde",

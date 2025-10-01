@@ -1,5 +1,4 @@
 pub mod routes;
-pub use routes::router;
 
 pub mod query;
 pub mod renderer;
@@ -18,7 +17,14 @@ pub mod nl2q;
 // 运行时调参（由网关注入，避免使用环境变量注入）
 pub mod tuning;
 
-/// Ensure all persistent stores required by the service are ready.
-pub async fn ensure_initialized() -> Result<(), settings::SettingsError> {
-  settings::ensure_store().await
+use opsbox_core::{Result, SqlitePool};
+
+/// 导出 router 函数（接收数据库连接池）
+pub fn router(db_pool: SqlitePool) -> axum::Router {
+    routes::router(db_pool)
+}
+
+/// 初始化 LogSeek 模块数据库 schema
+pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
+    settings::init_schema(db_pool).await
 }
