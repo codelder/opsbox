@@ -6,7 +6,7 @@
 ## 📊 总体进度
 
 - ✅ 阶段 1：重命名和清理 (100%)
-- 🔄 阶段 2：核心框架创建 (80%)
+- ✅ 阶段 2：核心框架创建 (100%)
 - ⏳ 阶段 3：LogSeek 后端重构 (0%)
 - ⏳ 阶段 4：前端重构 (0%)
 - ⏳ 阶段 5：文档和工具 (0%)
@@ -23,7 +23,7 @@
 ### 提交记录
 - `6f39172` - Rename binary to opsbox and crate logsearch to logseek; remove comment prefixes
 
-## 🔄 阶段 2：核心框架创建 (80% 完成)
+## ✅ 阶段 2：核心框架创建 (100% 完成)
 
 ### 已完成部分
 
@@ -103,19 +103,17 @@ src/
 **提交记录**:
 - `49264b5` - Refactor opsbox main service with modular architecture (WIP)
 
-#### 3. LogSeek 模块准备 🔄
+#### 3. LogSeek 模块适配 ✅
 **位置**: `server/logseek/`
 
 **已完成**:
 - ✅ 更新 `lib.rs` 添加 `router()` 和 `init_schema()` 导出
 - ✅ 添加 `opsbox-core` 依赖到 `Cargo.toml`
-
-**待完成** (详见 `docs/TODO_REFACTORING.md`):
-- ⏳ 修改 `routes.rs` 接受数据库池参数
-- ⏳ 在 `settings.rs` 中添加 `init_schema()` 函数
-- ⏳ 更新所有函数使用 `opsbox_core::AppError`
-- ⏳ 更新表名为 `logseek_` 前缀
-- ⏳ 修复编译错误
+- ✅ 修改 `routes.rs` 接受数据库池参数
+- ✅ 在 `settings.rs` 中添加 `init_schema()` 函数
+- ✅ 更新所有函数使用 `opsbox_core::AppError`
+- ✅ 更新表名为 `logseek_` 前缀
+- ✅ 修复所有编译错误
 
 ### 关键改进
 
@@ -135,26 +133,23 @@ src/
 - **上下文丰富**: 记录关键业务事件
 - **灵活配置**: 支持多种日志级别设置方式
 
-## 🔄 当前状态
+## ✅ 当前状态
 
 ### 编译状态
-⚠️ **无法编译** - LogSeek 模块需要适配新架构
+✅ **编译通过** - 所有模块已成功适配新架构
 
-**错误信息**:
-```
-error[E0425]: cannot find function `init_schema` in module `settings`
-error[E0061]: this function takes 0 arguments but 1 argument was supplied (routes::router)
-```
+### 运行时测试结果
+✅ **所有测试通过**
+
+**测试项目**:
+- ✅ 健康检查: `curl http://127.0.0.1:4000/healthy` → `ok`
+- ✅ LogSeek MinIO 设置 API: `GET /api/v1/logseek/settings/minio` → 正常响应
+- ✅ 数据库创建: `opsbox.db` 成功创建
+- ✅ 表名前缀: `logseek_minio_config`, `logseek_settings` 使用正确前缀
+- ✅ 模块初始化: LogSeek schema 自动创建
 
 ### 下一步行动
-参见 `docs/TODO_REFACTORING.md` 中的详细步骤。
-
-**优先级**:
-1. 🔥 修复 `logseek/routes.rs` 签名
-2. 🔥 添加 `logseek/settings.rs` 的 `init_schema()`
-3. 🔥 更新 `logseek/settings.rs` 使用 opsbox-core
-4. 🔥 修复所有编译错误
-5. ✅ 运行时测试
+阶段 2 已完成！可以开始阶段 3（LogSeek 后端内部重构）或直接进入阶段 5（文档和工具更新）。
 
 ## 📂 新文件清单
 

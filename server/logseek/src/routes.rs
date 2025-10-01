@@ -9,10 +9,11 @@ use crate::{
 use axum::{
   Router,
   body::Body,
-  extract::{Json, Query, rejection::JsonRejection},
+  extract::{Json, Query, State, rejection::JsonRejection},
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
   routing::{get, post},
 };
+use opsbox_core::SqlitePool;
 use chrono::{Datelike, Duration};
 use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
@@ -34,7 +35,7 @@ pub enum AppError {
   #[error("查询语法错误")]
   QueryParse(#[from] crate::query::ParseError),
   #[error("设置存储错误")]
-  Settings(#[from] settings::SettingsError),
+  Settings(#[from] opsbox_core::AppError),
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -130,16 +131,19 @@ impl From<AppError> for Problem {
       AppError::QueryParse(e) => problemdetails::new(StatusCode::BAD_REQUEST)
         .with_title("查询语法错误")
         .with_detail(e.to_string()),
-      AppError::Settings(e) => match e {
-        settings::SettingsError::NotConfigured => problemdetails::new(StatusCode::SERVICE_UNAVAILABLE)
-          .with_title("MinIO 未配置")
-          .with_detail("请先完成 MinIO 设置"),
-        settings::SettingsError::Connection(msg) => problemdetails::new(StatusCode::BAD_REQUEST)
-          .with_title("MinIO 连接失败")
-          .with_detail(msg),
-        settings::SettingsError::Database(err) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-          .with_title("设置存储错误")
-          .with_detail(err.to_string()),
+      AppError::Settings(e) => {
+        // 将 opsbox_core::AppError 转换为 Problem
+        let status = match e {
+          opsbox_core::AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+          opsbox_core::AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
+          opsbox_core::AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+          opsbox_core::AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+          opsbox_core::AppError::NotFound(_) => StatusCode::NOT_FOUND,
+          opsbox_core::AppError::ExternalService(_) => StatusCode::BAD_GATEWAY,
+        };
+        problemdetails::new(status)
+          .with_title(e.to_string())
+          .with_detail(e.to_string())
       },
     }
   }
@@ -234,7 +238,7 @@ fn cpu_max_concurrency() -> usize {
     .unwrap_or(16)
 }
 
-pub fn router() -> Router {
+pub fn router(db_pool: SqlitePool) -> Router {
   Router::new()
     .route("/stream", post(stream_markdown))
     .route("/stream.ndjson", post(stream_local_ndjson))
@@ -243,10 +247,13 @@ pub fn router() -> Router {
     .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
     // 自然语言 → 查询字符串
     .route("/nl2q", post(nl2q))
+    .with_state(db_pool)
 }
 
-async fn get_minio_settings() -> Result<Json<MinioSettingsPayload>, Problem> {
-  let settings_opt = settings::load_minio_settings().await.map_err(AppError::Settings)?;
+async fn get_minio_settings(
+  State(pool): State<SqlitePool>,
+) -> Result<Json<MinioSettingsPayload>, Problem> {
+  let settings_opt = settings::load_minio_settings(&pool).await.map_err(AppError::Settings)?;
   let mut payload = settings_opt
     .clone()
     .map_or_else(MinioSettingsPayload::default, Into::into);
@@ -256,31 +263,36 @@ async fn get_minio_settings() -> Result<Json<MinioSettingsPayload>, Problem> {
       Ok(_) => {
         payload.configured = true;
       }
-      Err(settings::SettingsError::Connection(msg)) => {
+      Err(e) => {
         payload.configured = false;
-        payload.connection_error = Some(format!("无法连接 MinIO：{}", msg));
+        payload.connection_error = Some(format!("无法连接 MinIO：{}", e));
       }
-      Err(err) => return Err(AppError::Settings(err).into()),
     }
   }
 
   Ok(Json(payload))
 }
 
-async fn save_minio_settings(Json(payload): Json<MinioSettingsPayload>) -> Result<StatusCode, Problem> {
+async fn save_minio_settings(
+  State(pool): State<SqlitePool>,
+  Json(payload): Json<MinioSettingsPayload>,
+) -> Result<StatusCode, Problem> {
   let settings: settings::MinioSettings = payload.into();
-  settings::save_minio_settings(&settings)
+  settings::save_minio_settings(&pool, &settings)
     .await
     .map_err(AppError::Settings)?;
   Ok(StatusCode::NO_CONTENT)
 }
 
-async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
+async fn stream_markdown(
+  State(pool): State<SqlitePool>,
+  Json(body): Json<SearchBody>,
+) -> Result<HttpResponse<Body>, Problem> {
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
 
   let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
 
-  let minio_cfg = settings::load_required_minio_settings()
+  let minio_cfg = settings::load_required_minio_settings(&pool)
     .await
     .map_err(AppError::Settings)?;
 
@@ -458,7 +470,10 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
   )
 }
 
-async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
+async fn stream_s3_ndjson(
+  State(pool): State<SqlitePool>,
+  Json(body): Json<SearchBody>,
+) -> Result<HttpResponse<Body>, Problem> {
   let cap = stream_channel_capacity();
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
   log::debug!("profiling: [S3] 建立响应通道，容量={}", cap);
@@ -561,7 +576,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   log::debug!("profiling: [S3] 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
 
   let minio_cfg = Arc::new(
-    settings::load_required_minio_settings()
+    settings::load_required_minio_settings(&pool)
       .await
       .map_err(AppError::Settings)?,
   );

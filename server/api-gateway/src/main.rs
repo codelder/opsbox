@@ -149,6 +149,6 @@ fn configure_logseek_module(config: &AppConfig) {
         minio_max_attempts: config.get_minio_max_attempts(),
     };
 
-    logseek::tuning::set(tuning);
     log::debug!("LogSeek 模块配置: {:?}", tuning);
+    logseek::tuning::set(tuning);
 }
