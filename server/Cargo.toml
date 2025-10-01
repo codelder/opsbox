@@ -2,5 +2,6 @@
 resolver = "3"
 members = [
   "api-gateway",
+  "opsbox-core",
   "logseek",
 ]

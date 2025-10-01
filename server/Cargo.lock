@@ -113,6 +113,7 @@ dependencies = [
  "nix",
  "num_cpus",
  "openssl",
+ "opsbox-core",
  "rust-embed",
  "serde",
  "tokio",
@@ -1850,6 +1851,24 @@ dependencies = [
  "openssl-src",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "opsbox-core"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http",
+ "libsqlite3-sys",
+ "log",
+ "problemdetails",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tower-http 0.6.6",
 ]
 
 [[package]]
