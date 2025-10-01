@@ -117,6 +117,30 @@ Architecture (modular design)
   - SvelteKit SPA built with adapter-static to server/api-gateway/static (pages+assets) and fallback index.html
   - Vite dev server proxies /api to api-gateway
   - Vitest projects for browser (Svelte components) and node (server utilities)
+  - Modular LogSeek architecture (ui/src/lib/modules/logseek/):
+    - types/: Centralized TypeScript type definitions for API contracts, UI states, and utilities
+    - api/: API client layer encapsulating all backend calls (search, settings, nl2q, view)
+      - Unified error handling with RFC 7807 Problem Details support
+      - Type-safe request/response handling
+      - Chinese error messages for user-facing errors
+    - utils/: Reusable utilities for text processing
+      - highlight.ts: HTML escaping, keyword highlighting with <mark> tags, smart line truncation
+    - composables/: Svelte 5 Runes-style state management
+      - useStreamReader.svelte.ts: NDJSON stream batch reading with buffer management
+      - useSearch.svelte.ts: Search state and lifecycle (start/cancel/loadMore)
+      - useSettings.svelte.ts: MinIO settings CRUD with connection validation
+    - components/: Placeholder for reusable UI components (future expansion)
+  - Pages refactored to use modular APIs:
+    - routes/+page.svelte: Home page uses convertNaturalLanguage() for NL→Q
+    - routes/settings/+page.svelte: Settings page uses useSettings() composable
+    - routes/search/+page.svelte: Search page uses modular types, APIs, and highlight utilities
+    - routes/view/+page.svelte: View page uses fetchViewCache() and text processing utils
+  - Benefits of modular frontend:
+    - Clear separation: API client, state management, utilities, and UI
+    - Type safety: Centralized TypeScript definitions prevent inconsistencies
+    - Reusability: API and utilities shared across pages, reducing duplication
+    - Maintainability: Each layer can be tested and modified independently
+    - Modern patterns: Svelte 5 Runes for reactive state, composable logic for state encapsulation
 
 Conventions and notes
 - Align with CI toolchain versions when possible: Rust 1.90.0 and Node 20.

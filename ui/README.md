@@ -1,18 +1,18 @@
-# sv
+# OpsBoard Frontend
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+SvelteKit-based frontend with modular architecture, built with Svelte 5 and TypeScript.
 
-## Creating a project
+## Architecture
 
-If you're seeing this, you've probably already done this step. Congrats!
+The frontend uses a modular architecture with clear separation of concerns:
 
-```sh
-# create a new project in the current directory
-npx sv create
+- **Types** (`src/lib/modules/logseek/types/`): Centralized TypeScript definitions
+- **API Clients** (`src/lib/modules/logseek/api/`): Backend API encapsulation
+- **Utils** (`src/lib/modules/logseek/utils/`): Reusable utility functions
+- **Composables** (`src/lib/modules/logseek/composables/`): Svelte 5 Runes state management
+- **Components** (`src/lib/modules/logseek/components/`): Reusable UI components (future)
 
-# create a new project in my-app
-npx sv create my-app
-```
+See `docs/FRONTEND_DEVELOPMENT.md` for detailed development guide.
 
 ## Developing
 
