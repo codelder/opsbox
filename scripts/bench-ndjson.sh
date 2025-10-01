@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 中文注释：NDJSON 流式检索一键压测脚本
 # 功能：
-# 1) 重启 api-gateway 并设置 CPU 并发上限
+# 1) 重启 opsbox 并设置 CPU 并发上限
 # 2) 执行 LONG_SECS(默认120) 秒的 CPU=16 压测并导出自适应护栏日志为 CSV
 # 3) 对 CPU=8、12、16 分别执行 SHORT_SECS(默认30) 秒对比压测并打印吞吐汇总（Markdown 表）
 #
@@ -18,16 +18,16 @@
 #   CPU_SERIES     对比压测的 CPU 并发列表（逗号分隔，默认：8,12,16）
 #   LONG_SECS      长测时长（默认：120）
 #   SHORT_SECS     短测时长（默认：30）
-#   BIN_PATH       api-gateway 二进制路径（默认：server/target/release/api-gateway）
-#   LOG_PATH       日志文件路径（默认：~/.opsbox/api-gateway.log）
+#   BIN_PATH       opsbox 二进制路径（默认：server/target/release/opsbox）
+#   LOG_PATH       日志文件路径（默认：~/.opsbox/opsbox.log）
 #   JEMALLOC_AGGRESSIVE 若为 1/true/yes，则为进程设置更积极回收的 MALLOC_CONF
 #   MALLOC_CONF    如已事先设置，则优先使用该值（覆盖 aggressive 预设）
 
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-BIN_DEFAULT="$ROOT_DIR/server/target/release/api-gateway"
-LOG_DEFAULT="$HOME/.opsbox/api-gateway.log"
+BIN_DEFAULT="$ROOT_DIR/server/target/release/opsbox"
+LOG_DEFAULT="$HOME/.opsbox/opsbox.log"
 
 BIN="${BIN_PATH:-$BIN_DEFAULT}"
 LOG="${LOG_PATH:-$LOG_DEFAULT}"
@@ -65,7 +65,7 @@ BASE_ARGS=(
   -V
 )
 
-# 中文注释：优雅重启 api-gateway 并使用指定 CPU 并发
+# 中文注释：优雅重启 opsbox 并使用指定 CPU 并发
 restart_with_cpu() {
   local cpu="$1"
   local pids
