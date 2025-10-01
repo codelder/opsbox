@@ -1,108 +1,29 @@
 <script lang="ts">
-  // 迁移到 Svelte 5 Runes：不再使用 onMount
+  /**
+   * MinIO 设置页面（重构版）
+   * 使用 LogSeek 模块的 composables 和 API 客户端
+   */
   import { invalidate } from '$app/navigation';
-  import { env } from '$env/dynamic/public';
+  import { useSettings } from '$lib/modules/logseek';
 
-  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
+  // 使用 composable 管理状态和方法
+  const settings = useSettings();
 
-  let endpoint = $state('');
-  let bucket = $state('');
-  let accessKey = $state('');
-  let secretKey = $state('');
-  let loadingSettings = $state(false);
-  let loadError: string | null = $state(null);
-  let saving = $state(false);
-  let saveError: string | null = $state(null);
-  let saveSuccess = $state(false);
-  let loadedOnce = $state(false);
-  let connectionError: string | null = $state(null);
-
-  async function fetchSettings(force = false) {
-    if (loadingSettings || (loadedOnce && !force)) return;
-    loadingSettings = true;
-    loadError = null;
-    connectionError = null;
-    try {
-      const res = await fetch(`${API_BASE}/settings/minio`, {
-        headers: { Accept: 'application/json' }
-      });
-      if (!res.ok) {
-        loadError = `加载失败：${res.status}`;
-        return;
-      }
-      const data = (await res.json()) as {
-        endpoint?: string;
-        bucket?: string;
-        access_key?: string;
-        secret_key?: string;
-        connection_error?: string | null;
-      };
-      endpoint = data.endpoint ?? '';
-      bucket = data.bucket ?? '';
-      accessKey = data.access_key ?? '';
-      secretKey = data.secret_key ?? '';
-      connectionError = data.connection_error ?? null;
-      loadedOnce = true;
-    } catch (e: unknown) {
-      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
-      loadError = err.message ?? '无法读取设置';
-    } finally {
-      loadingSettings = false;
-    }
-  }
-
-  // 使用一次性 $effect 启动设置拉取
+  // 初始化设置加载
   let settingsInit = $state(false);
   $effect(() => {
     if (settingsInit) return;
     settingsInit = true;
-    fetchSettings();
+    settings.loadSettings();
   });
 
+  // 保存设置并跳转
   async function handleSave(event: Event) {
     event.preventDefault();
-    if (saving) return;
-    saving = true;
-    saveError = null;
-    saveSuccess = false;
-    connectionError = null;
-    try {
-      const res = await fetch(`${API_BASE}/settings/minio`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body: JSON.stringify({
-          endpoint,
-          bucket,
-          access_key: accessKey,
-          secret_key: secretKey
-        })
-      });
-      if (!res.ok) {
-        const defaultMessage = `保存失败：${res.status}`;
-        let message = defaultMessage;
-        try {
-          const problem = await res.json();
-          message = problem?.detail || problem?.title || defaultMessage;
-        } catch {
-          // ignore json parse error, keep default message
-        }
-        saveError = message;
-        connectionError = message;
-        return;
-      }
-      await fetchSettings(true);
+    await settings.save();
+    if (settings.saveSuccess) {
       await invalidate('/api/v1/logseek/settings/minio');
-      connectionError = null;
-      saveSuccess = true;
       window.location.href = '/';
-    } catch (e: unknown) {
-      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
-      saveError = err.message ?? '保存设置失败';
-    } finally {
-      saving = false;
     }
   }
 
@@ -138,7 +59,7 @@
   </nav>
 
   <form class="space-y-6" onsubmit={handleSave}>
-    {#if loadingSettings && !loadedOnce}
+    {#if settings.loadingSettings && !settings.loadedOnce}
       <div
         class="rounded-xl border border-dashed border-slate-200 bg-white/40 px-4 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/40 dark:text-slate-400"
       >
@@ -146,7 +67,7 @@
       </div>
     {/if}
 
-    {#if loadError}
+    {#if settings.loadError}
       <div
         class="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-700 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200"
       >
@@ -163,11 +84,11 @@
             d="M12 9v4m0 4h.01m-.01-14a9 9 0 1 1 0 18 9 9 0 0 1 0-18z"
           />
         </svg>
-        <span>{loadError}</span>
+        <span>{settings.loadError}</span>
       </div>
     {/if}
 
-    {#if saveError}
+    {#if settings.saveError}
       <div
         class="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm dark:border-red-800 dark:bg-red-950 dark:text-red-200"
       >
@@ -184,11 +105,11 @@
             d="M12 9v4m0 4h.01m-.01-14a9 9 0 1 1 0 18 9 9 0 0 1 0-18z"
           />
         </svg>
-        <span>{saveError}</span>
+        <span>{settings.saveError}</span>
       </div>
     {/if}
 
-    {#if connectionError && connectionError !== saveError}
+    {#if settings.connectionError && settings.connectionError !== settings.saveError}
       <div
         class="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm dark:border-red-800 dark:bg-red-950 dark:text-red-200"
       >
@@ -205,11 +126,11 @@
             d="M12 9v4m0 4h.01m-.01-14a9 9 0 1 1 0 18 9 9 0 0 1 0-18z"
           />
         </svg>
-        <span>{connectionError}</span>
+        <span>{settings.connectionError}</span>
       </div>
     {/if}
 
-    {#if saveSuccess}
+    {#if settings.saveSuccess}
       <div
         class="flex items-start gap-3 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-sm dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
       >
@@ -252,8 +173,8 @@
             <input
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 shadow-inner shadow-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:shadow-none dark:focus:border-indigo-400 dark:focus:ring-indigo-500/30"
               placeholder="http://host:9000"
-              bind:value={endpoint}
-              disabled={loadingSettings && !loadedOnce}
+            bind:value={settings.endpoint}
+            disabled={settings.loadingSettings && !settings.loadedOnce}
             />
           </label>
 
@@ -271,8 +192,8 @@
             <input
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 shadow-inner shadow-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:shadow-none dark:focus:border-indigo-400 dark:focus:ring-indigo-500/30"
               placeholder="bucket"
-              bind:value={bucket}
-              disabled={loadingSettings && !loadedOnce}
+            bind:value={settings.bucket}
+            disabled={settings.loadingSettings && !settings.loadedOnce}
             />
           </label>
 
@@ -290,9 +211,9 @@
             <input
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 shadow-inner shadow-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:shadow-none dark:focus:border-indigo-400 dark:focus:ring-indigo-500/30"
               placeholder="access key"
-              bind:value={accessKey}
-              autocomplete="off"
-              disabled={loadingSettings && !loadedOnce}
+            bind:value={settings.accessKey}
+            autocomplete="off"
+            disabled={settings.loadingSettings && !settings.loadedOnce}
             />
           </label>
 
@@ -311,9 +232,9 @@
               class="w-full rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm text-slate-900 shadow-inner shadow-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:shadow-none dark:focus:border-indigo-400 dark:focus:ring-indigo-500/30"
               placeholder="secret key"
               type="password"
-              bind:value={secretKey}
-              autocomplete="off"
-              disabled={loadingSettings && !loadedOnce}
+            bind:value={settings.secretKey}
+            autocomplete="off"
+            disabled={settings.loadingSettings && !settings.loadedOnce}
             />
           </label>
 
@@ -339,14 +260,14 @@
         <button
           type="submit"
           class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500 focus:ring-4 focus:ring-indigo-200 focus:outline-none disabled:cursor-not-allowed disabled:bg-indigo-300 dark:bg-indigo-500 dark:hover:bg-indigo-400 dark:focus:ring-indigo-500/40"
-          disabled={saving ||
-            (loadingSettings && !loadedOnce) ||
-            !endpoint.trim() ||
-            !bucket.trim() ||
-            !accessKey.trim() ||
-            !secretKey.trim()}
+          disabled={settings.saving ||
+            (settings.loadingSettings && !settings.loadedOnce) ||
+            !settings.endpoint.trim() ||
+            !settings.bucket.trim() ||
+            !settings.accessKey.trim() ||
+            !settings.secretKey.trim()}
         >
-          {#if saving}
+          {#if settings.saving}
             保存中…
           {:else}
             保存设置

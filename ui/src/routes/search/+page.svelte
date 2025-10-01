@@ -1,47 +1,42 @@
 <script lang="ts">
-  // 迁移到 Svelte 5 Runes：不再使用 onMount/onDestroy
+  /**
+   * 搜索页面（重构版）
+   * 使用 LogSeek 模块的 composables 和工具函数
+   */
   import { SvelteSet } from 'svelte/reactivity';
-  import { env } from '$env/dynamic/public';
-  // const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
-  // const sid = '';
+  import type { SearchJsonResult, JsonLine, JsonChunk } from '$lib/modules/logseek';
+  import { highlight, snippet } from '$lib/modules/logseek';
+  import { startSearch as apiStartSearch, extractSessionId } from '$lib/modules/logseek';
 
   // 查询字符串、结果列表、加载与错误状态
   let q = $state('');
-  // 结构类型：与后端 NDJSON 对齐
-  type JsonLine = { no: number; text: string };
-  type JsonChunk = { range: [number, number] | { 0: number; 1: number }; lines: JsonLine[] };
-  type SearchJsonResult = { path: string; keywords: string[]; chunks: JsonChunk[] };
   let results = $state<SearchJsonResult[]>([]);
-  let loading = $state(false); // 当前是否正在读取一批
+  let loading = $state(false);
   let error = $state<string | null>(null);
-  // 搜索会话 ID（从流接口响应头获取，供 /view 使用）
   let sid = $state('');
 
   // 分页控制（每批 20 条）
   const PAGE_SIZE = 20;
-  let hasMore = $state(true); // 是否还有更多可读
-  // let paused = $state(false); // 是否处于"暂停等待加载更多"状态（暂未使用）
+  let hasMore = $state(true);
 
   // 流读取持久状态
-  let controller: AbortController | null = null; // 取消当前请求
-  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null; // 当前响应的 reader
-  let decoder: TextDecoder | null = null; // 统一的 TextDecoder
-  let buffer = $state(''); // 分片缓冲（可能出现半行）
+  let controller: AbortController | null = null;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+  let decoder: TextDecoder | null = null;
+  let buffer = $state('');
 
-  // 读取一批（最多 PAGE_SIZE 条）。
-  // 策略：优先消费缓冲区中的“完整行”，不够再读取更多字节；避免跨批次“回灌”带来的跳行。
+  // 读取一批（最多 PAGE_SIZE 条）
   async function readBatch(maxItems = PAGE_SIZE) {
     if (!reader) return;
     loading = true;
-    // paused = false; // 暂未使用
     let produced = 0;
     try {
       const dec = decoder ?? (decoder = new TextDecoder());
       while (produced < maxItems && reader) {
-        // 1) 先消费缓冲区中已有的完整行（以换行符为界）
+        // 1) 先消费缓冲区中已有的完整行
         while (produced < maxItems) {
           const nl = buffer.indexOf('\n');
-          if (nl === -1) break; // 缓冲区中暂无完整行
+          if (nl === -1) break;
           const line = buffer.slice(0, nl);
           buffer = buffer.slice(nl + 1);
           const trimmed = line.trim();
@@ -51,16 +46,14 @@
             results = [...results, obj];
             produced += 1;
           } catch (e) {
-            // 中文报错：单行解析失败不阻断整体
             console.error('解析 NDJSON 行失败：', e, trimmed);
           }
         }
         if (produced >= maxItems) break;
 
-        // 2) 若仍未达上限，则读取更多字节补充缓冲区
+        // 2) 读取更多字节补充缓冲区
         const { done, value } = await reader.read();
         if (done) {
-          // 流结束：尽最大努力消费缓冲区剩余内容（可能无换行）
           const rest = buffer;
           buffer = '';
           if (rest) {
@@ -73,7 +66,6 @@
                 results = [...results, obj];
                 produced += 1;
               } catch (e) {
-                // 最后一段可能不是完整 JSON，这里仅记录，不中断
                 console.error('解析 NDJSON 尾段失败：', e, trimmed);
               }
             }
@@ -86,93 +78,13 @@
       }
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { name?: string; message?: string }) : {};
-      if (err.name === 'AbortError') return; // 主动取消
+      if (err.name === 'AbortError') return;
       error = err.message || '搜索过程中发生未知错误';
       hasMore = false;
       reader = null;
     } finally {
       loading = false;
-      // 若还有更多但已达到本批上限，则进入暂停态，等待“加载更多”
-      if (hasMore && produced >= maxItems) {
-        // paused = true; // 暂未使用
-      }
     }
-  }
-
-  // 转义与高亮（模仿 GitHub 高亮效果，使用 <mark>）
-  function escapeHtml(s: string): string {
-    return s
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
-  }
-  function escapeRegExp(s: string): string {
-    return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-  function highlight(line: string, keywords: string[]): string {
-    let out = escapeHtml(line);
-    const kws = (keywords || []).filter((k) => k && k.length > 0);
-    for (const kw of kws) {
-      const re = new RegExp(escapeRegExp(kw), 'g');
-      out = out.replace(re, (m) => `<mark>${escapeHtml(m)}</mark>`);
-    }
-    return out;
-  }
-
-  // 长行截断（优先保留首次命中关键字），支持左右“省略号”点击展开
-  function snippet(
-    line: string,
-    keywords: string[],
-    opts: { max?: number; context?: number } = {}
-  ): { html: string; leftTrunc: boolean; rightTrunc: boolean } {
-    const max = opts.max ?? 540;
-    const ctx = opts.context ?? 230;
-    if (line.length <= max) {
-      return { html: highlight(line, keywords), leftTrunc: false, rightTrunc: false };
-    }
-    const kws = (keywords || []).filter((k) => k && k.length > 0);
-    let firstIdx = -1;
-    let firstLen = 0;
-    for (const kw of kws) {
-      const idx = line.indexOf(kw);
-      if (idx !== -1 && (firstIdx === -1 || idx < firstIdx)) {
-        firstIdx = idx;
-        firstLen = kw.length;
-      }
-    }
-    let start = 0;
-    let end = 0;
-    if (firstIdx >= 0) {
-      start = Math.max(0, firstIdx - ctx);
-      end = Math.min(line.length, firstIdx + firstLen + ctx);
-      if (end - start < max) {
-        const deficit = max - (end - start);
-        const addLeft = Math.min(start, Math.floor(deficit / 2));
-        const addRight = Math.min(line.length - end, deficit - addLeft);
-        start -= addLeft;
-        end += addRight;
-      }
-    } else {
-      start = 0;
-      end = max;
-    }
-
-    // 对齐截取边界，避免从单词中间开始或结束
-    if (start > 0 && line[start] !== ' ' && line[start - 1] !== ' ') {
-      // 向前找到空格或行首
-      const prevSpace = line.lastIndexOf(' ', start);
-      if (prevSpace >= 0 && start - prevSpace < 20) {
-        // 只在近20个字符内调整
-        start = prevSpace; // 保留空格，不跳过
-      }
-    }
-
-    const leftTrunc = start > 0;
-    const rightTrunc = end < line.length;
-    const slice = line.slice(start, end);
-    return { html: highlight(slice, keywords), leftTrunc, rightTrunc };
   }
 
   // 每个结果的 UI 状态（折叠、展开所有匹配、单行展开）
@@ -245,52 +157,31 @@
 
   // 启动流式搜索（重置状态并读取首批）
   async function startSearch(query: string) {
-    // 终止上一次
     controller?.abort();
     controller = new AbortController();
-    const signal = controller.signal;
 
     // 重置状态
     results = [];
     error = null;
     hasMore = true;
-    // paused = false; // 暂未使用
     buffer = '';
     decoder = null;
     reader = null;
-    // 启动阶段立即标记加载中（即使暂未收到任何字节）
     loading = true;
 
     try {
-      const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
-      const endpoint = `${API_BASE}/stream.ndjson`;
-      const payload: { q: string } = { q: query };
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/x-ndjson',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload),
-        signal
-      });
-
-      if (!res.ok || !res.body) {
-        error = `服务端返回异常状态：${res.status}`;
+      const response = await apiStartSearch(query);
+      sid = extractSessionId(response);
+      reader = response.body?.getReader() || null;
+      if (!reader) {
+        error = '无法获取响应流';
         hasMore = false;
-        reader = null;
         return;
       }
-
-      // 保存会话 ID，供 /view 使用
-      sid = res.headers.get('x-logseek-sid') || '';
-      reader = res.body.getReader();
       await readBatch(PAGE_SIZE);
     } catch (e: unknown) {
-      const err = e && typeof e === 'object' ? (e as { name?: string; message?: string }) : {};
-      if (err.name === 'AbortError') return; // 主动取消不视为错误
-      error = err.message || '搜索过程中发生未知错误';
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      error = err.message || '搜索失败';
       hasMore = false;
       reader = null;
     }

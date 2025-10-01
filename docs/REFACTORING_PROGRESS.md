@@ -151,6 +151,8 @@ src/
 ## ✅ 阶段 3：LogSeek 后端分层重构 (100% 完成)
 
 ### 分层架构设计
+
+### 分层架构设计
 **位置**: `server/logseek/src/`
 
 ```
@@ -266,8 +268,163 @@ logseek/src/
 ### 提交记录
 - `9604882` - Refactor LogSeek module with layered architecture (Phase 3)
 
+## ✅ 阶段 4：前端模块化重构 (100% 完成)
+
+**更新时间**: 2025-10-01  
+**分支**: feature/adaptive-concurrency-guard-20250928
+
+### 模块化目录结构
+
+**位置**: `ui/src/lib/modules/logseek/`
+
+```
+logseek/
+├── types/              # 类型定义层
+│   └── index.ts       # 所有 TypeScript 类型集中管理 (174 行)
+├── api/                # API 客户端层
+│   ├── config.ts       # API 配置 (21 行)
+│   ├── search.ts       # 搜索 API (36 行)
+│   ├── settings.ts     # 设置 API (51 行)
+│   ├── nl2q.ts         # 自然语言转换 API (36 行)
+│   ├── view.ts         # 文件查看 API (34 行)
+│   └── index.ts        # API 模块导出
+├── utils/              # 工具函数层
+│   ├── highlight.ts    # 高亮和截断工具 (100 行)
+│   └── index.ts        # 工具模块导出
+├── composables/        # 可组合逻辑层
+│   ├── useStreamReader.svelte.ts  # 流读取 (115 行)
+│   ├── useSearch.svelte.ts        # 搜索状态管理 (127 行)
+│   ├── useSettings.svelte.ts      # 设置状态管理 (134 行)
+│   └── index.ts                   # Composables 导出
+├── components/         # 组件层（预留，未来扩展）
+└── index.ts            # LogSeek 模块统一入口
+```
+
+### 已完成内容
+
+#### 1. 类型定义层 ✅
+**文件**: `types/index.ts`
+
+**主要类型**:
+- 搜索相关：`JsonLine`, `JsonChunk`, `SearchJsonResult`, `SearchBody`
+- 设置相关：`MinioSettingsPayload`, `MinioSettingsResponse`
+- NL2Q：`NL2QRequest`, `NL2QResponse`
+- 文件查看：`ViewParams`, `ViewCacheResponse`
+- UI 状态：`SearchState`, `SettingsState`, `ViewState`
+- 工具类型：`ApiProblem`, `SnippetResult`, `SnippetOptions`
+
+#### 2. API 客户端层 ✅
+**目录**: `api/`
+
+**封装的 API**:
+- **config.ts**: API 基础配置和公共请求头
+- **search.ts**: 搜索 API
+  - `startSearch()` - 启动流式搜索
+  - `extractSessionId()` - 提取会话 ID
+- **settings.ts**: MinIO 设置 API
+  - `fetchMinioSettings()` - 获取设置
+  - `saveMinioSettings()` - 保存设置
+- **nl2q.ts**: 自然语言转换 API
+  - `convertNaturalLanguage()` - NL 转查询字符串
+- **view.ts**: 文件查看 API
+  - `fetchViewCache()` - 获取文件行范围
+
+**优势**:
+- 统一错误处理
+- RFC 7807 Problem Details 支持
+- 中文错误消息
+- 类型安全
+
+#### 3. 工具函数层 ✅
+**目录**: `utils/`
+
+**功能模块**:
+- **highlight.ts**: 文本处理工具
+  - `escapeHtml()` - HTML 转义
+  - `escapeRegExp()` - 正则转义
+  - `highlight()` - 关键词高亮（`<mark>` 标签）
+  - `snippet()` - 智能截断长行，保留关键词上下文
+
+**特点**:
+- 可复用逻辑提取
+- 支持左右截断标记
+- 智能单词边界对齐
+
+#### 4. Composables 层 ✅
+**目录**: `composables/`
+
+**可组合逻辑**:
+- **useStreamReader.svelte.ts**: 流式读取管理
+  - NDJSON 流分批读取
+  - 缓冲区管理
+  - 错误处理
+- **useSearch.svelte.ts**: 搜索状态管理
+  - 搜索启动/取消
+  - 分页加载
+  - 结果聚合
+- **useSettings.svelte.ts**: 设置状态管理
+  - 设置加载/保存
+  - 连接验证
+  - 表单状态
+
+**优势**:
+- Svelte 5 Runes 风格
+- 状态封装
+- 逻辑复用
+- 清晰的 API
+
+#### 5. 页面重构 ✅
+
+**首页** (`routes/+page.svelte`):
+- ✅ 使用 `convertNaturalLanguage()` API
+- ✅ 精简代码逻辑（71 行 → 57 行）
+
+**设置页** (`routes/settings/+page.svelte`):
+- ✅ 使用 `useSettings()` composable
+- ✅ 大幅精简逻辑（116 行 → 37 行）
+- ✅ 所有状态管理委托给 composable
+
+**搜索页** (`routes/search/+page.svelte`):
+- ✅ 使用 `startSearch()`, `extractSessionId()` API
+- ✅ 使用 `highlight()`, `snippet()` 工具函数
+- ✅ 导入 `SearchJsonResult`, `JsonLine`, `JsonChunk` 类型
+- ✅ 核心逻辑精简（移除重复代码）
+
+**查看页** (`routes/view/+page.svelte`):
+- ✅ 使用 `fetchViewCache()` API
+- ✅ 使用 `highlight()` 工具函数
+- ✅ 移除本地重复实现
+
+### 关键改进
+
+#### 代码组织
+- **模块化**: 按功能分层，职责清晰
+- **可复用**: API 和工具函数可在多处使用
+- **类型安全**: TypeScript 类型集中管理
+- **代码精简**: 页面代码大幅减少
+
+#### 架构优势
+- **分离关注**: UI 与业务逻辑分离
+- **易于维护**: 每层独立修改
+- **便于测试**: API 和 composables 可独立测试
+- **易于扩展**: 添加新功能只需在相应层添加
+
+#### Svelte 5 Runes 风格
+- 使用 `$state`, `$derived`, `$effect`
+- Composables 返回 getter/setter
+- 现代化的响应式状态管理
+
+### 编译和测试
+✅ **编译通过** - 所有模块无警告  
+⏳ **功能测试** - 待验证（运行前端 dev 服务器）
+
+### 提交记录
+- `[pending]` - Refactor frontend with modular LogSeek architecture (Phase 4)
+
 ### 下一步行动
-阶段 3 已完成！可以开始阶段 4（前端重构）或阶段 5（文档和工具更新）。
+阶段 4 已完成！可以开始：
+1. 运行前端 dev 服务器测试功能
+2. 进入阶段 5（文档和工具更新）
 
 ## 📂 新文件清单
 

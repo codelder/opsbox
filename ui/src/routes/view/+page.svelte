@@ -1,11 +1,13 @@
 <script lang="ts">
+  /**
+   * 文件查看页面（重构版）
+   * 使用 LogSeek 模块的 API 客户端和工具函数
+   */
   import { onMount, onDestroy } from 'svelte';
-  import { env } from '$env/dynamic/public';
   import { createVirtualizer } from '@tanstack/svelte-virtual';
   import { get } from 'svelte/store';
   import { browser } from '$app/environment';
-
-  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
+  import { fetchViewCache, escapeHtml, escapeRegExp } from '$lib/modules/logseek';
 
   let file = $state('');
   let sid = $state('');
@@ -121,18 +123,7 @@
   });
 
   async function fetchRange(s: number, e: number) {
-    const url = `${API_BASE}/view.cache.json?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(file)}&start=${s}&end=${e}`;
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return data as {
-      file: string;
-      total: number;
-      start: number;
-      end: number;
-      keywords: string[];
-      lines: { no: number; text: string }[];
-    };
+    return await fetchViewCache(sid, file, s, e);
   }
 
   async function loadInitial() {
@@ -186,29 +177,7 @@
     }
   }
 
-  // 转义与高亮（模仿 GitHub 高亮效果，使用 <mark>）
-  function escapeHtml(s: string): string {
-    return s
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
-  }
-  function escapeRegExp(s: string): string {
-    return s.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
-  }
-  function highlight(line: string, keywords: string[]): string {
-    let out = escapeHtml(line);
-    const kws = (keywords || []).filter((k) => k && k.length > 0);
-    for (const kw of kws) {
-      const re = new RegExp(escapeRegExp(kw), 'g');
-      out = out.replace(re, (m) => `<mark>${escapeHtml(m)}</mark>`);
-    }
-    return out;
-  }
-
-  // 关键词高亮函数，用于在正文中高亮显示搜索关键词
+  // 关键词高亮函数（使用 LogSeek 模块的工具函数）
   function highlightKeywords(text: string): string {
     if (!keywords || keywords.length === 0 || !text) {
       return escapeHtml(text);
@@ -222,7 +191,7 @@
         const escapedKeyword = escapeRegExp(keyword.trim());
         // 大小写敏感匹配
         const regex = new RegExp(escapedKeyword, 'g');
-        result = result.replace(regex, (match) => {
+        result = result.replace(regex, (match: string) => {
           return `<mark class="bg-yellow-200/80 py-0.5 rounded-sm text-yellow-900 dark:bg-yellow-400/30 dark:text-yellow-200">${match}</mark>`;
         });
       }

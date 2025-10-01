@@ -1,6 +1,11 @@
 <script lang="ts">
-  import { env } from '$env/dynamic/public';
+  /**
+   * 首页（重构版）
+   * 使用 LogSeek 模块的 API 客户端
+   */
   import { IconRobot, IconFunction } from '@tabler/icons-svelte';
+  import { convertNaturalLanguage } from '$lib/modules/logseek';
+
   // 工具函数：将片段插入到输入框光标位置
   let inputEl: HTMLInputElement | null = null;
 
@@ -32,37 +37,19 @@
     e.preventDefault();
     const text = (inputEl?.value || '').trim();
     if (!text || aiLoading) return;
+
     if (!aiMode) {
       // 表达式模式：直接跳到 /search?q=
       window.location.href = `/search?q=${encodeURIComponent(text)}`;
       return;
     }
+
     // AI 模式：先调用 nl2q，再跳转
     aiLoading = true;
     try {
-      const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
-      const res = await fetch(`${API_BASE}/nl2q`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ nl: text })
-      });
-
-      if (!res.ok) {
-        console.error('AI 生成失败：AI 服务异常', res.status);
-        return;
-      }
-
-      const data = (await res.json()) as { q?: string };
-      const q = (data?.q || '').trim();
-
-      if (!q) {
-        console.error('AI 生成失败：AI 返回空结果');
-        return;
-      }
-
-      window.location.href = `/search?q=${encodeURIComponent(q)}`;
+      const query = await convertNaturalLanguage(text);
+      window.location.href = `/search?q=${encodeURIComponent(query)}`;
     } catch (err) {
-      // 网络或其他异常
       console.error('AI 生成失败：', err);
     } finally {
       aiLoading = false;
