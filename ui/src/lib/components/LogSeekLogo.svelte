@@ -22,13 +22,7 @@
     htmlFor?: string;
   }
 
-  let {
-    size = 'large',
-    asLabel = false,
-    hoverable = false,
-    class: className = '',
-    htmlFor
-  }: Props = $props();
+  let { size = 'large', asLabel = false, hoverable = false, class: className = '', htmlFor }: Props = $props();
 
   // 尺寸映射
   const sizeClasses = {
@@ -44,10 +38,7 @@
 </script>
 
 {#if asLabel && htmlFor}
-  <label
-    for={htmlFor}
-    class="{baseClass} {hoverClass} {cursorClass} {className}"
-  >
+  <label for={htmlFor} class="{baseClass} {hoverClass} {cursorClass} {className}">
     <span class="text-blue-600 drop-shadow-sm">L</span>
     <span class="text-red-600 drop-shadow-sm">o</span>
     <span class="text-yellow-500 drop-shadow-sm">g</span>
@@ -67,4 +58,3 @@
     <span class="text-yellow-500 drop-shadow-sm">k</span>
   </div>
 {/if}
-

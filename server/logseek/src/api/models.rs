@@ -50,7 +50,7 @@ impl From<AppError> for Problem {
         problemdetails::new(status)
           .with_title(e.to_string())
           .with_detail(e.to_string())
-      },
+      }
     }
   }
 }
@@ -69,11 +69,15 @@ pub struct NL2QOut {
 }
 
 /// MinIO 设置请求/响应
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MinioSettingsPayload {
+  #[serde(default)]
   pub endpoint: String,
+  #[serde(default)]
   pub bucket: String,
+  #[serde(default)]
   pub access_key: String,
+  #[serde(default)]
   pub secret_key: String,
   #[serde(default)]
   pub configured: bool,
@@ -99,19 +103,6 @@ impl From<settings::MinioSettings> for MinioSettingsPayload {
       bucket: value.bucket,
       access_key: value.access_key,
       secret_key: value.secret_key,
-      configured: false,
-      connection_error: None,
-    }
-  }
-}
-
-impl Default for MinioSettingsPayload {
-  fn default() -> Self {
-    Self {
-      endpoint: String::new(),
-      bucket: String::new(),
-      access_key: String::new(),
-      secret_key: String::new(),
       configured: false,
       connection_error: None,
     }

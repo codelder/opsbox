@@ -12,25 +12,25 @@ import { getApiBase, commonHeaders } from './config';
  * @returns 生成的查询字符串
  */
 export async function convertNaturalLanguage(nl: string): Promise<string> {
-	const API_BASE = getApiBase();
-	const body: NL2QRequest = { nl };
+  const API_BASE = getApiBase();
+  const body: NL2QRequest = { nl };
 
-	const response = await fetch(`${API_BASE}/nl2q`, {
-		method: 'POST',
-		headers: commonHeaders,
-		body: JSON.stringify(body)
-	});
+  const response = await fetch(`${API_BASE}/nl2q`, {
+    method: 'POST',
+    headers: commonHeaders,
+    body: JSON.stringify(body)
+  });
 
-	if (!response.ok) {
-		throw new Error(`AI 生成失败：HTTP ${response.status}`);
-	}
+  if (!response.ok) {
+    throw new Error(`AI 生成失败：HTTP ${response.status}`);
+  }
 
-	const data = (await response.json()) as NL2QResponse;
-	const query = data?.q?.trim() || '';
+  const data = (await response.json()) as NL2QResponse;
+  const query = data?.q?.trim() || '';
 
-	if (!query) {
-		throw new Error('AI 返回空结果');
-	}
+  if (!query) {
+    throw new Error('AI 返回空结果');
+  }
 
-	return query;
+  return query;
 }

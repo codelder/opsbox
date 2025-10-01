@@ -14,21 +14,21 @@ import { getApiBase } from './config';
  * @param end 结束行号（包含）
  */
 export async function fetchViewCache(
-	sid: string,
-	file: string,
-	start: number,
-	end: number
+  sid: string,
+  file: string,
+  start: number,
+  end: number
 ): Promise<ViewCacheResponse> {
-	const API_BASE = getApiBase();
-	const url = `${API_BASE}/view.cache.json?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(file)}&start=${start}&end=${end}`;
+  const API_BASE = getApiBase();
+  const url = `${API_BASE}/view.cache.json?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(file)}&start=${start}&end=${end}`;
 
-	const response = await fetch(url, {
-		headers: { Accept: 'application/json' }
-	});
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' }
+  });
 
-	if (!response.ok) {
-		throw new Error(`加载文件失败：HTTP ${response.status}`);
-	}
+  if (!response.ok) {
+    throw new Error(`加载文件失败：HTTP ${response.status}`);
+  }
 
-	return await response.json();
+  return await response.json();
 }

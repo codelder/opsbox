@@ -37,12 +37,10 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
               span: Some(t.span),
             })?);
           }
+        } else if negative {
+          exclude_contains.push(pattern);
         } else {
-          if negative {
-            exclude_contains.push(pattern);
-          } else {
-            include_contains.push(pattern);
-          }
+          include_contains.push(pattern);
         }
       }
       _ => code_tokens.push(t),
@@ -189,14 +187,14 @@ impl Parser {
   }
 
   fn can_start_pref(&self) -> bool {
-    match self.peek_kind() {
+    matches!(
+      self.peek_kind(),
       Some(TokenKind::Minus)
-      | Some(TokenKind::LParen)
-      | Some(TokenKind::Literal(_))
-      | Some(TokenKind::Phrase(_))
-      | Some(TokenKind::RegexBody(_)) => true,
-      _ => false,
-    }
+        | Some(TokenKind::LParen)
+        | Some(TokenKind::Literal(_))
+        | Some(TokenKind::Phrase(_))
+        | Some(TokenKind::RegexBody(_))
+    )
   }
 
   fn parse_pref(&mut self, terms: &mut Vec<Term>) -> Result<Expr, ParseError> {
@@ -289,7 +287,7 @@ mod tests {
   fn parse_precedence_and_structure() {
     let spec = parse_github_like("foo OR bar -baz").expect("parse");
     assert_eq!(spec.terms.len(), 3);
-    assert!(matches!(spec.expr, Some(_)));
+    assert!(spec.expr.is_some());
     match spec.expr.unwrap() {
       Expr::Or(v) => {
         assert_eq!(v.len(), 2);
@@ -487,7 +485,10 @@ mod tests {
       Term::RegexStd(r) => {
         assert!(r.is_match("91110108MA7DXPY30B"), "expected valid code to match");
         assert!(!r.is_match("91350200792232668x"), "lowercase letters should not match");
-        assert!(!r.is_match("9135020079223266"), "code shorter than 18 chars should not match");
+        assert!(
+          !r.is_match("9135020079223266"),
+          "code shorter than 18 chars should not match"
+        );
       }
       other => panic!("expected RegexStd term, got {:?}", other),
     }

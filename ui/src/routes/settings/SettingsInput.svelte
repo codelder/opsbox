@@ -60,10 +60,10 @@
   class="flex flex-col gap-3 rounded-2xl border border-transparent bg-white/60 p-4 text-sm text-slate-500 shadow-sm shadow-slate-200/40 transition hover:border-slate-200 hover:shadow-slate-200 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:border-slate-700"
 >
   <span>
-    <span class="text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400 block">
+    <span class="block text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400">
       {label}
     </span>
-    <span class="text-sm leading-relaxed text-slate-600 dark:text-slate-300 block">
+    <span class="block text-sm leading-relaxed text-slate-600 dark:text-slate-300">
       {description}
     </span>
   </span>
@@ -77,4 +77,3 @@
     oninput={handleInput}
   />
 </label>
-

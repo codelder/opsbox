@@ -43,6 +43,7 @@
 
     if (!aiMode) {
       // 表达式模式：直接跳到 /search?q=（使用客户端路由，避免触发 layout.ts 重新加载）
+      // eslint-disable-next-line svelte/no-navigation-without-resolve
       goto(`/search?q=${encodeURIComponent(text)}`);
       return;
     }
@@ -51,6 +52,7 @@
     aiLoading = true;
     try {
       const query = await convertNaturalLanguage(text);
+      // eslint-disable-next-line svelte/no-navigation-without-resolve
       goto(`/search?q=${encodeURIComponent(query)}`);
     } catch (err) {
       console.error('AI 生成失败：', err);

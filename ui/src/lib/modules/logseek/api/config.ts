@@ -9,13 +9,13 @@ import { env } from '$env/dynamic/public';
  * 获取 API 基础路径
  */
 export function getApiBase(): string {
-	return env.PUBLIC_API_BASE || '/api/v1/logseek';
+  return env.PUBLIC_API_BASE || '/api/v1/logseek';
 }
 
 /**
  * 公共请求头
  */
 export const commonHeaders = {
-	'Content-Type': 'application/json',
-	Accept: 'application/json'
+  'Content-Type': 'application/json',
+  Accept: 'application/json'
 };

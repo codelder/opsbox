@@ -31,14 +31,7 @@
     onDownload?: () => void;
   }
 
-  let {
-    filePath,
-    total,
-    loadedLines,
-    keywords = [],
-    loading = false,
-    onDownload
-  }: Props = $props();
+  let { filePath, total, loadedLines, keywords = [], loading = false, onDownload }: Props = $props();
 
   // 提取文件名
   function extractFileName(fullPath: string): string {
@@ -76,7 +69,7 @@
         {extractFileName(filePath)}
       </h2>
       {#if extractTarName(filePath)}
-        <p class="mt-0.5 text-[11px] text-slate-500 dark:text-gray-400 font-mono break-all">
+        <p class="mt-0.5 font-mono text-[11px] break-all text-slate-500 dark:text-gray-400">
           来自: {extractTarName(filePath)}
         </p>
       {/if}
@@ -106,7 +99,7 @@
 
           {#if keywords?.length}
             <!-- 关键词显示 -->
-            {#each keywords.slice(0, 3) as keyword}
+            {#each keywords.slice(0, 3) as keyword (keyword)}
               <span
                 class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-[10px] font-medium text-yellow-800 ring-1 ring-yellow-600/20 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-500/20"
                 >{keyword}</span
@@ -146,4 +139,3 @@
     </div>
   </div>
 </div>
-

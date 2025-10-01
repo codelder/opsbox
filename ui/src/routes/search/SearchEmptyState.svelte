@@ -13,16 +13,12 @@
      */
     errorMessage?: string;
     /**
-     * 查询字符串（用于判断是否有输入）
-     */
-    query?: string;
-    /**
      * 重试回调（仅 error 类型使用）
      */
     onRetry?: () => void;
   }
 
-  let { type, errorMessage, query, onRetry }: Props = $props();
+  let { type, errorMessage, onRetry }: Props = $props();
 </script>
 
 <div class="mx-auto max-w-lg text-center">
@@ -89,10 +85,7 @@
         </svg>
       </div>
       <h3 class="mt-4 text-xl font-semibold text-blue-900 dark:text-blue-200">开始搜索</h3>
-      <p class="mt-2 text-sm text-blue-700 dark:text-blue-300">
-        在上方输入框中输入关键词或自然语言查询，开始搜索日志
-      </p>
+      <p class="mt-2 text-sm text-blue-700 dark:text-blue-300">在上方输入框中输入关键词或自然语言查询，开始搜索日志</p>
     </div>
   {/if}
 </div>
-

@@ -141,7 +141,7 @@ impl AppConfig {
       .unwrap_or_else(|| {
         let phys = num_cpus::get_physical().max(1);
         let cpu_conc = self.get_cpu_concurrency();
-        phys.min(cpu_conc + 2).min(18).max(2)
+        phys.min(cpu_conc + 2).clamp(2, 18)
       })
       .clamp(2, 64)
   }

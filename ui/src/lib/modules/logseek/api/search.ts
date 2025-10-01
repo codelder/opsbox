@@ -12,25 +12,25 @@ import { getApiBase, commonHeaders } from './config';
  * @returns Response 对象，包含 NDJSON 流和会话 ID（响应头 X-Logseek-SID）
  */
 export async function startSearch(query: string): Promise<Response> {
-	const API_BASE = getApiBase();
-	const body: SearchBody = { q: query };
+  const API_BASE = getApiBase();
+  const body: SearchBody = { q: query };
 
-	const response = await fetch(`${API_BASE}/stream.ndjson`, {
-		method: 'POST',
-		headers: commonHeaders,
-		body: JSON.stringify(body)
-	});
+  const response = await fetch(`${API_BASE}/stream.ndjson`, {
+    method: 'POST',
+    headers: commonHeaders,
+    body: JSON.stringify(body)
+  });
 
-	if (!response.ok) {
-		throw new Error(`搜索请求失败：HTTP ${response.status}`);
-	}
+  if (!response.ok) {
+    throw new Error(`搜索请求失败：HTTP ${response.status}`);
+  }
 
-	return response;
+  return response;
 }
 
 /**
  * 从响应中提取会话 ID
  */
 export function extractSessionId(response: Response): string {
-	return response.headers.get('X-Logseek-SID') || '';
+  return response.headers.get('X-Logseek-SID') || '';
 }

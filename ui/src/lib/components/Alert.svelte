@@ -57,12 +57,14 @@
       button: 'bg-red-600 hover:bg-red-700 focus:ring-red-500'
     },
     success: {
-      container: 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
+      container:
+        'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200',
       icon: 'text-emerald-600 dark:text-emerald-400',
       button: 'bg-emerald-600 hover:bg-emerald-700 focus:ring-emerald-500'
     },
     warning: {
-      container: 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200',
+      container:
+        'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200',
       icon: 'text-amber-600 dark:text-amber-400',
       button: 'bg-amber-600 hover:bg-amber-700 focus:ring-amber-500'
     },
@@ -104,9 +106,9 @@
     </svg>
   {/if}
 
-  <div class="flex-1 min-w-0">
+  <div class="min-w-0 flex-1">
     {#if title}
-      <h3 class="font-semibold mb-1">{title}</h3>
+      <h3 class="mb-1 font-semibold">{title}</h3>
     {/if}
     <p class="leading-relaxed">{message}</p>
 
@@ -133,4 +135,3 @@
     </button>
   {/if}
 </div>
-

@@ -36,17 +36,13 @@ fn build_prompt(user_nl: &str) -> String {
 // 移除大模型推理模型产生的 <think> 思考片段，保留真实输出
 fn strip_think_sections(input: &str) -> String {
   let mut out = input.to_string();
-  loop {
-    if let Some(start) = out.find("<think>") {
-      if let Some(end_rel) = out[start..].find("</think>") {
-        let end = start + end_rel + "</think>".len();
-        out.replace_range(start..end, "");
-      } else {
-        // 若没有闭合标签，直接移除从 <think> 开始至末尾
-        out.replace_range(start.., "");
-        break;
-      }
+  while let Some(start) = out.find("<think>") {
+    if let Some(end_rel) = out[start..].find("</think>") {
+      let end = start + end_rel + "</think>".len();
+      out.replace_range(start..end, "");
     } else {
+      // 若没有闭合标签，直接移除从 <think> 开始至末尾
+      out.replace_range(start.., "");
       break;
     }
   }

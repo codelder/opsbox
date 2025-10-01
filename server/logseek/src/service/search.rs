@@ -153,13 +153,13 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   ranges.sort_by_key(|r| r.0);
   let mut merged: Vec<(usize, usize)> = Vec::new();
   for (s, e) in ranges {
-    if let Some(last) = merged.last_mut() {
-      if s <= last.1 + 1 {
-        if e > last.1 {
-          last.1 = e;
-        }
-        continue;
+    if let Some(last) = merged.last_mut()
+      && s <= last.1 + 1
+    {
+      if e > last.1 {
+        last.1 = e;
       }
+      continue;
     }
     merged.push((s, e));
   }

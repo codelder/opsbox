@@ -202,7 +202,7 @@ async fn stream_markdown(
   )
   .open()
   .await
-  .map_err(|e| AppError::StorageError(e))?;
+  .map_err(AppError::StorageError)?;
 
   let spec = crate::query::Query::parse_github_like(&body.q).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
 
@@ -289,7 +289,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
     let sid_c = sid.clone();
     tokio::spawn(async move {
       let file_start = std::time::Instant::now();
-      let Ok(reader) = tokio::fs::File::open(&path).await.map_err(|e| StorageError::from(e)) else {
+      let Ok(reader) = tokio::fs::File::open(&path).await.map_err(StorageError::from) else {
         log::warn!("profiling: 打开文件失败 path={}", path);
         return;
       };
@@ -542,7 +542,7 @@ async fn stream_s3_ndjson(
         };
 
         let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
-        let Ok(reader) = s3rp.open().await.map_err(|e| AppError::StorageError(e)) else {
+        let Ok(reader) = s3rp.open().await.map_err(AppError::StorageError) else {
           log::warn!("profiling: [S3] 打开对象失败 key={}", key);
           // 统计：S3 错误
           stats_c2.s3_errors.fetch_add(1, Ordering::Relaxed);
@@ -609,7 +609,7 @@ async fn stream_s3_ndjson(
       });
     }
 
-    d = d + Duration::days(1);
+    d += Duration::days(1);
   }
 
   log::debug!(

@@ -14,12 +14,7 @@
   let file = $state('');
   let sid = $state('');
   let total = $state(0);
-  // 用于分页（内部使用）
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  let start = $state(1);
   let end = $state(0);
-  // 仅用于展示，可为空
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let keywords = $state<string[]>([]);
   let lines = $state<{ no: number; text: string }[]>([]);
   let loading = $state(false);
@@ -48,14 +43,14 @@
         getScrollElement: () => parentEl,
         count: total
       });
-    } catch {}
+    } catch {
+      // 忽略虚拟器配置错误
+    }
   });
 
-  type VirtualItem = { index: number; start: number; key: any };
+  type VirtualItem = { index: number; start: number; key: string | number | bigint };
   // 虚拟项缓存，避免在模板中使用 {@const}
-  const vItems: VirtualItem[] = $derived(
-    browser ? $rowVirtualizer.getVirtualItems() : []
-  );
+  const vItems: VirtualItem[] = $derived(browser ? $rowVirtualizer.getVirtualItems() : []);
 
   // 统一调度虚拟器测量
   function scheduleVirtualUpdate() {
@@ -63,7 +58,9 @@
     requestAnimationFrame(() => {
       try {
         get(rowVirtualizer)?.measure?.();
-      } catch {}
+      } catch {
+        // 忽略测量错误
+      }
     });
   }
 
@@ -96,7 +93,9 @@
       frame = requestAnimationFrame(() => {
         try {
           virtualizer.measureElement?.(node);
-        } catch {}
+        } catch {
+          // 忽略测量元素错误
+        }
       });
     };
 
@@ -138,7 +137,6 @@
 
       if (total <= 0) {
         // 无内容
-        start = 0;
         end = 0;
         lines = [];
         return;
@@ -146,7 +144,6 @@
 
       // 第二步：一次性加载全部行
       const full = await fetchRange(1, total);
-      start = full.start;
       end = full.end;
       keywords = full.keywords || [];
       lines = full.lines || [];
@@ -184,9 +181,9 @@
     if (!keywords || keywords.length === 0 || !text) {
       return escapeHtml(text);
     }
-    
+
     let result = escapeHtml(text);
-    
+
     // 对每个关键词进行高亮处理
     for (const keyword of keywords) {
       if (keyword && keyword.trim()) {
@@ -198,7 +195,7 @@
         });
       }
     }
-    
+
     return result;
   }
 
@@ -245,7 +242,9 @@
         try {
           const v = get(rowVirtualizer);
           v?.scrollToIndex?.(0);
-        } catch {}
+        } catch {
+          // 忽略滚动初始化错误
+        }
       });
     }
 
@@ -332,24 +331,17 @@
       </div>
     {/if}
 
-    <div class="flex flex-1 flex-col gap-10 min-h-0">
+    <div class="flex min-h-0 flex-1 flex-col gap-10">
       <!-- 主内容卡片：文件信息 + 虚拟滚动容器 -->
       <div
         class="flex flex-1 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
       >
         <!-- 文件信息标题栏 -->
-        <FileHeader
-          filePath={file}
-          {total}
-          loadedLines={end}
-          {keywords}
-          {loading}
-          onDownload={downloadCurrentFile}
-        />
+        <FileHeader filePath={file} {total} loadedLines={end} {keywords} {loading} onDownload={downloadCurrentFile} />
 
         <!-- 虚拟滚动内容区域 -->
         <div
-          class="relative flex-1 min-h-0 overflow-auto bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
+          class="relative min-h-0 flex-1 overflow-auto bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
           bind:this={parentEl}
           onscroll={handleScroll}
         >

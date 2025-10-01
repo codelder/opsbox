@@ -66,10 +66,11 @@ pub fn render_markdown(path: &str, ranges: Vec<(usize, usize)>, all_lines: Vec<S
   buf.push_str(&format!("\n## 文件 s3://{}/{}::{}\n\n", "test", "codeler.tar.gz", path));
   buf.push_str("<pre>\n");
   for (chunk_idx, (s, e)) in ranges.iter().copied().enumerate() {
+    #[allow(clippy::needless_range_loop)]
     for i in s..=e {
       use std::fmt::Write as _;
-      let highlighted = highlight_with_mark(&all_lines[i], &keywords);
-      let _ = write!(&mut buf, "{:>6} | {}\n", i + 1, highlighted);
+      let highlighted = highlight_with_mark(&all_lines[i], keywords);
+      let _ = writeln!(&mut buf, "{:>6} | {}", i + 1, highlighted);
     }
     if chunk_idx + 1 < ranges.len() {
       buf.push_str("       ...\n");
@@ -109,6 +110,7 @@ pub fn render_json_chunks(
   let mut chunks: Vec<JsonChunk> = Vec::with_capacity(ranges.len());
   for (s, e) in ranges.into_iter() {
     let mut lines_vec: Vec<JsonLine> = Vec::with_capacity(e.saturating_sub(s) + 1);
+    #[allow(clippy::needless_range_loop)]
     for i in s..=e {
       lines_vec.push(JsonLine {
         no: i + 1,

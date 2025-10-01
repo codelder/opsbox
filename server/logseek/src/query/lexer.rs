@@ -83,7 +83,7 @@ fn read_until_ws_paren(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) 
 
 fn read_quoted(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> String {
   let mut s = String::new();
-  while let Some(c) = it.next() {
+  for c in it.by_ref() {
     *pos += 1;
     if c == '"' {
       break;
@@ -97,7 +97,7 @@ fn read_regex_body(it: &mut Peekable<std::str::Chars<'_>>, pos: &mut usize) -> S
   // 保留反斜杠本身，仅在遇到 \/ 时让分隔符被转义
   let mut s = String::new();
   let mut escaped = false;
-  while let Some(c) = it.next() {
+  for c in it.by_ref() {
     *pos += 1;
     if escaped {
       // 上一个字符是 '\\'，当前字符无论是什么都原样加入

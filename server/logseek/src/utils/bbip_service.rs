@@ -40,7 +40,7 @@ fn build_paths(base_dir: &str, buckets: &[&str], range: DateRange) -> Vec<String
     for b in buckets {
       files.push(format!("{}/BBIP_{}_APPLOG_{}.tar.gz", base_dir, b, date));
     }
-    cur = cur + chrono::Duration::days(1);
+    cur += chrono::Duration::days(1);
   }
   files
 }
@@ -61,11 +61,10 @@ fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, D
       if rest.len() == 8 && rest.chars().all(|c| c.is_ascii_digit()) {
         fdt_q = Some(rest.to_string());
       }
-    } else if let Some(rest) = t.strip_prefix("tdt:") {
-      if rest.len() == 8 && rest.chars().all(|c| c.is_ascii_digit()) {
+    } else if let Some(rest) = t.strip_prefix("tdt:")
+      && rest.len() == 8 && rest.chars().all(|c| c.is_ascii_digit()) {
         tdt_q = Some(rest.to_string());
       }
-    }
   }
 
   let prev = today - chrono::Duration::days(1);

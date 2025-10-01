@@ -14,11 +14,14 @@ pub struct Entry<T> {
   pub value: T,
 }
 
+type KeywordsCache = RwLock<HashMap<String, Entry<Vec<String>>>>;
+type FilesCache = RwLock<HashMap<(String, String), Entry<Vec<String>>>>;
+
 #[derive(Debug)]
 pub struct Cache {
   ttl: Duration,
-  keywords: RwLock<HashMap<String, Entry<Vec<String>>>>, // sid -> keywords
-  files: RwLock<HashMap<(String, String), Entry<Vec<String>>>>, // (sid, file_id) -> lines
+  keywords: KeywordsCache, // sid -> keywords
+  files: FilesCache,       // (sid, file_id) -> lines
 }
 
 static GLOBAL: OnceLock<Cache> = OnceLock::new();
@@ -45,7 +48,7 @@ impl Cache {
   fn start_cleaner_once() {
     CLEANER_STARTED.get_or_init(|| {
       // 使用取消令牌支持优雅关闭后台清理任务
-      let token = CLEANER_CANCEL.get_or_init(|| CancellationToken::new()).clone();
+      let token = CLEANER_CANCEL.get_or_init(CancellationToken::new).clone();
       tokio::spawn(async move {
         let interval = Duration::from_secs(60);
         loop {
@@ -85,7 +88,6 @@ impl Cache {
           }
         }
       });
-      ()
     });
   }
 

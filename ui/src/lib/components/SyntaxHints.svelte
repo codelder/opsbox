@@ -28,7 +28,7 @@
 
 <div class="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
   <span class="mr-1 select-none">语法提示：</span>
-  {#each hints as hint}
+  {#each hints as hint (hint.label)}
     <button
       class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
       onclick={() => onInsert(hint.snippet, hint.caretOffset)}
@@ -47,4 +47,3 @@
     示例
   </button>
 </div>
-

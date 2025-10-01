@@ -11,7 +11,7 @@
 
   // 使用 composable 管理搜索状态
   const searchStore = useSearch();
-  
+
   // 本地输入框状态
   let q = $state('');
 
@@ -19,7 +19,6 @@
   const collapsedFiles = new SvelteSet<number>();
   const expandedAllMatches = new SvelteSet<number>();
   const expandedLines = new SvelteSet<string>();
-  const lineKey = (fileIdx: number, chunkIdx: number, lineIdx: number) => `${fileIdx}-${chunkIdx}-${lineIdx}`;
   function isFileCollapsed(i: number) {
     return collapsedFiles.has(i);
   }
@@ -54,13 +53,9 @@
       expandedAllMatches.add(i);
     }
   }
-  function isLineExpanded(key: string) {
-    return expandedLines.has(key);
-  }
   function expandLine(key: string) {
     expandedLines.add(key);
   }
-
 
   // 从地址栏读取 ?q=，并在客户端启动搜索
   let searchInit = $state(false);
@@ -176,11 +171,15 @@
 
       <!-- 空状态和错误状态 -->
       {#if searchStore.error}
-        <SearchEmptyState type="error" errorMessage={searchStore.error} query={q} onRetry={() => {
-          if (q) searchStore.search(q);
-        }} />
+        <SearchEmptyState
+          type="error"
+          errorMessage={searchStore.error}
+          onRetry={() => {
+            if (q) searchStore.search(q);
+          }}
+        />
       {:else if !searchStore.loading && searchStore.results.length === 0 && q && !searchStore.hasMore}
-        <SearchEmptyState type="no-results" query={q} />
+        <SearchEmptyState type="no-results" />
       {:else if !searchStore.loading && !searchStore.error && searchStore.results.length === 0 && !q}
         <SearchEmptyState type="initial" />
       {/if}

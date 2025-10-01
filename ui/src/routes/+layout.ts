@@ -27,7 +27,7 @@ export const load: LayoutLoad = async ({ fetch, url }) => {
         const data = await res.json();
         configChecked = true;
         isConfigured = data?.configured || false;
-        
+
         if (isConfigured) {
           return {};
         }

@@ -75,10 +75,7 @@
     return flattenLines(item).length;
   }
 
-  function visibleLines(
-    item: SearchJsonResult,
-    fileIdx: number
-  ): Array<{ no: number; text: string; _ci: number; _li: number }> {
+  function visibleLines(item: SearchJsonResult): Array<{ no: number; text: string; _ci: number; _li: number }> {
     const flat = flattenLines(item);
     if (isShowAll) return flat;
     return flat.slice(0, Math.min(7, flat.length));
@@ -131,9 +128,7 @@
                 }
               }}
             >
-              <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1"
-                >{splitPath(item.path).inner}</span
-              >
+              <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1">{splitPath(item.path).inner}</span>
             </span>
             <svg
               class="mt-1 h-4 w-4 shrink-0 text-blue-600 opacity-0 transition-opacity duration-200 group-hover/link:opacity-100 dark:text-blue-400"
@@ -229,7 +224,7 @@
     <div
       class="overflow-hidden bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
     >
-      {#each visibleLines(item, index) as ln (index + '-' + ln._ci + '-' + ln._li)}
+      {#each visibleLines(item) as ln (index + '-' + ln._ci + '-' + ln._li)}
         <div
           class="group/line grid grid-cols-[80px_1fr] gap-0 font-mono text-sm leading-[24px] transition-colors duration-150 hover:bg-blue-50/40 dark:hover:bg-blue-900/10"
         >
@@ -258,12 +253,7 @@
                       viewBox="0 0 24 24"
                       stroke="currentColor"
                     >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M15 19l-7-7 7-7"
-                      />
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
                     </svg>
                     <span>…</span>
                   </button>
@@ -282,12 +272,7 @@
                       viewBox="0 0 24 24"
                       stroke="currentColor"
                     >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M9 5l7 7-7 7"
-                      />
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
                     </svg>
                   </button>
                 {/if}
@@ -351,4 +336,3 @@
     display: inline;
   }
 </style>
-
