@@ -95,7 +95,7 @@ Architecture (modular design)
     - init_schema(db_pool) → Result<()>: registers logseek_ prefixed tables
   - routes.rs: HTTP endpoint definitions using opsbox-core types
     - /stream: markdown stream from local example; demonstration endpoint
-    - /stream.ndjson: streams local filesystem results as NDJSON; includes a per-request session id (X-Logsearch-SID) and caches highlighted line slices
+    - /stream.ndjson: streams local filesystem results as NDJSON; includes a per-request session id (X-Logseek-SID) and caches highlighted line slices
     - /stream.s3.ndjson: streams S3/MinIO search results as NDJSON over a configurable date range and bucket set; uses S3ReaderProvider
     - /view.cache.json: returns cached line ranges for a file within a session, including line numbers and keywords
     - /settings/minio (GET/POST): persistence and validation of MinIO connectivity using shared database pool

@@ -9,7 +9,7 @@ import { getApiBase, commonHeaders } from './config';
 /**
  * 开始流式搜索（返回 ReadableStream）
  * @param query 查询字符串
- * @returns Response 对象，包含 NDJSON 流和会话 ID（响应头 X-Logsearch-SID）
+ * @returns Response 对象，包含 NDJSON 流和会话 ID（响应头 X-Logseek-SID）
  */
 export async function startSearch(query: string): Promise<Response> {
 	const API_BASE = getApiBase();
@@ -32,5 +32,5 @@ export async function startSearch(query: string): Promise<Response> {
  * 从响应中提取会话 ID
  */
 export function extractSessionId(response: Response): string {
-	return response.headers.get('X-Logsearch-SID') || '';
+	return response.headers.get('X-Logseek-SID') || '';
 }

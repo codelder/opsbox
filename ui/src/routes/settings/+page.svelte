@@ -25,6 +25,7 @@
     await settings.save();
     if (settings.saveSuccess) {
       await invalidate('/api/v1/logseek/settings/minio');
+      // 强制完整页面刷新，以重新检查配置状态
       window.location.href = '/';
     }
   }

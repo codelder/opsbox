@@ -3,6 +3,7 @@
    * 首页（重构版）
    * 使用 LogSeek 模块的 API 客户端
    */
+  import { goto } from '$app/navigation';
   import { IconRobot, IconFunction } from '@tabler/icons-svelte';
   import { convertNaturalLanguage } from '$lib/modules/logseek';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
@@ -41,8 +42,8 @@
     if (!text || aiLoading) return;
 
     if (!aiMode) {
-      // 表达式模式：直接跳到 /search?q=
-      window.location.href = `/search?q=${encodeURIComponent(text)}`;
+      // 表达式模式：直接跳到 /search?q=（使用客户端路由，避免触发 layout.ts 重新加载）
+      goto(`/search?q=${encodeURIComponent(text)}`);
       return;
     }
 
@@ -50,7 +51,7 @@
     aiLoading = true;
     try {
       const query = await convertNaturalLanguage(text);
-      window.location.href = `/search?q=${encodeURIComponent(query)}`;
+      goto(`/search?q=${encodeURIComponent(query)}`);
     } catch (err) {
       console.error('AI 生成失败：', err);
     } finally {

@@ -5,12 +5,12 @@
 // 新代码应使用 api::models 中的类型
 // ============================================================================
 use crate::api::models::{AppError, MinioSettingsPayload, NL2QOut, SearchBody, ViewParams};
-use crate::utils::bbip_service::derive_plan;
-use crate::repository::settings;
 use crate::repository::cache::{cache as simple_cache, new_sid};
+use crate::repository::settings;
+use crate::utils::bbip_service::derive_plan;
 use crate::{
-  utils::renderer::{render_json_chunks, render_markdown},
   service::search::Search as _,
+  utils::renderer::{render_json_chunks, render_markdown},
   utils::storage::{ReaderProvider as _, S3ReaderProvider, StorageError},
 };
 use axum::{
@@ -20,15 +20,14 @@ use axum::{
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
   routing::{get, post},
 };
-use opsbox_core::SqlitePool;
 use chrono::{Datelike, Duration};
+use opsbox_core::SqlitePool;
 use problemdetails::Problem;
 use serde_json;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 
 async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, Problem> {
   log::debug!(
@@ -102,8 +101,13 @@ async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRespons
 
 fn stream_channel_capacity() -> usize {
   // 优先使用全局调参；未设置则回退到环境变量；再回退到默认值
-  if let Some(t) = crate::utils::tuning::get() { return t.stream_ch_cap.clamp(8, 10_000); }
-  match std::env::var("LOGSEARCH_STREAM_CH_CAP").ok().and_then(|s| s.parse::<usize>().ok()) {
+  if let Some(t) = crate::utils::tuning::get() {
+    return t.stream_ch_cap.clamp(8, 10_000);
+  }
+  match std::env::var("LOGSEEK_STREAM_CH_CAP")
+    .ok()
+    .and_then(|s| s.parse::<usize>().ok())
+  {
     Some(v) => v.clamp(8, 10_000),
     None => 256usize,
   }
@@ -111,8 +115,10 @@ fn stream_channel_capacity() -> usize {
 
 // 读取 S3 IO 并发上限（限制同时打开/读取的对象数）
 fn s3_max_concurrency() -> usize {
-  if let Some(t) = crate::utils::tuning::get() { return t.s3_max_concurrency.clamp(1, 128); }
-  std::env::var("LOGSEARCH_S3_MAX_CONCURRENCY")
+  if let Some(t) = crate::utils::tuning::get() {
+    return t.s3_max_concurrency.clamp(1, 128);
+  }
+  std::env::var("LOGSEEK_S3_MAX_CONCURRENCY")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
     .map(|v| v.clamp(1, 128))
@@ -121,8 +127,10 @@ fn s3_max_concurrency() -> usize {
 
 // 读取 CPU 并发上限（限制同时进行解压/检索的任务数）
 fn cpu_max_concurrency() -> usize {
-  if let Some(t) = crate::utils::tuning::get() { return t.cpu_concurrency.clamp(1, 128); }
-  std::env::var("LOGSEARCH_CPU_CONCURRENCY")
+  if let Some(t) = crate::utils::tuning::get() {
+    return t.cpu_concurrency.clamp(1, 128);
+  }
+  std::env::var("LOGSEEK_CPU_CONCURRENCY")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
     .map(|v| v.clamp(1, 128))
@@ -141,9 +149,7 @@ pub fn router(db_pool: SqlitePool) -> Router {
     .with_state(db_pool)
 }
 
-async fn get_minio_settings(
-  State(pool): State<SqlitePool>,
-) -> Result<Json<MinioSettingsPayload>, Problem> {
+async fn get_minio_settings(State(pool): State<SqlitePool>) -> Result<Json<MinioSettingsPayload>, Problem> {
   let settings_opt = settings::load_minio_settings(&pool).await.map_err(AppError::Settings)?;
   let mut payload = settings_opt
     .clone()
@@ -353,7 +359,7 @@ async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpRespons
         HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
       )
       .header(
-        "X-Logsearch-SID",
+        "X-Logseek-SID",
         HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")),
       )
       .body(body)
@@ -375,12 +381,34 @@ async fn stream_s3_ndjson(
   let cpu_sem = Arc::new(tokio::sync::Semaphore::new(cpu_max));
 
   // 自适应护栏 - 统计与控制器
-  struct Stats { produced: AtomicU64, s3_errors: AtomicU64 }
-  impl Stats { fn new() -> Self { Self { produced: AtomicU64::new(0), s3_errors: AtomicU64::new(0) } } }
+  struct Stats {
+    produced: AtomicU64,
+    s3_errors: AtomicU64,
+  }
+  impl Stats {
+    fn new() -> Self {
+      Self {
+        produced: AtomicU64::new(0),
+        s3_errors: AtomicU64::new(0),
+      }
+    }
+  }
   let stats = Arc::new(Stats::new());
-  struct CpuController { max: usize, target: usize, held: Vec<tokio::sync::OwnedSemaphorePermit> }
-  impl CpuController { fn current_effective(&self) -> usize { self.max.saturating_sub(self.held.len()) } }
-  let cpu_ctrl = Arc::new(tokio::sync::Mutex::new(CpuController { max: cpu_max, target: cpu_max.min(2), held: Vec::new() }));
+  struct CpuController {
+    max: usize,
+    target: usize,
+    held: Vec<tokio::sync::OwnedSemaphorePermit>,
+  }
+  impl CpuController {
+    fn current_effective(&self) -> usize {
+      self.max.saturating_sub(self.held.len())
+    }
+  }
+  let cpu_ctrl = Arc::new(tokio::sync::Mutex::new(CpuController {
+    max: cpu_max,
+    target: cpu_max.min(2),
+    held: Vec::new(),
+  }));
 
   // 后台调节任务（每 3s 调整一次，AIMD 策略）
   {
@@ -397,7 +425,8 @@ async fn stream_s3_ndjson(
         let err = stats_c.s3_errors.load(Ordering::Relaxed);
         let dprod = prod.saturating_sub(prev_prod);
         let derr = err.saturating_sub(prev_err);
-        prev_prod = prod; prev_err = err;
+        prev_prod = prod;
+        prev_err = err;
         let denom = (dprod + derr) as f64;
         let err_rate = if denom > 0.0 { derr as f64 / denom } else { 0.0 };
         let tp = dprod as f64 / 3.0; // 条/秒
@@ -425,7 +454,9 @@ async fn stream_s3_ndjson(
           }
         } else if desired_held < ctrl.held.len() {
           let release = ctrl.held.len() - desired_held;
-          for _ in 0..release { let _ = ctrl.held.pop(); } // drop -> 释放许可
+          for _ in 0..release {
+            let _ = ctrl.held.pop();
+          } // drop -> 释放许可
         }
         log::debug!(
           "adaptive: cpu target={} effective={} err_rate={:.3}% tp={:.2}/s",
@@ -597,11 +628,10 @@ async fn stream_s3_ndjson(
         HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
       )
       .header(
-        "X-Logsearch-SID",
+        "X-Logseek-SID",
         HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")),
       )
       .body(body)
       .unwrap(),
   )
 }
-
