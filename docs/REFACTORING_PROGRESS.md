@@ -7,7 +7,7 @@
 
 - ✅ 阶段 1：重命名和清理 (100%)
 - ✅ 阶段 2：核心框架创建 (100%)
-- ⏳ 阶段 3：LogSeek 后端重构 (0%)
+- ✅ 阶段 3：LogSeek 后端分层重构 (100%)
 - ⏳ 阶段 4：前端重构 (0%)
 - ⏳ 阶段 5：文档和工具 (0%)
 
@@ -148,8 +148,126 @@ src/
 - ✅ 表名前缀: `logseek_minio_config`, `logseek_settings` 使用正确前缀
 - ✅ 模块初始化: LogSeek schema 自动创建
 
+## ✅ 阶段 3：LogSeek 后端分层重构 (100% 完成)
+
+### 分层架构设计
+**位置**: `server/logseek/src/`
+
+```
+logseek/src/
+├── api/                  # API 层 - HTTP 接口
+│   ├── mod.rs           # 模块入口
+│   └── models.rs        # 数据模型（128 行）
+│       ├── AppError         - API 错误类型
+│       ├── SearchBody       - 搜索请求
+│       ├── NL2QOut          - NL2Q 响应
+│       ├── MinioSettingsPayload - MinIO 设置
+│       └── ViewParams       - 查看缓存参数
+├── service/              # 服务层 - 业务逻辑
+│   ├── mod.rs
+│   ├── search.rs        # 搜索服务（815 行）
+│   └── nl2q.rs          # 自然语言转换服务（118 行）
+├── repository/           # 数据访问层 - 持久化和缓存
+│   ├── mod.rs
+│   ├── settings.rs      # 设置持久化（161 行）
+│   └── cache.rs         # 缓存管理（154 行）
+├── utils/                # 工具层 - 通用功能
+│   ├── mod.rs
+│   ├── renderer.rs      # 渲染工具（129 行）
+│   ├── storage.rs       # 存储抽象（309 行）
+│   ├── tuning.rs        # 运行时调参（20 行）
+│   └── bbip_service.rs  # BBIP 服务（232 行）
+├── query/                # 查询解析器（未变）
+│   ├── mod.rs           # 查询模型
+│   ├── lexer.rs         # 词法分析
+│   └── parser.rs        # 语法分析
+├── domain/               # 领域层（占位符，未来扩展）
+├── lib.rs                # 模块入口（42 行，清晰的分层说明）
+└── routes.rs             # 路由处理器（约 600 行，保持向后兼容）
+```
+
+### 已完成内容
+
+#### 1. API 层重构 ✅
+- ✅ 创建 `api/models.rs` 提取所有数据模型
+- ✅ 统一错误类型 `AppError` 及其到 `Problem` 的转换
+- ✅ 请求/响应模型：SearchBody, MinioSettingsPayload, NL2QOut, ViewParams
+- ✅ 清理 `routes.rs` 中的重复定义
+
+#### 2. 服务层重构 ✅
+- ✅ 移动 `search.rs` 到 `service/`
+  - 核心搜索逻辑
+  - 目录遍历和并发控制
+  - 归档文件扫描
+- ✅ 移动 `nl2q.rs` 到 `service/`
+  - Ollama 集成
+  - 自然语言到查询字符串转换
+
+#### 3. 数据访问层重构 ✅
+- ✅ 移动 `settings.rs` 到 `repository/`
+  - MinIO 配置持久化
+  - 使用统一数据库池
+  - 表名前缀：`logseek_`
+- ✅ 移动 `cache.rs` 到 `repository/`
+  - 会话缓存管理
+  - 后台清理任务
+
+#### 4. 工具层重构 ✅
+- ✅ 移动 `renderer.rs` 到 `utils/`
+  - Markdown 渲染
+  - JSON 块渲染
+- ✅ 移动 `storage.rs` 到 `utils/`
+  - 存储抽象接口
+  - 本地文件和 S3/MinIO 实现
+- ✅ 移动 `tuning.rs` 到 `utils/`
+  - 运行时参数配置
+- ✅ 移动 `bbip_service.rs` 到 `utils/`
+  - 文件路径生成
+
+#### 5. 模块组织 ✅
+- ✅ 更新 `lib.rs` 添加清晰的分层说明
+- ✅ 创建各层的 `mod.rs` 模块入口
+- ✅ 更新所有 import 路径
+- ✅ 修复 `include_str!` 路径问题
+
+#### 6. 向后兼容 ✅
+- ✅ 保留 `routes.rs` 作为路由处理器
+- ✅ 保留公共 API：`router()`, `init_schema()`
+- ✅ 所有现有功能正常工作
+
+### 关键改进
+
+#### 代码组织
+- **清晰分层**：5 个明确的层次，职责分离
+- **易于导航**：通过目录结构就能理解代码组织
+- **代码简化**：`routes.rs` 从 719 行减少到约 600 行
+- **模块化**：每个文件职责单一，易于维护
+
+#### 架构优势
+- **API 层**：处理 HTTP 请求/响应，参数验证
+- **服务层**：业务逻辑和外部服务集成
+- **数据访问层**：数据持久化和缓存管理
+- **工具层**：通用功能和辅助工具
+- **查询层**：专用的查询语言解析器
+
+#### 可维护性提升
+- **职责明确**：每层只做自己的事
+- **依赖清晰**：上层依赖下层，避免循环依赖
+- **易于测试**：每层可独立测试
+- **便于扩展**：添加新功能只需在相应层添加文件
+
+### 编译和测试
+✅ **编译通过** - 无警告  
+✅ **所有测试通过**
+- 健康检查：`http://127.0.0.1:4000/healthy` → `ok`
+- MinIO 设置 API：正常响应
+- 向后兼容：所有现有 API 正常工作
+
+### 提交记录
+- `9604882` - Refactor LogSeek module with layered architecture (Phase 3)
+
 ### 下一步行动
-阶段 2 已完成！可以开始阶段 3（LogSeek 后端内部重构）或直接进入阶段 5（文档和工具更新）。
+阶段 3 已完成！可以开始阶段 4（前端重构）或阶段 5（文档和工具更新）。
 
 ## 📂 新文件清单
 
