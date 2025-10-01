@@ -90,7 +90,7 @@ async fn shutdown_signal() {
     }
     log::info!("收到关闭信号，开始优雅关闭...");
     // 通知后台清理任务退出
-    logseek::simple_cache::Cache::stop_cleaner();
+    logseek::repository::cache::Cache::stop_cleaner();
 }
 
 /// 构建应用路由

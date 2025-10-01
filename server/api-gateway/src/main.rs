@@ -141,7 +141,7 @@ fn handle_daemon_mode(config: &AppConfig) {
 
 /// 配置 LogSeek 模块参数
 fn configure_logseek_module(config: &AppConfig) {
-    let tuning = logseek::tuning::Tuning {
+    let tuning = logseek::utils::tuning::Tuning {
         s3_max_concurrency: config.get_s3_max_concurrency(),
         cpu_concurrency: config.get_cpu_concurrency(),
         stream_ch_cap: config.get_stream_ch_cap(),
@@ -150,5 +150,5 @@ fn configure_logseek_module(config: &AppConfig) {
     };
 
     log::debug!("LogSeek 模块配置: {:?}", tuning);
-    logseek::tuning::set(tuning);
+    logseek::utils::tuning::set(tuning);
 }

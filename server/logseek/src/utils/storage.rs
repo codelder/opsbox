@@ -39,7 +39,7 @@ static MINIO_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<minio::s3::Client>>>> 
 
 // MinIO 操作超时配置（可由环境变量 LOGSEARCH_MINIO_TIMEOUT_SEC 覆盖，默认 60 秒）
 fn minio_timeout() -> Duration {
-  if let Some(t) = crate::tuning::get() { return Duration::from_secs(t.minio_timeout_sec.clamp(5, 300)); }
+  if let Some(t) = crate::utils::tuning::get() { return Duration::from_secs(t.minio_timeout_sec.clamp(5, 300)); }
   let secs = std::env::var("LOGSEARCH_MINIO_TIMEOUT_SEC")
     .ok()
     .and_then(|s| s.parse::<u64>().ok())
@@ -131,7 +131,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
     debug!("MinIO客户端获取成功，开始获取对象");
 
     // 最多重试次数（指数退避），可由环境变量 LOGSEARCH_MINIO_MAX_ATTEMPTS 覆盖，默认 5 次
-    let max_attempts: u32 = if let Some(t) = crate::tuning::get() {
+    let max_attempts: u32 = if let Some(t) = crate::utils::tuning::get() {
       t.minio_max_attempts.clamp(1, 20)
     } else {
       std::env::var("LOGSEARCH_MINIO_MAX_ATTEMPTS").ok().and_then(|s| s.parse::<u32>().ok()).unwrap_or(5).clamp(1, 20)

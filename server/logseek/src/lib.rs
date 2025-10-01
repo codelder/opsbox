@@ -1,21 +1,33 @@
-pub mod routes;
+// ============================================================================
+// LogSeek 模块 - 日志搜索服务
+// ============================================================================
+// 分层架构：
+// - routes: API 层，HTTP 路由和处理器
+// - service: 服务层，业务逻辑
+// - repository: 数据访问层，持久化和缓存
+// - domain: 领域层，核心业务模型
+// - utils: 工具层，通用功能
+// - query: 查询解析器
+// ============================================================================
 
+// API 层
+pub mod api;
+pub mod routes;  // 保留以保持向后兼容
+
+// 服务层
+pub mod service;
+
+// 数据访问层
+pub mod repository;
+
+// 领域层
+pub mod domain;
+
+// 工具层
+pub mod utils;
+
+// 查询解析器
 pub mod query;
-pub mod renderer;
-mod search;
-pub mod storage;
-
-// BBIP 文件路径生成与查询字符串处理服务
-pub mod bbip_service;
-
-pub mod settings;
-pub mod simple_cache;
-
-// 自然语言转查询串服务（调用本地 Ollama）
-pub mod nl2q;
-
-// 运行时调参（由网关注入，避免使用环境变量注入）
-pub mod tuning;
 
 use opsbox_core::{Result, SqlitePool};
 
@@ -26,5 +38,5 @@ pub fn router(db_pool: SqlitePool) -> axum::Router {
 
 /// 初始化 LogSeek 模块数据库 schema
 pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
-    settings::init_schema(db_pool).await
+    repository::settings::init_schema(db_pool).await
 }

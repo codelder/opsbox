@@ -3,7 +3,7 @@ use ollama_rs::Ollama;
 use ollama_rs::generation::completion::request::GenerationRequest;
 use log::{debug, info, warn, error};
 // 将快速指南在编译期内嵌，避免运行时依赖路径
-const QUICK_GUIDE: &str = include_str!("../../../docs/query-string-quick-guide.md");
+const QUICK_GUIDE: &str = include_str!("../../../../docs/query-string-quick-guide.md");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NLBody {

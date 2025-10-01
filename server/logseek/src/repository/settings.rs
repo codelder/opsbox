@@ -1,4 +1,4 @@
-use crate::storage::{self, StorageError};
+use crate::utils::storage::{self, StorageError};
 use opsbox_core::{Result, AppError, SqlitePool, run_migration};
 use serde::{Deserialize, Serialize};
 use log::{debug, info, error};

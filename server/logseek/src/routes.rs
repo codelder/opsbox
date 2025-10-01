@@ -1,50 +1,34 @@
-use crate::bbip_service::derive_plan;
-use crate::settings;
-use crate::simple_cache::{cache as simple_cache, new_sid};
+// ============================================================================
+// API 层 - HTTP 路由和处理器
+// ============================================================================
+// 注意：此文件保留以保持向后兼容
+// 新代码应使用 api::models 中的类型
+// ============================================================================
+use crate::api::models::{AppError, MinioSettingsPayload, NL2QOut, SearchBody, ViewParams};
+use crate::utils::bbip_service::derive_plan;
+use crate::repository::settings;
+use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::{
-  renderer::{render_json_chunks, render_markdown},
-  search::{Search as _, SearchError},
-  storage::{ReaderProvider as _, S3ReaderProvider, StorageError},
+  utils::renderer::{render_json_chunks, render_markdown},
+  service::search::Search as _,
+  utils::storage::{ReaderProvider as _, S3ReaderProvider, StorageError},
 };
 use axum::{
   Router,
   body::Body,
-  extract::{Json, Query, State, rejection::JsonRejection},
+  extract::{Json, Query, State},
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
   routing::{get, post},
 };
 use opsbox_core::SqlitePool;
 use chrono::{Datelike, Duration};
 use problemdetails::Problem;
-use serde::{Deserialize, Serialize};
 use serde_json;
 use std::sync::Arc;
-use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Debug, Error)]
-pub enum AppError {
-  #[error("存储错误")]
-  StorageError(StorageError),
-  #[error("检索错误")]
-  SearchError(SearchError),
-  #[error(transparent)]
-  BadJson(#[from] JsonRejection),
-  #[error("查询语法错误")]
-  QueryParse(#[from] crate::query::ParseError),
-  #[error("设置存储错误")]
-  Settings(#[from] opsbox_core::AppError),
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-struct ViewParams {
-  sid: String,
-  file: String,
-  start: Option<usize>,
-  end: Option<usize>,
-}
 
 async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, Problem> {
   log::debug!(
@@ -116,102 +100,9 @@ async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRespons
   )
 }
 
-impl From<AppError> for Problem {
-  fn from(error: AppError) -> Self {
-    match error {
-      AppError::StorageError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("存储错误")
-        .with_detail(e.to_string()),
-      AppError::SearchError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("检索错误")
-        .with_detail(e.to_string()),
-      AppError::BadJson(e) => problemdetails::new(StatusCode::BAD_REQUEST)
-        .with_title("JSON请求错误")
-        .with_detail(e.to_string()),
-      AppError::QueryParse(e) => problemdetails::new(StatusCode::BAD_REQUEST)
-        .with_title("查询语法错误")
-        .with_detail(e.to_string()),
-      AppError::Settings(e) => {
-        // 将 opsbox_core::AppError 转换为 Problem
-        let status = match e {
-          opsbox_core::AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
-          opsbox_core::AppError::NotFound(_) => StatusCode::NOT_FOUND,
-          opsbox_core::AppError::ExternalService(_) => StatusCode::BAD_GATEWAY,
-        };
-        problemdetails::new(status)
-          .with_title(e.to_string())
-          .with_detail(e.to_string())
-      },
-    }
-  }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct SearchBody {
-  pub q: String,
-  pub context: Option<usize>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct NL2QOut {
-  q: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct MinioSettingsPayload {
-  endpoint: String,
-  bucket: String,
-  access_key: String,
-  secret_key: String,
-  #[serde(default)]
-  configured: bool,
-  #[serde(default)]
-  connection_error: Option<String>,
-}
-
-impl From<MinioSettingsPayload> for settings::MinioSettings {
-  fn from(value: MinioSettingsPayload) -> Self {
-    Self {
-      endpoint: value.endpoint,
-      bucket: value.bucket,
-      access_key: value.access_key,
-      secret_key: value.secret_key,
-    }
-  }
-}
-
-impl From<settings::MinioSettings> for MinioSettingsPayload {
-  fn from(value: settings::MinioSettings) -> Self {
-    Self {
-      endpoint: value.endpoint,
-      bucket: value.bucket,
-      access_key: value.access_key,
-      secret_key: value.secret_key,
-      configured: false,
-      connection_error: None,
-    }
-  }
-}
-
-impl Default for MinioSettingsPayload {
-  fn default() -> Self {
-    Self {
-      endpoint: String::new(),
-      bucket: String::new(),
-      access_key: String::new(),
-      secret_key: String::new(),
-      configured: false,
-      connection_error: None,
-    }
-  }
-}
-
 fn stream_channel_capacity() -> usize {
   // 优先使用全局调参；未设置则回退到环境变量；再回退到默认值
-  if let Some(t) = crate::tuning::get() { return t.stream_ch_cap.clamp(8, 10_000); }
+  if let Some(t) = crate::utils::tuning::get() { return t.stream_ch_cap.clamp(8, 10_000); }
   match std::env::var("LOGSEARCH_STREAM_CH_CAP").ok().and_then(|s| s.parse::<usize>().ok()) {
     Some(v) => v.clamp(8, 10_000),
     None => 256usize,
@@ -220,7 +111,7 @@ fn stream_channel_capacity() -> usize {
 
 // 读取 S3 IO 并发上限（限制同时打开/读取的对象数）
 fn s3_max_concurrency() -> usize {
-  if let Some(t) = crate::tuning::get() { return t.s3_max_concurrency.clamp(1, 128); }
+  if let Some(t) = crate::utils::tuning::get() { return t.s3_max_concurrency.clamp(1, 128); }
   std::env::var("LOGSEARCH_S3_MAX_CONCURRENCY")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
@@ -230,7 +121,7 @@ fn s3_max_concurrency() -> usize {
 
 // 读取 CPU 并发上限（限制同时进行解压/检索的任务数）
 fn cpu_max_concurrency() -> usize {
-  if let Some(t) = crate::tuning::get() { return t.cpu_concurrency.clamp(1, 128); }
+  if let Some(t) = crate::utils::tuning::get() { return t.cpu_concurrency.clamp(1, 128); }
   std::env::var("LOGSEARCH_CPU_CONCURRENCY")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
@@ -336,11 +227,11 @@ async fn stream_markdown(
 }
 
 // NL → Q 端点，实现将自然语言转换为查询字符串
-async fn nl2q(Json(body): Json<crate::nl2q::NLBody>) -> Result<Json<NL2QOut>, Problem> {
+async fn nl2q(Json(body): Json<crate::service::nl2q::NLBody>) -> Result<Json<NL2QOut>, Problem> {
   log::info!("NL2Q API请求: {}", body.nl);
 
   let start = std::time::Instant::now();
-  let q = crate::nl2q::call_ollama(&body.nl).await.map_err(|e| {
+  let q = crate::service::nl2q::call_ollama(&body.nl).await.map_err(|e| {
     log::error!("NL2Q API失败: {}", e);
     problemdetails::new(StatusCode::BAD_GATEWAY)
       .with_title("AI 生成失败")
