@@ -106,7 +106,7 @@ dependencies = [
  "daemonize",
  "env_logger",
  "log",
- "logsearch",
+ "logseek",
  "mimalloc",
  "mime_guess",
  "minio",
@@ -1566,7 +1566,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "logsearch"
+name = "logseek"
 version = "0.1.0"
 dependencies = [
  "async-compression",

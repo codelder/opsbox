@@ -214,7 +214,7 @@ fn stream_channel_capacity() -> usize {
   }
 }
 
-// 中文注释：读取 S3 IO 并发上限（限制同时打开/读取的对象数）
+// 读取 S3 IO 并发上限（限制同时打开/读取的对象数）
 fn s3_max_concurrency() -> usize {
   if let Some(t) = crate::tuning::get() { return t.s3_max_concurrency.clamp(1, 128); }
   std::env::var("LOGSEARCH_S3_MAX_CONCURRENCY")
@@ -224,7 +224,7 @@ fn s3_max_concurrency() -> usize {
     .unwrap_or(12)
 }
 
-// 中文注释：读取 CPU 并发上限（限制同时进行解压/检索的任务数）
+// 读取 CPU 并发上限（限制同时进行解压/检索的任务数）
 fn cpu_max_concurrency() -> usize {
   if let Some(t) = crate::tuning::get() { return t.cpu_concurrency.clamp(1, 128); }
   std::env::var("LOGSEARCH_CPU_CONCURRENCY")
@@ -241,7 +241,7 @@ pub fn router() -> Router {
     .route("/stream.s3.ndjson", post(stream_s3_ndjson))
     .route("/view.cache.json", get(view_cache_json))
     .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
-    // 中文注释：自然语言 → 查询字符串
+    // 自然语言 → 查询字符串
     .route("/nl2q", post(nl2q))
 }
 
@@ -323,7 +323,7 @@ async fn stream_markdown(Json(body): Json<SearchBody>) -> Result<HttpResponse<Bo
   )
 }
 
-// 中文注释：NL → Q 端点，实现将自然语言转换为查询字符串
+// NL → Q 端点，实现将自然语言转换为查询字符串
 async fn nl2q(Json(body): Json<crate::nl2q::NLBody>) -> Result<Json<NL2QOut>, Problem> {
   log::info!("NL2Q API请求: {}", body.nl);
 
@@ -463,12 +463,12 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
   log::debug!("profiling: [S3] 建立响应通道，容量={}", cap);
 
-  // 中文注释：分层限流——IO 并发与 CPU 并发
+  // 分层限流——IO 并发与 CPU 并发
   let io_sem = Arc::new(tokio::sync::Semaphore::new(s3_max_concurrency()));
   let cpu_max = cpu_max_concurrency();
   let cpu_sem = Arc::new(tokio::sync::Semaphore::new(cpu_max));
 
-  // 中文注释：自适应护栏 - 统计与控制器
+  // 自适应护栏 - 统计与控制器
   struct Stats { produced: AtomicU64, s3_errors: AtomicU64 }
   impl Stats { fn new() -> Self { Self { produced: AtomicU64::new(0), s3_errors: AtomicU64::new(0) } } }
   let stats = Arc::new(Stats::new());
@@ -476,7 +476,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
   impl CpuController { fn current_effective(&self) -> usize { self.max.saturating_sub(self.held.len()) } }
   let cpu_ctrl = Arc::new(tokio::sync::Mutex::new(CpuController { max: cpu_max, target: cpu_max.min(2), held: Vec::new() }));
 
-  // 中文注释：后台调节任务（每 3s 调整一次，AIMD 策略）
+  // 后台调节任务（每 3s 调整一次，AIMD 策略）
   {
     let stats_c = Arc::clone(&stats);
     let cpu_sem_c = Arc::clone(&cpu_sem);
@@ -595,7 +595,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
       tokio::spawn(async move {
         let file_start = std::time::Instant::now();
 
-        // 中文注释：获取 IO 并发许可，限制同时打开/读取的对象数
+        // 获取 IO 并发许可，限制同时打开/读取的对象数
         let _io_permit = match io_sem_c.acquire_owned().await {
           Ok(p) => p,
           Err(_) => {
@@ -612,7 +612,7 @@ async fn stream_s3_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<B
           return;
         };
 
-        // 中文注释：获取 CPU 并发许可，限制同时进行解压/检索的任务数
+        // 获取 CPU 并发许可，限制同时进行解压/检索的任务数
         let _cpu_permit = match cpu_sem_c.acquire_owned().await {
           Ok(p) => p,
           Err(_) => {

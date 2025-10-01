@@ -1,5 +1,5 @@
 [package]
-name = "logsearch"
+name = "logseek"
 version = "0.1.0"
 edition = "2024"
 
@@ -30,14 +30,14 @@ regex = "1"
 fancy-regex = "0.11"
 globset = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-# 中文注释：为跨平台交叉编译启用 OpenSSL 源码内置编译（避免目标系统缺失 OpenSSL 开发包）
+# 为跨平台交叉编译启用 OpenSSL 源码内置编译（避免目标系统缺失 OpenSSL 开发包）
 openssl = { version = "0.10", features = ["vendored"] }
-# 中文注释：为确保各平台无需系统级 sqlite3，开启 sqlx 的 sqlite 并显式依赖打包版 libsqlite3-sys。
+# 为确保各平台无需系统级 sqlite3，开启 sqlx 的 sqlite 并显式依赖打包版 libsqlite3-sys。
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 libsqlite3-sys = { version = "0.30", features = ["bundled"] }
-# 中文注释：Ollama Rust 客户端
+# Ollama Rust 客户端
 ollama-rs = "0.3"
-# 中文注释：统一日志宏
+# 统一日志宏
 log = "0.4"
-# 中文注释：用于全局单例客户端缓存
+# 用于全局单例客户端缓存
 once_cell = "1.20"

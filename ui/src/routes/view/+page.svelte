@@ -5,7 +5,7 @@
   import { get } from 'svelte/store';
   import { browser } from '$app/environment';
 
-  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
+  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
 
   let file = $state('');
   let sid = $state('');
@@ -21,9 +21,9 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
-  // 中文注释：虚拟滚动容器引用
+  // 虚拟滚动容器引用
   let parentEl = $state<HTMLDivElement | null>(null);
-  // 中文注释：统一行高预估，供虚拟器与兜底高度计算复用
+  // 统一行高预估，供虚拟器与兜底高度计算复用
   // 行样式为 text-[13px] + leading-[20px] + py-1，综合约 32px
   const EST_ROW = 32;
   const rowVirtualizer = createVirtualizer({
@@ -31,11 +31,11 @@
     getScrollElement: () => parentEl, // 滚动容器（初始为 null，下面用 setOptions 保持同步）
     estimateSize: () => EST_ROW, // 预估单行高度(px)
     overscan: 20, // 预加载额外行，平衡性能与滚动流畅度
-    // 中文注释：启用真实高度测量，避免底部出现多余空白或无法触底
+    // 启用真实高度测量，避免底部出现多余空白或无法触底
     measureElement: (el: HTMLElement) => el.getBoundingClientRect().height
   });
 
-  // 中文注释：确保在 parentEl 绑定后，虚拟器获得滚动容器引用
+  // 确保在 parentEl 绑定后，虚拟器获得滚动容器引用
   $effect(() => {
     if (!browser) return;
     try {
@@ -48,12 +48,12 @@
   });
 
   type VirtualItem = { index: number; start: number; key: any };
-  // 中文注释：虚拟项缓存，避免在模板中使用 {@const}
+  // 虚拟项缓存，避免在模板中使用 {@const}
   const vItems: VirtualItem[] = $derived(
     browser ? $rowVirtualizer.getVirtualItems() : []
   );
 
-  // 中文注释：统一调度虚拟器测量
+  // 统一调度虚拟器测量
   function scheduleVirtualUpdate() {
     if (!browser) return;
     requestAnimationFrame(() => {
@@ -63,7 +63,7 @@
     });
   }
 
-  // 中文注释：滚动触底兜底（即使虚拟器未就绪也能触发加载更多）
+  // 滚动触底兜底（即使虚拟器未就绪也能触发加载更多）
   function handleScroll() {
     if (!browser || loading || !parentEl) return;
     const el = parentEl;
@@ -72,15 +72,15 @@
     }
   }
 
-  // 中文注释：根据 index 取对应行（未加载则返回 null）
+  // 根据 index 取对应行（未加载则返回 null）
   function getLineByIndex(idx0: number): { no: number; text: string } | null {
     const lineNo = idx0 + 1; // TanStack 使用 0-based，这里转为 1-based 行号
     const rec = lines[lineNo - 1];
-    // 中文注释：放宽校验，若数组存在对应项则直接返回，避免因行号不匹配导致空白
+    // 放宽校验，若数组存在对应项则直接返回，避免因行号不匹配导致空白
     return rec ?? null;
   }
 
-  // 中文注释：轻量行高测量，消除折行遮挡问题
+  // 轻量行高测量，消除折行遮挡问题
   function measureVirtualRow(node: HTMLElement) {
     if (!browser) return {};
     const virtualizer = get(rowVirtualizer);
@@ -106,7 +106,7 @@
     };
   }
 
-  // 中文注释：接近底部自动加载更多
+  // 接近底部自动加载更多
   $effect(() => {
     if (!browser) return;
     const items = $rowVirtualizer.getVirtualItems();
@@ -158,7 +158,7 @@
       keywords = full.keywords || [];
       lines = full.lines || [];
 
-      // 中文注释：数据填充后强制重新测量，确保总高度与内容精确匹配
+      // 数据填充后强制重新测量，确保总高度与内容精确匹配
       scheduleVirtualUpdate();
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
@@ -186,7 +186,7 @@
     }
   }
 
-  // 中文注释：转义与高亮（模仿 GitHub 高亮效果，使用 <mark>）
+  // 转义与高亮（模仿 GitHub 高亮效果，使用 <mark>）
   function escapeHtml(s: string): string {
     return s
       .replaceAll('&', '&amp;')
@@ -231,14 +231,14 @@
     return result;
   }
 
-  // 中文注释：派生下载文件名（将不合法的文件名字符替换为下划线）
+  // 派生下载文件名（将不合法的文件名字符替换为下划线）
   function deriveDownloadName(): string {
     const base = extractFileName(file) || 'log.txt';
     const safe = base.replace(/[\\/:*?"<>|]+/g, '_');
     return safe || 'log.txt';
   }
 
-  // 中文注释：提取文件名（去掉tar包路径，只保留实际文件名）
+  // 提取文件名（去掉tar包路径，只保留实际文件名）
   function extractFileName(fullPath: string): string {
     if (!fullPath) return '未知文件';
 
@@ -255,7 +255,7 @@
     return fullPath.split('/').pop() || fullPath || '未知文件';
   }
 
-  // 中文注释：提取tar包名称
+  // 提取tar包名称
   function extractTarName(fullPath: string): string | null {
     if (!fullPath) return null;
 
@@ -272,7 +272,7 @@
     return null;
   }
 
-  // 中文注释：下载当前视图的完整原始文本（不含行号）
+  // 下载当前视图的完整原始文本（不含行号）
   function downloadCurrentFile() {
     try {
       if (!lines || lines.length === 0) return;
@@ -306,8 +306,8 @@
     }
     loadInitial();
 
-    // 中文注释：首屏渲染后，确保虚拟器定位到起始行，避免初次 items 为空
-    // 中文注释：等一帧再滚动，确保容器与虚拟器完成初始化
+    // 首屏渲染后，确保虚拟器定位到起始行，避免初次 items 为空
+    // 等一帧再滚动，确保容器与虚拟器完成初始化
     if (browser) {
       requestAnimationFrame(() => {
         try {
@@ -317,7 +317,7 @@
       });
     }
 
-    // 中文注释：使用原生滚动条时，确保容器允许滚动
+    // 使用原生滚动条时，确保容器允许滚动
     const el = parentEl;
     if (browser && el) {
       el.style.overflow = el.style.overflow || 'auto';
@@ -391,7 +391,7 @@
   });
 </script>
 
-<!-- 中文注释：页面标题与状态栏 -->
+<!-- 页面标题与状态栏 -->
 <div class="h-screen overflow-hidden bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
   <div class="mx-auto flex h-full max-w-[1560px] flex-col px-4 py-8">
     {#if error}
@@ -567,7 +567,7 @@
                       </div>
                     </div>
                   {:else}
-                    <!-- 中文注释：占位行（尚未加载到该行），高度尽量匹配 estimateSize -->
+                    <!-- 占位行（尚未加载到该行），高度尽量匹配 estimateSize -->
                     <div class="grid grid-cols-[70px_1fr] font-mono text-xs leading-[16px] opacity-60">
                       <div
                         class="border-r border-slate-300 bg-gradient-to-r from-slate-100 to-slate-50 px-3 py-0.5 text-right font-medium text-slate-400 select-none dark:border-gray-700/60 dark:from-gray-800/80 dark:to-gray-900/80 dark:text-gray-600"

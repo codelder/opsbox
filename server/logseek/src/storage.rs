@@ -34,10 +34,10 @@ pub enum StorageError {
   ConnectionTimeout,
 }
 
-// 中文注释：全局 MinIO 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
+// 全局 MinIO 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
 static MINIO_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<minio::s3::Client>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-// 中文注释：MinIO 操作超时配置（可由环境变量 LOGSEARCH_MINIO_TIMEOUT_SEC 覆盖，默认 60 秒）
+// MinIO 操作超时配置（可由环境变量 LOGSEARCH_MINIO_TIMEOUT_SEC 覆盖，默认 60 秒）
 fn minio_timeout() -> Duration {
   if let Some(t) = crate::tuning::get() { return Duration::from_secs(t.minio_timeout_sec.clamp(5, 300)); }
   let secs = std::env::var("LOGSEARCH_MINIO_TIMEOUT_SEC")
@@ -48,7 +48,7 @@ fn minio_timeout() -> Duration {
   Duration::from_secs(secs)
 }
 
-// 中文注释：创建或获取缓存的 MinIO 客户端（按 url+access_key 缓存）
+// 创建或获取缓存的 MinIO 客户端（按 url+access_key 缓存）
 fn get_or_create_minio_client(
   url: &str,
   access_key: &str,
@@ -62,13 +62,13 @@ fn get_or_create_minio_client(
 
   info!("创建 MinIO 客户端: url={}", url);
 
-  // 中文注释：记录当前 NO_PROXY，便于排查是否因代理导致连接失败
+  // 记录当前 NO_PROXY，便于排查是否因代理导致连接失败
   let no_proxy_dbg = std::env::var("NO_PROXY").ok().or_else(|| std::env::var("no_proxy").ok());
   let http_proxy_dbg = std::env::var("HTTP_PROXY").ok().or_else(|| std::env::var("http_proxy").ok());
   let https_proxy_dbg = std::env::var("HTTPS_PROXY").ok().or_else(|| std::env::var("https_proxy").ok());
   debug!("网络代理环境: HTTP_PROXY={:?} HTTPS_PROXY={:?} NO_PROXY={:?}", http_proxy_dbg, https_proxy_dbg, no_proxy_dbg);
   
-  // 中文注释：配置基础 URL
+  // 配置基础 URL
   let base_url = BaseUrl::from_str(url).map_err(|_e| {
     error!("MinIO URL解析失败: {}", url);
     StorageError::InvalidBaseUrl(url.to_string())
@@ -125,12 +125,12 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
   async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, StorageError> {
     debug!("开始打开S3对象: bucket={}, key={}, url={}", self.bucket, self.key, self.url);
     
-    // 中文注释：使用缓存的客户端
+    // 使用缓存的客户端
     let client = get_or_create_minio_client(self.url, self.access_key, self.secret_key)?;
 
     debug!("MinIO客户端获取成功，开始获取对象");
 
-    // 中文注释：最多重试次数（指数退避），可由环境变量 LOGSEARCH_MINIO_MAX_ATTEMPTS 覆盖，默认 5 次
+    // 最多重试次数（指数退避），可由环境变量 LOGSEARCH_MINIO_MAX_ATTEMPTS 覆盖，默认 5 次
     let max_attempts: u32 = if let Some(t) = crate::tuning::get() {
       t.minio_max_attempts.clamp(1, 20)
     } else {
@@ -206,7 +206,7 @@ impl<'a> S3ReaderProvider<'a> {
     info!("开始列举S3对象: bucket={}, prefix='{}', recursive={}, regex={:?}", 
           self.bucket, prefix, recursive, regex);
     
-    // 中文注释：使用缓存的客户端
+    // 使用缓存的客户端
     let client = get_or_create_minio_client(self.url, self.access_key, self.secret_key)?;
 
     let regex = if let Some(pat) = regex {
@@ -219,7 +219,7 @@ impl<'a> S3ReaderProvider<'a> {
       None
     };
 
-    // 中文注释：使用超时包装列举操作
+    // 使用超时包装列举操作
     let list_result = time::timeout(minio_timeout(), async {
       let mut stream = client
         .list_objects(self.bucket)
@@ -273,12 +273,12 @@ pub async fn test_minio_connection(
 ) -> Result<(), StorageError> {
   info!("测试MinIO连接: url={}, bucket={}", url, bucket);
   
-  // 中文注释：使用缓存的客户端
+  // 使用缓存的客户端
   let client = get_or_create_minio_client(url, access_key, secret_key)?;
 
   debug!("尝试列举桶内对象以验证连接");
   
-  // 中文注释：使用超时包装连接测试
+  // 使用超时包装连接测试
   time::timeout(minio_timeout(), async {
     let mut stream = client
       .list_objects(bucket)

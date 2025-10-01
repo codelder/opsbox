@@ -2,10 +2,10 @@
   // 迁移到 Svelte 5 Runes：不再使用 onMount/onDestroy
   import { SvelteSet } from 'svelte/reactivity';
   import { env } from '$env/dynamic/public';
-  // const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
+  // const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
   // const sid = '';
 
-  // 中文注释：查询字符串、结果列表、加载与错误状态
+  // 查询字符串、结果列表、加载与错误状态
   let q = $state('');
   // 结构类型：与后端 NDJSON 对齐
   type JsonLine = { no: number; text: string };
@@ -14,21 +14,21 @@
   let results = $state<SearchJsonResult[]>([]);
   let loading = $state(false); // 当前是否正在读取一批
   let error = $state<string | null>(null);
-  // 中文注释：搜索会话 ID（从流接口响应头获取，供 /view 使用）
+  // 搜索会话 ID（从流接口响应头获取，供 /view 使用）
   let sid = $state('');
 
-  // 中文注释：分页控制（每批 20 条）
+  // 分页控制（每批 20 条）
   const PAGE_SIZE = 20;
   let hasMore = $state(true); // 是否还有更多可读
   // let paused = $state(false); // 是否处于"暂停等待加载更多"状态（暂未使用）
 
-  // 中文注释：流读取持久状态
+  // 流读取持久状态
   let controller: AbortController | null = null; // 取消当前请求
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null; // 当前响应的 reader
   let decoder: TextDecoder | null = null; // 统一的 TextDecoder
   let buffer = $state(''); // 分片缓冲（可能出现半行）
 
-  // 中文注释：读取一批（最多 PAGE_SIZE 条）。
+  // 读取一批（最多 PAGE_SIZE 条）。
   // 策略：优先消费缓冲区中的“完整行”，不够再读取更多字节；避免跨批次“回灌”带来的跳行。
   async function readBatch(maxItems = PAGE_SIZE) {
     if (!reader) return;
@@ -99,7 +99,7 @@
     }
   }
 
-  // 中文注释：转义与高亮（模仿 GitHub 高亮效果，使用 <mark>）
+  // 转义与高亮（模仿 GitHub 高亮效果，使用 <mark>）
   function escapeHtml(s: string): string {
     return s
       .replaceAll('&', '&amp;')
@@ -121,7 +121,7 @@
     return out;
   }
 
-  // 中文注释：长行截断（优先保留首次命中关键字），支持左右“省略号”点击展开
+  // 长行截断（优先保留首次命中关键字），支持左右“省略号”点击展开
   function snippet(
     line: string,
     keywords: string[],
@@ -159,7 +159,7 @@
       end = max;
     }
 
-    // 中文注释：对齐截取边界，避免从单词中间开始或结束
+    // 对齐截取边界，避免从单词中间开始或结束
     if (start > 0 && line[start] !== ' ' && line[start - 1] !== ' ') {
       // 向前找到空格或行首
       const prevSpace = line.lastIndexOf(' ', start);
@@ -243,7 +243,7 @@
     return flat.slice(0, Math.min(7, flat.length));
   }
 
-  // 中文注释：启动流式搜索（重置状态并读取首批）
+  // 启动流式搜索（重置状态并读取首批）
   async function startSearch(query: string) {
     // 终止上一次
     controller?.abort();
@@ -262,7 +262,7 @@
     loading = true;
 
     try {
-      const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
+      const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
       const endpoint = `${API_BASE}/stream.ndjson`;
       const payload: { q: string } = { q: query };
 
@@ -283,8 +283,8 @@
         return;
       }
 
-      // 中文注释：保存会话 ID，供 /view 使用
-      sid = res.headers.get('x-logsearch-sid') || '';
+      // 保存会话 ID，供 /view 使用
+      sid = res.headers.get('x-logseek-sid') || '';
       reader = res.body.getReader();
       await readBatch(PAGE_SIZE);
     } catch (e: unknown) {
@@ -296,13 +296,13 @@
     }
   }
 
-  // 中文注释：继续读取下一批
+  // 继续读取下一批
   async function loadMore() {
     if (loading || !hasMore) return;
     await readBatch(PAGE_SIZE);
   }
 
-  // 中文注释：从地址栏读取 ?q=，并在客户端启动搜索
+  // 从地址栏读取 ?q=，并在客户端启动搜索
   // 一次性 $effect：读取 URL 查询并启动搜索
   let searchInit = $state(false);
   $effect(() => {
@@ -321,7 +321,7 @@
     };
   });
 
-  // 中文注释：表单提交（支持在页面内触发新搜索）
+  // 表单提交（支持在页面内触发新搜索）
   function handleSubmit(e: Event) {
     e.preventDefault();
     const next = q.trim();
@@ -329,7 +329,7 @@
     startSearch(next);
   }
 
-  // 中文注释：解析 item.path 为 { bucket, tar, inner }
+  // 解析 item.path 为 { bucket, tar, inner }
   function splitPath(full: string): { bucket: string | null; tar: string; inner: string | null } {
     const idx = full.indexOf(':');
     const tarFull = idx >= 0 ? full.slice(full.indexOf('/'), idx) : full;
@@ -342,7 +342,7 @@
   }
 </script>
 
-<!-- 中文注释：页面标题与状态栏 -->
+<!-- 页面标题与状态栏 -->
 <div class="min-h-screen bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
   <div class="mx-auto max-w-[1560px] px-4 py-8">
     <!-- 顶部区域重新设计 -->
@@ -442,13 +442,13 @@
                         title={splitPath(item.path).inner}
                         onclick={(e) => {
                           e.stopPropagation();
-                          // 中文注释：带上 sid 以便 /view 从缓存读取；在新标签页打开
+                          // 带上 sid 以便 /view 从缓存读取；在新标签页打开
                           const base = '/view';
                           const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
                           window.open(url, '_blank', 'noopener');
                         }}
                         onkeydown={(e) => {
-                          // 中文注释：无障碍支持 Enter/Space 键（新标签页打开）
+                          // 无障碍支持 Enter/Space 键（新标签页打开）
                           if (e.key === 'Enter' || e.key === ' ') {
                             e.preventDefault();
                             e.stopPropagation();
@@ -753,7 +753,7 @@
       {/if}
     </div>
 
-    <!-- 中文注释：分页控制按钮 -->
+    <!-- 分页控制按钮 -->
     <div class="mt-12 flex items-center justify-center">
       {#if hasMore}
         <button

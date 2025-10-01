@@ -27,7 +27,7 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
-  // 中文注释：处理首页搜索框提交逻辑
+  // 处理首页搜索框提交逻辑
   async function handleHomeSubmit(e: Event) {
     e.preventDefault();
     const text = (inputEl?.value || '').trim();
@@ -40,7 +40,7 @@
     // AI 模式：先调用 nl2q，再跳转
     aiLoading = true;
     try {
-      const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
+      const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
       const res = await fetch(`${API_BASE}/nl2q`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -132,7 +132,7 @@
             disabled={aiLoading}
           >
             {#if aiLoading}
-              <!-- 中文注释：简易加载指示器 -->
+              <!-- 简易加载指示器 -->
               <svg class="h-4 w-4 animate-spin text-gray-500" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />

@@ -44,7 +44,7 @@ impl Cache {
 
   fn start_cleaner_once() {
     CLEANER_STARTED.get_or_init(|| {
-      // 中文注释：使用取消令牌支持优雅关闭后台清理任务
+      // 使用取消令牌支持优雅关闭后台清理任务
       let token = CLEANER_CANCEL.get_or_init(|| CancellationToken::new()).clone();
       tokio::spawn(async move {
         let interval = Duration::from_secs(60);
@@ -78,7 +78,7 @@ impl Cache {
                 }
               }
             }
-            // 中文注释：收到关闭信号时退出循环
+            // 收到关闭信号时退出循环
             _ = token.cancelled() => {
               break;
             }
@@ -145,7 +145,7 @@ impl Cache {
     Some((total, slice))
   }
 
-  /// 中文注释：停止后台清理任务（用于优雅关闭）
+  /// 停止后台清理任务（用于优雅关闭）
   pub fn stop_cleaner() {
     if let Some(token) = CLEANER_CANCEL.get() {
       token.cancel();

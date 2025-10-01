@@ -30,7 +30,7 @@ static DB_POOL: OnceCell<SqlitePool> = OnceCell::const_new();
 async fn pool() -> Result<&'static SqlitePool, SettingsError> {
   let pool = DB_POOL
     .get_or_try_init(|| async {
-      let db_path = std::env::var("LOGSEARCH_SETTINGS_DB").unwrap_or_else(|_| "logsearch_settings.db".to_string());
+      let db_path = std::env::var("LOGSEARCH_SETTINGS_DB").unwrap_or_else(|_| "logseek_settings.db".to_string());
       info!("初始化设置数据库: {}", db_path);
       
       if let Some(parent) = Path::new(&db_path).parent() {

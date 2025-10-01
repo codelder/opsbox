@@ -103,7 +103,7 @@ run_stream_test() {
   # 中文注释：在 set -euo pipefail 下，允许 curl 因 --max-time 返回非零但仍统计已有输出
   lines=$(( $( (curl -sS -N --max-time "$seconds" \
     -H "Accept: application/x-ndjson" -H "Content-Type: application/json" \
-    --data-binary @"$tmp" "http://$ADDR/api/v1/logsearch/stream.s3.ndjson" || true) | wc -l | tr -d " ") ))
+    --data-binary @"$tmp" "http://$ADDR/api/v1/logseek/stream.s3.ndjson" || true) | wc -l | tr -d " ") ))
   t1=$(date +%s); dur=$((t1 - t0)); rm -f "$tmp"
 
   # 中文注释：导出自适应护栏日志（仅 label 包含 csv 的情况）

@@ -4,7 +4,7 @@ use axum::http::{
   StatusCode,
 };
 use axum::{response::Response, routing::get, Router};
-use logsearch::router as logsearch_router;
+use logseek::router as logseek_router;
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 use std::net::SocketAddr;
@@ -15,12 +15,12 @@ use log::LevelFilter;
 use tower_http::cors::{Any, CorsLayer};
 use http::header::{ACCEPT};
 
-// 中文注释：全局内存分配器固定为 mimalloc（不再支持切换）
+// 全局内存分配器固定为 mimalloc（不再支持切换）
 use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-// 中文注释：将 server/api-gateway/static 目录在编译期打包进二进制
+// 将 server/api-gateway/static 目录在编译期打包进二进制
 #[derive(RustEmbed)]
 #[folder = "static"]
 struct Assets;
@@ -63,49 +63,49 @@ fn serve_embedded(path: &str) -> Option<Response> {
   }
 }
 
-/// 中文注释：将字符串解析为端口（u16），提供中文错误信息
+/// 将字符串解析为端口（u16），提供中文错误信息
 fn port_parser(s: &str) -> Result<u16, String> {
   s.parse::<u16>()
     .map_err(|_| format!("无效的端口号：{s}"))
 }
 
-/// 中文注释：将字符串解析为 SocketAddr，提供中文错误信息
+/// 将字符串解析为 SocketAddr，提供中文错误信息
 fn addr_parser(s: &str) -> Result<SocketAddr, String> {
   s.parse::<SocketAddr>()
     .map_err(|_| format!("无效的地址：{s}，请使用 HOST:PORT 或 [IPv6]:PORT 格式"))
 }
 
-/// 中文注释：子命令定义（使用 clap）
+/// 子命令定义（使用 clap）
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-  /// 中文注释：启动服务（默认后台运行，可通过 --daemon=false 前台运行）
+  /// 启动服务（默认后台运行，可通过 --daemon=false 前台运行）
   Start {
-    /// 中文注释：是否后台运行（默认 true，仅类 Unix 支持）
+    /// 是否后台运行（默认 true，仅类 Unix 支持）
     #[arg(long, short = 'd', default_value_t = true)]
     daemon: bool,
-    /// 中文注释：PID 文件路径（默认：~/.opsbox/api-gateway.pid）
+    /// PID 文件路径（默认：~/.opsbox/api-gateway.pid）
     #[arg(long, value_name = "FILE")]
     pid_file: Option<PathBuf>,
   },
-  /// 中文注释：停止服务（通过 PID 文件定位进程）
+  /// 停止服务（通过 PID 文件定位进程）
   Stop {
-    /// 中文注释：PID 文件路径（默认：~/.opsbox/api-gateway.pid）
+    /// PID 文件路径（默认：~/.opsbox/opsbox.pid）
     #[arg(long, value_name = "FILE")]
     pid_file: Option<PathBuf>,
-    /// 中文注释：强制停止（发送 SIGKILL）
+    /// 强制停止（发送 SIGKILL）
     #[arg(long, short = 'f', default_value_t = false)]
     force: bool,
   },
 }
 
-/// 中文注释：命令行选项（使用 clap）
+/// 命令行选项（使用 clap）
 #[derive(Parser, Debug)]
 #[command(
   author = "wangyue",
-  name = "api-gateway",
+  name = "opsbox",
   version,
   disable_version_flag = true,
-  about = "LogSearch API 网关（内置前端静态资源）。支持通过参数设置监听地址/端口，并可选择后台运行（Unix）。",
+  about = "OpsBox API 服务（内置前端静态资源）。支持通过参数设置监听地址/端口，并可选择后台运行（Unix）。",
   long_about = None
 )]
 struct Cli {
@@ -146,7 +146,7 @@ struct Cli {
   #[arg(long = "minio-max-attempts", value_name = "N", help = "MinIO 获取对象最大重试次数（覆盖 LOGSEARCH_MINIO_MAX_ATTEMPTS）")]
   minio_max_attempts: Option<u32>,
 
-  /// 中文注释：管理子命令（start/stop）
+  /// 管理子命令（start/stop）
   #[command(subcommand)]
   cmd: Option<Commands>,
 }
@@ -172,7 +172,7 @@ fn default_pid_file() -> PathBuf {
   let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
   let dir = PathBuf::from(home).join(".opsbox");
   let _ = fs::create_dir_all(&dir);
-  dir.join("api-gateway.pid")
+  dir.join("opsbox.pid")
 }
 
 #[cfg(unix)]
@@ -180,7 +180,7 @@ fn default_log_file() -> PathBuf {
   let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
   let dir = PathBuf::from(home).join(".opsbox");
   let _ = fs::create_dir_all(&dir);
-  dir.join("api-gateway.log")
+  dir.join("opsbox.log")
 }
 
 #[cfg(unix)]
@@ -229,7 +229,7 @@ fn check_process_alive(pid: Pid) -> bool {
   signal::kill(pid, None).is_ok()
 }
 
-/// 中文注释：停止进程（Unix），通过 PID 文件发送 SIGTERM/SIGKILL（同步实现，无unsafe）
+/// 停止进程（Unix），通过 PID 文件发送 SIGTERM/SIGKILL（同步实现，无unsafe）
 #[cfg(unix)]
 fn stop_unix(pid_path: PathBuf, force: bool) -> io::Result<()> {
   let txt = fs::read_to_string(&pid_path)?;
@@ -257,24 +257,24 @@ fn stop_unix(pid_path: PathBuf, force: bool) -> io::Result<()> {
 async fn run_server(addr: SocketAddr) {
   // 初始化依赖（例如存储等）
   log::info!("启动服务，监听地址 = {}", addr);
-  logsearch::ensure_initialized().await.expect("初始化设置存储失败");
+  logseek::ensure_initialized().await.expect("初始化设置存储失败");
 
   // CORS 已禁用：如需启用，请在此处添加 CorsLayer
 
   let app = Router::new()
     .route("/healthy", get(|| async { "ok" }))
-    .nest("/api/v1/logsearch", logsearch_router())
+    .nest("/api/v1/logseek", logseek_router())
     .fallback(get(spa_fallback));
 
-  // 中文注释：启用 CORS（主要用于开发阶段前端与后端不同源时读取自定义头 X-Logsearch-SID）
+  // 启用 CORS（主要用于开发阶段前端与后端不同源时读取自定义头 X-Logseek-SID）
   let cors = CorsLayer::new()
     .allow_origin(Any)
     .allow_methods([http::Method::GET, http::Method::POST, http::Method::OPTIONS])
     .allow_headers([CONTENT_TYPE, ACCEPT])
-    .expose_headers([http::header::HeaderName::from_static("x-logsearch-sid")]);
+    .expose_headers([http::header::HeaderName::from_static("x-logseek-sid")]);
   let app = app.layer(cors);
 
-  // 中文注释：优雅关闭信号（支持 Unix 的 SIGTERM/SIGINT 以及通用的 Ctrl-C）
+  // 优雅关闭信号（支持 Unix 的 SIGTERM/SIGINT 以及通用的 Ctrl-C）
   async fn shutdown_signal() {
     #[cfg(unix)]
     {
@@ -292,8 +292,8 @@ async fn run_server(addr: SocketAddr) {
       let _ = tokio::signal::ctrl_c().await;
     }
     log::info!("收到关闭信号，开始优雅关闭 ...");
-    // 中文注释：通知后台清理任务退出
-    logsearch::simple_cache::Cache::stop_cleaner();
+    // 通知后台清理任务退出
+    logseek::simple_cache::Cache::stop_cleaner();
   }
 
   let listener = tokio::net::TcpListener::bind(addr).await.expect("监听地址绑定失败");
@@ -347,7 +347,7 @@ fn init_logger(cli: &Cli) {
 }
 
 fn init_network_env() {
-  // 中文注释：打印并标准化代理相关环境变量，便于定位 release 与 debug 行为差异
+  // 打印并标准化代理相关环境变量，便于定位 release 与 debug 行为差异
   let get = |k: &str| std::env::var(k).ok();
   let http_proxy = get("HTTP_PROXY").or_else(|| get("http_proxy"));
   let https_proxy = get("HTTPS_PROXY").or_else(|| get("https_proxy"));
@@ -359,14 +359,14 @@ fn init_network_env() {
     no_proxy.as_deref().unwrap_or("")
   );
 
-  // 中文注释：当显式开启 LOGSEARCH_AUTO_NO_PROXY，且 NO_PROXY 未设置时，自动填入内网与本地网段
+  // 当显式开启 LOGSEARCH_AUTO_NO_PROXY，且 NO_PROXY 未设置时，自动填入内网与本地网段
   let auto = std::env::var("LOGSEARCH_AUTO_NO_PROXY")
     .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"))
     .unwrap_or(false);
   if auto && no_proxy.is_none() {
     // 常见内网与本地地址范围
     let defaults = "localhost,127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16";
-    // 中文注释：在 Rust 2024 + 受限环境下 set_var 可能被标记为 unsafe；此处仅影响当前进程环境
+    // 在 Rust 2024 + 受限环境下 set_var 可能被标记为 unsafe；此处仅影响当前进程环境
     unsafe {
       std::env::set_var("NO_PROXY", defaults);
       // 同时设置小写以适配部分依赖库的读取习惯
@@ -375,7 +375,7 @@ fn init_network_env() {
     log::warn!("NO_PROXY 未设置，已根据 LOGSEARCH_AUTO_NO_PROXY 自动设为: {}", defaults);
   }
 
-  // 中文注释：如检测到空的 HTTP(S)_PROXY 值，主动移除，避免底层库解析异常
+  // 如检测到空的 HTTP(S)_PROXY 值，主动移除，避免底层库解析异常
   let is_empty = |v: &Option<String>| v.as_ref().map(|s| s.trim().is_empty()).unwrap_or(false);
   if auto && (is_empty(&http_proxy) || is_empty(&https_proxy)) {
     unsafe {
@@ -393,7 +393,7 @@ fn init_network_env() {
 }
 
 fn main() {
-  // 中文注释：解析命令行参数（地址、后台模式、以及子命令）
+  // 解析命令行参数（地址、后台模式、以及子命令）
   let cli = Cli::parse();
 
   // 子命令：stop（优先处理后直接退出）
@@ -440,10 +440,10 @@ fn main() {
 
     if need_daemon {
       use daemonize::Daemonize;
-      // 中文注释：保持当前工作目录，避免因 chdir("/") 导致的相对路径问题
+      // 保持当前工作目录，避免因 chdir("/") 导致的相对路径问题
       let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
       ensure_parent_dir(&pid_path);
-      // 中文注释：准备日志文件，重定向 stdout/stderr，便于排障
+      // 准备日志文件，重定向 stdout/stderr，便于排障
       let log_path = default_log_file();
       let _ = fs::create_dir_all(log_path.parent().unwrap_or(Path::new(".")));
       let stdout = fs::OpenOptions::new().create(true).append(true).open(&log_path).unwrap();
@@ -469,9 +469,9 @@ fn main() {
     }
   }
 
-  // 中文注释：初始化日志（使用 env_logger），允许通过 --log-level 与 -V/-VV/-VVV 控制详细程度
+  // 初始化日志（使用 env_logger），允许通过 --log-level 与 -V/-VV/-VVV 控制详细程度
   init_logger(&cli);
-  // 中文注释：初始化网络环境（打印代理设置；可选自动填充 NO_PROXY）
+  // 初始化网络环境（打印代理设置；可选自动填充 NO_PROXY）
   init_network_env();
 
   // ====== 参数整合（命令行 > 环境变量 > 默认值）======
@@ -510,8 +510,8 @@ fn main() {
     .unwrap_or(default_workers)
     .clamp(2, 64);
 
-  // 将最终值注入 logsearch 调参（避免通过环境变量、也无需 unsafe）
-  let _ = logsearch::tuning::set(logsearch::tuning::Tuning {
+  // 将最终值注入 logseek 调参（避免通过环境变量、也无需 unsafe）
+  let _ = logseek::tuning::set(logseek::tuning::Tuning {
     s3_max_concurrency: s3_max_conc,
     cpu_concurrency: cpu_conc,
     stream_ch_cap: stream_ch_cap,
@@ -519,7 +519,7 @@ fn main() {
     minio_max_attempts: minio_max_attempts,
   });
 
-  // 中文注释：在（可能的）守护化之后，再创建 Tokio 运行时并启动服务器
+  // 在（可能的）守护化之后，再创建 Tokio 运行时并启动服务器
   let rt = tokio::runtime::Builder::new_multi_thread()
     .worker_threads(worker_threads)
     .enable_all()

@@ -12,10 +12,10 @@ pub mod bbip_service;
 pub mod settings;
 pub mod simple_cache;
 
-// 中文注释：自然语言转查询串服务（调用本地 Ollama）
+// 自然语言转查询串服务（调用本地 Ollama）
 pub mod nl2q;
 
-// 中文注释：运行时调参（由网关注入，避免使用环境变量注入）
+// 运行时调参（由网关注入，避免使用环境变量注入）
 pub mod tuning;
 
 /// Ensure all persistent stores required by the service are ready.

@@ -1,7 +1,7 @@
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
 
-/// 中文注释：运行期可调参数（由上层网关注入；优先级：命令行 > 环境变量 > 默认值）
+/// 运行期可调参数（由上层网关注入；优先级：命令行 > 环境变量 > 默认值）
 #[derive(Debug, Clone)]
 pub struct Tuning {
   pub s3_max_concurrency: usize,

@@ -3,7 +3,7 @@
   import { invalidate } from '$app/navigation';
   import { env } from '$env/dynamic/public';
 
-  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logsearch';
+  const API_BASE = env.PUBLIC_API_BASE || '/api/v1/logseek';
 
   let endpoint = $state('');
   let bucket = $state('');
@@ -94,7 +94,7 @@
         return;
       }
       await fetchSettings(true);
-      await invalidate('/api/v1/logsearch/settings/minio');
+      await invalidate('/api/v1/logseek/settings/minio');
       connectionError = null;
       saveSuccess = true;
       window.location.href = '/';

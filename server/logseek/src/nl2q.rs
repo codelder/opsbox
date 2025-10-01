@@ -2,18 +2,18 @@ use serde::{Deserialize, Serialize};
 use ollama_rs::Ollama;
 use ollama_rs::generation::completion::request::GenerationRequest;
 use log::{debug, info, warn, error};
-// 中文注释：将快速指南在编译期内嵌，避免运行时依赖路径
+// 将快速指南在编译期内嵌，避免运行时依赖路径
 const QUICK_GUIDE: &str = include_str!("../../../docs/query-string-quick-guide.md");
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NLBody {
-  /// 中文注释：自然语言需求文本
+  /// 自然语言需求文本
   pub nl: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct NL2QResponse {
-  /// 中文注释：生成的查询字符串（q）
+  /// 生成的查询字符串（q）
   pub q: String,
 }
 
@@ -26,14 +26,14 @@ pub enum NL2QError {
 }
 
 fn build_prompt(user_nl: &str) -> String {
-  // 中文注释：严格约束输出，仅允许输出一行最终 q 字符串；禁止输出 <think> 思考内容
+  // 严格约束输出，仅允许输出一行最终 q 字符串；禁止输出 <think> 思考内容
   format!(
     "你是一名日志检索查询串生成器。请严格遵循以下文档把用户的自然语言需求转换为本站使用的查询字符串（q）。\n\n=== 文档开始 ===\n{}\n=== 文档结束 ===\n\n要求：\n- 仅输出一行最终 q 字符串，不要任何解释或多余符号\n- 不要用引号包裹整个表达式\n- 若用户给出多个同义词，用大写 OR 连接\n- 若是“同一行出现 A 与 B”，用正则 /(A.*B|B.*A)/\n- 不要输出任何 <think> 或 </think> 内容\n\n用户需求：{}\n输出：",
     QUICK_GUIDE, user_nl.trim()
   )
 }
 
-// 中文注释：移除大模型推理模型产生的 <think> 思考片段，保留真实输出
+// 移除大模型推理模型产生的 <think> 思考片段，保留真实输出
 fn strip_think_sections(input: &str) -> String {
   let mut out = input.to_string();
   loop {
@@ -85,14 +85,14 @@ pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
   let mut q = resp.response.trim().to_string();
   debug!("Ollama原始输出: '{}'", &q);
 
-  // 中文注释：先移除 <think> 思考片段，再做其它清理
+  // 先移除 <think> 思考片段，再做其它清理
   let before_strip = q.clone();
   q = strip_think_sections(&q).trim().to_string();
   if q != before_strip {
     debug!("移除<think>片段后: '{}'", &q);
   }
 
-  // 中文注释：容错清理——去除围绕的代码块/引号，仅保留单行
+  // 容错清理——去除围绕的代码块/引号，仅保留单行
   if q.starts_with("```") && q.ends_with("```") {
     debug!("移除代码块围栏");
     // 去掉围栏

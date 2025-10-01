@@ -5,8 +5,8 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 Project overview
 - Monorepo with a Rust backend and a SvelteKit (Vite) frontend.
 - Backend (server/): Cargo workspace with two crates:
-  - api-gateway: Axum HTTP server that nests logsearch APIs under /api/v1/logsearch and serves the built SPA from embedded static assets.
-  - logsearch: Library exposing router() and domain logic for log search (local files and S3/MinIO), settings persistence, and an NL→Q helper via local Ollama.
+  - api-gateway: Axum HTTP server that nests logseek APIs under /api/v1/logseek and serves the built SPA from embedded static assets.
+  - logseek: Library exposing router() and domain logic for log search (local files and S3/MinIO), settings persistence, and an NL→Q helper via local Ollama.
 - Frontend (ui/): SvelteKit app compiled to static assets directly into server/api-gateway/static using adapter-static with SPA fallback.
 
 Toolchains and prerequisites
@@ -41,16 +41,16 @@ Common commands
   - Frontend lint: pnpm --dir ui lint
 - Tests
   - Rust (workspace): cargo test
-  - Rust (lib only): cargo test -p logsearch
-  - Rust (single test): cargo test -p logsearch <test_name>
+  - Rust (lib only): cargo test -p logseek
+  - Rust (single test): cargo test -p logseek <test_name>
   - Frontend (all unit tests): pnpm --dir ui test
   - Frontend (watch): pnpm --dir ui test:unit
   - Frontend (single test by name): pnpm --dir ui test:unit -- -t "name"
   - Frontend (single file): pnpm --dir ui vitest run path/to/file.test.ts
 
 Key runtime configuration
-- MinIO/S3 settings are persisted in a local SQLite DB (default file: ./logsearch_settings.db). Override path via LOGSEARCH_SETTINGS_DB (accepts a filesystem path or sqlite:// URL).
-- Settings API (served by api-gateway under /api/v1/logsearch):
+- MinIO/S3 settings are persisted in a local SQLite DB (default file: ./logseek_settings.db). Override path via LOGSEARCH_SETTINGS_DB (accepts a filesystem path or sqlite:// URL).
+- Settings API (served by api-gateway under /api/v1/logseek):
   - GET /settings/minio → returns current settings plus configured + connection_error flags
   - POST /settings/minio with JSON { endpoint, bucket, access_key, secret_key }
     - Validates connectivity before persisting. Typical errors are returned as problem+json with Chinese titles/details.
@@ -62,8 +62,8 @@ Key runtime configuration
 
 Logsearch architecture (big picture)
 - server/api-gateway (binary)
-  - Composes the HTTP app: health endpoint, mounts logsearch::router() at /api/v1/logsearch, and serves SPA via embedded assets (rust-embed). Provides SPA fallback so deep-linked routes resolve to index.html. Offers daemonization (Unix) and adjustable logging via env_logger.
-- server/logsearch (library)
+  - Composes the HTTP app: health endpoint, mounts logseek::router() at /api/v1/logseek, and serves SPA via embedded assets (rust-embed). Provides SPA fallback so deep-linked routes resolve to index.html. Offers daemonization (Unix) and adjustable logging via env_logger.
+- server/logseek (library)
   - routes.rs: Defines HTTP endpoints:
     - /stream: markdown stream from local example; demonstration endpoint.
     - /stream.ndjson: streams local filesystem results as NDJSON; includes a per-request session id (X-Logsearch-SID) and caches highlighted line slices for later retrieval via /view.cache.json.

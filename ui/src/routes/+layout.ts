@@ -10,7 +10,7 @@ export const load: LayoutLoad = async ({ fetch, url }) => {
   }
 
   try {
-    const res = await fetch('/api/v1/logsearch/settings/minio', { cache: 'no-store' });
+    const res = await fetch('/api/v1/logseek/settings/minio', { cache: 'no-store' });
     if (res.ok) {
       const data = await res.json();
       if (data?.configured) {
