@@ -40,7 +40,7 @@
 <button
   type="button"
   aria-label={theme === 'dark' ? '切换到浅色' : '切换到深色'}
-  class="fixed top-3 right-3 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
+  class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
   onclick={toggleTheme}
 >
   {#if theme === 'dark'}

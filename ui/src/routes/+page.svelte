@@ -5,6 +5,8 @@
    */
   import { IconRobot, IconFunction } from '@tabler/icons-svelte';
   import { convertNaturalLanguage } from '$lib/modules/logseek';
+  import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
+  import SyntaxHints from '$lib/components/SyntaxHints.svelte';
 
   // 工具函数：将片段插入到输入框光标位置
   let inputEl: HTMLInputElement | null = null;
@@ -60,20 +62,9 @@
 <main class="flex min-h-[100svh] justify-center">
   <div class="w-210 px-6 pt-28 sm:pt-36 md:pt-44">
     <div class="mx-auto w-full text-center">
-      <label
-        class="mb-4 block text-6xl font-extrabold tracking-[-0.25em] italic antialiased select-none md:mb-10 md:text-8xl"
-        for="search"
-        id="logo-label"
-      >
-        <span class="text-blue-600">L</span>
-        <span class="text-red-600">o</span>
-        <span class="text-yellow-500">g</span>
-        <span class="text-green-600">s</span>
-        <span class="text-blue-600">e</span>
-        <span class="text-red-600">e</span>
-        <span class="text-yellow-500">k</span>
-        <!--        <span class="text-green-600">e</span>-->
-      </label>
+      <div class="mb-4 block md:mb-10" id="logo-label">
+        <LogSeekLogo size="large" asLabel htmlFor="search" />
+      </div>
 
       <!-- 输入框容器（相对定位），在左侧放置搜索图标；右侧是模式切换（AI/表达式） -->
       <form role="search" onsubmit={handleHomeSubmit}>
@@ -133,64 +124,7 @@
         </div>
       </form>
 
-      <div class="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-        <span class="mr-1 select-none">语法提示：</span>
-        <button
-          class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
-          onclick={() => insertSnippet(' OR ')}
-          title="逻辑或（必须大写）"
-          type="button"
-        >
-          OR
-        </button>
-        <button
-          class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
-          onclick={() => insertSnippet(' AND ')}
-          title="逻辑与（必须大写）；相邻词默认 AND"
-          type="button"
-        >
-          AND
-        </button>
-        <button
-          class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
-          onclick={() => insertSnippet('-')}
-          title="排除词，例如 -debug"
-          type="button"
-        >
-          -exclude
-        </button>
-        <button
-          class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
-          onclick={() => insertSnippet('""', 1)}
-          title="短语匹配：插入一对引号"
-          type="button"
-        >
-          "phrase"
-        </button>
-        <button
-          class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
-          onclick={() => insertSnippet('//', 1)}
-          title="正则匹配：插入 /.../"
-          type="button"
-        >
-          /regex/
-        </button>
-        <button
-          class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
-          onclick={() => insertSnippet('path:logs/*.log ')}
-          title="路径限定（glob），示例 path:logs/*.log"
-          type="button">path:glob</button
-        >
-        <button
-          class="ml-2 underline underline-offset-2 hover:text-gray-200"
-          onclick={() =>
-            insertSnippet('(taxResult OR taxWarn) /"9111[0-9A-Z]{14}"/ dt:20250818 path:ptcr -path:system.log')}
-          title="插入完整示例"
-          type="button"
-        >
-          示例
-        </button>
-      </div>
+      <SyntaxHints onInsert={insertSnippet} />
     </div>
   </div>
 </main>

@@ -8,6 +8,8 @@
   import { get } from 'svelte/store';
   import { browser } from '$app/environment';
   import { fetchViewCache, escapeHtml, escapeRegExp } from '$lib/modules/logseek';
+  import Alert from '$lib/components/Alert.svelte';
+  import FileHeader from './FileHeader.svelte';
 
   let file = $state('');
   let sid = $state('');
@@ -29,7 +31,7 @@
   // 行样式为 text-[13px] + leading-[20px] + py-1，综合约 32px
   const EST_ROW = 32;
   const rowVirtualizer = createVirtualizer({
-    count: total, // 总行数
+    count: 0, // 初始值为 0，会在下面的 $effect 中响应式更新为实际的 total
     getScrollElement: () => parentEl, // 滚动容器（初始为 null，下面用 setOptions 保持同步）
     estimateSize: () => EST_ROW, // 预估单行高度(px)
     overscan: 20, // 预加载额外行，平衡性能与滚动流畅度
@@ -200,47 +202,6 @@
     return result;
   }
 
-  // 派生下载文件名（将不合法的文件名字符替换为下划线）
-  function deriveDownloadName(): string {
-    const base = extractFileName(file) || 'log.txt';
-    const safe = base.replace(/[\\/:*?"<>|]+/g, '_');
-    return safe || 'log.txt';
-  }
-
-  // 提取文件名（去掉tar包路径，只保留实际文件名）
-  function extractFileName(fullPath: string): string {
-    if (!fullPath) return '未知文件';
-
-    // 如果路径包含冒号，说明是 tar包:文件路径 格式
-    const colonIndex = fullPath.indexOf(':');
-    if (colonIndex >= 0) {
-      // 取冒号后面的部分（tar包内的文件路径）
-      const innerPath = fullPath.slice(colonIndex + 1);
-      // 返回文件名（路径的最后一部分）
-      return innerPath.split('/').pop() || innerPath || '未知文件';
-    }
-
-    // 如果没有冒号，直接取路径的最后一部分
-    return fullPath.split('/').pop() || fullPath || '未知文件';
-  }
-
-  // 提取tar包名称
-  function extractTarName(fullPath: string): string | null {
-    if (!fullPath) return null;
-
-    // 如果路径包含冒号，说明是 tar包:文件路径 格式
-    const colonIndex = fullPath.indexOf(':');
-    if (colonIndex >= 0) {
-      // 取冒号前面的部分（tar包路径）
-      const tarPath = fullPath.slice(0, colonIndex);
-      // 返回tar包文件名（路径的最后一部分）
-      return tarPath.split('/').pop() || tarPath || null;
-    }
-
-    // 如果没有冒号，说明不是tar包内的文件
-    return null;
-  }
-
   // 下载当前视图的完整原始文本（不含行号）
   function downloadCurrentFile() {
     try {
@@ -250,7 +211,9 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = deriveDownloadName();
+      // 提取文件名并清理非法字符
+      const fileName = file.split(':').pop()?.split('/').pop() || 'log.txt';
+      a.download = fileName.replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -364,21 +327,8 @@
 <div class="h-screen overflow-hidden bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
   <div class="mx-auto flex h-full max-w-[1560px] flex-col px-4 py-8">
     {#if error}
-      <div class="mx-auto mb-6 max-w-md text-center">
-        <div class="rounded-xl bg-red-50 p-4 shadow-lg ring-1 ring-red-200 dark:bg-red-900/20 dark:ring-red-800/50">
-          <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-900/50">
-            <svg class="h-6 w-6 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
-              />
-            </svg>
-          </div>
-          <h3 class="mt-2 text-base font-semibold text-red-900 dark:text-red-200">加载出错</h3>
-          <p class="mt-1 text-sm text-red-700 dark:text-red-300">{error}</p>
-        </div>
+      <div class="mx-auto mb-6 max-w-md">
+        <Alert type="error" title="加载出错" message={error} />
       </div>
     {/if}
 
@@ -388,99 +338,14 @@
         class="flex flex-1 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
       >
         <!-- 文件信息标题栏 -->
-        <div
-          class="flex-shrink-0 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-gray-100 px-6 py-4 dark:border-gray-700/50 dark:from-gray-800/50 dark:to-gray-700/50"
-        >
-          <!-- 三列布局：左侧文件信息，中间LogSeek标志，右侧下载按钮 -->
-          <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-            <!-- 左侧：文件信息 -->
-            <div class="min-w-0">
-              <h2
-                class="font-mono text-sm leading-tight font-semibold break-all text-slate-900 md:text-base dark:text-gray-100"
-              >
-                {extractFileName(file)}
-              </h2>
-              {#if extractTarName(file)}
-                <p class="mt-0.5 text-[11px] text-slate-500 dark:text-gray-400 font-mono break-all">
-                  来自: {extractTarName(file)}
-                </p>
-              {/if}
-              {#if total > 0}
-                <div class="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-slate-600 dark:text-gray-400">
-                  <span
-                    class="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800"
-                  >
-                    <svg class="mr-1 h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                      />
-                    </svg>
-                    总共 {total} 行
-                  </span>
-                  <span
-                    class="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-[10px] font-medium text-green-700 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800"
-                  >
-                    <svg class="mr-1 h-2.5 w-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4" />
-                    </svg>
-                    已加载 {end} 行
-                  </span>
-
-                  {#if keywords?.length}
-                    <!-- 关键词显示 -->
-                    {#each keywords.slice(0, 3) as keyword}
-                      <span
-                        class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-[10px] font-medium text-yellow-800 ring-1 ring-yellow-600/20 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-500/20"
-                        >{keyword}</span
-                      >
-                    {/each}
-                    {#if keywords.length > 3}
-                      <span class="text-[10px] text-gray-500 dark:text-gray-400">+{keywords.length - 3}</span>
-                    {/if}
-                  {/if}
-                </div>
-              {/if}
-            </div>
-
-            <!-- 中间：LogSeek标志 -->
-            <div class="flex items-center justify-center">
-              <div
-                class="inline-block transform text-3xl font-extrabold tracking-[-0.25em] italic antialiased transition-transform duration-300 select-none hover:scale-105 md:text-4xl"
-              >
-                <span class="text-blue-600 drop-shadow-sm">L</span>
-                <span class="text-red-600 drop-shadow-sm">o</span>
-                <span class="text-yellow-500 drop-shadow-sm">g</span>
-                <span class="text-green-600 drop-shadow-sm">S</span>
-                <span class="text-blue-600 drop-shadow-sm">e</span>
-                <span class="text-red-600 drop-shadow-sm">e</span>
-                <span class="text-yellow-500 drop-shadow-sm">k</span>
-              </div>
-            </div>
-
-            <!-- 右侧：下载按钮 -->
-            <div class="flex justify-end">
-              <button
-                class="inline-flex items-center rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-3 py-2 text-sm font-semibold text-white shadow-lg shadow-blue-500/25 transition-all duration-300 hover:from-blue-700 hover:to-blue-800 hover:shadow-xl hover:shadow-blue-500/30 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-50 focus:outline-none disabled:from-gray-400 disabled:to-gray-500 disabled:shadow-gray-400/25 dark:focus:ring-offset-gray-900 dark:disabled:from-gray-600 dark:disabled:to-gray-700"
-                onclick={downloadCurrentFile}
-                disabled={loading || total <= 0}
-                title="下载当前文件"
-              >
-                <svg class="mr-1.5 h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="2"
-                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-                下载
-              </button>
-            </div>
-          </div>
-        </div>
+        <FileHeader
+          filePath={file}
+          {total}
+          loadedLines={end}
+          {keywords}
+          {loading}
+          onDownload={downloadCurrentFile}
+        />
 
         <!-- 虚拟滚动内容区域 -->
         <div
