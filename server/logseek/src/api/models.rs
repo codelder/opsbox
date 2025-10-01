@@ -117,3 +117,163 @@ pub struct ViewParams {
   pub start: Option<usize>,
   pub end: Option<usize>,
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_search_body_deserialization() {
+    let json = r#"{"q":"error","context":5}"#;
+    let body: SearchBody = serde_json::from_str(json).unwrap();
+    assert_eq!(body.q, "error");
+    assert_eq!(body.context, Some(5));
+  }
+
+  #[test]
+  fn test_search_body_optional_context() {
+    let json = r#"{"q":"warn"}"#;
+    let body: SearchBody = serde_json::from_str(json).unwrap();
+    assert_eq!(body.q, "warn");
+    assert_eq!(body.context, None);
+  }
+
+  #[test]
+  fn test_nl2q_out_serialization() {
+    let out = NL2QOut {
+      q: "error OR warning".to_string(),
+    };
+    let json = serde_json::to_string(&out).unwrap();
+    assert!(json.contains("error OR warning"));
+  }
+
+  #[test]
+  fn test_minio_settings_payload_serialization() {
+    let payload = MinioSettingsPayload {
+      endpoint: "localhost:9000".to_string(),
+      bucket: "logs".to_string(),
+      access_key: "minioadmin".to_string(),
+      secret_key: "minioadmin".to_string(),
+      configured: true,
+      connection_error: None,
+    };
+
+    let json = serde_json::to_string(&payload).unwrap();
+    let deserialized: MinioSettingsPayload = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(deserialized.endpoint, "localhost:9000");
+    assert_eq!(deserialized.bucket, "logs");
+    assert_eq!(deserialized.configured, true);
+  }
+
+  #[test]
+  fn test_minio_settings_payload_deserialization_with_defaults() {
+    let json = r#"{}"#;
+    let payload: MinioSettingsPayload = serde_json::from_str(json).unwrap();
+
+    assert_eq!(payload.endpoint, "");
+    assert_eq!(payload.bucket, "");
+    assert_eq!(payload.configured, false);
+    assert_eq!(payload.connection_error, None);
+  }
+
+  #[test]
+  fn test_minio_settings_payload_with_connection_error() {
+    let json = r#"{"endpoint":"localhost:9000","connection_error":"Connection timeout"}"#;
+    let payload: MinioSettingsPayload = serde_json::from_str(json).unwrap();
+
+    assert_eq!(payload.endpoint, "localhost:9000");
+    assert_eq!(payload.connection_error, Some("Connection timeout".to_string()));
+  }
+
+  #[test]
+  fn test_minio_settings_conversion_to_domain() {
+    let payload = MinioSettingsPayload {
+      endpoint: "localhost:9000".to_string(),
+      bucket: "logs".to_string(),
+      access_key: "admin".to_string(),
+      secret_key: "password".to_string(),
+      configured: true,
+      connection_error: None,
+    };
+
+    let settings: settings::MinioSettings = payload.into();
+
+    assert_eq!(settings.endpoint, "localhost:9000");
+    assert_eq!(settings.bucket, "logs");
+    assert_eq!(settings.access_key, "admin");
+    assert_eq!(settings.secret_key, "password");
+  }
+
+  #[test]
+  fn test_minio_settings_conversion_from_domain() {
+    let settings = settings::MinioSettings {
+      endpoint: "localhost:9000".to_string(),
+      bucket: "logs".to_string(),
+      access_key: "admin".to_string(),
+      secret_key: "password".to_string(),
+    };
+
+    let payload: MinioSettingsPayload = settings.into();
+
+    assert_eq!(payload.endpoint, "localhost:9000");
+    assert_eq!(payload.bucket, "logs");
+    assert_eq!(payload.configured, false); // 默认值
+    assert_eq!(payload.connection_error, None); // 默认值
+  }
+
+  #[test]
+  fn test_view_params_deserialization() {
+    let json = r#"{"sid":"test-session","file":"test.log","start":10,"end":20}"#;
+    let params: ViewParams = serde_json::from_str(json).unwrap();
+
+    assert_eq!(params.sid, "test-session");
+    assert_eq!(params.file, "test.log");
+    assert_eq!(params.start, Some(10));
+    assert_eq!(params.end, Some(20));
+  }
+
+  #[test]
+  fn test_view_params_optional_fields() {
+    let json = r#"{"sid":"test-session","file":"test.log"}"#;
+    let params: ViewParams = serde_json::from_str(json).unwrap();
+
+    assert_eq!(params.sid, "test-session");
+    assert_eq!(params.file, "test.log");
+    assert_eq!(params.start, None);
+    assert_eq!(params.end, None);
+  }
+
+  #[test]
+  fn test_minio_settings_default() {
+    let payload = MinioSettingsPayload::default();
+
+    assert_eq!(payload.endpoint, "");
+    assert_eq!(payload.bucket, "");
+    assert_eq!(payload.access_key, "");
+    assert_eq!(payload.secret_key, "");
+    assert_eq!(payload.configured, false);
+    assert_eq!(payload.connection_error, None);
+  }
+
+  #[test]
+  fn test_app_error_display() {
+    use crate::query;
+    let error = AppError::QueryParse(query::ParseError::UnexpectedToken { span: (0, 1) });
+
+    let error_string = error.to_string();
+    assert!(error_string.contains("查询语法错误"));
+  }
+
+  #[test]
+  fn test_app_error_to_problem() {
+    use crate::query;
+    let error = AppError::QueryParse(query::ParseError::InvalidRegex {
+      message: "invalid syntax".to_string(),
+      span: (0, 5),
+    });
+
+    let problem: Problem = error.into();
+    assert_eq!(problem.status_code, StatusCode::BAD_REQUEST);
+  }
+}

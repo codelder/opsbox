@@ -129,3 +129,131 @@ pub fn render_json_chunks(
     chunks,
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_escape_html_basic() {
+    assert_eq!(escape_html("hello"), "hello");
+    assert_eq!(escape_html("<script>"), "&lt;script&gt;");
+    assert_eq!(escape_html("&"), "&amp;");
+    assert_eq!(escape_html("\"test\""), "&quot;test&quot;");
+    assert_eq!(escape_html("'test'"), "&#39;test&#39;");
+  }
+
+  #[test]
+  fn test_escape_html_mixed() {
+    assert_eq!(
+      escape_html("<div class=\"test\" data='value' & more>"),
+      "&lt;div class=&quot;test&quot; data=&#39;value&#39; &amp; more&gt;"
+    );
+  }
+
+  #[test]
+  fn test_highlight_with_mark_no_keywords() {
+    let result = highlight_with_mark("hello world", &[]);
+    assert_eq!(result, "hello world");
+  }
+
+  #[test]
+  fn test_highlight_with_mark_empty_keywords() {
+    let result = highlight_with_mark("hello world", &["".to_string()]);
+    assert_eq!(result, "hello world");
+  }
+
+  #[test]
+  fn test_highlight_with_mark_single_keyword() {
+    let result = highlight_with_mark("hello world", &["world".to_string()]);
+    assert_eq!(result, "hello <mark>world</mark>");
+  }
+
+  #[test]
+  fn test_highlight_with_mark_multiple_keywords() {
+    let result = highlight_with_mark("hello world foo bar", &["world".to_string(), "foo".to_string()]);
+    assert_eq!(result, "hello <mark>world</mark> <mark>foo</mark> bar");
+  }
+
+  #[test]
+  fn test_highlight_with_mark_overlapping_keywords() {
+    // 更长的关键词优先
+    let result = highlight_with_mark("foobar", &["foo".to_string(), "foobar".to_string()]);
+    assert_eq!(result, "<mark>foobar</mark>");
+  }
+
+  #[test]
+  fn test_highlight_with_mark_repeated_keywords() {
+    let result = highlight_with_mark("foo foo bar", &["foo".to_string()]);
+    assert_eq!(result, "<mark>foo</mark> <mark>foo</mark> bar");
+  }
+
+  #[test]
+  fn test_highlight_with_mark_html_escape() {
+    let result = highlight_with_mark("<script>alert('xss')</script>", &["alert".to_string()]);
+    assert_eq!(result, "&lt;script&gt;<mark>alert</mark>(&#39;xss&#39;)&lt;/script&gt;");
+  }
+
+  #[test]
+  fn test_render_markdown_single_range() {
+    let lines = vec!["line 1".to_string(), "line 2".to_string(), "line 3".to_string()];
+    let result = render_markdown("test.log", vec![(0, 1)], lines, &["line".to_string()]);
+
+    assert!(result.contains("test.log"));
+    assert!(result.contains("<pre>"));
+    assert!(result.contains("</pre>"));
+    assert!(result.contains("<mark>line</mark> 1"));
+    assert!(result.contains("<mark>line</mark> 2"));
+  }
+
+  #[test]
+  fn test_render_markdown_multiple_ranges() {
+    let lines = vec![
+      "line 1".to_string(),
+      "line 2".to_string(),
+      "line 3".to_string(),
+      "line 4".to_string(),
+    ];
+    let result = render_markdown("test.log", vec![(0, 1), (2, 3)], lines, &[]);
+
+    // 应该在两个范围之间包含省略号
+    assert!(result.contains("..."));
+  }
+
+  #[test]
+  fn test_render_json_chunks_basic() {
+    let lines = vec!["line 1".to_string(), "line 2".to_string()];
+    let result = render_json_chunks("test.log", vec![(0, 1)], lines, &["test".to_string()]);
+
+    assert_eq!(result.path, "test.log");
+    assert_eq!(result.keywords, vec!["test".to_string()]);
+    assert_eq!(result.chunks.len(), 1);
+    assert_eq!(result.chunks[0].range, (1, 2)); // 从 1 开始
+    assert_eq!(result.chunks[0].lines.len(), 2);
+    assert_eq!(result.chunks[0].lines[0].no, 1);
+    assert_eq!(result.chunks[0].lines[0].text, "line 1");
+  }
+
+  #[test]
+  fn test_render_json_chunks_multiple_ranges() {
+    let lines = vec![
+      "line 1".to_string(),
+      "line 2".to_string(),
+      "line 3".to_string(),
+      "line 4".to_string(),
+    ];
+    let result = render_json_chunks("test.log", vec![(0, 1), (2, 3)], lines, &["line".to_string()]);
+
+    assert_eq!(result.chunks.len(), 2);
+    assert_eq!(result.chunks[0].range, (1, 2));
+    assert_eq!(result.chunks[1].range, (3, 4));
+  }
+
+  #[test]
+  fn test_render_json_chunks_empty_ranges() {
+    let lines = vec!["line 1".to_string()];
+    let result = render_json_chunks("test.log", vec![], lines, &[]);
+
+    assert_eq!(result.chunks.len(), 0);
+  }
+}

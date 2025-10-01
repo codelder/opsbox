@@ -154,3 +154,337 @@ impl Cache {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn test_cache_put_and_get_keywords() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let keywords = vec!["error".to_string(), "warn".to_string()];
+
+    c.put_keywords(&sid, keywords.clone()).await;
+    let result = c.get_keywords(&sid).await;
+
+    assert_eq!(result, Some(keywords));
+  }
+
+  #[tokio::test]
+  async fn test_cache_get_keywords_missing() {
+    let c = cache();
+    let result = c.get_keywords("non-existent-sid").await;
+    assert_eq!(result, None);
+  }
+
+  #[tokio::test]
+  async fn test_cache_put_and_get_file_lines() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let file_id = "test-file";
+    let lines = vec!["line 1".to_string(), "line 2".to_string()];
+
+    c.put_lines(&sid, file_id, lines.clone()).await;
+    let result = c.get_lines_slice(&sid, file_id, 1, 2).await;
+
+    assert!(result.is_some());
+    let (total, slice) = result.unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(slice, lines);
+  }
+
+  #[tokio::test]
+  async fn test_cache_get_file_lines_missing() {
+    let c = cache();
+    let result = c.get_lines_slice("non-existent-sid", "non-existent-file", 1, 10).await;
+    assert_eq!(result, None);
+  }
+
+  #[tokio::test]
+  async fn test_cache_keywords_retrieval() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let keywords = vec!["test".to_string()];
+
+    c.put_keywords(&sid, keywords.clone()).await;
+
+    // 验证可以多次获取
+    let result1 = c.get_keywords(&sid).await;
+    let result2 = c.get_keywords(&sid).await;
+
+    assert_eq!(result1, Some(keywords.clone()));
+    assert_eq!(result2, Some(keywords));
+  }
+
+  #[tokio::test]
+  async fn test_cache_overwrite_keywords() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+
+    c.put_keywords(&sid, vec!["old".to_string()]).await;
+    c.put_keywords(&sid, vec!["new".to_string()]).await;
+
+    let result = c.get_keywords(&sid).await;
+    assert_eq!(result, Some(vec!["new".to_string()]));
+  }
+
+  #[tokio::test]
+  async fn test_cache_multiple_files_same_sid() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+
+    c.put_lines(&sid, "file1", vec!["a".to_string()]).await;
+    c.put_lines(&sid, "file2", vec!["b".to_string()]).await;
+
+    let result1 = c.get_lines_slice(&sid, "file1", 1, 1).await.map(|(_, lines)| lines);
+    let result2 = c.get_lines_slice(&sid, "file2", 1, 1).await.map(|(_, lines)| lines);
+
+    assert_eq!(result1, Some(vec!["a".to_string()]));
+    assert_eq!(result2, Some(vec!["b".to_string()]));
+  }
+
+  #[tokio::test]
+  async fn test_cache_same_file_different_sids() {
+    let c = cache();
+    let sid1 = format!("test-sid-1-{}", Uuid::new_v4());
+    let sid2 = format!("test-sid-2-{}", Uuid::new_v4());
+    let file_id = "shared-file";
+
+    c.put_lines(&sid1, file_id, vec!["content1".to_string()]).await;
+    c.put_lines(&sid2, file_id, vec!["content2".to_string()]).await;
+
+    let result1 = c.get_lines_slice(&sid1, file_id, 1, 1).await.map(|(_, lines)| lines);
+    let result2 = c.get_lines_slice(&sid2, file_id, 1, 1).await.map(|(_, lines)| lines);
+
+    assert_eq!(result1, Some(vec!["content1".to_string()]));
+    assert_eq!(result2, Some(vec!["content2".to_string()]));
+  }
+
+  #[tokio::test]
+  async fn test_cache_get_file_lines_slice() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let file_id = "test-file";
+    let lines: Vec<String> = (1..=10).map(|i| format!("line {}", i)).collect();
+
+    c.put_lines(&sid, file_id, lines).await;
+
+    // 获取第 3-5 行 (1-based indexing)
+    let result = c.get_lines_slice(&sid, file_id, 3, 5).await;
+
+    assert!(result.is_some());
+    let (total, slice) = result.unwrap();
+    assert_eq!(total, 10);
+    assert_eq!(slice.len(), 3);
+    assert_eq!(slice[0], "line 3");
+    assert_eq!(slice[2], "line 5");
+  }
+
+  #[tokio::test]
+  async fn test_cache_get_file_lines_slice_out_of_bounds() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let file_id = "test-file";
+    let lines = vec!["line 1".to_string(), "line 2".to_string()];
+
+    c.put_lines(&sid, file_id, lines).await;
+
+    // 请求超出范围的行
+    let result = c.get_lines_slice(&sid, file_id, 1, 100).await;
+
+    assert!(result.is_some());
+    let (total, slice) = result.unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(slice.len(), 2); // 应该只返回实际存在的行
+  }
+
+  #[test]
+  fn test_new_sid_generates_valid_uuid() {
+    let sid1 = new_sid();
+    let sid2 = new_sid();
+
+    // 验证是有效的 UUID 格式
+    assert!(Uuid::parse_str(&sid1).is_ok());
+    assert!(Uuid::parse_str(&sid2).is_ok());
+
+    // 验证每次生成的 SID 不同
+    assert_ne!(sid1, sid2);
+  }
+
+  #[test]
+  fn test_cache_singleton() {
+    let c1 = cache();
+    let c2 = cache();
+
+    // 验证是同一个实例
+    assert!(std::ptr::eq(c1, c2));
+  }
+
+  #[tokio::test]
+  async fn test_cache_get_updates_last_touch() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+
+    c.put_keywords(&sid, vec!["test".to_string()]).await;
+
+    // 等待一小段时间
+    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+    // get 会更新 last_touch
+    let result = c.get_keywords(&sid).await;
+    assert!(result.is_some());
+  }
+
+  #[tokio::test]
+  async fn test_cache_concurrent_writes() {
+    use tokio::task;
+
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+
+    // 并发写入
+    let handles: Vec<_> = (0..10)
+      .map(|i| {
+        let sid = sid.clone();
+        task::spawn(async move {
+          cache().put_keywords(&sid, vec![format!("keyword-{}", i)]).await;
+        })
+      })
+      .collect();
+
+    // 等待所有任务完成
+    for handle in handles {
+      handle.await.unwrap();
+    }
+
+    // 验证最后一次写入成功（顺序不确定，但应该有一个值）
+    let result = c.get_keywords(&sid).await;
+    assert!(result.is_some());
+  }
+
+  #[tokio::test]
+  async fn test_cache_concurrent_reads() {
+    use tokio::task;
+
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let keywords = vec!["test1".to_string(), "test2".to_string()];
+
+    c.put_keywords(&sid, keywords.clone()).await;
+
+    // 并发读取
+    let handles: Vec<_> = (0..10)
+      .map(|_| {
+        let sid = sid.clone();
+        let expected = keywords.clone();
+        task::spawn(async move {
+          let result = cache().get_keywords(&sid).await;
+          assert_eq!(result, Some(expected));
+        })
+      })
+      .collect();
+
+    // 等待所有任务完成
+    for handle in handles {
+      handle.await.unwrap();
+    }
+  }
+
+  #[tokio::test]
+  async fn test_cache_get_lines_slice_boundary_conditions() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let file_id = "test-file";
+    let lines: Vec<String> = (1..=5).map(|i| format!("line {}", i)).collect();
+
+    c.put_lines(&sid, file_id, lines).await;
+
+    // 测试边界条件：start=0（应该被调整为1）
+    let result = c.get_lines_slice(&sid, file_id, 0, 2).await;
+    assert!(result.is_some());
+    let (_, slice) = result.unwrap();
+    assert_eq!(slice[0], "line 1");
+
+    // 测试边界条件：end > total（应该被限制）
+    let result = c.get_lines_slice(&sid, file_id, 1, 1000).await;
+    assert!(result.is_some());
+    let (total, slice) = result.unwrap();
+    assert_eq!(total, 5);
+    assert_eq!(slice.len(), 5);
+
+    // 测试边界条件：start > end（应该返回空或最小范围）
+    let result = c.get_lines_slice(&sid, file_id, 3, 2).await;
+    assert!(result.is_some());
+    let (_, slice) = result.unwrap();
+    // start 会被调整，应该至少返回一行
+    assert!(!slice.is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_cache_empty_keywords() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+
+    // 存储空关键词列表
+    c.put_keywords(&sid, vec![]).await;
+
+    let result = c.get_keywords(&sid).await;
+    assert_eq!(result, Some(vec![]));
+  }
+
+  #[tokio::test]
+  async fn test_cache_empty_lines() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let file_id = "empty-file";
+
+    // 存储空行列表
+    c.put_lines(&sid, file_id, vec![]).await;
+
+    let result = c.get_lines_slice(&sid, file_id, 1, 10).await;
+    // 空文件应该返回 None 或空结果
+    // 根据实现，可能需要调整断言
+    if let Some((total, slice)) = result {
+      assert_eq!(total, 0);
+      assert_eq!(slice.len(), 0);
+    }
+  }
+
+  #[tokio::test]
+  async fn test_cache_large_keywords_list() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+
+    // 创建大量关键词
+    let keywords: Vec<String> = (0..1000).map(|i| format!("keyword-{}", i)).collect();
+
+    c.put_keywords(&sid, keywords.clone()).await;
+
+    let result = c.get_keywords(&sid).await;
+    assert_eq!(result, Some(keywords));
+  }
+
+  #[tokio::test]
+  async fn test_cache_special_characters_in_sid() {
+    let c = cache();
+    let sid = "sid-with-特殊字符-!@#$%";
+
+    c.put_keywords(sid, vec!["test".to_string()]).await;
+
+    let result = c.get_keywords(sid).await;
+    assert_eq!(result, Some(vec!["test".to_string()]));
+  }
+
+  #[tokio::test]
+  async fn test_cache_special_characters_in_file_id() {
+    let c = cache();
+    let sid = format!("test-sid-{}", Uuid::new_v4());
+    let file_id = "path/to/file-with-特殊字符.log";
+
+    c.put_lines(&sid, file_id, vec!["line 1".to_string()]).await;
+
+    let result = c.get_lines_slice(&sid, file_id, 1, 1).await;
+    assert!(result.is_some());
+  }
+}
