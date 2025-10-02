@@ -88,6 +88,7 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
     .region(Region::new("us-east-1")) // MinIO 通常不关心 region，但 SDK 需要
     .credentials_provider(credentials)
     .force_path_style(true) // MinIO 需要路径风格访问（bucket-name/key 而非 bucket-name.domain/key）
+    .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest()) // AWS SDK 要求设置 behavior version
     .build();
 
   let client = Arc::new(S3Client::from_conf(config));
