@@ -15,7 +15,7 @@ use tokio::io::AsyncRead;
 
 pub mod agent;
 pub mod local;
-// pub mod targz;  // 待实现
+pub mod targz;
 // pub mod minio;  // 待实现
 
 // ============================================================================
