@@ -1,5 +1,5 @@
 // ============================================================================
-// MinIO 存储源
+// S3 兼容对象存储源（MinIO 实现）
 // ============================================================================
 
 use super::{DataSource, FileEntry, FileIterator, FileMetadata, FileReader, StorageError};
@@ -11,10 +11,10 @@ use log::{debug, warn};
 use minio::s3::types::ToStream;
 use std::sync::Arc;
 
-/// MinIO 存储源配置
+/// S3 兼容对象存储配置（支持 MinIO、AWS S3 等）
 #[derive(Debug, Clone)]
 pub struct MinIOConfig {
-  /// MinIO 服务器 URL
+  /// S3 服务器 URL（例如：http://minio.example.com:9000 或 https://s3.amazonaws.com）
   pub url: String,
   /// 访问密钥
   pub access_key: String,
@@ -28,23 +28,24 @@ pub struct MinIOConfig {
   pub pattern: Option<String>,
 }
 
-/// MinIO 存储源
+/// S3 兼容对象存储源（MinIO 实现）
 ///
-/// 提供对 MinIO S3 对象存储的访问，搜索逻辑由 Server 端执行
+/// 提供对 S3 兼容对象存储的访问，支持 MinIO、AWS S3、阿里云 OSS 等
+/// 搜索逻辑由 Server 端执行
 pub struct MinIOStorage {
   config: MinIOConfig,
   client: Arc<minio::s3::Client>,
 }
 
 impl MinIOStorage {
-  /// 创建新的 MinIO 存储源
+  /// 创建新的 S3 兼容存储源
   ///
   /// # 参数
   ///
-  /// * `config` - MinIO 配置
+  /// * `config` - S3 存储配置
   pub fn new(config: MinIOConfig) -> Result<Self, StorageError> {
     debug!(
-      "创建 MinIO 存储源: url={}, bucket={}, prefix={:?}",
+      "创建 S3 存储源: url={}, bucket={}, prefix={:?}",
       config.url, config.bucket, config.prefix
     );
 
@@ -67,7 +68,7 @@ impl DataSource for MinIOStorage {
     let prefix = self.config.prefix.clone();
     let pattern = self.config.pattern.clone();
 
-    debug!("列举 MinIO 对象: bucket={}, prefix={:?}", bucket, prefix);
+    debug!("列举 S3 对象: bucket={}, prefix={:?}", bucket, prefix);
 
     let stream = stream! {
       // 列举对象
@@ -87,7 +88,7 @@ impl DataSource for MinIOStorage {
         let obj = match item_result {
           Ok(o) => o,
           Err(e) => {
-            warn!("MinIO 列举对象项失败: {}", e);
+            warn!("S3 列举对象项失败: {}", e);
             yield Err(legacy::StorageError::MinioListObjects(e.to_string()).into());
             continue;
           }
@@ -120,8 +121,8 @@ impl DataSource for MinIOStorage {
         let entry = FileEntry {
           path: key,
           metadata: FileMetadata {
-            size: None,  // MinIO list_objects 不提供大小
-            modified: None,  // MinIO list_objects 不提供修改时间
+            size: None,  // list_objects 不提供大小信息
+            modified: None,  // list_objects 不提供修改时间
             content_type: None,
           },
         };
@@ -129,14 +130,14 @@ impl DataSource for MinIOStorage {
         yield Ok(entry);
       }
 
-      debug!("MinIO 对象列举完成: {} 个文件", count);
+      debug!("S3 对象列举完成: {} 个文件", count);
     };
 
     Ok(Box::new(Box::pin(stream)))
   }
 
   async fn open_file(&self, entry: &FileEntry) -> Result<FileReader, StorageError> {
-    debug!("打开 MinIO 对象: bucket={}, key={}", self.config.bucket, entry.path);
+    debug!("打开 S3 对象: bucket={}, key={}", self.config.bucket, entry.path);
 
     // 使用现有的 S3ReaderProvider
     let provider = legacy::S3ReaderProvider::new(
@@ -184,7 +185,7 @@ mod tests {
       pattern: None,
     };
 
-    // 这个测试需要 MinIO 客户端，但我们只测试配置
+    // 这个测试需要 S3 客户端，但我们只测试配置
     // 实际的集成测试应该在集成测试中进行
   }
 
@@ -205,7 +206,7 @@ mod tests {
     assert!(!re.is_match("app.txt"));
   }
 
-  // 注意：MinIO 的实际集成测试需要运行的 MinIO 服务器
+  // 注意：S3 的实际集成测试需要运行的 S3 兼容服务器
   // 这些测试应该在 tests/ 目录下的集成测试中进行
   // 这里只测试配置和基本逻辑
 }

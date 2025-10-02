@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
-   * MinIO 设置页面（重构版）
+   * S3 对象存储设置页面（重构版）
    * 使用 LogSeek 模块的 composables 和 API 客户端
+   * 支持 AWS S3、MinIO、阿里云 OSS 等 S3 兼容存储
    */
   import { invalidate } from '$app/navigation';
   import { useSettings } from '$lib/modules/logseek';
@@ -24,7 +25,7 @@
     event.preventDefault();
     await settings.save();
     if (settings.saveSuccess) {
-      await invalidate('/api/v1/logseek/settings/minio');
+      await invalidate('/api/v1/logseek/settings/s3');
       // 强制完整页面刷新，以重新检查配置状态
       window.location.href = '/';
     }
@@ -40,14 +41,14 @@
 </script>
 
 <svelte:head>
-  <title>MinIO 设置 · Opsboard</title>
+  <title>对象存储设置 · Opsboard</title>
 </svelte:head>
 
 <div class="mx-auto flex max-w-5xl flex-col gap-6 px-6 pb-16 text-slate-900 dark:text-slate-100">
   <header class="pt-6">
     <p class="text-xs font-semibold tracking-[0.2em] text-slate-500 uppercase dark:text-slate-400">Storage</p>
-    <h1 class="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-50">MinIO 设置</h1>
-    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">配置日志检索所需的对象存储连接和凭证。</p>
+    <h1 class="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-50">对象存储设置</h1>
+    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">配置 S3 兼容对象存储连接。支持 AWS S3、MinIO、阿里云 OSS、腾讯云 COS 等。</p>
   </header>
 
   <nav

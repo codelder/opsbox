@@ -7,14 +7,18 @@ pub struct Tuning {
   pub s3_max_concurrency: usize,
   pub cpu_concurrency: usize,
   pub stream_ch_cap: usize,
-  pub minio_timeout_sec: u64,
-  pub minio_max_attempts: u32,
+  pub s3_timeout_sec: u64,
+  pub s3_max_retries: u32,
 }
 
 static TUNING: OnceCell<Arc<Tuning>> = OnceCell::new();
 
 /// 设置全局调参（仅第一次成功）
-pub fn set(t: Tuning) -> bool { TUNING.set(Arc::new(t)).is_ok() }
+pub fn set(t: Tuning) -> bool {
+  TUNING.set(Arc::new(t)).is_ok()
+}
 
 /// 获取只读调参（若未设置返回 None）
-pub fn get() -> Option<Arc<Tuning>> { TUNING.get().cloned() }
+pub fn get() -> Option<Arc<Tuning>> {
+  TUNING.get().cloned()
+}

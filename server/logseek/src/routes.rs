@@ -4,7 +4,7 @@
 // 注意：此文件保留以保持向后兼容
 // 新代码应使用 api::models 中的类型
 // ============================================================================
-use crate::api::models::{AppError, MinioSettingsPayload, NL2QOut, SearchBody, ViewParams};
+use crate::api::models::{AppError, NL2QOut, S3SettingsPayload, SearchBody, ViewParams};
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::repository::settings;
 use crate::utils::bbip_service::derive_plan;
@@ -140,17 +140,16 @@ fn cpu_max_concurrency() -> usize {
 pub fn router(db_pool: SqlitePool) -> Router {
   // 创建 Agent 状态
   let agent_state = Arc::new(crate::routes_agent::AgentState::new());
-  
+
   // 创建 Agent 子路由
-  let agent_router = crate::routes_agent::agent_routes()
-    .with_state(agent_state);
-  
+  let agent_router = crate::routes_agent::agent_routes().with_state(agent_state);
+
   Router::new()
     .route("/stream", post(stream_markdown))
     .route("/stream.ndjson", post(stream_local_ndjson))
     .route("/stream.s3.ndjson", post(stream_s3_ndjson))
     .route("/view.cache.json", get(view_cache_json))
-    .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
+    .route("/settings/s3", get(get_s3_settings).post(save_s3_settings))
     // 自然语言 → 查询字符串
     .route("/nl2q", post(nl2q))
     // Agent 管理路由
@@ -158,14 +157,12 @@ pub fn router(db_pool: SqlitePool) -> Router {
     .with_state(db_pool)
 }
 
-async fn get_minio_settings(State(pool): State<SqlitePool>) -> Result<Json<MinioSettingsPayload>, Problem> {
-  let settings_opt = settings::load_minio_settings(&pool).await.map_err(AppError::Settings)?;
-  let mut payload = settings_opt
-    .clone()
-    .map_or_else(MinioSettingsPayload::default, Into::into);
+async fn get_s3_settings(State(pool): State<SqlitePool>) -> Result<Json<S3SettingsPayload>, Problem> {
+  let settings_opt = settings::load_s3_settings(&pool).await.map_err(AppError::Settings)?;
+  let mut payload = settings_opt.clone().map_or_else(S3SettingsPayload::default, Into::into);
 
   if let Some(settings_value) = settings_opt {
-    match settings::verify_minio_settings(&settings_value).await {
+    match settings::verify_s3_settings(&settings_value).await {
       Ok(_) => {
         payload.configured = true;
       }
@@ -179,12 +176,12 @@ async fn get_minio_settings(State(pool): State<SqlitePool>) -> Result<Json<Minio
   Ok(Json(payload))
 }
 
-async fn save_minio_settings(
+async fn save_s3_settings(
   State(pool): State<SqlitePool>,
-  Json(payload): Json<MinioSettingsPayload>,
+  Json(payload): Json<S3SettingsPayload>,
 ) -> Result<StatusCode, Problem> {
-  let settings: settings::MinioSettings = payload.into();
-  settings::save_minio_settings(&pool, &settings)
+  let settings: settings::S3Settings = payload.into();
+  settings::save_s3_settings(&pool, &settings)
     .await
     .map_err(AppError::Settings)?;
   Ok(StatusCode::NO_CONTENT)
@@ -198,7 +195,7 @@ async fn stream_markdown(
 
   let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
 
-  let minio_cfg = settings::load_required_minio_settings(&pool)
+  let minio_cfg = settings::load_required_s3_settings(&pool)
     .await
     .map_err(AppError::Settings)?;
 
@@ -507,7 +504,7 @@ async fn stream_s3_ndjson(
   log::debug!("profiling: [S3] 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
 
   let minio_cfg = Arc::new(
-    settings::load_required_minio_settings(&pool)
+    settings::load_required_s3_settings(&pool)
       .await
       .map_err(AppError::Settings)?,
   );

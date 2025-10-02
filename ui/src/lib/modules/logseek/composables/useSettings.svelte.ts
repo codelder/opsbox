@@ -1,10 +1,10 @@
 /**
  * 设置状态管理 Composable
- * 提供 MinIO 设置相关的状态和方法
+ * 提供 S3 对象存储设置相关的状态和方法
  */
 
-import { fetchMinioSettings, saveMinioSettings } from '../api';
-import type { MinioSettingsPayload } from '../types';
+import { fetchS3Settings, saveS3Settings } from '../api';
+import type { S3SettingsPayload } from '../types';
 
 /**
  * 设置状态和方法
@@ -33,7 +33,7 @@ export function useSettings() {
     connectionError = null;
 
     try {
-      const data = await fetchMinioSettings();
+      const data = await fetchS3Settings();
       endpoint = data.endpoint ?? '';
       bucket = data.bucket ?? '';
       accessKey = data.access_key ?? '';
@@ -60,14 +60,14 @@ export function useSettings() {
     connectionError = null;
 
     try {
-      const payload: MinioSettingsPayload = {
+      const payload: S3SettingsPayload = {
         endpoint,
         bucket,
         access_key: accessKey,
         secret_key: secretKey
       };
 
-      await saveMinioSettings(payload);
+      await saveS3Settings(payload);
       await loadSettings(true);
       connectionError = null;
       saveSuccess = true;

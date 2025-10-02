@@ -68,9 +68,9 @@ pub struct NL2QOut {
   pub q: String,
 }
 
-/// MinIO 设置请求/响应
+/// S3 兼容对象存储设置请求/响应（支持 AWS S3、MinIO、阿里云 OSS 等）
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MinioSettingsPayload {
+pub struct S3SettingsPayload {
   #[serde(default)]
   pub endpoint: String,
   #[serde(default)]
@@ -85,8 +85,8 @@ pub struct MinioSettingsPayload {
   pub connection_error: Option<String>,
 }
 
-impl From<MinioSettingsPayload> for settings::MinioSettings {
-  fn from(value: MinioSettingsPayload) -> Self {
+impl From<S3SettingsPayload> for settings::S3Settings {
+  fn from(value: S3SettingsPayload) -> Self {
     Self {
       endpoint: value.endpoint,
       bucket: value.bucket,
@@ -96,8 +96,8 @@ impl From<MinioSettingsPayload> for settings::MinioSettings {
   }
 }
 
-impl From<settings::MinioSettings> for MinioSettingsPayload {
-  fn from(value: settings::MinioSettings) -> Self {
+impl From<settings::S3Settings> for S3SettingsPayload {
+  fn from(value: settings::S3Settings) -> Self {
     Self {
       endpoint: value.endpoint,
       bucket: value.bucket,
@@ -148,8 +148,8 @@ mod tests {
   }
 
   #[test]
-  fn test_minio_settings_payload_serialization() {
-    let payload = MinioSettingsPayload {
+  fn test_s3_settings_payload_serialization() {
+    let payload = S3SettingsPayload {
       endpoint: "localhost:9000".to_string(),
       bucket: "logs".to_string(),
       access_key: "minioadmin".to_string(),
@@ -159,7 +159,7 @@ mod tests {
     };
 
     let json = serde_json::to_string(&payload).unwrap();
-    let deserialized: MinioSettingsPayload = serde_json::from_str(&json).unwrap();
+    let deserialized: S3SettingsPayload = serde_json::from_str(&json).unwrap();
 
     assert_eq!(deserialized.endpoint, "localhost:9000");
     assert_eq!(deserialized.bucket, "logs");
@@ -167,9 +167,9 @@ mod tests {
   }
 
   #[test]
-  fn test_minio_settings_payload_deserialization_with_defaults() {
+  fn test_s3_settings_payload_deserialization_with_defaults() {
     let json = r#"{}"#;
-    let payload: MinioSettingsPayload = serde_json::from_str(json).unwrap();
+    let payload: S3SettingsPayload = serde_json::from_str(json).unwrap();
 
     assert_eq!(payload.endpoint, "");
     assert_eq!(payload.bucket, "");
@@ -178,17 +178,17 @@ mod tests {
   }
 
   #[test]
-  fn test_minio_settings_payload_with_connection_error() {
+  fn test_s3_settings_payload_with_connection_error() {
     let json = r#"{"endpoint":"localhost:9000","connection_error":"Connection timeout"}"#;
-    let payload: MinioSettingsPayload = serde_json::from_str(json).unwrap();
+    let payload: S3SettingsPayload = serde_json::from_str(json).unwrap();
 
     assert_eq!(payload.endpoint, "localhost:9000");
     assert_eq!(payload.connection_error, Some("Connection timeout".to_string()));
   }
 
   #[test]
-  fn test_minio_settings_conversion_to_domain() {
-    let payload = MinioSettingsPayload {
+  fn test_s3_settings_conversion_to_domain() {
+    let payload = S3SettingsPayload {
       endpoint: "localhost:9000".to_string(),
       bucket: "logs".to_string(),
       access_key: "admin".to_string(),
@@ -197,7 +197,7 @@ mod tests {
       connection_error: None,
     };
 
-    let settings: settings::MinioSettings = payload.into();
+    let settings: settings::S3Settings = payload.into();
 
     assert_eq!(settings.endpoint, "localhost:9000");
     assert_eq!(settings.bucket, "logs");
@@ -206,15 +206,15 @@ mod tests {
   }
 
   #[test]
-  fn test_minio_settings_conversion_from_domain() {
-    let settings = settings::MinioSettings {
+  fn test_s3_settings_conversion_from_domain() {
+    let settings = settings::S3Settings {
       endpoint: "localhost:9000".to_string(),
       bucket: "logs".to_string(),
       access_key: "admin".to_string(),
       secret_key: "password".to_string(),
     };
 
-    let payload: MinioSettingsPayload = settings.into();
+    let payload: S3SettingsPayload = settings.into();
 
     assert_eq!(payload.endpoint, "localhost:9000");
     assert_eq!(payload.bucket, "logs");
@@ -245,8 +245,8 @@ mod tests {
   }
 
   #[test]
-  fn test_minio_settings_default() {
-    let payload = MinioSettingsPayload::default();
+  fn test_s3_settings_default() {
+    let payload = S3SettingsPayload::default();
 
     assert_eq!(payload.endpoint, "");
     assert_eq!(payload.bucket, "");

@@ -80,12 +80,12 @@ impl opsbox_core::Module for LogSeekModule {
       .and_then(|v| v.parse().ok())
       .unwrap_or(32);
 
-    let minio_timeout_sec = std::env::var("LOGSEEK_MINIO_TIMEOUT_SEC")
+    let s3_timeout_sec = std::env::var("LOGSEEK_S3_TIMEOUT_SEC")
       .ok()
       .and_then(|v| v.parse().ok())
       .unwrap_or(60);
 
-    let minio_max_attempts = std::env::var("LOGSEEK_MINIO_MAX_ATTEMPTS")
+    let s3_max_retries = std::env::var("LOGSEEK_S3_MAX_RETRIES")
       .ok()
       .and_then(|v| v.parse().ok())
       .unwrap_or(3);
@@ -94,8 +94,8 @@ impl opsbox_core::Module for LogSeekModule {
       s3_max_concurrency,
       cpu_concurrency,
       stream_ch_cap,
-      minio_timeout_sec,
-      minio_max_attempts,
+      s3_timeout_sec,
+      s3_max_retries,
     };
 
     log::debug!("LogSeek 模块配置: {:?}", tuning);

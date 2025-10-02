@@ -100,11 +100,15 @@ pub struct AppConfig {
   #[arg(long = "stream-ch-cap", value_name = "N", help = "NDJSON 输出通道容量")]
   pub stream_ch_cap: Option<usize>,
 
-  #[arg(long = "minio-timeout-sec", value_name = "SECS", help = "MinIO 操作超时秒数")]
-  pub minio_timeout_sec: Option<u64>,
+  #[arg(long = "s3-timeout-sec", value_name = "SECS", help = "S3 操作超时秒数（get/list）")]
+  pub s3_timeout_sec: Option<u64>,
 
-  #[arg(long = "minio-max-attempts", value_name = "N", help = "MinIO 获取对象最大重试次数")]
-  pub minio_max_attempts: Option<u32>,
+  #[arg(
+    long = "s3-max-retries",
+    value_name = "N",
+    help = "S3 对象下载最大重试次数（指数退避）"
+  )]
+  pub s3_max_retries: Option<u32>,
 
   /// 管理子命令（start/stop）
   #[command(subcommand)]
@@ -178,20 +182,20 @@ impl AppConfig {
       .clamp(8, 10_000)
   }
 
-  /// 获取 MinIO 超时时间
-  pub fn get_minio_timeout_sec(&self) -> u64 {
+  /// 获取 S3 超时时间
+  pub fn get_s3_timeout_sec(&self) -> u64 {
     self
-      .minio_timeout_sec
-      .or_else(|| Self::env_u64("LOGSEEK_MINIO_TIMEOUT_SEC"))
+      .s3_timeout_sec
+      .or_else(|| Self::env_u64("LOGSEEK_S3_TIMEOUT_SEC"))
       .unwrap_or(60)
       .clamp(5, 300)
   }
 
-  /// 获取 MinIO 最大重试次数
-  pub fn get_minio_max_attempts(&self) -> u32 {
+  /// 获取 S3 最大重试次数
+  pub fn get_s3_max_retries(&self) -> u32 {
     self
-      .minio_max_attempts
-      .or_else(|| Self::env_u32("LOGSEEK_MINIO_MAX_ATTEMPTS"))
+      .s3_max_retries
+      .or_else(|| Self::env_u32("LOGSEEK_S3_MAX_RETRIES"))
       .unwrap_or(5)
       .clamp(1, 20)
   }

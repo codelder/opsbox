@@ -40,9 +40,10 @@ export interface SearchBody {
 // ============ 设置相关类型 ============
 
 /**
- * MinIO 配置负载（用于 POST 请求）
+ * S3 对象存储配置负载（用于 POST 请求）
+ * 支持 AWS S3、MinIO、阿里云 OSS 等 S3 兼容存储
  */
-export interface MinioSettingsPayload {
+export interface S3SettingsPayload {
   endpoint: string;
   bucket: string;
   access_key: string;
@@ -50,9 +51,9 @@ export interface MinioSettingsPayload {
 }
 
 /**
- * MinIO 设置响应（包含连接状态）
+ * S3 对象存储设置响应（包含连接状态）
  */
-export interface MinioSettingsResponse extends MinioSettingsPayload {
+export interface S3SettingsResponse extends S3SettingsPayload {
   configured?: boolean;
   connection_error?: string | null;
 }

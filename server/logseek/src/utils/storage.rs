@@ -18,13 +18,13 @@ use tokio_util::io::StreamReader;
 pub enum StorageError {
   #[error("url:{0}不可用")]
   InvalidBaseUrl(String),
-  #[error("创建MinIO客户端失败")]
+  #[error("创建 S3 客户端失败")]
   MinioBuild,
-  #[error("MinIO 获取对象错误：{0}")]
+  #[error("S3 获取对象错误：{0}")]
   MinioGetObject(String),
-  #[error("MinIO to_stream 错误：{0}")]
+  #[error("S3 to_stream 错误：{0}")]
   MinioToStream(String),
-  #[error("MinIO 列举对象错误：{0}")]
+  #[error("S3 列举对象错误：{0}")]
   MinioListObjects(String),
   #[error("无效正则：{0}")]
   Regex(String),
@@ -34,16 +34,16 @@ pub enum StorageError {
   ConnectionTimeout,
 }
 
-// 全局 MinIO 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
+// 全局 S3 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
 static MINIO_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<minio::s3::Client>>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
 
-// MinIO 操作超时配置（可由环境变量 LOGSEEK_MINIO_TIMEOUT_SEC 覆盖，默认 60 秒）
-fn minio_timeout() -> Duration {
+// S3 操作超时配置（可由环境变量 LOGSEEK_S3_TIMEOUT_SEC 覆盖，默认 60 秒）
+fn s3_timeout() -> Duration {
   if let Some(t) = crate::utils::tuning::get() {
-    return Duration::from_secs(t.minio_timeout_sec.clamp(5, 300));
+    return Duration::from_secs(t.s3_timeout_sec.clamp(5, 300));
   }
-  let secs = std::env::var("LOGSEEK_MINIO_TIMEOUT_SEC")
+  let secs = std::env::var("LOGSEEK_S3_TIMEOUT_SEC")
     .ok()
     .and_then(|s| s.parse::<u64>().ok())
     .unwrap_or(60)
@@ -51,7 +51,7 @@ fn minio_timeout() -> Duration {
   Duration::from_secs(secs)
 }
 
-// 创建或获取缓存的 MinIO 客户端（按 url+access_key 缓存）
+// 创建或获取缓存的 S3 客户端（按 url+access_key 缓存）
 pub fn get_or_create_minio_client(
   url: &str,
   access_key: &str,
@@ -63,7 +63,7 @@ pub fn get_or_create_minio_client(
     return Ok(existing);
   }
 
-  info!("创建 MinIO 客户端: url={}", url);
+  info!("创建 S3 客户端: url={}", url);
 
   // 记录当前 NO_PROXY，便于排查是否因代理导致连接失败
   let no_proxy_dbg = std::env::var("NO_PROXY")
@@ -82,7 +82,7 @@ pub fn get_or_create_minio_client(
 
   // 配置基础 URL
   let base_url = BaseUrl::from_str(url).map_err(|_e| {
-    error!("MinIO URL解析失败: {}", url);
+    error!("S3 URL 解析失败: {}", url);
     StorageError::InvalidBaseUrl(url.to_string())
   })?;
 
@@ -90,14 +90,14 @@ pub fn get_or_create_minio_client(
     ClientBuilder::new(base_url).provider(Some(Box::new(StaticProvider::new(access_key, secret_key, None))));
 
   let client = builder.build().map_err(|_e| {
-    error!("MinIO客户端构建失败");
+    error!("S3 客户端构建失败");
     StorageError::MinioBuild
   })?;
 
   let client = Arc::new(client);
   // 写入缓存（覆盖同 key）
   MINIO_CLIENT_CACHE.lock().unwrap().insert(key, Arc::clone(&client));
-  info!("MinIO 客户端创建并缓存成功");
+  info!("S3 客户端创建并缓存成功");
   Ok(client)
 }
 
@@ -137,13 +137,13 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
     // 使用缓存的客户端
     let client = get_or_create_minio_client(self.url, self.access_key, self.secret_key)?;
 
-    debug!("MinIO客户端获取成功，开始获取对象");
+    debug!("S3 客户端获取成功，开始获取对象");
 
-    // 最多重试次数（指数退避），可由环境变量 LOGSEEK_MINIO_MAX_ATTEMPTS 覆盖，默认 5 次
+    // 最多重试次数（指数退避），可由环境变量 LOGSEEK_S3_MAX_RETRIES 覆盖，默认 5 次
     let max_attempts: u32 = if let Some(t) = crate::utils::tuning::get() {
-      t.minio_max_attempts.clamp(1, 20)
+      t.s3_max_retries.clamp(1, 20)
     } else {
-      std::env::var("LOGSEEK_MINIO_MAX_ATTEMPTS")
+      std::env::var("LOGSEEK_S3_MAX_RETRIES")
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(5)
@@ -152,7 +152,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
 
     let mut attempt: u32 = 0;
     loop {
-      let timeout = minio_timeout();
+      let timeout = s3_timeout();
       let fut = async {
         client
           .get_object(self.bucket, self.key)
@@ -244,7 +244,7 @@ impl<'a> S3ReaderProvider<'a> {
     };
 
     // 使用超时包装列举操作
-    let list_result = time::timeout(minio_timeout(), async {
+    let list_result = time::timeout(s3_timeout(), async {
       let mut stream = client
         .list_objects(self.bucket)
         .prefix(Some(prefix.to_string()))
@@ -299,7 +299,7 @@ pub async fn test_minio_connection(
   secret_key: &str,
   bucket: &str,
 ) -> Result<(), StorageError> {
-  info!("测试MinIO连接: url={}, bucket={}", url, bucket);
+  info!("测试 S3 连接: url={}, bucket={}", url, bucket);
 
   // 使用缓存的客户端
   let client = get_or_create_minio_client(url, access_key, secret_key)?;
@@ -307,13 +307,13 @@ pub async fn test_minio_connection(
   debug!("尝试列举桶内对象以验证连接");
 
   // 使用超时包装连接测试
-  time::timeout(minio_timeout(), async {
+  time::timeout(s3_timeout(), async {
     let mut stream = client.list_objects(bucket).recursive(false).to_stream().await;
 
     // 触发一次迭代以验证凭证与桶可访问性；桶为空也视作成功
     if let Some(item) = stream.next().await {
       item.map_err(|e| {
-        error!("MinIO连接测试失败: {:?}", e);
+        error!("S3 连接测试失败: {:?}", e);
         StorageError::MinioListObjects(e.to_string())
       })?;
       debug!("找到至少一个对象，连接正常");
@@ -324,10 +324,10 @@ pub async fn test_minio_connection(
   })
   .await
   .map_err(|_| {
-    error!("MinIO连接测试超时: bucket={}", bucket);
+    error!("S3 连接测试超时: bucket={}", bucket);
     StorageError::ConnectionTimeout
   })??;
 
-  info!("MinIO连接测试成功");
+  info!("S3 连接测试成功");
   Ok(())
 }

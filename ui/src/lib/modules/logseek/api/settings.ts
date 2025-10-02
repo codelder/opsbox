@@ -1,17 +1,17 @@
 /**
  * 设置 API 客户端
- * 封装 MinIO 设置相关的 API 调用
+ * 封装 S3 对象存储设置相关的 API 调用
  */
 
-import type { MinioSettingsPayload, MinioSettingsResponse } from '../types';
+import type { S3SettingsPayload, S3SettingsResponse } from '../types';
 import { getApiBase, commonHeaders } from './config';
 
 /**
- * 获取 MinIO 设置
+ * 获取 S3 对象存储设置
  */
-export async function fetchMinioSettings(): Promise<MinioSettingsResponse> {
+export async function fetchS3Settings(): Promise<S3SettingsResponse> {
   const API_BASE = getApiBase();
-  const response = await fetch(`${API_BASE}/settings/minio`, {
+  const response = await fetch(`${API_BASE}/settings/s3`, {
     headers: { Accept: 'application/json' }
   });
 
@@ -23,11 +23,11 @@ export async function fetchMinioSettings(): Promise<MinioSettingsResponse> {
 }
 
 /**
- * 保存 MinIO 设置
+ * 保存 S3 对象存储设置
  */
-export async function saveMinioSettings(settings: MinioSettingsPayload): Promise<void> {
+export async function saveS3Settings(settings: S3SettingsPayload): Promise<void> {
   const API_BASE = getApiBase();
-  const response = await fetch(`${API_BASE}/settings/minio`, {
+  const response = await fetch(`${API_BASE}/settings/s3`, {
     method: 'POST',
     headers: commonHeaders,
     body: JSON.stringify(settings)

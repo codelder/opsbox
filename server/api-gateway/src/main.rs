@@ -165,11 +165,8 @@ fn setup_module_env_vars(config: &AppConfig) {
     );
     std::env::set_var("LOGSEEK_CPU_CONCURRENCY", config.get_cpu_concurrency().to_string());
     std::env::set_var("LOGSEEK_STREAM_CH_CAP", config.get_stream_ch_cap().to_string());
-    std::env::set_var("LOGSEEK_MINIO_TIMEOUT_SEC", config.get_minio_timeout_sec().to_string());
-    std::env::set_var(
-      "LOGSEEK_MINIO_MAX_ATTEMPTS",
-      config.get_minio_max_attempts().to_string(),
-    );
+    std::env::set_var("LOGSEEK_S3_TIMEOUT_SEC", config.get_s3_timeout_sec().to_string());
+    std::env::set_var("LOGSEEK_S3_MAX_RETRIES", config.get_s3_max_retries().to_string());
   }
 
   log::debug!("模块配置环境变量已设置");
