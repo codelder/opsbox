@@ -160,11 +160,11 @@ mod tests {
   use super::*;
 
   #[test]
-  fn test_minio_config() {
+  fn test_s3_config() {
     let config = MinIOConfig {
       url: "http://localhost:9000".to_string(),
-      access_key: "minioadmin".to_string(),
-      secret_key: "minioadmin".to_string(),
+      access_key: "test_access_key".to_string(),
+      secret_key: "test_secret_key".to_string(),
       bucket: "logs".to_string(),
       prefix: Some("2024/".to_string()),
       pattern: Some(r"\.log$".to_string()),

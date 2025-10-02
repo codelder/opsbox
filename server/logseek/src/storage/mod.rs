@@ -15,7 +15,7 @@ use tokio::io::AsyncRead;
 
 pub mod agent;
 pub mod local;
-pub mod minio;
+pub mod s3;
 pub mod targz;
 
 // ============================================================================
@@ -180,10 +180,10 @@ impl From<crate::utils::storage::StorageError> for StorageError {
     match e {
       crate::utils::storage::StorageError::Io(e) => Self::Io(e),
       crate::utils::storage::StorageError::InvalidBaseUrl(s) => Self::Other(format!("Invalid base URL: {}", s)),
-      crate::utils::storage::StorageError::MinioBuild => Self::Other("MinIO build error".to_string()),
-      crate::utils::storage::StorageError::MinioGetObject(s) => Self::Other(format!("MinIO get object: {}", s)),
-      crate::utils::storage::StorageError::MinioToStream(s) => Self::Other(format!("MinIO to_stream: {}", s)),
-      crate::utils::storage::StorageError::MinioListObjects(s) => Self::Other(format!("MinIO list objects: {}", s)),
+      crate::utils::storage::StorageError::MinioBuild => Self::Other("S3 client build error".to_string()),
+      crate::utils::storage::StorageError::MinioGetObject(s) => Self::Other(format!("S3 get object: {}", s)),
+      crate::utils::storage::StorageError::MinioToStream(s) => Self::Other(format!("S3 to_stream: {}", s)),
+      crate::utils::storage::StorageError::MinioListObjects(s) => Self::Other(format!("S3 list objects: {}", s)),
       crate::utils::storage::StorageError::Regex(s) => Self::QueryParseError(s),
       crate::utils::storage::StorageError::ConnectionTimeout => Self::Timeout,
     }
@@ -196,7 +196,7 @@ impl From<crate::utils::storage::StorageError> for StorageError {
 
 /// 数据源 trait
 ///
-/// 本地文件系统、Tar.gz、MinIO 等实现此接口
+/// 本地文件系统、Tar.gz、S3 对象存储等实现此接口
 /// 只负责提供数据访问，搜索逻辑由 Server 执行
 #[async_trait]
 pub trait DataSource: Send + Sync {
