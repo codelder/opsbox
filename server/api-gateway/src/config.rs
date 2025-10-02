@@ -130,7 +130,12 @@ impl AppConfig {
       .clone()
       .or_else(|| std::env::var("OPSBOX_DATABASE_URL").ok())
       .or_else(|| std::env::var("DATABASE_URL").ok())
-      .unwrap_or_else(|| "./opsbox.db".to_string())
+      .unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let dir = std::path::PathBuf::from(home).join(".opsbox");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("opsbox.db").to_string_lossy().to_string()
+      })
   }
 
   /// 获取工作线程数

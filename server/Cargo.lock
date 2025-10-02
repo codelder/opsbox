@@ -1455,6 +1455,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "inventory"
+version = "0.3.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc61209c082fbeb19919bee74b176221b27223e27b65d781eb91af24eb1fb46e"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1628,9 +1637,11 @@ dependencies = [
  "futures-core",
  "futures-util",
  "globset",
+ "inventory",
  "libsqlite3-sys",
  "log",
  "minio",
+ "num_cpus",
  "ollama-rs",
  "once_cell",
  "openssl",
@@ -1928,8 +1939,10 @@ dependencies = [
 name = "opsbox-core"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "http",
+ "inventory",
  "libsqlite3-sys",
  "log",
  "problemdetails",

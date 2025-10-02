@@ -108,8 +108,6 @@ pub fn start_daemon(pid_path: PathBuf) -> io::Result<()> {
   let stdout = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
   let stderr = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
 
-  log::info!("准备后台运行，PID 文件: {:?}, 日志文件: {:?}", pid_path, log_path);
-
   let daemon = Daemonize::new()
     .pid_file(pid_path.clone())
     .working_directory(cwd)

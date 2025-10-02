@@ -53,25 +53,6 @@ impl MinIOStorage {
 
     Ok(Self { config, client })
   }
-
-  /// 检查路径是否匹配过滤条件
-  fn matches_filter(&self, path: &str) -> bool {
-    // 检查前缀
-    if let Some(ref prefix) = self.config.prefix {
-      if !path.starts_with(prefix) {
-        return false;
-      }
-    }
-
-    // 检查正则
-    if let Some(ref pattern) = self.config.pattern {
-      if let Ok(re) = regex::Regex::new(pattern) {
-        return re.is_match(path);
-      }
-    }
-
-    true
-  }
 }
 
 #[async_trait]

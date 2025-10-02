@@ -13,7 +13,11 @@ minio = "0.3.0"
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 opsbox-core = { path = "../opsbox-core" }
-logseek = { path = "../logseek" }
+# ✅ 模块化架构：使用 optional dependencies
+logseek = { path = "../logseek", optional = true }
+# 未来可添加更多模块：
+# analytics = { path = "../analytics", optional = true }
+# monitoring = { path = "../monitoring", optional = true }
 # 仍保留 CORS 中间件；不再使用文件系统静态服务
 # （但 feature 保留不影响体积，后续可移除 fs feature）
 tower-http = { version = "0.6", features = ["fs", "cors"] }
@@ -31,6 +35,14 @@ env_logger = "0.11"
 # 仅使用 mimalloc 作为全局分配器（不再保留切换能力）
 mimalloc = "0.1"
 
+
+# ✅ 模块功能开关
+[features]
+# 默认启用所有模块
+default = ["logseek"]
+# 可选：只启用特定模块
+# minimal = []  # 最小化构建，无业务模块
+# all = ["logseek", "analytics", "monitoring"]  # 启用所有模块
 
 [target.'cfg(unix)'.dependencies]
 # 仅在类 Unix 系统上启用后台守护能力

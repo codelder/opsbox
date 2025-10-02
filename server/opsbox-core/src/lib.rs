@@ -9,12 +9,14 @@
 pub mod database;
 pub mod error;
 pub mod middleware;
+pub mod module;
 pub mod response;
 
 // 重新导出常用类型
-pub use database::{DatabaseConfig, init_pool, health_check, run_migration};
+pub use database::{DatabaseConfig, health_check, init_pool, run_migration};
 pub use error::{AppError, Result};
-pub use response::{ok, ok_message, ok_with_message, created, no_content, SuccessResponse};
+pub use module::{Module, get_all_modules};
+pub use response::{SuccessResponse, created, no_content, ok, ok_message, ok_with_message};
 
 // 重新导出 sqlx 类型以供模块使用
 pub use sqlx::sqlite::SqlitePool;
