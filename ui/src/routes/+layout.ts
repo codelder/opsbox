@@ -22,7 +22,7 @@ export const load: LayoutLoad = async ({ fetch, url }) => {
   // 只在首次加载时检查配置
   if (!configChecked) {
     try {
-      const res = await fetch('/api/v1/logseek/settings/minio', { cache: 'no-store' });
+      const res = await fetch('/api/v1/logseek/settings/s3', { cache: 'no-store' });
       if (res.ok) {
         const data = await res.json();
         configChecked = true;
@@ -33,7 +33,7 @@ export const load: LayoutLoad = async ({ fetch, url }) => {
         }
       }
     } catch (err) {
-      console.error('检查 MinIO 配置失败:', err);
+      console.error('检查 S3 配置失败:', err);
       configChecked = true;
       isConfigured = false;
     }

@@ -536,9 +536,17 @@ async fn stream_s3_ndjson(
       let cpu_sem_c = cpu_sem.clone();
       let stats_c2 = Arc::clone(&stats);
       tokio::spawn(async move {
-        let file_start = std::time::Instant::now();
+        let task_start = std::time::Instant::now();
+
+        log::debug!(
+          "profiling: [S3] 任务开始排队 key={}, io_avail={}, cpu_avail={}",
+          key,
+          io_sem_c.available_permits(),
+          cpu_sem_c.available_permits()
+        );
 
         // 获取 IO 并发许可，限制同时打开/读取的对象数
+        let io_wait_start = std::time::Instant::now();
         let _io_permit = match io_sem_c.acquire_owned().await {
           Ok(p) => p,
           Err(_) => {
@@ -546,7 +554,15 @@ async fn stream_s3_ndjson(
             return;
           }
         };
+        let io_wait_time = io_wait_start.elapsed();
 
+        log::debug!(
+          "profiling: [S3] 获得 IO 许可 key={}, 等待={:.3}s",
+          key,
+          io_wait_time.as_secs_f64()
+        );
+
+        let s3_open_start = std::time::Instant::now();
         let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
         let Ok(reader) = s3rp.open().await.map_err(AppError::StorageError) else {
           log::warn!("profiling: [S3] 打开对象失败 key={}", key);
@@ -554,8 +570,17 @@ async fn stream_s3_ndjson(
           stats_c2.s3_errors.fetch_add(1, Ordering::Relaxed);
           return;
         };
+        let s3_open_time = s3_open_start.elapsed();
+
+        log::debug!(
+          "profiling: [S3] 对象已打开 key={}, 耗时={:.3}s",
+          key,
+          s3_open_time.as_secs_f64()
+        );
 
         // 获取 CPU 并发许可，限制同时进行解压/检索的任务数
+        let cpu_wait_start = std::time::Instant::now();
+        let cpu_avail_before = cpu_sem_c.available_permits();
         let _cpu_permit = match cpu_sem_c.acquire_owned().await {
           Ok(p) => p,
           Err(_) => {
@@ -563,7 +588,18 @@ async fn stream_s3_ndjson(
             return;
           }
         };
+        let cpu_wait_time = cpu_wait_start.elapsed();
 
+        log::info!(
+          "profiling: [S3] 开始搜索 key={}, io_wait={:.3}s, s3_open={:.3}s, cpu_wait={:.3}s, cpu_avail_before={}",
+          key,
+          io_wait_time.as_secs_f64(),
+          s3_open_time.as_secs_f64(),
+          cpu_wait_time.as_secs_f64(),
+          cpu_avail_before
+        );
+
+        let search_start = std::time::Instant::now();
         let Ok(mut stream) = reader.search(&specc, ctx).await else {
           log::warn!("profiling: [S3] 启动检索失败 key={}", key);
           stats_c2.s3_errors.fetch_add(1, Ordering::Relaxed);
@@ -606,11 +642,20 @@ async fn stream_s3_ndjson(
           }
         }
 
-        log::debug!(
-          "profiling: [S3] 对象处理完成 key={}，输出记录={}，耗时={:?}",
+        let total_time = task_start.elapsed();
+        let search_time = search_start.elapsed();
+        let total_wait = io_wait_time + cpu_wait_time;
+
+        log::info!(
+          "profiling: [S3] 任务完成 key={}, 记录={}, 总耗时={:.3}s [等待={:.3}s(io={:.3}s+cpu={:.3}s), 打开={:.3}s, 搜索={:.3}s]",
           key,
           produced,
-          file_start.elapsed()
+          total_time.as_secs_f64(),
+          total_wait.as_secs_f64(),
+          io_wait_time.as_secs_f64(),
+          cpu_wait_time.as_secs_f64(),
+          s3_open_time.as_secs_f64(),
+          search_time.as_secs_f64()
         );
       });
     }
