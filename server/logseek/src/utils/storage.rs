@@ -19,13 +19,13 @@ pub enum StorageError {
   #[error("url:{0}不可用")]
   InvalidBaseUrl(String),
   #[error("创建 S3 客户端失败")]
-  MinioBuild,
+  S3Build,
   #[error("S3 获取对象错误：{0}")]
-  MinioGetObject(String),
+  S3GetObject(String),
   #[error("S3 to_stream 错误：{0}")]
-  MinioToStream(String),
+  S3ToStream(String),
   #[error("S3 列举对象错误：{0}")]
-  MinioListObjects(String),
+  S3ListObjects(String),
   #[error("无效正则：{0}")]
   Regex(String),
   #[error("IO错误: {0}")]
@@ -35,7 +35,7 @@ pub enum StorageError {
 }
 
 // 全局 S3 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
-static MINIO_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<minio::s3::Client>>>> =
+static S3_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<minio::s3::Client>>>> =
   Lazy::new(|| Mutex::new(HashMap::new()));
 
 // S3 操作超时配置（可由环境变量 LOGSEEK_S3_TIMEOUT_SEC 覆盖，默认 60 秒）
@@ -52,14 +52,14 @@ fn s3_timeout() -> Duration {
 }
 
 // 创建或获取缓存的 S3 客户端（按 url+access_key 缓存）
-pub fn get_or_create_minio_client(
+pub fn get_or_create_s3_client(
   url: &str,
   access_key: &str,
   secret_key: &str,
 ) -> Result<Arc<minio::s3::Client>, StorageError> {
   let key = format!("{}|{}", url, access_key);
   // 命中缓存则直接返回
-  if let Some(existing) = MINIO_CLIENT_CACHE.lock().unwrap().get(&key).cloned() {
+  if let Some(existing) = S3_CLIENT_CACHE.lock().unwrap().get(&key).cloned() {
     return Ok(existing);
   }
 
@@ -91,12 +91,12 @@ pub fn get_or_create_minio_client(
 
   let client = builder.build().map_err(|_e| {
     error!("S3 客户端构建失败");
-    StorageError::MinioBuild
+    StorageError::S3Build
   })?;
 
   let client = Arc::new(client);
   // 写入缓存（覆盖同 key）
-  MINIO_CLIENT_CACHE.lock().unwrap().insert(key, Arc::clone(&client));
+  S3_CLIENT_CACHE.lock().unwrap().insert(key, Arc::clone(&client));
   info!("S3 客户端创建并缓存成功");
   Ok(client)
 }
@@ -135,7 +135,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
     );
 
     // 使用缓存的客户端
-    let client = get_or_create_minio_client(self.url, self.access_key, self.secret_key)?;
+    let client = get_or_create_s3_client(self.url, self.access_key, self.secret_key)?;
 
     debug!("S3 客户端获取成功，开始获取对象");
 
@@ -160,7 +160,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
           .await
           .map_err(|e| {
             error!("获取S3对象失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
-            StorageError::MinioGetObject(e.to_string())
+            StorageError::S3GetObject(e.to_string())
           })?
           .content
           .to_stream()
@@ -170,7 +170,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
               "S3对象转换为流失败: bucket={}, key={}, error={}",
               self.bucket, self.key, e
             );
-            StorageError::MinioToStream(e.to_string())
+            StorageError::S3ToStream(e.to_string())
           })
       };
 
@@ -231,7 +231,7 @@ impl<'a> S3ReaderProvider<'a> {
     );
 
     // 使用缓存的客户端
-    let client = get_or_create_minio_client(self.url, self.access_key, self.secret_key)?;
+    let client = get_or_create_s3_client(self.url, self.access_key, self.secret_key)?;
 
     let regex = if let Some(pat) = regex {
       debug!("编译正则表达式: {}", pat);
@@ -260,7 +260,7 @@ impl<'a> S3ReaderProvider<'a> {
       while let Some(item) = stream.next().await {
         let obj = item.map_err(|e| {
           error!("列举对象出错: error={:?}", e);
-          StorageError::MinioListObjects(e.to_string())
+          StorageError::S3ListObjects(e.to_string())
         })?;
         // 在 minio 0.3.x 中，对象键通常通过 `name` 字段提供
         let key = obj.name;
@@ -293,7 +293,7 @@ impl<'a> S3ReaderProvider<'a> {
   }
 }
 
-pub async fn test_minio_connection(
+pub async fn test_s3_connection(
   url: &str,
   access_key: &str,
   secret_key: &str,
@@ -302,7 +302,7 @@ pub async fn test_minio_connection(
   info!("测试 S3 连接: url={}, bucket={}", url, bucket);
 
   // 使用缓存的客户端
-  let client = get_or_create_minio_client(url, access_key, secret_key)?;
+  let client = get_or_create_s3_client(url, access_key, secret_key)?;
 
   debug!("尝试列举桶内对象以验证连接");
 
@@ -314,7 +314,7 @@ pub async fn test_minio_connection(
     if let Some(item) = stream.next().await {
       item.map_err(|e| {
         error!("S3 连接测试失败: {:?}", e);
-        StorageError::MinioListObjects(e.to_string())
+        StorageError::S3ListObjects(e.to_string())
       })?;
       debug!("找到至少一个对象，连接正常");
     } else {

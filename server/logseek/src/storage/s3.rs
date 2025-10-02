@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 /// S3 兼容对象存储配置（支持 MinIO、AWS S3 等）
 #[derive(Debug, Clone)]
-pub struct MinIOConfig {
+pub struct S3Config {
   /// S3 服务器 URL（例如：http://minio.example.com:9000 或 https://s3.amazonaws.com）
   pub url: String,
   /// 访问密钥
@@ -28,38 +28,38 @@ pub struct MinIOConfig {
   pub pattern: Option<String>,
 }
 
-/// S3 兼容对象存储源（MinIO 实现）
+/// S3 兼容对象存储源
 ///
 /// 提供对 S3 兼容对象存储的访问，支持 MinIO、AWS S3、阿里云 OSS 等
 /// 搜索逻辑由 Server 端执行
-pub struct MinIOStorage {
-  config: MinIOConfig,
+pub struct S3Storage {
+  config: S3Config,
   client: Arc<minio::s3::Client>,
 }
 
-impl MinIOStorage {
+impl S3Storage {
   /// 创建新的 S3 兼容存储源
   ///
   /// # 参数
   ///
   /// * `config` - S3 存储配置
-  pub fn new(config: MinIOConfig) -> Result<Self, StorageError> {
+  pub fn new(config: S3Config) -> Result<Self, StorageError> {
     debug!(
       "创建 S3 存储源: url={}, bucket={}, prefix={:?}",
       config.url, config.bucket, config.prefix
     );
 
     // 复用现有的客户端创建逻辑
-    let client = legacy::get_or_create_minio_client(&config.url, &config.access_key, &config.secret_key)?;
+    let client = legacy::get_or_create_s3_client(&config.url, &config.access_key, &config.secret_key)?;
 
     Ok(Self { config, client })
   }
 }
 
 #[async_trait]
-impl DataSource for MinIOStorage {
+impl DataSource for S3Storage {
   fn source_type(&self) -> &'static str {
-    "MinIOStorage"
+    "S3Storage"
   }
 
   async fn list_files(&self) -> Result<FileIterator, StorageError> {
@@ -89,7 +89,7 @@ impl DataSource for MinIOStorage {
           Ok(o) => o,
           Err(e) => {
             warn!("S3 列举对象项失败: {}", e);
-            yield Err(legacy::StorageError::MinioListObjects(e.to_string()).into());
+            yield Err(legacy::StorageError::S3ListObjects(e.to_string()).into());
             continue;
           }
         };
@@ -161,7 +161,7 @@ mod tests {
 
   #[test]
   fn test_s3_config() {
-    let config = MinIOConfig {
+    let config = S3Config {
       url: "http://localhost:9000".to_string(),
       access_key: "test_access_key".to_string(),
       secret_key: "test_secret_key".to_string(),
@@ -176,7 +176,7 @@ mod tests {
 
   #[test]
   fn test_matches_filter_prefix() {
-    let _config = MinIOConfig {
+    let _config = S3Config {
       url: "http://localhost:9000".to_string(),
       access_key: "test".to_string(),
       secret_key: "test".to_string(),
@@ -191,7 +191,7 @@ mod tests {
 
   #[test]
   fn test_matches_filter_pattern() {
-    let _config = MinIOConfig {
+    let _config = S3Config {
       url: "http://localhost:9000".to_string(),
       access_key: "test".to_string(),
       secret_key: "test".to_string(),

@@ -180,10 +180,10 @@ impl From<crate::utils::storage::StorageError> for StorageError {
     match e {
       crate::utils::storage::StorageError::Io(e) => Self::Io(e),
       crate::utils::storage::StorageError::InvalidBaseUrl(s) => Self::Other(format!("Invalid base URL: {}", s)),
-      crate::utils::storage::StorageError::MinioBuild => Self::Other("S3 client build error".to_string()),
-      crate::utils::storage::StorageError::MinioGetObject(s) => Self::Other(format!("S3 get object: {}", s)),
-      crate::utils::storage::StorageError::MinioToStream(s) => Self::Other(format!("S3 to_stream: {}", s)),
-      crate::utils::storage::StorageError::MinioListObjects(s) => Self::Other(format!("S3 list objects: {}", s)),
+      crate::utils::storage::StorageError::S3Build => Self::Other("S3 client build error".to_string()),
+      crate::utils::storage::StorageError::S3GetObject(s) => Self::Other(format!("S3 get object: {}", s)),
+      crate::utils::storage::StorageError::S3ToStream(s) => Self::Other(format!("S3 to_stream: {}", s)),
+      crate::utils::storage::StorageError::S3ListObjects(s) => Self::Other(format!("S3 list objects: {}", s)),
       crate::utils::storage::StorageError::Regex(s) => Self::QueryParseError(s),
       crate::utils::storage::StorageError::ConnectionTimeout => Self::Timeout,
     }

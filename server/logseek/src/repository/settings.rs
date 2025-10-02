@@ -116,7 +116,7 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
     settings.endpoint, settings.bucket
   );
 
-  match storage::test_minio_connection(
+  match storage::test_s3_connection(
     &settings.endpoint,
     &settings.access_key,
     &settings.secret_key,
@@ -134,13 +134,13 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
         "S3连接失败: Endpoint 地址无效，请确认格式例如 http://host:9000",
       ))
     }
-    Err(StorageError::MinioBuild) => {
+    Err(StorageError::S3Build) => {
       error!("S3客户端构建失败: endpoint={}", settings.endpoint);
       Err(AppError::external_service(
         "S3连接失败: 无法建立 S3 连接，请检查 Endpoint、Access Key 和 Secret Key",
       ))
     }
-    Err(StorageError::MinioListObjects(msg)) => {
+    Err(StorageError::S3ListObjects(msg)) => {
       let lower = msg.to_ascii_lowercase();
       if lower.contains("nosuchbucket") {
         Err(AppError::external_service(format!(
@@ -158,10 +158,10 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
         )))
       }
     }
-    Err(StorageError::MinioGetObject(msg)) => {
+    Err(StorageError::S3GetObject(msg)) => {
       Err(AppError::external_service(format!("S3连接失败: 无法读取对象：{}", msg)))
     }
-    Err(StorageError::MinioToStream(msg)) => Err(AppError::external_service(format!(
+    Err(StorageError::S3ToStream(msg)) => Err(AppError::external_service(format!(
       "S3连接失败: 读取对象流失败：{}",
       msg
     ))),
