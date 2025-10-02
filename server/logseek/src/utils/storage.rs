@@ -1,7 +1,10 @@
 use std::{io, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use aws_sdk_s3::{config::{Credentials, Region}, Client as S3Client};
+use aws_sdk_s3::{
+  Client as S3Client,
+  config::{Credentials, Region},
+};
 use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -48,11 +51,7 @@ fn s3_timeout() -> Duration {
 }
 
 // 创建或获取缓存的 S3 客户端（按 url+access_key 缓存）
-pub fn get_or_create_s3_client(
-  url: &str,
-  access_key: &str,
-  secret_key: &str,
-) -> Result<Arc<S3Client>, StorageError> {
+pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) -> Result<Arc<S3Client>, StorageError> {
   let cache_key = format!("{}|{}", url, access_key);
   // 命中缓存则直接返回
   if let Some(existing) = S3_CLIENT_CACHE.lock().unwrap().get(&cache_key).cloned() {
@@ -78,10 +77,8 @@ pub fn get_or_create_s3_client(
 
   // 创建 AWS SDK 凭据
   let credentials = Credentials::new(
-    access_key,
-    secret_key,
-    None, // session_token
-    None, // expiry
+    access_key, secret_key, None,     // session_token
+    None,     // expiry
     "static", // provider_name
   );
 
@@ -94,7 +91,7 @@ pub fn get_or_create_s3_client(
     .build();
 
   let client = Arc::new(S3Client::from_conf(config));
-  
+
   // 写入缓存
   S3_CLIENT_CACHE.lock().unwrap().insert(cache_key, Arc::clone(&client));
   info!("S3 客户端创建并缓存成功");
@@ -248,10 +245,7 @@ impl<'a> S3ReaderProvider<'a> {
 
       // AWS SDK 使用分页 API，需要循环处理
       loop {
-        let mut request = client
-          .list_objects_v2()
-          .bucket(self.bucket)
-          .prefix(prefix);
+        let mut request = client.list_objects_v2().bucket(self.bucket).prefix(prefix);
 
         // 如果不是递归，设置分隔符（只列举当前层级）
         if !recursive {
@@ -344,7 +338,7 @@ pub async fn test_s3_connection(
     } else {
       debug!("桶为空或无权限列举，但连接正常");
     }
-    
+
     Ok::<(), StorageError>(())
   })
   .await

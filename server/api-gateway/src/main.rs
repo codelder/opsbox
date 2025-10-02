@@ -3,6 +3,11 @@
 use clap::Parser;
 use mimalloc::MiMalloc;
 
+// ⚠️ 重要：必须显式引用可选依赖，否则 inventory 机制在 release 模式下不生效
+// 原因：Rust linker 会移除未被引用的 crate，导致 inventory::submit! 不被执行
+#[cfg(feature = "logseek")]
+extern crate logseek;
+
 // 模块声明
 mod config;
 mod daemon;
