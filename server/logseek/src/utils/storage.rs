@@ -1,10 +1,8 @@
-use std::{io, str::FromStr as _, sync::Arc, time::Duration};
+use std::{io, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use futures::StreamExt as _;
+use aws_sdk_s3::{config::{Credentials, Region}, Client as S3Client};
 use log::{debug, error, info, warn};
-use minio::s3::types::ToStream;
-use minio::s3::{ClientBuilder, creds::StaticProvider, http::BaseUrl, types::S3Api as _};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
@@ -12,7 +10,6 @@ use std::sync::Mutex;
 use thiserror::Error;
 use tokio::io::AsyncRead;
 use tokio::time;
-use tokio_util::io::StreamReader;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -35,8 +32,7 @@ pub enum StorageError {
 }
 
 // 全局 S3 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
-static S3_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<minio::s3::Client>>>> =
-  Lazy::new(|| Mutex::new(HashMap::new()));
+static S3_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<S3Client>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 // S3 操作超时配置（可由环境变量 LOGSEEK_S3_TIMEOUT_SEC 覆盖，默认 60 秒）
 fn s3_timeout() -> Duration {
@@ -56,16 +52,16 @@ pub fn get_or_create_s3_client(
   url: &str,
   access_key: &str,
   secret_key: &str,
-) -> Result<Arc<minio::s3::Client>, StorageError> {
-  let key = format!("{}|{}", url, access_key);
+) -> Result<Arc<S3Client>, StorageError> {
+  let cache_key = format!("{}|{}", url, access_key);
   // 命中缓存则直接返回
-  if let Some(existing) = S3_CLIENT_CACHE.lock().unwrap().get(&key).cloned() {
+  if let Some(existing) = S3_CLIENT_CACHE.lock().unwrap().get(&cache_key).cloned() {
     return Ok(existing);
   }
 
   info!("创建 S3 客户端: url={}", url);
 
-  // 记录当前 NO_PROXY，便于排查是否因代理导致连接失败
+  // 记录当前代理环境变量，便于排查连接问题
   let no_proxy_dbg = std::env::var("NO_PROXY")
     .ok()
     .or_else(|| std::env::var("no_proxy").ok());
@@ -80,23 +76,27 @@ pub fn get_or_create_s3_client(
     http_proxy_dbg, https_proxy_dbg, no_proxy_dbg
   );
 
-  // 配置基础 URL
-  let base_url = BaseUrl::from_str(url).map_err(|_e| {
-    error!("S3 URL 解析失败: {}", url);
-    StorageError::InvalidBaseUrl(url.to_string())
-  })?;
+  // 创建 AWS SDK 凭据
+  let credentials = Credentials::new(
+    access_key,
+    secret_key,
+    None, // session_token
+    None, // expiry
+    "static", // provider_name
+  );
 
-  let builder =
-    ClientBuilder::new(base_url).provider(Some(Box::new(StaticProvider::new(access_key, secret_key, None))));
+  // 配置 S3 客户端
+  let config = aws_sdk_s3::Config::builder()
+    .endpoint_url(url) // 支持 MinIO 和其他 S3 兼容服务
+    .region(Region::new("us-east-1")) // MinIO 通常不关心 region，但 SDK 需要
+    .credentials_provider(credentials)
+    .force_path_style(true) // MinIO 需要路径风格访问（bucket-name/key 而非 bucket-name.domain/key）
+    .build();
 
-  let client = builder.build().map_err(|_e| {
-    error!("S3 客户端构建失败");
-    StorageError::S3Build
-  })?;
-
-  let client = Arc::new(client);
-  // 写入缓存（覆盖同 key）
-  S3_CLIENT_CACHE.lock().unwrap().insert(key, Arc::clone(&client));
+  let client = Arc::new(S3Client::from_conf(config));
+  
+  // 写入缓存
+  S3_CLIENT_CACHE.lock().unwrap().insert(cache_key, Arc::clone(&client));
   info!("S3 客户端创建并缓存成功");
   Ok(client)
 }
@@ -154,30 +154,25 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
     loop {
       let timeout = s3_timeout();
       let fut = async {
-        client
-          .get_object(self.bucket, self.key)
+        let response = client
+          .get_object()
+          .bucket(self.bucket)
+          .key(self.key)
           .send()
           .await
           .map_err(|e| {
             error!("获取S3对象失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
             StorageError::S3GetObject(e.to_string())
-          })?
-          .content
-          .to_stream()
-          .await
-          .map_err(|e| {
-            error!(
-              "S3对象转换为流失败: bucket={}, key={}, error={}",
-              self.bucket, self.key, e
-            );
-            StorageError::S3ToStream(e.to_string())
-          })
+          })?;
+
+        // AWS SDK 返回 ByteStream，可以直接转换为兼容的流
+        Ok::<_, StorageError>(response.body.into_async_read())
       };
 
       match time::timeout(timeout, fut).await {
-        Ok(Ok((stream, _file_size))) => {
+        Ok(Ok(stream)) => {
           info!("S3对象打开成功: bucket={}, key={}", self.bucket, self.key);
-          return Ok(Box::new(StreamReader::new(stream)));
+          return Ok(Box::new(stream));
         }
         Ok(Err(e)) => {
           attempt += 1;
@@ -245,32 +240,55 @@ impl<'a> S3ReaderProvider<'a> {
 
     // 使用超时包装列举操作
     let list_result = time::timeout(s3_timeout(), async {
-      let mut stream = client
-        .list_objects(self.bucket)
-        .prefix(Some(prefix.to_string()))
-        .recursive(recursive)
-        .to_stream()
-        .await;
-
-      debug!("开始遍历S3对象列表");
+      debug!("开始列举S3对象");
 
       let mut keys = Vec::new();
       let mut processed_count = 0;
+      let mut continuation_token: Option<String> = None;
 
-      while let Some(item) = stream.next().await {
-        let obj = item.map_err(|e| {
-          error!("列举对象出错: error={:?}", e);
+      // AWS SDK 使用分页 API，需要循环处理
+      loop {
+        let mut request = client
+          .list_objects_v2()
+          .bucket(self.bucket)
+          .prefix(prefix);
+
+        // 如果不是递归，设置分隔符（只列举当前层级）
+        if !recursive {
+          request = request.delimiter("/");
+        }
+
+        // 处理分页
+        if let Some(token) = continuation_token {
+          request = request.continuation_token(token);
+        }
+
+        let response = request.send().await.map_err(|e| {
+          error!("列举S3对象失败: error={:?}", e);
           StorageError::S3ListObjects(e.to_string())
         })?;
-        // 在 minio 0.3.x 中，对象键通常通过 `name` 字段提供
-        let key = obj.name;
-        processed_count += 1;
 
-        if regex.as_ref().map(|r| r.is_match(&key)).unwrap_or(true) {
-          debug!("对象匹配成功: {}", key);
-          keys.push(key);
+        // 处理返回的对象
+        if let Some(contents) = response.contents {
+          for object in contents {
+            if let Some(key) = object.key {
+              processed_count += 1;
+
+              if regex.as_ref().map(|r| r.is_match(&key)).unwrap_or(true) {
+                debug!("对象匹配成功: {}", key);
+                keys.push(key);
+              } else {
+                debug!("对象不匹配: {}", key);
+              }
+            }
+          }
+        }
+
+        // 检查是否还有更多结果
+        if response.is_truncated == Some(true) {
+          continuation_token = response.next_continuation_token;
         } else {
-          debug!("对象不匹配: {}", key);
+          break;
         }
       }
 
@@ -308,18 +326,25 @@ pub async fn test_s3_connection(
 
   // 使用超时包装连接测试
   time::timeout(s3_timeout(), async {
-    let mut stream = client.list_objects(bucket).recursive(false).to_stream().await;
-
-    // 触发一次迭代以验证凭证与桶可访问性；桶为空也视作成功
-    if let Some(item) = stream.next().await {
-      item.map_err(|e| {
+    // 尝试列举桶内对象（最多1个）以验证凭证和桶可访问性
+    let response = client
+      .list_objects_v2()
+      .bucket(bucket)
+      .max_keys(1)
+      .send()
+      .await
+      .map_err(|e| {
         error!("S3 连接测试失败: {:?}", e);
         StorageError::S3ListObjects(e.to_string())
       })?;
-      debug!("找到至少一个对象，连接正常");
+
+    // 无论是否有对象，只要请求成功就说明连接正常
+    if response.contents.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
+      debug!("找到对象，连接正常");
     } else {
-      debug!("桶为空，但连接正常");
+      debug!("桶为空或无权限列举，但连接正常");
     }
+    
     Ok::<(), StorageError>(())
   })
   .await

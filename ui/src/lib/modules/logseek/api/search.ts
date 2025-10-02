@@ -15,7 +15,7 @@ export async function startSearch(query: string): Promise<Response> {
   const API_BASE = getApiBase();
   const body: SearchBody = { q: query };
 
-  const response = await fetch(`${API_BASE}/stream.ndjson`, {
+  const response = await fetch(`${API_BASE}/stream.s3.ndjson`, {
     method: 'POST',
     headers: commonHeaders,
     body: JSON.stringify(body)

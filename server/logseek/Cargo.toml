@@ -21,7 +21,9 @@ uuid = { version = "1", features = ["v4"] }
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 async-trait = "0.1"
-minio = "0.3.0"
+# AWS SDK for S3 (official, better maintained than minio crate)
+aws-config = "1.1"
+aws-sdk-s3 = "1.15"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tar = "0.4.44"
