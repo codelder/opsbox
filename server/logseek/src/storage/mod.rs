@@ -15,8 +15,8 @@ use tokio::io::AsyncRead;
 
 pub mod agent;
 pub mod local;
+pub mod minio;
 pub mod targz;
-// pub mod minio;  // 待实现
 
 // ============================================================================
 // 公共类型定义
@@ -172,6 +172,22 @@ pub enum StorageError {
 
   #[error("其他错误: {0}")]
   Other(String),
+}
+
+// 从旧的 StorageError 转换
+impl From<crate::utils::storage::StorageError> for StorageError {
+  fn from(e: crate::utils::storage::StorageError) -> Self {
+    match e {
+      crate::utils::storage::StorageError::Io(e) => Self::Io(e),
+      crate::utils::storage::StorageError::InvalidBaseUrl(s) => Self::Other(format!("Invalid base URL: {}", s)),
+      crate::utils::storage::StorageError::MinioBuild => Self::Other("MinIO build error".to_string()),
+      crate::utils::storage::StorageError::MinioGetObject(s) => Self::Other(format!("MinIO get object: {}", s)),
+      crate::utils::storage::StorageError::MinioToStream(s) => Self::Other(format!("MinIO to_stream: {}", s)),
+      crate::utils::storage::StorageError::MinioListObjects(s) => Self::Other(format!("MinIO list objects: {}", s)),
+      crate::utils::storage::StorageError::Regex(s) => Self::QueryParseError(s),
+      crate::utils::storage::StorageError::ConnectionTimeout => Self::Timeout,
+    }
+  }
 }
 
 // ============================================================================

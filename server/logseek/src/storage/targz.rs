@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
@@ -179,6 +178,7 @@ mod tests {
   use flate2::write::GzEncoder;
   use std::io::Write;
   use tar::Builder;
+  use tokio::io::AsyncReadExt;
 
   /// 创建测试用的 tar.gz 文件
   fn create_test_targz(path: &std::path::Path) -> std::io::Result<()> {

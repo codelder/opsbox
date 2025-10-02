@@ -52,7 +52,7 @@ fn minio_timeout() -> Duration {
 }
 
 // 创建或获取缓存的 MinIO 客户端（按 url+access_key 缓存）
-fn get_or_create_minio_client(
+pub fn get_or_create_minio_client(
   url: &str,
   access_key: &str,
   secret_key: &str,
