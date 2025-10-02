@@ -1,0 +1,42 @@
+#!/bin/bash
+# ============================================================================
+# LogSeek Agent 启动脚本
+# ============================================================================
+
+set -e
+
+# 默认配置
+export AGENT_ID=${AGENT_ID:-"agent-$(hostname)"}
+export AGENT_NAME=${AGENT_NAME:-"Agent @ $(hostname)"}
+export SERVER_ENDPOINT=${SERVER_ENDPOINT:-"http://localhost:8080"}
+export SEARCH_ROOTS=${SEARCH_ROOTS:-"/var/log"}
+export AGENT_PORT=${AGENT_PORT:-8090}
+export ENABLE_HEARTBEAT=${ENABLE_HEARTBEAT:-true}
+export HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
+export RUST_LOG=${RUST_LOG:-info}
+
+echo "╔══════════════════════════════════════════╗"
+echo "║   LogSeek Agent 启动脚本                 ║"
+echo "╚══════════════════════════════════════════╝"
+echo ""
+echo "配置信息:"
+echo "  Agent ID:       $AGENT_ID"
+echo "  Agent Name:     $AGENT_NAME"
+echo "  Server:         $SERVER_ENDPOINT"
+echo "  Search Roots:   $SEARCH_ROOTS"
+echo "  Listen Port:    $AGENT_PORT"
+echo "  Heartbeat:      $ENABLE_HEARTBEAT"
+echo ""
+
+# 检查是否已编译
+if [ ! -f "../server/target/release/logseek-agent" ]; then
+    echo "⚠️  未找到编译后的 Agent 程序，正在编译..."
+    cd ../server
+    cargo build --release -p logseek-agent
+    cd -
+fi
+
+# 启动 Agent
+echo "🚀 启动 Agent..."
+exec ../server/target/release/logseek-agent
+

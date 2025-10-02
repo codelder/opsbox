@@ -92,14 +92,14 @@ impl ProcessingStats {
 /// 2. 内容处理逻辑可以单独测试
 /// 3. 结果发送逻辑可以单独测试
 /// 4. 新的搜索源可以复用这些逻辑
-struct SearchProcessor {
+pub struct SearchProcessor {
   spec: Arc<Query>,
   context_lines: usize,
 }
 
 impl SearchProcessor {
   /// 创建新的搜索处理器
-  fn new(spec: Arc<Query>, context_lines: usize) -> Self {
+  pub fn new(spec: Arc<Query>, context_lines: usize) -> Self {
     Self { spec, context_lines }
   }
 
@@ -111,7 +111,7 @@ impl SearchProcessor {
   /// assert!(processor.should_process_path("file.log"));
   /// assert!(!processor.should_process_path("file.txt"));
   /// ```
-  fn should_process_path(&self, path: &str) -> bool {
+  pub fn should_process_path(&self, path: &str) -> bool {
     self.spec.path_filter.is_allowed(path)
   }
 
@@ -125,7 +125,7 @@ impl SearchProcessor {
   /// - `Ok(Some(SearchResult))`: 找到匹配结果
   /// - `Ok(None)`: 没有匹配结果
   /// - `Err(SearchError)`: 处理出错
-  async fn process_content<R: AsyncRead + Unpin>(
+  pub async fn process_content<R: AsyncRead + Unpin>(
     &self,
     path: String,
     reader: &mut R,
@@ -144,7 +144,7 @@ impl SearchProcessor {
   /// # 返回
   /// - `Ok(())`: 发送成功
   /// - `Err(SearchError::ChannelClosed)`: 接收端已关闭
-  async fn send_result(
+  pub async fn send_result(
     &self,
     result: SearchResult,
     tx: &tokio::sync::mpsc::Sender<SearchResult>,
@@ -290,7 +290,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   Ok(Some((lines, merged)))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
   pub path: String,
   pub lines: Vec<String>,
@@ -609,7 +609,7 @@ impl TarStreamProcessor {
 
       // 3. 智能错误处理
       let entry = match self.handle_entry_error(entry_result) {
-        EntryAction::Process(entry) => entry,
+        EntryAction::Process(entry) => *entry,
         EntryAction::Skip => continue,
         EntryAction::Abort => break,
       };
@@ -654,7 +654,7 @@ impl TarStreamProcessor {
     match result {
       Ok(entry) => {
         self.error_tracker.record_success();
-        EntryAction::Process(entry)
+        EntryAction::Process(Box::new(entry))
       }
       Err(error) => match self.error_tracker.analyze_error(&error) {
         ErrorAction::AbortProcessing => {
@@ -682,7 +682,7 @@ impl TarStreamProcessor {
 
 /// 条目处理动作
 enum EntryAction<R: futures::io::AsyncRead + Unpin> {
-  Process(async_tar::Entry<R>),
+  Process(Box<async_tar::Entry<R>>),
   Skip,
   Abort,
 }

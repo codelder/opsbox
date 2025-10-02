@@ -1,0 +1,42 @@
+[package]
+name = "logseek-agent"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "logseek-agent"
+path = "src/main.rs"
+
+[dependencies]
+# 复用 logseek 的搜索逻辑和存储抽象
+logseek = { path = "../logseek" }
+
+# Web 框架
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 日志
+log = "0.4"
+env_logger = "0.11"
+
+# HTTP 客户端
+reqwest = { version = "0.12", features = ["json"] }
+
+# 工具
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+thiserror = "2"
+anyhow = "1"
+
+# 系统信息
+hostname = "0.4"
+
+# 异步流
+futures = "0.3"
+async-stream = "0.3"
+

@@ -138,6 +138,13 @@ fn cpu_max_concurrency() -> usize {
 }
 
 pub fn router(db_pool: SqlitePool) -> Router {
+  // 创建 Agent 状态
+  let agent_state = Arc::new(crate::routes_agent::AgentState::new());
+  
+  // 创建 Agent 子路由
+  let agent_router = crate::routes_agent::agent_routes()
+    .with_state(agent_state);
+  
   Router::new()
     .route("/stream", post(stream_markdown))
     .route("/stream.ndjson", post(stream_local_ndjson))
@@ -146,6 +153,8 @@ pub fn router(db_pool: SqlitePool) -> Router {
     .route("/settings/minio", get(get_minio_settings).post(save_minio_settings))
     // 自然语言 → 查询字符串
     .route("/nl2q", post(nl2q))
+    // Agent 管理路由
+    .merge(agent_router)
     .with_state(db_pool)
 }
 

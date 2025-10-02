@@ -44,3 +44,10 @@ ollama-rs = "0.3"
 log = "0.4"
 # 用于全局单例客户端缓存
 once_cell = "1.20"
+# 用于创建异步流
+async-stream = "0.3"
+# HTTP 客户端 (用于 Agent 通信)
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+[dev-dependencies]
+tempfile = "3"

@@ -12,7 +12,8 @@
 
 // API 层
 pub mod api;
-pub mod routes;  // 保留以保持向后兼容
+pub mod routes; // 保留以保持向后兼容
+pub mod routes_agent; // Agent 管理路由
 
 // 服务层
 pub mod service;
@@ -29,14 +30,17 @@ pub mod utils;
 // 查询解析器
 pub mod query;
 
+// 存储抽象层
+pub mod storage;
+
 use opsbox_core::{Result, SqlitePool};
 
 /// 导出 router 函数（接收数据库连接池）
 pub fn router(db_pool: SqlitePool) -> axum::Router {
-    routes::router(db_pool)
+  routes::router(db_pool)
 }
 
 /// 初始化 LogSeek 模块数据库 schema
 pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
-    repository::settings::init_schema(db_pool).await
+  repository::settings::init_schema(db_pool).await
 }
