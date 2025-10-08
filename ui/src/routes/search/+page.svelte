@@ -195,7 +195,7 @@
         >
           {#if searchStore.loading}
             <div class="mr-3 h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
-            加载中…
+            {searchStore.results.length === 0 ? '搜索中…' : '加载中…'}
           {:else}
             <svg
               class="mr-3 h-5 w-5 transition-transform duration-200 group-hover:translate-y-0.5"

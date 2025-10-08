@@ -6,5 +6,6 @@
 export * from './config';
 export * from './search';
 export * from './settings';
+export * from './profiles';
 export * from './nl2q';
 export * from './view';

@@ -3,7 +3,7 @@
 // ============================================================================
 
 use crate::query::Query;
-use crate::service::search::{SearchError, SearchProcessor, SearchResult};
+use crate::service::search::{Search, SearchError, SearchProcessor, SearchResult};
 use crate::storage::{DataSource, SearchOptions, SearchService, StorageSource};
 use futures::StreamExt;
 use log::{debug, error, info, warn};
@@ -157,7 +157,7 @@ impl SearchCoordinator {
         let _permit = permit;
 
         // 打开文件
-        let mut reader = match data_source.open_file(&entry).await {
+        let reader = match data_source.open_file(&entry).await {
           Ok(r) => r,
           Err(e) => {
             warn!("无法打开文件 {}: {}", entry.path, e);
@@ -165,19 +165,46 @@ impl SearchCoordinator {
           }
         };
 
-        // 执行搜索
-        match processor.process_content(entry.path.clone(), &mut reader).await {
-          Ok(Some(result)) => {
-            if processor.send_result(result, &tx).await.is_ok() {
-              1 // 成功匹配
-            } else {
+        // 根据文件类型选择处理方式
+        let is_targz = entry.path.ends_with(".tar.gz") || entry.path.ends_with(".tgz");
+        
+        if is_targz {
+          // 对 tar.gz 文件，复用现有的 Search trait 实现
+          // 该实现会自动解压 gzip 并解析 tar 归档
+          let spec = processor.spec.as_ref().clone();
+          let ctx = processor.context_lines;
+          match reader.search(&spec, ctx).await {
+            Ok(mut result_rx) => {
+              let mut count = 0;
+              while let Some(result) = result_rx.recv().await {
+                if tx.send(result).await.is_err() {
+                  break;
+                }
+                count += 1;
+              }
+              count
+            }
+            Err(e) => {
+              warn!("搜索 tar.gz 文件 {} 失败: {}", entry.path, e);
               0
             }
           }
-          Ok(None) => 0,
-          Err(e) => {
-            warn!("搜索文件 {} 失败: {}", entry.path, e);
-            0
+        } else {
+          // 对普通文本文件，直接使用 processor 处理
+          let mut reader = reader;
+          match processor.process_content(entry.path.clone(), &mut reader).await {
+            Ok(Some(result)) => {
+              if processor.send_result(result, &tx).await.is_ok() {
+                1 // 成功匹配
+              } else {
+                0
+              }
+            }
+            Ok(None) => 0,
+            Err(e) => {
+              warn!("搜索文件 {} 失败: {}", entry.path, e);
+              0
+            }
           }
         }
       });

@@ -25,6 +25,16 @@ export interface JsonChunk {
  * 搜索结果（NDJSON 流中的单个文件结果）
  */
 export interface SearchJsonResult {
+  /**
+   * 文件 URL 标识符
+   * 
+   * 支持多种格式：
+   * - 本地文件: `file:///path/to/file.log`
+   * - S3 对象（默认配置）: `s3://bucket/path/to/file`
+   * - S3 对象（指定配置）: `s3://profile:bucket/path/to/file`
+   * - Tar 压缩包内文件: `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
+   * - Agent 远程文件: `agent://server-01/var/log/app.log`
+   */
   path: string;
   keywords: string[];
   chunks: JsonChunk[];
@@ -58,6 +68,26 @@ export interface S3SettingsResponse extends S3SettingsPayload {
   connection_error?: string | null;
 }
 
+/**
+ * S3 Profile 负载（用于 POST 请求）
+ * 
+ * 每个 Profile 包含完整的 S3 访问配置：Endpoint + Bucket + Credentials
+ */
+export interface S3ProfilePayload {
+  profile_name: string;
+  endpoint: string;
+  bucket: string;
+  access_key: string;
+  secret_key: string;
+}
+
+/**
+ * S3 Profile 列表响应
+ */
+export interface S3ProfileListResponse {
+  profiles: S3ProfilePayload[];
+}
+
 // ============ 自然语言转查询 ============
 
 /**
@@ -81,7 +111,15 @@ export interface NL2QResponse {
  */
 export interface ViewParams {
   sid: string; // 会话 ID
-  file: string; // 文件路径
+  /**
+   * 文件 URL 标识符（同 SearchJsonResult.path）
+   * 
+   * 支持的格式示例：
+   * - `file:///var/log/app.log`
+   * - `s3://backupdr/logs/app.log`
+   * - `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
+   */
+  file: string;
   start: number; // 起始行号（1-based）
   end: number; // 结束行号（包含）
 }

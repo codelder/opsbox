@@ -93,8 +93,8 @@ impl ProcessingStats {
 /// 3. 结果发送逻辑可以单独测试
 /// 4. 新的搜索源可以复用这些逻辑
 pub struct SearchProcessor {
-  spec: Arc<Query>,
-  context_lines: usize,
+  pub spec: Arc<Query>,
+  pub context_lines: usize,
 }
 
 impl SearchProcessor {

@@ -4,3 +4,4 @@
  */
 
 export * from './highlight';
+export * from './fileUrl';

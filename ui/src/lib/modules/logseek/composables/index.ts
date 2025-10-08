@@ -5,4 +5,5 @@
 
 export * from './useSearch.svelte';
 export * from './useSettings.svelte';
+export * from './useProfiles.svelte';
 export * from './useStreamReader.svelte';

@@ -4,7 +4,7 @@
  */
 
 import type { SearchJsonResult } from '../types';
-import { startSearch, extractSessionId } from '../api';
+import { extractSessionId, startUnifiedSearch } from '../api';
 import { useStreamReader } from './useStreamReader.svelte';
 
 /**
@@ -39,26 +39,28 @@ export function useSearch() {
     controller = new AbortController();
 
     try {
-      const response = await startSearch(q);
+      loading = true;
+      const response = await startUnifiedSearch(q);
       sid = extractSessionId(response);
 
       // 初始化流读取器
       streamReader.initReader(response);
 
-      // 读取第一批数据
-      await loadMore();
+      // 读取第一批数据（内部会设置 loading）
+      await loadMoreInternal();
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
       error = err.message || '搜索失败';
       hasMore = false;
+      loading = false;
     }
   }
 
   /**
-   * 加载更多结果
+   * 内部加载方法（不检查 loading 状态）
    */
-  async function loadMore(pageSize: number = 20): Promise<void> {
-    if (!hasMore || loading) return;
+  async function loadMoreInternal(pageSize: number = 20): Promise<void> {
+    if (!hasMore) return;
 
     loading = true;
     const { hasMore: more } = await streamReader.readBatch(
@@ -73,6 +75,14 @@ export function useSearch() {
 
     hasMore = more;
     loading = false;
+  }
+
+  /**
+   * 加载更多结果（公开方法，检查 loading 状态）
+   */
+  async function loadMore(pageSize: number = 20): Promise<void> {
+    if (!hasMore || loading) return;
+    await loadMoreInternal(pageSize);
   }
 
   /**

@@ -118,6 +118,48 @@ pub struct ViewParams {
   pub end: Option<usize>,
 }
 
+/// S3 Profile 负载（用于 POST 请求）
+/// 
+/// 每个 Profile 包含完整的 S3 访问配置：Endpoint + Bucket + Credentials
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3ProfilePayload {
+  pub profile_name: String,
+  pub endpoint: String,
+  pub bucket: String,
+  pub access_key: String,
+  pub secret_key: String,
+}
+
+impl From<S3ProfilePayload> for settings::S3Profile {
+  fn from(value: S3ProfilePayload) -> Self {
+    Self {
+      profile_name: value.profile_name,
+      endpoint: value.endpoint,
+      bucket: value.bucket,
+      access_key: value.access_key,
+      secret_key: value.secret_key,
+    }
+  }
+}
+
+impl From<settings::S3Profile> for S3ProfilePayload {
+  fn from(value: settings::S3Profile) -> Self {
+    Self {
+      profile_name: value.profile_name,
+      endpoint: value.endpoint,
+      bucket: value.bucket,
+      access_key: value.access_key,
+      secret_key: value.secret_key,
+    }
+  }
+}
+
+/// S3 Profile 列表响应
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct S3ProfileListResponse {
+  pub profiles: Vec<S3ProfilePayload>,
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

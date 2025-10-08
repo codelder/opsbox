@@ -4,21 +4,18 @@
 // 注意：此文件保留以保持向后兼容
 // 新代码应使用 api::models 中的类型
 // ============================================================================
-use crate::api::models::{AppError, NL2QOut, S3SettingsPayload, SearchBody, ViewParams};
+use crate::api::models::{AppError, NL2QOut, S3ProfileListResponse, S3ProfilePayload, S3SettingsPayload, SearchBody, ViewParams};
+use crate::domain::FileUrl;
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::repository::settings;
 use crate::utils::bbip_service::derive_plan;
-use crate::{
-  service::search::Search as _,
-  utils::renderer::{render_json_chunks, render_markdown},
-  utils::storage::{ReaderProvider as _, S3ReaderProvider, StorageError},
-};
+use crate::utils::renderer::render_json_chunks;
 use axum::{
   Router,
   body::Body,
-  extract::{Json, Query, State},
+  extract::{Json, Path, Query, State},
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
-  routing::{get, post},
+  routing::{delete, get, post},
 };
 use chrono::{Datelike, Duration};
 use opsbox_core::SqlitePool;
@@ -37,12 +34,32 @@ async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRespons
     params.start,
     params.end
   );
+
+  // 解析 FileUrl
+  let file_url: FileUrl = match params.file.parse() {
+    Ok(url) => url,
+    Err(e) => {
+      log::warn!(
+        "view-parse-error: sid={} file={} error={:?}",
+        params.sid,
+        params.file,
+        e
+      );
+      return Ok(
+        HttpResponse::builder()
+          .status(StatusCode::BAD_REQUEST)
+          .body(Body::from(format!("Invalid file URL: {}", e)))
+          .unwrap(),
+      );
+    }
+  };
+
   // 读取 keywords 与行切片
   let keywords = simple_cache().get_keywords(&params.sid).await.unwrap_or_default();
   let (total, slice) = match simple_cache()
     .get_lines_slice(
       &params.sid,
-      &params.file,
+      &file_url,
       params.start.unwrap_or(1),
       params.end.unwrap_or(1000),
     )
@@ -145,11 +162,13 @@ pub fn router(db_pool: SqlitePool) -> Router {
   let agent_router = crate::routes_agent::agent_routes().with_state(agent_state);
 
   Router::new()
-    .route("/stream", post(stream_markdown))
-    .route("/stream.ndjson", post(stream_local_ndjson))
-    .route("/stream.s3.ndjson", post(stream_s3_ndjson))
+    // 搜索路由（多存储源并行搜索）
+    .route("/search.ndjson", post(stream_search))
     .route("/view.cache.json", get(view_cache_json))
     .route("/settings/s3", get(get_s3_settings).post(save_s3_settings))
+    // S3 Profile 管理
+    .route("/profiles", get(list_profiles).post(save_profile))
+    .route("/profiles/{name}", delete(delete_profile))  // 使用 {name} 而不是 :name
     // 自然语言 → 查询字符串
     .route("/nl2q", post(nl2q))
     // Agent 管理路由
@@ -187,56 +206,42 @@ async fn save_s3_settings(
   Ok(StatusCode::NO_CONTENT)
 }
 
-async fn stream_markdown(
-  State(pool): State<SqlitePool>,
-  Json(body): Json<SearchBody>,
-) -> Result<HttpResponse<Body>, Problem> {
-  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(8);
-
-  let _ = tx.send(Ok(bytes::Bytes::from("# 搜索结果\n\n"))).await;
-
-  let minio_cfg = settings::load_required_s3_settings(&pool)
+/// 列出所有 S3 Profiles
+async fn list_profiles(State(pool): State<SqlitePool>) -> Result<Json<S3ProfileListResponse>, Problem> {
+  let profiles = settings::list_s3_profiles(&pool)
     .await
     .map_err(AppError::Settings)?;
-
-  let s3reader = S3ReaderProvider::new(
-    &minio_cfg.endpoint,
-    &minio_cfg.access_key,
-    &minio_cfg.secret_key,
-    &minio_cfg.bucket,
-    "bbip/2025/202508/20250819/BBIP_20_APPLOG_2025-08-18.tar.gz",
-  )
-  .open()
-  .await
-  .map_err(AppError::StorageError)?;
-
-  let spec = crate::query::Query::parse_github_like(&body.q).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
-
-  let highlights = spec.highlights.clone();
-
-  let fut = async move {
-    let Ok(mut stream) = s3reader.search(&spec, body.context.unwrap_or(3)).await else {
-      return;
-    };
-
-    while let Some(result) = stream.recv().await {
-      let buf = render_markdown(&result.path, result.merged, result.lines, &highlights);
-      let _ = tx.send(Ok(bytes::Bytes::from(buf))).await;
-    }
-  };
-
-  tokio::spawn(fut);
-
-  let body = axum::body::Body::from_stream(ReceiverStream::new(rx));
-
-  Ok(
-    HttpResponse::builder()
-      .status(200)
-      .header(CONTENT_TYPE, HeaderValue::from_static("text/markdown; charset=utf-8"))
-      .body(body)
-      .unwrap(),
-  )
+  
+  let payload_list: Vec<S3ProfilePayload> = profiles.into_iter().map(Into::into).collect();
+  
+  Ok(Json(S3ProfileListResponse {
+    profiles: payload_list,
+  }))
 }
+
+/// 保存或更新 S3 Profile
+async fn save_profile(
+  State(pool): State<SqlitePool>,
+  Json(payload): Json<S3ProfilePayload>,
+) -> Result<StatusCode, Problem> {
+  let profile: settings::S3Profile = payload.into();
+  settings::save_s3_profile(&pool, &profile)
+    .await
+    .map_err(AppError::Settings)?;
+  Ok(StatusCode::NO_CONTENT)
+}
+
+/// 删除 S3 Profile
+async fn delete_profile(
+  State(pool): State<SqlitePool>,
+  Path(name): Path<String>,
+) -> Result<StatusCode, Problem> {
+  settings::delete_s3_profile(&pool, &name)
+    .await
+    .map_err(AppError::Settings)?;
+  Ok(StatusCode::NO_CONTENT)
+}
+
 
 // NL → Q 端点，实现将自然语言转换为查询字符串
 async fn nl2q(Json(body): Json<crate::service::nl2q::NLBody>) -> Result<Json<NL2QOut>, Problem> {
@@ -254,132 +259,129 @@ async fn nl2q(Json(body): Json<crate::service::nl2q::NLBody>) -> Result<Json<NL2
   Ok(Json(NL2QOut { q }))
 }
 
-async fn stream_local_ndjson(Json(body): Json<SearchBody>) -> Result<HttpResponse<Body>, Problem> {
-  let cap = stream_channel_capacity();
-  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
-  log::debug!("profiling: 建立响应通道，容量={}", cap);
 
-  // 整体起始时间（仅用于粗粒度耗时调试）
-  let overall_start = std::time::Instant::now();
 
-  // 通过服务从 q 中解析日期属性并生成文件路径，同时返回清理后的 q
-  let plan_start = std::time::Instant::now();
-  let base_dir = "/Users/wangyue/Downloads/log";
+// ============================================================================
+// 搜索（多存储源并行搜索）
+// ============================================================================
+
+/// 获取需要搜索的存储源配置列表
+///
+/// 从数据库加载所有 S3 Profiles，并根据查询中的日期范围生成多个 tar.gz 文件配置
+///
+/// TODO: 后续扩展：
+/// 1. 支持按权限过滤（不同用户看到不同的存储源）
+/// 2. 支持按标签/分组过滤（例如 "production" 标签的所有存储源）
+/// 3. 支持动态启用/禁用某些存储源
+/// 4. 支持 Agent 存储源配置
+/// 5. 支持本地文件系统存储源配置
+async fn get_storage_source_configs(
+  pool: &SqlitePool,
+  query: &str,
+) -> Result<(Vec<crate::storage::factory::SourceConfig>, String), AppError> {
+  use crate::storage::factory::SourceConfig;
+
+  // 从数据库加载所有 S3 Profiles
+  let profiles = settings::list_s3_profiles(pool)
+    .await
+    .map_err(|e| {
+      log::error!("加载 S3 Profiles 失败: {:?}", e);
+      e
+    })?;
+
+  log::info!("从数据库加载到 {} 个 S3 Profile(s)", profiles.len());
+
+  // 解析日期计划，获取日期区间和清理后的查询（无论是否有 profiles 都需要清理查询）
+  let base_dir = "/unused/for/s3"; // 仅为复用 derive_plan 获取日期区间
   let buckets = ["20", "21", "22", "23"];
-  let plan = derive_plan(base_dir, &buckets, &body.q);
-  let files = plan.paths;
-  let q_for_search = plan.cleaned_query;
-  log::debug!(
-    "profiling: 规划完成，文件数={}，日期区间=[{}..={}], 规划耗时={:?}",
-    files.len(),
+  let plan = derive_plan(base_dir, &buckets, query);
+  
+  log::info!(
+    "[Search] 日期范围解析: start={}, end={}, 原始查询='{}', 清理后查询='{}'",
     plan.range.start,
     plan.range.end,
-    plan_start.elapsed()
+    query,
+    plan.cleaned_query
   );
 
-  let parse_start = std::time::Instant::now();
-  let spec =
-    crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
-  let parse_dur = parse_start.elapsed();
-  let highlights = spec.highlights.clone();
-  let sid = new_sid();
-  simple_cache().put_keywords(&sid, highlights.clone()).await;
-  log::debug!("cache-keywords: sid={} keywords={:?}", sid, highlights);
-  let ctx = body.context.unwrap_or(3);
-  log::debug!("profiling: 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
-
-  for path in files {
-    let txc = tx.clone();
-    let specc = spec.clone();
-    let highlights_c = highlights.clone();
-    let sid_c = sid.clone();
-    tokio::spawn(async move {
-      let file_start = std::time::Instant::now();
-      let Ok(reader) = tokio::fs::File::open(&path).await.map_err(StorageError::from) else {
-        log::warn!("profiling: 打开文件失败 path={}", path);
-        return;
-      };
-
-      let Ok(mut stream) = reader.search(&specc, ctx).await else {
-        log::warn!("profiling: 启动检索失败 path={}", path);
-        return;
-      };
-
-      let mut produced: usize = 0;
-      while let Some(result) = stream.recv().await {
-        // 如前端已停止读取，尽快退出，避免无效开销
-        if txc.is_closed() {
-          log::debug!("profiling: 下游通道已关闭，提前结束 path={}", path);
-          return;
-        }
-        let file_id = format!("{}:{}", path, &result.path);
-        log::debug!(
-          "cache-put: sid={} file_id={} lines={}",
-          sid_c,
-          file_id,
-          result.lines.len()
-        );
-        simple_cache().put_lines(&sid_c, &file_id, result.lines.clone()).await;
-
-        let json_obj = render_json_chunks(&file_id, result.merged.clone(), result.lines.clone(), &highlights_c);
-        match serde_json::to_vec(&json_obj) {
-          Ok(mut v) => {
-            v.push(b'\n');
-            if let Err(_e) = txc.send(Ok(bytes::Bytes::from(v))).await {
-              // 接收端已关闭（客户端断开或响应结束），终止该任务
-              log::debug!("profiling: 发送失败(接收端关闭) path={}", path);
-              return;
-            }
-            produced += 1;
-            log::debug!("profiling: 发送成功 path={}，输出记录={}", path, produced);
-          }
-          Err(e) => {
-            log::warn!("profiling: 序列化失败 path={}，err={}", path, e);
-          }
-        }
-      }
-      log::debug!(
-        "profiling: 文件处理完成 path={}，输出记录={}，耗时={:?}",
-        path,
-        produced,
-        file_start.elapsed()
-      );
-    });
+  // 如果没有 profiles，直接返回空配置和清理后的查询
+  if profiles.is_empty() {
+    return Ok((Vec::new(), plan.cleaned_query));
   }
 
-  log::debug!(
-    "profiling: 任务已派发，整体耗时(至返回响应构建前)={:?}",
-    overall_start.elapsed()
+  let mut configs: Vec<SourceConfig> = Vec::new();
+
+  // 为每个 Profile 生成多个 tar.gz 文件配置
+  for profile in profiles {
+    log::debug!(
+      "为 Profile '{}' 生成存储源配置 (endpoint={}, bucket={})",
+      profile.profile_name,
+      profile.endpoint,
+      profile.bucket
+    );
+
+    // 遍历日期范围
+    let mut d = plan.range.start;
+    while d <= plan.range.end {
+      let dp1 = d + Duration::days(1);
+      let y = dp1.year();
+      let m = dp1.month();
+      let day = dp1.day();
+      let yyyymm = format!("{:04}{:02}", y, m);
+      let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
+      let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
+
+      // 为每个 bucket 生成一个 S3 对象键
+      for b in buckets {
+        let key = format!(
+          "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
+          y, yyyymm, yyyymmdd, b, file_name
+        );
+
+        configs.push(SourceConfig::S3 {
+          profile: profile.profile_name.clone(),
+          bucket: Some(profile.bucket.clone()),
+          prefix: None,
+          pattern: None,
+          key: Some(key.clone()),
+        });
+
+        log::debug!(
+          "添加 S3 存储源: profile={}, key={}",
+          profile.profile_name,
+          key
+        );
+      }
+
+      d += Duration::days(1);
+    }
+  }
+
+  log::info!(
+    "[Search] 共生成 {} 个存储源配置",
+    configs.len()
   );
 
-  // 关闭原始发送端，待各并发任务结束后自动结束流
-  drop(tx);
+  // TODO: 后续可以在这里添加 Agent 存储源和本地文件系统存储源
+  // 例如：
+  // configs.push(SourceConfig::Agent {
+  //   endpoint: "http://agent1.example.com:8090".to_string(),
+  // });
 
-  let body = Body::from_stream(ReceiverStream::new(rx));
-
-  Ok(
-    HttpResponse::builder()
-      .status(200)
-      .header(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-      )
-      .header(
-        "X-Logseek-SID",
-        HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")),
-      )
-      .body(body)
-      .unwrap(),
-  )
+  // 返回存储源配置和清理后的查询（移除了 dt:/fdt:/tdt: 等日期限定符）
+  Ok((configs, plan.cleaned_query))
 }
 
-async fn stream_s3_ndjson(
+/// 搜索处理函数（多存储源并行搜索）
+async fn stream_search(
   State(pool): State<SqlitePool>,
   Json(body): Json<SearchBody>,
 ) -> Result<HttpResponse<Body>, Problem> {
+  log::info!("[Search] 开始搜索: q={}", body.q);
+
   let cap = stream_channel_capacity();
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
-  log::debug!("profiling: [S3] 建立响应通道，容量={}", cap);
+  log::debug!("profiling: [Search] 建立响应通道，容量={}", cap);
 
   // 分层限流——IO 并发与 CPU 并发
   let io_sem = Arc::new(tokio::sync::Semaphore::new(s3_max_concurrency()));
@@ -387,19 +389,19 @@ async fn stream_s3_ndjson(
   let cpu_sem = Arc::new(tokio::sync::Semaphore::new(cpu_max));
 
   // 自适应护栏 - 统计与控制器
-  struct Stats {
-    produced: AtomicU64,
-    s3_errors: AtomicU64,
+  struct SearchStats {
+    produced: Arc<AtomicU64>,
+    source_errors: Arc<AtomicU64>,
   }
-  impl Stats {
+  impl SearchStats {
     fn new() -> Self {
       Self {
-        produced: AtomicU64::new(0),
-        s3_errors: AtomicU64::new(0),
+        produced: Arc::new(AtomicU64::new(0)),
+        source_errors: Arc::new(AtomicU64::new(0)),
       }
     }
   }
-  let stats = Arc::new(Stats::new());
+  let stats = Arc::new(SearchStats::new());
   struct CpuController {
     max: usize,
     target: usize,
@@ -428,7 +430,7 @@ async fn stream_s3_ndjson(
       loop {
         tokio::time::sleep(std::time::Duration::from_secs(3)).await;
         let prod = stats_c.produced.load(Ordering::Relaxed);
-        let err = stats_c.s3_errors.load(Ordering::Relaxed);
+        let err = stats_c.source_errors.load(Ordering::Relaxed);
         let dprod = prod.saturating_sub(prev_prod);
         let derr = err.saturating_sub(prev_err);
         prev_prod = prod;
@@ -439,7 +441,7 @@ async fn stream_s3_ndjson(
 
         let mut ctrl = cpu_ctrl_c.lock().await;
         let cur_eff = ctrl.current_effective();
-        // 决策：高错误率则乘性减小；否则若吞吐不下降则加一
+        // 决策：高错误率则乘性减小；否则若吐吐不下降则加一
         if err_rate > 0.02 && cur_eff > 1 {
           let new_target = ((cur_eff as f64) * 0.7).floor().max(1.0) as usize;
           ctrl.target = new_target;
@@ -465,7 +467,7 @@ async fn stream_s3_ndjson(
           } // drop -> 释放许可
         }
         log::debug!(
-          "adaptive: cpu target={} effective={} err_rate={:.3}% tp={:.2}/s",
+          "adaptive: [Search] cpu target={} effective={} err_rate={:.3}% tp={:.2}/s",
           ctrl.target,
           ctrl.current_effective(),
           err_rate * 100.0,
@@ -475,199 +477,207 @@ async fn stream_s3_ndjson(
     });
   }
 
-  // 粗粒度耗时
   let overall_start = std::time::Instant::now();
 
-  // 解析日期计划，仅用于得到日期区间与清理后的查询
-  let plan_start = std::time::Instant::now();
-  let base_dir = "/unused/for/s3"; // 仅为复用 derive_plan 获取日期区间与 cleaned_query
-  let buckets = ["20", "21", "22", "23"];
-  let plan = derive_plan(base_dir, &buckets, &body.q);
-  let q_for_search = plan.cleaned_query;
-  log::debug!(
-    "profiling: [S3] 规划完成，日期区间=[{}..={}], 规划耗时={:?}",
-    plan.range.start,
-    plan.range.end,
-    plan_start.elapsed()
+  // 1. 获取存储源配置列表（同时获取清理后的查询）
+  let (source_configs, cleaned_query) = match get_storage_source_configs(&pool, &body.q).await {
+    Ok((configs, cleaned)) => (configs, cleaned),
+    Err(e) => {
+      log::error!("[Search] 获取存储源配置失败: {:?}", e);
+      drop(tx);
+      let body = Body::from_stream(ReceiverStream::new(rx));
+      return Ok(
+        HttpResponse::builder()
+          .status(200)
+          .header(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+          )
+          .body(body)
+          .unwrap(),
+      );
+    }
+  };
+  log::info!(
+    "[Search] 获取到 {} 个存储源配置",
+    source_configs.len()
   );
 
-  // 解析查询
+  if source_configs.is_empty() {
+    log::warn!("[Search] 没有可用的存储源配置");
+    drop(tx);
+    let body = Body::from_stream(ReceiverStream::new(rx));
+    return Ok(
+      HttpResponse::builder()
+        .status(200)
+        .header(
+          CONTENT_TYPE,
+          HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+        )
+        .body(body)
+        .unwrap(),
+    );
+  }
+
+  // 2. 使用工厂创建存储源
+  let factory = crate::storage::factory::StorageFactory::new(pool.clone());
+  let (sources, errors) = factory.create_sources(source_configs.clone()).await;
+
+  if !errors.is_empty() {
+    log::warn!(
+      "[Search] {} 个存储源创建失败: {:?}",
+      errors.len(),
+      errors
+    );
+  }
+
+  if sources.is_empty() {
+    log::error!("[Search] 所有存储源创建失败，无法进行搜索");
+    drop(tx);
+    let body = Body::from_stream(ReceiverStream::new(rx));
+    return Ok(
+      HttpResponse::builder()
+        .status(200)
+        .header(
+          CONTENT_TYPE,
+          HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+        )
+        .body(body)
+        .unwrap(),
+    );
+  }
+
+  log::info!(
+    "[Search] 成功创建 {} 个存储源",
+    sources.len()
+  );
+
+  // 3. 解析查询并准备搜索参数
+  let ctx = body.context.unwrap_or(3);
   let parse_start = std::time::Instant::now();
-  let spec =
-    crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let spec = crate::query::Query::parse_github_like(&cleaned_query)
+    .map_err(|e| Problem::from(AppError::QueryParse(e)))?;
   let parse_dur = parse_start.elapsed();
   let highlights = spec.highlights.clone();
   let sid = new_sid();
   simple_cache().put_keywords(&sid, highlights.clone()).await;
-  log::debug!("cache-keywords: sid={} keywords={:?}", sid, highlights);
-  let ctx = body.context.unwrap_or(3);
-  log::debug!("profiling: [S3] 查询语法解析完成，ctx={}，耗时={:?}", ctx, parse_dur);
-
-  let minio_cfg = Arc::new(
-    settings::load_required_s3_settings(&pool)
-      .await
-      .map_err(AppError::Settings)?,
+  log::debug!(
+    "profiling: [Search] 查询解析完成，ctx={}, 耗时={:?}",
+    ctx,
+    parse_dur
   );
 
-  // 生成 S3 对象键：每天 4 个 bucket，文件名日期 = d；前缀路径日期 = d+1
+  log::info!(
+    "[Search] 开始并行搜索: 原始query={}, 清理后query={}, context={}, sid={}, sources={}",
+    body.q, cleaned_query, ctx, sid, sources.len()
+  );
 
-  let mut d = plan.range.start;
-  while d <= plan.range.end {
-    let dp1 = d + Duration::days(1);
-    let y = dp1.year();
-    let m = dp1.month();
-    let day = dp1.day();
-    let yyyymm = format!("{:04}{:02}", y, m);
-    let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
-    let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
+  // 4. 为每个存储源启动搜索任务（带并发控制）
+  let spec = Arc::new(spec);
+  for (idx, (source, config)) in sources.into_iter().zip(source_configs.iter()).enumerate() {
+    let source_name = match &source {
+      crate::storage::StorageSource::Data(ds) => ds.source_type(),
+      crate::storage::StorageSource::Service(ss) => ss.service_type(),
+    };
 
-    for b in buckets {
-      let key = format!(
-        "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
-        y, yyyymm, yyyymmdd, b, file_name
+    let tx_clone = tx.clone();
+    let spec_clone = spec.clone();
+    let highlights_clone = highlights.clone();
+    let sid_clone = sid.clone();
+    let io_sem_clone = io_sem.clone();
+    let cpu_sem_clone = cpu_sem.clone();
+    let stats_clone = stats.clone();
+    let config_clone = config.clone();
+
+    tokio::spawn(async move {
+      let task_start = std::time::Instant::now();
+
+      log::debug!(
+        "profiling: [Search] 任务开始排队 source_idx={} name={}, io_avail={}, cpu_avail={}",
+        idx,
+        source_name,
+        io_sem_clone.available_permits(),
+        cpu_sem_clone.available_permits()
       );
 
-      let txc = tx.clone();
-      let specc = spec.clone();
-      let highlights_c = highlights.clone();
-      let sid_c = sid.clone();
-      let cfg = Arc::clone(&minio_cfg);
-      let io_sem_c = io_sem.clone();
-      let cpu_sem_c = cpu_sem.clone();
-      let stats_c2 = Arc::clone(&stats);
-      tokio::spawn(async move {
-        let task_start = std::time::Instant::now();
-
-        log::debug!(
-          "profiling: [S3] 任务开始排队 key={}, io_avail={}, cpu_avail={}",
-          key,
-          io_sem_c.available_permits(),
-          cpu_sem_c.available_permits()
-        );
-
-        // 获取 IO 并发许可，限制同时打开/读取的对象数
-        let io_wait_start = std::time::Instant::now();
-        let _io_permit = match io_sem_c.acquire_owned().await {
-          Ok(p) => p,
-          Err(_) => {
-            log::warn!("profiling: [S3] 获取 IO 许可失败，跳过 key={}", key);
-            return;
-          }
-        };
-        let io_wait_time = io_wait_start.elapsed();
-
-        log::debug!(
-          "profiling: [S3] 获得 IO 许可 key={}, 等待={:.3}s",
-          key,
-          io_wait_time.as_secs_f64()
-        );
-
-        let s3_open_start = std::time::Instant::now();
-        let s3rp = S3ReaderProvider::new(&cfg.endpoint, &cfg.access_key, &cfg.secret_key, &cfg.bucket, &key);
-        let Ok(reader) = s3rp.open().await.map_err(AppError::StorageError) else {
-          log::warn!("profiling: [S3] 打开对象失败 key={}", key);
-          // 统计：S3 错误
-          stats_c2.s3_errors.fetch_add(1, Ordering::Relaxed);
-          return;
-        };
-        let s3_open_time = s3_open_start.elapsed();
-
-        log::debug!(
-          "profiling: [S3] 对象已打开 key={}, 耗时={:.3}s",
-          key,
-          s3_open_time.as_secs_f64()
-        );
-
-        // 获取 CPU 并发许可，限制同时进行解压/检索的任务数
-        let cpu_wait_start = std::time::Instant::now();
-        let cpu_avail_before = cpu_sem_c.available_permits();
-        let _cpu_permit = match cpu_sem_c.acquire_owned().await {
-          Ok(p) => p,
-          Err(_) => {
-            log::warn!("profiling: [S3] 获取 CPU 许可失败，跳过 key={}", key);
-            return;
-          }
-        };
-        let cpu_wait_time = cpu_wait_start.elapsed();
-
-        log::info!(
-          "profiling: [S3] 开始搜索 key={}, io_wait={:.3}s, s3_open={:.3}s, cpu_wait={:.3}s, cpu_avail_before={}",
-          key,
-          io_wait_time.as_secs_f64(),
-          s3_open_time.as_secs_f64(),
-          cpu_wait_time.as_secs_f64(),
-          cpu_avail_before
-        );
-
-        let search_start = std::time::Instant::now();
-        let Ok(mut stream) = reader.search(&specc, ctx).await else {
-          log::warn!("profiling: [S3] 启动检索失败 key={}", key);
-          stats_c2.s3_errors.fetch_add(1, Ordering::Relaxed);
-          return;
-        };
-
-        let mut produced: usize = 0;
-        while let Some(result) = stream.recv().await {
-          if txc.is_closed() {
-            log::debug!("profiling: [S3] 下游通道已关闭，提前结束 key={}", key);
-            return;
-          }
-
-          let bucket_name = cfg.bucket.clone();
-          let file_id = format!("{}/{}:{}", bucket_name, key, &result.path);
-          log::debug!(
-            "cache-put: sid={} file_id={} lines={}",
-            sid_c,
-            file_id,
-            result.lines.len()
+      // 获取 IO 并发许可
+      let io_wait_start = std::time::Instant::now();
+      let _io_permit = match io_sem_clone.acquire_owned().await {
+        Ok(p) => p,
+        Err(_) => {
+          log::warn!(
+            "profiling: [Search] 获取 IO 许可失败，跳过 source_idx={}",
+            idx
           );
-          simple_cache().put_lines(&sid_c, &file_id, result.lines.clone()).await;
-
-          let json_obj = render_json_chunks(&file_id, result.merged.clone(), result.lines.clone(), &highlights_c);
-
-          match serde_json::to_vec(&json_obj) {
-            Ok(mut v) => {
-              v.push(b'\n');
-              if let Err(_e) = txc.send(Ok(bytes::Bytes::from(v))).await {
-                log::debug!("profiling: [S3] 发送失败(接收端关闭) key={}", key);
-                return;
-              }
-              produced += 1;
-              stats_c2.produced.fetch_add(1, Ordering::Relaxed);
-              log::info!("profiling: 发送成功 path={}，输出记录={}", &result.path, produced);
-            }
-            Err(e) => {
-              log::warn!("profiling: [S3] 序列化失败 key={}，err={}", key, e);
-            }
-          }
+          return;
         }
+      };
+      let io_wait_time = io_wait_start.elapsed();
 
-        let total_time = task_start.elapsed();
-        let search_time = search_start.elapsed();
-        let total_wait = io_wait_time + cpu_wait_time;
+      log::debug!(
+        "profiling: [Search] 获得 IO 许可 source_idx={}, 等待={:.3}s",
+        idx,
+        io_wait_time.as_secs_f64()
+      );
 
-        log::info!(
-          "profiling: [S3] 任务完成 key={}, 记录={}, 总耗时={:.3}s [等待={:.3}s(io={:.3}s+cpu={:.3}s), 打开={:.3}s, 搜索={:.3}s]",
-          key,
-          produced,
-          total_time.as_secs_f64(),
-          total_wait.as_secs_f64(),
-          io_wait_time.as_secs_f64(),
-          cpu_wait_time.as_secs_f64(),
-          s3_open_time.as_secs_f64(),
-          search_time.as_secs_f64()
-        );
-      });
-    }
+      // 根据存储源类型调用不同的搜索方法
+      let search_result = match source {
+        crate::storage::StorageSource::Data(data_source) => {
+          // DataSource: Server 端执行搜索
+          search_data_source_with_concurrency(
+            data_source,
+            config_clone,
+            spec_clone,
+            ctx,
+            tx_clone,
+            sid_clone,
+            highlights_clone,
+            cpu_sem_clone,
+            Arc::clone(&stats_clone.produced),
+            idx,
+          )
+          .await
+        }
+        crate::storage::StorageSource::Service(_search_service) => {
+          // SearchService: 远程执行搜索
+          // TODO: 实现 SearchService 支持
+          log::warn!("[Search] SearchService 尚未实现，跳过 source_idx={}", idx);
+          Ok(0)
+        }
+      };
 
-    d += Duration::days(1);
+      let total_time = task_start.elapsed();
+      match search_result {
+        Ok(count) => {
+          log::info!(
+            "profiling: [Search] 任务完成 source_idx={} name={}, 结果数={}, 总耗时={:.3}s, io_wait={:.3}s",
+            idx,
+            source_name,
+            count,
+            total_time.as_secs_f64(),
+            io_wait_time.as_secs_f64()
+          );
+        }
+        Err(e) => {
+          log::error!(
+            "profiling: [Search] 任务失败 source_idx={} name={}, error={}, 耗时={:.3}s",
+            idx,
+            source_name,
+            e,
+            total_time.as_secs_f64()
+          );
+          stats_clone.source_errors.fetch_add(1, Ordering::Relaxed);
+        }
+      }
+    });
   }
 
-  log::debug!(
-    "profiling: [S3] 任务已派发，整体耗时(至返回响应构建前)={:?}",
+  log::info!(
+    "[Search] 搜索任务已启动，耗时={:?}",
     overall_start.elapsed()
   );
 
+  // 删除发送端，让任务完成后自动关闭
   drop(tx);
 
   let body = Body::from_stream(ReceiverStream::new(rx));
@@ -685,4 +695,279 @@ async fn stream_s3_ndjson(
       .body(body)
       .unwrap(),
   )
+}
+/// 带并发控制的 DataSource 搜索
+async fn search_data_source_with_concurrency(
+  data_source: Arc<dyn crate::storage::DataSource>,
+  source_config: crate::storage::factory::SourceConfig,
+  spec: Arc<crate::query::Query>,
+  context_lines: usize,
+  tx: mpsc::Sender<Result<bytes::Bytes, std::io::Error>>,
+  sid: String,
+  highlights: Vec<String>,
+  cpu_sem: Arc<tokio::sync::Semaphore>,
+  stats_produced: Arc<AtomicU64>,
+  source_idx: usize,
+) -> Result<usize, String> {
+  use crate::service::search::Search;
+  use futures::StreamExt;
+
+  let source_type = data_source.source_type();
+
+  // 获取文件列表
+  let list_start = std::time::Instant::now();
+  let mut files = data_source
+    .list_files()
+    .await
+    .map_err(|e| format!("文件列举失败: {}", e))?;
+  let list_time = list_start.elapsed();
+
+  log::debug!(
+    "profiling: [Search] source_idx={} 文件列举完成，耗时={:.3}s",
+    source_idx,
+    list_time.as_secs_f64()
+  );
+
+  let mut file_count = 0;
+  let mut result_count = 0;
+
+  // 处理每个文件
+  while let Some(entry_result) = files.next().await {
+    let entry = match entry_result {
+      Ok(e) => e,
+      Err(e) => {
+        log::warn!(
+          "profiling: [Search] source_idx={} 文件条目读取失败: {}",
+          source_idx,
+          e
+        );
+        continue;
+      }
+    };
+
+    file_count += 1;
+
+    // 检查下游是否关闭
+    if tx.is_closed() {
+      log::debug!(
+        "profiling: [Search] source_idx={} 下游通道关闭，提前结束",
+        source_idx
+      );
+      break;
+    }
+
+    // 获取 CPU 许可（限制解压/搜索并发）
+    let cpu_wait_start = std::time::Instant::now();
+    let _cpu_permit = match cpu_sem.clone().acquire_owned().await {
+      Ok(p) => p,
+      Err(_) => {
+        log::warn!(
+          "profiling: [Search] source_idx={} 获取 CPU 许可失败",
+          source_idx
+        );
+        break;
+      }
+    };
+    let cpu_wait_time = cpu_wait_start.elapsed();
+
+    // 打开文件
+    let open_start = std::time::Instant::now();
+    let reader = match data_source.open_file(&entry).await {
+      Ok(r) => r,
+      Err(e) => {
+        log::warn!(
+          "profiling: [Search] source_idx={} 打开文件失败 path={}: {}",
+          source_idx,
+          entry.path,
+          e
+        );
+        continue;
+      }
+    };
+    let open_time = open_start.elapsed();
+
+    // 执行搜索（根据文件类型选择处理方式）
+    let search_start = std::time::Instant::now();
+    let is_targz = entry.path.ends_with(".tar.gz") || entry.path.ends_with(".tgz");
+
+    let result = if is_targz {
+      // tar.gz 文件：使用 Search trait
+      match reader.search(&spec, context_lines).await {
+        Ok(mut result_rx) => {
+          let mut count = 0;
+          while let Some(result) = result_rx.recv().await {
+            if tx.is_closed() {
+              break;
+            }
+
+            // 构造完整的 FileUrl
+            use crate::domain::file_url::{FileUrl, TarCompression};
+            let base_url = match &source_config {
+              crate::storage::factory::SourceConfig::Local { path, .. } => {
+                FileUrl::local(path)
+              }
+              crate::storage::factory::SourceConfig::S3 { profile, bucket, key, .. } => {
+                let bucket_name = bucket.as_deref().unwrap_or("unknown");
+                if let Some(k) = key {
+                  FileUrl::s3_with_profile(profile, bucket_name, k)
+                } else {
+                  FileUrl::s3_with_profile(profile, bucket_name, &entry.path)
+                }
+              }
+              _ => {
+                // 对于其他类型，使用简化的 path
+                FileUrl::local(&entry.path)
+              }
+            };
+
+            let file_url = match FileUrl::tar_entry(TarCompression::Gzip, base_url, &result.path) {
+              Ok(url) => url,
+              Err(e) => {
+                log::warn!(
+                  "profiling: [Search] source_idx={} 构造 FileUrl 失败 entry={}: {:?}",
+                  source_idx,
+                  entry.path,
+                  e
+                );
+                continue;
+              }
+            };
+            let file_id = file_url.to_string();
+
+            // 缓存结果
+            simple_cache().put_lines(&sid, &file_url, result.lines.clone()).await;
+            
+            // 渲染 JSON
+            let json_obj = render_json_chunks(
+              &file_id,
+              result.merged.clone(),
+              result.lines.clone(),
+              &highlights,
+            );
+
+            match serde_json::to_vec(&json_obj) {
+              Ok(mut v) => {
+                v.push(b'\n');
+                if tx.send(Ok(bytes::Bytes::from(v))).await.is_err() {
+                  break;
+                }
+                count += 1;
+                stats_produced.fetch_add(1, Ordering::Relaxed);
+              }
+              Err(e) => {
+                log::warn!(
+                  "profiling: [Search] source_idx={} 序列化失败: {}",
+                  source_idx,
+                  e
+                );
+              }
+            }
+          }
+          count
+        }
+        Err(e) => {
+          log::warn!(
+            "profiling: [Search] source_idx={} tar.gz 搜索失败 path={}: {}",
+            source_idx,
+            entry.path,
+            e
+          );
+          0
+        }
+      }
+    } else {
+      // 普通文本文件：使用 SearchProcessor
+      use crate::service::search::SearchProcessor;
+      let processor = SearchProcessor::new(spec.clone(), context_lines);
+      
+      let mut reader = reader;
+      match processor.process_content(entry.path.clone(), &mut reader).await {
+        Ok(Some(result)) => {
+          // 构造 FileUrl
+          use crate::domain::file_url::FileUrl;
+          let file_url = match &source_config {
+            crate::storage::factory::SourceConfig::Local { .. } => {
+              FileUrl::local(&entry.path)
+            }
+            crate::storage::factory::SourceConfig::S3 { profile, bucket, key, .. } => {
+              let bucket_name = bucket.as_deref().unwrap_or("unknown");
+              if let Some(k) = key {
+                FileUrl::s3_with_profile(profile, bucket_name, k)
+              } else {
+                FileUrl::s3_with_profile(profile, bucket_name, &entry.path)
+              }
+            }
+            _ => FileUrl::local(&entry.path),
+          };
+          let file_id = file_url.to_string();
+          
+          // 缓存结果
+          simple_cache().put_lines(&sid, &file_url, result.lines.clone()).await;
+          
+          let json_obj = render_json_chunks(
+            &file_id,
+            result.merged.clone(),
+            result.lines.clone(),
+            &highlights,
+          );
+
+          match serde_json::to_vec(&json_obj) {
+            Ok(mut v) => {
+              v.push(b'\n');
+              if tx.send(Ok(bytes::Bytes::from(v))).await.is_ok() {
+                stats_produced.fetch_add(1, Ordering::Relaxed);
+                1
+              } else {
+                0
+              }
+            }
+            Err(e) => {
+              log::warn!(
+                "profiling: [Search] source_idx={} 序列化失败: {}",
+                source_idx,
+                e
+              );
+              0
+            }
+          }
+        }
+        Ok(None) => 0,
+        Err(e) => {
+          log::warn!(
+            "profiling: [Search] source_idx={} 搜索失败 path={}: {}",
+            source_idx,
+            entry.path,
+            e
+          );
+          0
+        }
+      }
+    };
+
+    let search_time = search_start.elapsed();
+    result_count += result;
+
+    if result > 0 {
+      log::info!(
+        "profiling: [Search] source_idx={} 文件处理完成 path={}, 结果={}, 耗时={:.3}s [cpu_wait={:.3}s, open={:.3}s, search={:.3}s]",
+        source_idx,
+        entry.path,
+        result,
+        (cpu_wait_time + open_time + search_time).as_secs_f64(),
+        cpu_wait_time.as_secs_f64(),
+        open_time.as_secs_f64(),
+        search_time.as_secs_f64()
+      );
+    }
+  }
+
+  log::info!(
+    "profiling: [Search] source_idx={} type={} 搜索完成: 文件数={}, 结果数={}",
+    source_idx,
+    source_type,
+    file_count,
+    result_count
+  );
+
+  Ok(result_count)
 }

@@ -8,6 +8,8 @@ use tokio::time as tokio_time;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::domain::FileUrl;
+
 #[derive(Debug, Clone)]
 pub struct Entry<T> {
   pub last_touch: Instant,
@@ -15,13 +17,13 @@ pub struct Entry<T> {
 }
 
 type KeywordsCache = RwLock<HashMap<String, Entry<Vec<String>>>>;
-type FilesCache = RwLock<HashMap<(String, String), Entry<Vec<String>>>>;
+type FilesCache = RwLock<HashMap<(String, FileUrl), Entry<Vec<String>>>>;
 
 #[derive(Debug)]
 pub struct Cache {
   ttl: Duration,
   keywords: KeywordsCache, // sid -> keywords
-  files: FilesCache,       // (sid, file_id) -> lines
+  files: FilesCache,       // (sid, FileUrl) -> lines
 }
 
 static GLOBAL: OnceLock<Cache> = OnceLock::new();
@@ -50,7 +52,7 @@ impl Cache {
       // 使用取消令牌支持优雅关闭后台清理任务
       let token = CLEANER_CANCEL.get_or_init(CancellationToken::new).clone();
       tokio::spawn(async move {
-        let interval = Duration::from_secs(60);
+        let interval = Duration::from_secs(15 * 60);
         loop {
           tokio::select! {
             _ = tokio_time::sleep(interval) => {
@@ -71,7 +73,7 @@ impl Cache {
               // 清理 files
               {
                 let mut m = c.files.write().await;
-                let to_remove: Vec<(String, String)> = m
+                let to_remove: Vec<(String, FileUrl)> = m
                   .iter()
                   .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
                   .map(|(k, _)| k.clone())
@@ -113,11 +115,11 @@ impl Cache {
     e.last_touch = Instant::now();
     Some(e.value.clone())
   }
-  pub async fn put_lines(&self, sid: &str, file_id: &str, lines: Vec<String>) {
+  pub async fn put_lines(&self, sid: &str, file_url: &FileUrl, lines: Vec<String>) {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
     map.insert(
-      (sid.to_string(), file_id.to_string()),
+      (sid.to_string(), file_url.clone()),
       Entry {
         last_touch: Instant::now(),
         value: lines,
@@ -127,13 +129,13 @@ impl Cache {
   pub async fn get_lines_slice(
     &self,
     sid: &str,
-    file_id: &str,
+    file_url: &FileUrl,
     start: usize,
     end: usize,
   ) -> Option<(usize, Vec<String>)> {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
-    let key = (sid.to_string(), file_id.to_string());
+    let key = (sid.to_string(), file_url.clone());
     let e = map.get_mut(&key)?;
     if self.expired(e) {
       map.remove(&key);
@@ -182,11 +184,11 @@ mod tests {
   async fn test_cache_put_and_get_file_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_id = "test-file";
+    let file_url = FileUrl::local("/test-file.log");
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, file_id, lines.clone()).await;
-    let result = c.get_lines_slice(&sid, file_id, 1, 2).await;
+    c.put_lines(&sid, &file_url, lines.clone()).await;
+    let result = c.get_lines_slice(&sid, &file_url, 1, 2).await;
 
     assert!(result.is_some());
     let (total, slice) = result.unwrap();
@@ -197,7 +199,8 @@ mod tests {
   #[tokio::test]
   async fn test_cache_get_file_lines_missing() {
     let c = cache();
-    let result = c.get_lines_slice("non-existent-sid", "non-existent-file", 1, 10).await;
+    let file_url = FileUrl::local("/non-existent-file.log");
+    let result = c.get_lines_slice("non-existent-sid", &file_url, 1, 10).await;
     assert_eq!(result, None);
   }
 
@@ -233,12 +236,14 @@ mod tests {
   async fn test_cache_multiple_files_same_sid() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
+    let file_url1 = FileUrl::local("/file1.log");
+    let file_url2 = FileUrl::local("/file2.log");
 
-    c.put_lines(&sid, "file1", vec!["a".to_string()]).await;
-    c.put_lines(&sid, "file2", vec!["b".to_string()]).await;
+    c.put_lines(&sid, &file_url1, vec!["a".to_string()]).await;
+    c.put_lines(&sid, &file_url2, vec!["b".to_string()]).await;
 
-    let result1 = c.get_lines_slice(&sid, "file1", 1, 1).await.map(|(_, lines)| lines);
-    let result2 = c.get_lines_slice(&sid, "file2", 1, 1).await.map(|(_, lines)| lines);
+    let result1 = c.get_lines_slice(&sid, &file_url1, 1, 1).await.map(|(_, lines)| lines);
+    let result2 = c.get_lines_slice(&sid, &file_url2, 1, 1).await.map(|(_, lines)| lines);
 
     assert_eq!(result1, Some(vec!["a".to_string()]));
     assert_eq!(result2, Some(vec!["b".to_string()]));
@@ -249,13 +254,13 @@ mod tests {
     let c = cache();
     let sid1 = format!("test-sid-1-{}", Uuid::new_v4());
     let sid2 = format!("test-sid-2-{}", Uuid::new_v4());
-    let file_id = "shared-file";
+    let file_url = FileUrl::local("/shared-file.log");
 
-    c.put_lines(&sid1, file_id, vec!["content1".to_string()]).await;
-    c.put_lines(&sid2, file_id, vec!["content2".to_string()]).await;
+    c.put_lines(&sid1, &file_url, vec!["content1".to_string()]).await;
+    c.put_lines(&sid2, &file_url, vec!["content2".to_string()]).await;
 
-    let result1 = c.get_lines_slice(&sid1, file_id, 1, 1).await.map(|(_, lines)| lines);
-    let result2 = c.get_lines_slice(&sid2, file_id, 1, 1).await.map(|(_, lines)| lines);
+    let result1 = c.get_lines_slice(&sid1, &file_url, 1, 1).await.map(|(_, lines)| lines);
+    let result2 = c.get_lines_slice(&sid2, &file_url, 1, 1).await.map(|(_, lines)| lines);
 
     assert_eq!(result1, Some(vec!["content1".to_string()]));
     assert_eq!(result2, Some(vec!["content2".to_string()]));
@@ -265,13 +270,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_id = "test-file";
+    let file_url = FileUrl::local("/test-file.log");
     let lines: Vec<String> = (1..=10).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, file_id, lines).await;
+    c.put_lines(&sid, &file_url, lines).await;
 
     // 获取第 3-5 行 (1-based indexing)
-    let result = c.get_lines_slice(&sid, file_id, 3, 5).await;
+    let result = c.get_lines_slice(&sid, &file_url, 3, 5).await;
 
     assert!(result.is_some());
     let (total, slice) = result.unwrap();
@@ -285,13 +290,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice_out_of_bounds() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_id = "test-file";
+    let file_url = FileUrl::local("/test-file.log");
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, file_id, lines).await;
+    c.put_lines(&sid, &file_url, lines).await;
 
     // 请求超出范围的行
-    let result = c.get_lines_slice(&sid, file_id, 1, 100).await;
+    let result = c.get_lines_slice(&sid, &file_url, 1, 100).await;
 
     assert!(result.is_some());
     let (total, slice) = result.unwrap();
@@ -395,26 +400,26 @@ mod tests {
   async fn test_cache_get_lines_slice_boundary_conditions() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_id = "test-file";
+    let file_url = FileUrl::local("/test-file.log");
     let lines: Vec<String> = (1..=5).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, file_id, lines).await;
+    c.put_lines(&sid, &file_url, lines).await;
 
     // 测试边界条件：start=0（应该被调整为1）
-    let result = c.get_lines_slice(&sid, file_id, 0, 2).await;
+    let result = c.get_lines_slice(&sid, &file_url, 0, 2).await;
     assert!(result.is_some());
     let (_, slice) = result.unwrap();
     assert_eq!(slice[0], "line 1");
 
     // 测试边界条件：end > total（应该被限制）
-    let result = c.get_lines_slice(&sid, file_id, 1, 1000).await;
+    let result = c.get_lines_slice(&sid, &file_url, 1, 1000).await;
     assert!(result.is_some());
     let (total, slice) = result.unwrap();
     assert_eq!(total, 5);
     assert_eq!(slice.len(), 5);
 
     // 测试边界条件：start > end（应该返回空或最小范围）
-    let result = c.get_lines_slice(&sid, file_id, 3, 2).await;
+    let result = c.get_lines_slice(&sid, &file_url, 3, 2).await;
     assert!(result.is_some());
     let (_, slice) = result.unwrap();
     // start 会被调整，应该至少返回一行
@@ -437,12 +442,12 @@ mod tests {
   async fn test_cache_empty_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_id = "empty-file";
+    let file_url = FileUrl::local("/empty-file.log");
 
     // 存储空行列表
-    c.put_lines(&sid, file_id, vec![]).await;
+    c.put_lines(&sid, &file_url, vec![]).await;
 
-    let result = c.get_lines_slice(&sid, file_id, 1, 10).await;
+    let result = c.get_lines_slice(&sid, &file_url, 1, 10).await;
     // 空文件应该返回 None 或空结果
     // 根据实现，可能需要调整断言
     if let Some((total, slice)) = result {
@@ -480,11 +485,11 @@ mod tests {
   async fn test_cache_special_characters_in_file_id() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_id = "path/to/file-with-特殊字符.log";
+    let file_url = FileUrl::local("/path/to/file-with-特殊字符.log");
 
-    c.put_lines(&sid, file_id, vec!["line 1".to_string()]).await;
+    c.put_lines(&sid, &file_url, vec!["line 1".to_string()]).await;
 
-    let result = c.get_lines_slice(&sid, file_id, 1, 1).await;
+    let result = c.get_lines_slice(&sid, &file_url, 1, 1).await;
     assert!(result.is_some());
   }
 }
