@@ -8,6 +8,9 @@ use mimalloc::MiMalloc;
 #[cfg(feature = "logseek")]
 extern crate logseek;
 
+#[cfg(feature = "agent-manager")]
+extern crate agent_manager;
+
 // 模块声明
 mod config;
 mod daemon;
@@ -53,12 +56,8 @@ fn main() {
   // 设置模块配置环境变量（模块将从环境变量读取配置）
   setup_module_env_vars(&config);
 
-  // 创建 Tokio 运行时并启动服务器
-  let worker_threads = config.get_worker_threads();
-  log::info!("Tokio 工作线程数: {}", worker_threads);
-
+  // 创建 Tokio 运行时并启动服务器（使用 Tokio 默认工作线程）
   let rt = tokio::runtime::Builder::new_multi_thread()
-    .worker_threads(worker_threads)
     .enable_all()
     .build()
     .expect("创建 Tokio 运行时失败");
@@ -163,13 +162,11 @@ fn handle_daemon_mode(config: &AppConfig) {
 /// 将命令行参数转换为环境变量，供各模块在 configure() 中读取
 fn setup_module_env_vars(config: &AppConfig) {
   unsafe {
-    // LogSeek 模块配置
+    // LogSeek 模块配置（仅保留 S3 相关参数）
     std::env::set_var(
       "LOGSEEK_S3_MAX_CONCURRENCY",
       config.get_s3_max_concurrency().to_string(),
     );
-    std::env::set_var("LOGSEEK_CPU_CONCURRENCY", config.get_cpu_concurrency().to_string());
-    std::env::set_var("LOGSEEK_STREAM_CH_CAP", config.get_stream_ch_cap().to_string());
     std::env::set_var("LOGSEEK_S3_TIMEOUT_SEC", config.get_s3_timeout_sec().to_string());
     std::env::set_var("LOGSEEK_S3_MAX_RETRIES", config.get_s3_max_retries().to_string());
   }

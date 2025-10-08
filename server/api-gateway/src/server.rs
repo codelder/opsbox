@@ -72,30 +72,69 @@ async fn spa_fallback(uri: http::Uri) -> Response {
     .unwrap()
 }
 
-/// 优雅关闭信号
-async fn shutdown_signal(modules: Vec<Arc<dyn Module>>) {
-  #[cfg(unix)]
-  {
-    use tokio::signal::unix::{SignalKind, signal};
-    let mut sigterm = signal(SignalKind::terminate()).expect("无法监听 SIGTERM");
-    let mut sigint = signal(SignalKind::interrupt()).expect("无法监听 SIGINT");
-    tokio::select! {
-        _ = sigterm.recv() => {},
-        _ = sigint.recv() => {},
-        _ = tokio::signal::ctrl_c() => {},
-    }
-  }
-  #[cfg(not(unix))]
-  {
-    let _ = tokio::signal::ctrl_c().await;
-  }
-  log::info!("收到关闭信号，开始优雅关闭...");
+/// 优雅关闭信号（带超时）
+/// 
+/// 监听系统信号实现优雅关闭：
+/// - Unix: SIGTERM, SIGINT (Ctrl-C)
+/// - Windows: Ctrl-C
+/// 
+/// 优雅关闭流程：
+/// 1. 等待关闭信号
+/// 2. 清理模块资源
+/// 3. 返回并触发 Axum 停止接受新连接
+/// 4. Axum 等待现有连接完成（本函数返回后）
+/// 
+/// 注意: 本函数只处理到步骤3，Axum 会在本函数返回后继续等待连接关闭。
+/// 为了避免永久等待，我们在外层设置超时。
+async fn shutdown_with_timeout(modules: Vec<Arc<dyn Module>>) {
+  // 等待关闭信号
+  let signal_name = wait_for_shutdown_signal().await;
+  log::info!("收到关闭信号 [{}]，开始优雅关闭...", signal_name);
 
-  // ✅ 清理所有模块资源
+  // 清理所有模块资源
   for module in &modules {
     log::info!("清理模块: {}", module.name());
     module.cleanup();
   }
+  
+  log::info!("所有模块已清理完成，等待活跃连接关闭...");
+  
+  // 在后台启动超时任务
+  // 如果10秒后还有连接未关闭，强制退出进程
+  tokio::spawn(async move {
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+    log::warn!("优雅关闭超时（10秒），仍有活跃连接未关闭");
+    log::warn!("强制退出进程...");
+    std::process::exit(0);
+  });
+  
+  // 返回后，Axum 会停止接受新连接并等待现有连接关闭
+  // 如果10秒内连接都关闭了，上面的 spawn 任务不会执行 exit
+  // 如果10秒后还有连接，上面的 spawn 任务会强制退出
+}
+
+/// 等待关闭信号并返回信号名称
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> &'static str {
+  use tokio::signal::unix::{signal, SignalKind};
+  
+  // 创建信号监听器
+  let mut sigterm = signal(SignalKind::terminate()).expect("无法监听 SIGTERM");
+  let mut sigint = signal(SignalKind::interrupt()).expect("无法监听 SIGINT");
+  
+  tokio::select! {
+    _ = sigterm.recv() => "SIGTERM",
+    _ = sigint.recv() => "SIGINT (Ctrl-C)",
+  }
+}
+
+/// 等待关闭信号并返回信号名称 (Windows)
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> &'static str {
+  tokio::signal::ctrl_c()
+    .await
+    .expect("无法监听 Ctrl-C 信号");
+  "Ctrl-C"
 }
 
 /// 构建应用路由（动态加载所有模块）
@@ -140,8 +179,9 @@ pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Mod
   log::info!("OpsBox 服务启动成功，访问地址: http://{}", addr);
 
   // 启动服务器并支持优雅关闭
+  // 注意: with_graceful_shutdown 只在收到信号后才开始关闭流程
   axum::serve(listener, app)
-    .with_graceful_shutdown(shutdown_signal(modules))
+    .with_graceful_shutdown(shutdown_with_timeout(modules))
     .await
     .expect("服务启动失败");
 

@@ -13,7 +13,6 @@
 // API 层
 pub mod api;
 pub mod routes; // 保留以保持向后兼容
-pub mod routes_agent; // Agent 管理路由
 
 // 服务层
 pub mod service;
@@ -64,21 +63,11 @@ impl opsbox_core::Module for LogSeekModule {
   }
 
   fn configure(&self) {
-    // 从环境变量读取配置
+    // 从环境变量读取 S3 相关配置（若无则使用合理默认值）
     let s3_max_concurrency = std::env::var("LOGSEEK_S3_MAX_CONCURRENCY")
       .ok()
       .and_then(|v| v.parse().ok())
-      .unwrap_or(50);
-
-    let cpu_concurrency = std::env::var("LOGSEEK_CPU_CONCURRENCY")
-      .ok()
-      .and_then(|v| v.parse().ok())
-      .unwrap_or_else(|| num_cpus::get().min(16));
-
-    let stream_ch_cap = std::env::var("LOGSEEK_STREAM_CH_CAP")
-      .ok()
-      .and_then(|v| v.parse().ok())
-      .unwrap_or(32);
+      .unwrap_or(12);
 
     let s3_timeout_sec = std::env::var("LOGSEEK_S3_TIMEOUT_SEC")
       .ok()
@@ -88,12 +77,10 @@ impl opsbox_core::Module for LogSeekModule {
     let s3_max_retries = std::env::var("LOGSEEK_S3_MAX_RETRIES")
       .ok()
       .and_then(|v| v.parse().ok())
-      .unwrap_or(3);
+      .unwrap_or(5);
 
     let tuning = utils::tuning::Tuning {
       s3_max_concurrency,
-      cpu_concurrency,
-      stream_ch_cap,
       s3_timeout_sec,
       s3_max_retries,
     };

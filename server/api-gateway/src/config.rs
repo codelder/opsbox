@@ -88,17 +88,8 @@ pub struct AppConfig {
   pub database_url: Option<String>,
 
   // 性能配置（LogSeek 模块）
-  #[arg(long = "worker-threads", value_name = "N", help = "Tokio 工作线程数")]
-  pub worker_threads: Option<usize>,
-
   #[arg(long = "s3-max-concurrency", value_name = "N", help = "S3/MinIO 最大并发")]
   pub s3_max_concurrency: Option<usize>,
-
-  #[arg(long = "cpu-concurrency", value_name = "N", help = "CPU 解压/检索最大并发")]
-  pub cpu_concurrency: Option<usize>,
-
-  #[arg(long = "stream-ch-cap", value_name = "N", help = "NDJSON 输出通道容量")]
-  pub stream_ch_cap: Option<usize>,
 
   #[arg(long = "s3-timeout-sec", value_name = "SECS", help = "S3 操作超时秒数（get/list）")]
   pub s3_timeout_sec: Option<u64>,
@@ -142,18 +133,6 @@ impl AppConfig {
       })
   }
 
-  /// 获取工作线程数
-  pub fn get_worker_threads(&self) -> usize {
-    self
-      .worker_threads
-      .or_else(|| Self::env_usize("LOGSEEK_WORKER_THREADS"))
-      .unwrap_or_else(|| {
-        let phys = num_cpus::get_physical().max(1);
-        let cpu_conc = self.get_cpu_concurrency();
-        phys.min(cpu_conc + 2).clamp(2, 18)
-      })
-      .clamp(2, 64)
-  }
 
   /// 获取 S3 最大并发
   pub fn get_s3_max_concurrency(&self) -> usize {
@@ -164,23 +143,7 @@ impl AppConfig {
       .clamp(1, 128)
   }
 
-  /// 获取 CPU 并发数
-  pub fn get_cpu_concurrency(&self) -> usize {
-    self
-      .cpu_concurrency
-      .or_else(|| Self::env_usize("LOGSEEK_CPU_CONCURRENCY"))
-      .unwrap_or(16)
-      .clamp(1, 128)
-  }
 
-  /// 获取流通道容量
-  pub fn get_stream_ch_cap(&self) -> usize {
-    self
-      .stream_ch_cap
-      .or_else(|| Self::env_usize("LOGSEEK_STREAM_CH_CAP"))
-      .unwrap_or(256)
-      .clamp(8, 10_000)
-  }
 
   /// 获取 S3 超时时间
   pub fn get_s3_timeout_sec(&self) -> u64 {

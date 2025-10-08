@@ -14,6 +14,7 @@ serde = { version = "1.0", features = ["derive"] }
 opsbox-core = { path = "../opsbox-core" }
 # ✅ 模块化架构：使用 optional dependencies
 logseek = { path = "../logseek", optional = true }
+agent-manager = { path = "../agent-manager", optional = true }
 # 未来可添加更多模块：
 # analytics = { path = "../analytics", optional = true }
 # monitoring = { path = "../monitoring", optional = true }
@@ -38,10 +39,10 @@ mimalloc = "0.1"
 # ✅ 模块功能开关
 [features]
 # 默认启用所有模块
-default = ["logseek"]
+default = ["logseek", "agent-manager"]
 # 可选：只启用特定模块
 # minimal = []  # 最小化构建，无业务模块
-# all = ["logseek", "analytics", "monitoring"]  # 启用所有模块
+# all = ["logseek", "agent-manager", "analytics", "monitoring"]  # 启用所有模块
 
 [target.'cfg(unix)'.dependencies]
 # 仅在类 Unix 系统上启用后台守护能力

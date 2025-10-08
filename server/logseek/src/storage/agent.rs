@@ -1,6 +1,8 @@
 // ============================================================================
 // Agent 客户端 - 远程搜索服务
 // ============================================================================
+//
+// 此模块只负责调用 Agent 的搜索服务，Agent 的注册和管理由 agent-manager 模块负责
 
 use super::{SearchOptions, SearchResultStream, SearchService, ServiceCapabilities, StorageError};
 use async_trait::async_trait;
@@ -8,6 +10,9 @@ use futures::StreamExt;
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+// ✅ 复用 agent-manager 的数据模型
+pub use agent_manager::models::{AgentInfo, AgentStatus};
 
 /// Agent 搜索请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,42 +39,6 @@ pub enum AgentMessage {
 
   /// 完成
   Complete,
-}
-
-/// Agent 信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentInfo {
-  /// Agent ID
-  pub id: String,
-
-  /// Agent 名称
-  pub name: String,
-
-  /// Agent 版本
-  pub version: String,
-
-  /// 主机名
-  pub hostname: String,
-
-  /// 能力标签
-  pub tags: Vec<String>,
-
-  /// 可搜索的根目录
-  pub search_roots: Vec<String>,
-
-  /// 最后心跳时间
-  pub last_heartbeat: i64,
-
-  /// 状态
-  pub status: AgentStatus,
-}
-
-/// Agent 状态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AgentStatus {
-  Online,
-  Busy { tasks: usize },
-  Offline,
 }
 
 /// Agent 客户端
@@ -279,61 +248,6 @@ impl SearchService for AgentClient {
   }
 }
 
-/// Agent 管理器
-///
-/// 管理多个 Agent 客户端
-pub struct AgentManager {
-  agents: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<AgentClient>>>>,
-}
-
-impl AgentManager {
-  /// 创建新的 Agent 管理器
-  pub fn new() -> Self {
-    Self {
-      agents: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-    }
-  }
-
-  /// 注册 Agent
-  pub async fn register_agent(&self, info: AgentInfo) -> Result<(), StorageError> {
-    let endpoint = format!("http://{}:8090", info.hostname);
-    let client = std::sync::Arc::new(AgentClient::new(info.id.clone(), endpoint));
-
-    self.agents.write().await.insert(info.id.clone(), client);
-
-    info!("Agent 注册成功: id={}, name={}", info.id, info.name);
-
-    Ok(())
-  }
-
-  /// 注销 Agent
-  pub async fn unregister_agent(&self, agent_id: &str) {
-    self.agents.write().await.remove(agent_id);
-    info!("Agent 已注销: id={}", agent_id);
-  }
-
-  /// 获取所有在线 Agent
-  pub async fn get_online_agents(&self) -> Vec<std::sync::Arc<AgentClient>> {
-    self.agents.read().await.values().cloned().collect()
-  }
-
-  /// 获取指定 Agent
-  pub async fn get_agent(&self, agent_id: &str) -> Option<std::sync::Arc<AgentClient>> {
-    self.agents.read().await.get(agent_id).cloned()
-  }
-
-  /// 获取所有 Agent ID
-  pub async fn list_agent_ids(&self) -> Vec<String> {
-    self.agents.read().await.keys().cloned().collect()
-  }
-}
-
-impl Default for AgentManager {
-  fn default() -> Self {
-    Self::new()
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -344,49 +258,5 @@ mod tests {
 
     assert_eq!(client.agent_id, "test-agent");
     assert_eq!(client.endpoint, "http://localhost:8090");
-  }
-
-  #[tokio::test]
-  async fn test_agent_manager_register() {
-    let manager = AgentManager::new();
-
-    let info = AgentInfo {
-      id: "agent-1".to_string(),
-      name: "Test Agent".to_string(),
-      version: "1.0.0".to_string(),
-      hostname: "localhost".to_string(),
-      tags: vec!["test".to_string()],
-      search_roots: vec!["/var/log".to_string()],
-      last_heartbeat: 0,
-      status: AgentStatus::Online,
-    };
-
-    manager.register_agent(info).await.unwrap();
-
-    let agents = manager.get_online_agents().await;
-    assert_eq!(agents.len(), 1);
-    assert_eq!(agents[0].agent_id, "agent-1");
-  }
-
-  #[tokio::test]
-  async fn test_agent_manager_unregister() {
-    let manager = AgentManager::new();
-
-    let info = AgentInfo {
-      id: "agent-1".to_string(),
-      name: "Test Agent".to_string(),
-      version: "1.0.0".to_string(),
-      hostname: "localhost".to_string(),
-      tags: vec![],
-      search_roots: vec![],
-      last_heartbeat: 0,
-      status: AgentStatus::Online,
-    };
-
-    manager.register_agent(info).await.unwrap();
-    manager.unregister_agent("agent-1").await;
-
-    let agents = manager.get_online_agents().await;
-    assert_eq!(agents.len(), 0);
   }
 }

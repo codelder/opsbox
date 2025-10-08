@@ -290,6 +290,7 @@ mod tests {
   fn test_source_config_serde_s3() {
     let s3_config = SourceConfig::S3 {
       profile: "default".to_string(),
+      bucket: Some("my-bucket".to_string()),
       prefix: Some("logs/".to_string()),
       pattern: Some(r"\.log$".to_string()),
       key: None,
@@ -301,8 +302,9 @@ mod tests {
     // 测试反序列化
     let deserialized: SourceConfig = serde_json::from_str(&json).unwrap();
     match deserialized {
-      SourceConfig::S3 { profile, prefix, pattern, key } => {
+      SourceConfig::S3 { profile, bucket, prefix, pattern, key } => {
         assert_eq!(profile, "default");
+        assert_eq!(bucket, Some("my-bucket".to_string()));
         assert_eq!(prefix, Some("logs/".to_string()));
         assert_eq!(pattern, Some(r"\.log$".to_string()));
         assert_eq!(key, None);
@@ -335,6 +337,7 @@ mod tests {
     // 测试可选字段被省略时的序列化
     let s3_config = SourceConfig::S3 {
       profile: "production".to_string(),
+      bucket: None,
       prefix: None,
       pattern: None,
       key: None,
@@ -342,6 +345,7 @@ mod tests {
     let json = serde_json::to_string(&s3_config).unwrap();
 
     // 确保 None 值不会出现在 JSON 中
+    assert!(!json.contains("bucket"));
     assert!(!json.contains("prefix"));
     assert!(!json.contains("pattern"));
     assert!(!json.contains("key"));
@@ -353,12 +357,14 @@ mod tests {
     let configs = vec![
       SourceConfig::S3 {
         profile: "s3-prod-1".to_string(),
+        bucket: Some("bucket-1".to_string()),
         prefix: Some("logs/".to_string()),
         pattern: None,
         key: None,
       },
       SourceConfig::S3 {
         profile: "s3-prod-2".to_string(),
+        bucket: Some("bucket-2".to_string()),
         prefix: Some("metrics/".to_string()),
         pattern: None,
         key: None,

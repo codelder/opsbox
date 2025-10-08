@@ -10,6 +10,9 @@ path = "src/lib.rs"
 # Shared core library
 opsbox-core = { path = "../opsbox-core" }
 
+# Agent Manager (OpsBox 核心模块)
+agent-manager = { path = "../agent-manager" }
+
 # Module registry (needed for register_module! macro)
 inventory = "0.3"
 

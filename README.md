@@ -119,12 +119,33 @@ cargo run -p api-gateway -- start --daemon
 cargo run -p api-gateway -- stop
 ```
 
-## 开发文档
+## 📚 开发文档
 
-- **项目指南**: `WARP.md` - WARP AI 开发指南
-- **前端开发**: `docs/FRONTEND_DEVELOPMENT.md` - 前端模块化架构使用
-- **重构进度**: `docs/REFACTORING_PROGRESS.md` - 重构历史和进度
-- **阶段总结**: `docs/PHASE4_SUMMARY.md` - 阶段4完成总结
+### 项目文档
+- **架构说明**: [ARCHITECTURE.md](ARCHITECTURE.md) - 系统架构设计
+- **项目指南**: [WARP.md](WARP.md) - WARP AI 开发指南
+
+### 模块文档
+- **模块架构**: [docs/modules/module-architecture.md](docs/modules/module-architecture.md) - 模块系统设计
+- **Agent Manager**: [docs/modules/agent-manager.md](docs/modules/agent-manager.md) - Agent 管理模块
+- **Agent API**: [docs/modules/agent-api-spec.md](docs/modules/agent-api-spec.md) - Agent HTTP API 规范
+
+### 功能文档
+- **FileUrl 设计**: [docs/features/file-url.md](docs/features/file-url.md) - 文件 URL 抽象层
+- **S3 Profiles**: [docs/features/s3-profiles.md](docs/features/s3-profiles.md) - S3 配置管理
+
+### 使用指南
+- **查询语法**: [docs/guides/query-syntax.md](docs/guides/query-syntax.md) - 搜索查询语法
+- **存储层使用**: [docs/guides/storage-usage.md](docs/guides/storage-usage.md) - 存储抽象层示例
+- **前端开发**: [docs/FRONTEND_DEVELOPMENT.md](docs/FRONTEND_DEVELOPMENT.md) - 前端模块化架构
+
+### 测试报告
+- **Agent Manager 测试**: [tests/agent-manager-test-report.md](tests/agent-manager-test-report.md) - 集成测试报告
+
+### 脚本工具
+- **启动 Server**: [scripts/start_server.sh](scripts/start_server.sh)
+- **启动 Agent**: [scripts/start_agent.sh](scripts/start_agent.sh)
+- **API 测试**: [scripts/test_agent_api.sh](scripts/test_agent_api.sh)
 
 ## 代码规范
 

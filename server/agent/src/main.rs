@@ -78,8 +78,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
   info!("准备就绪，等待搜索请求...");
 
   let listener = tokio::net::TcpListener::bind(addr).await?;
-  axum::serve(listener, app).await?;
 
+  // 支持优雅关闭
+  axum::serve(listener, app)
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
+
+  info!("Agent 已关闭");
   Ok(())
 }
 
@@ -108,7 +113,7 @@ impl AgentConfig {
     Self {
       agent_id: std::env::var("AGENT_ID").unwrap_or_else(|_| format!("agent-{}", hostname)),
       agent_name: std::env::var("AGENT_NAME").unwrap_or_else(|_| format!("Agent @ {}", hostname)),
-      server_endpoint: std::env::var("SERVER_ENDPOINT").unwrap_or_else(|_| "http://localhost:8080".to_string()),
+      server_endpoint: std::env::var("SERVER_ENDPOINT").unwrap_or_else(|_| "http://localhost:4000".to_string()),
       search_roots: std::env::var("SEARCH_ROOTS")
         .unwrap_or_else(|_| "/var/log".to_string())
         .split(',')
@@ -394,6 +399,33 @@ async fn execute_search(
     "搜索完成: task_id={}, processed={}, matched={}",
     task_id, all_processed, all_matched
   );
+}
+
+// ============================================================================
+// 优雅关闭
+// ============================================================================
+
+/// 等待关闭信号
+#[cfg(unix)]
+async fn shutdown_signal() {
+  use tokio::signal::unix::{SignalKind, signal};
+
+  let mut sigterm = signal(SignalKind::terminate()).expect("无法监听 SIGTERM");
+  let mut sigint = signal(SignalKind::interrupt()).expect("无法监听 SIGINT");
+
+  let signal_name = tokio::select! {
+    _ = sigterm.recv() => "SIGTERM",
+    _ = sigint.recv() => "SIGINT (Ctrl-C)",
+  };
+
+  info!("收到关闭信号 [{}]，开始优雅关闭...", signal_name);
+}
+
+/// 等待关闭信号 (Windows)
+#[cfg(not(unix))]
+async fn shutdown_signal() {
+  tokio::signal::ctrl_c().await.expect("无法监听 Ctrl-C 信号");
+  info!("收到关闭信号 [Ctrl-C]，开始优雅关闭...");
 }
 
 // ============================================================================

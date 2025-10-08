@@ -1,12 +1,10 @@
 use once_cell::sync::OnceCell;
 use std::sync::Arc;
 
-/// 运行期可调参数（由上层网关注入；优先级：命令行 > 环境变量 > 默认值）
+/// 运行期可调参数（仅包含 S3 相关的关键项）
 #[derive(Debug, Clone)]
 pub struct Tuning {
   pub s3_max_concurrency: usize,
-  pub cpu_concurrency: usize,
-  pub stream_ch_cap: usize,
   pub s3_timeout_sec: u64,
   pub s3_max_retries: u32,
 }

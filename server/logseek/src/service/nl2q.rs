@@ -1,9 +1,12 @@
-use serde::{Deserialize, Serialize};
+use log::{debug, error, info, warn};
 use ollama_rs::Ollama;
 use ollama_rs::generation::completion::request::GenerationRequest;
-use log::{debug, info, warn, error};
-// 将快速指南在编译期内嵌，避免运行时依赖路径
-const QUICK_GUIDE: &str = include_str!("../../../../docs/query-string-quick-guide.md");
+use serde::{Deserialize, Serialize};
+// 将快速指南在编译期内嵌，使用基于 crate 根目录的绝对路径，避免相对路径失效
+const QUICK_GUIDE: &str = include_str!(concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/../../docs/guides/query-syntax.md"
+));
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct NLBody {
@@ -29,7 +32,8 @@ fn build_prompt(user_nl: &str) -> String {
   // 严格约束输出，仅允许输出一行最终 q 字符串；禁止输出 <think> 思考内容
   format!(
     "你是一名日志检索查询串生成器。请严格遵循以下文档把用户的自然语言需求转换为本站使用的查询字符串（q）。\n\n=== 文档开始 ===\n{}\n=== 文档结束 ===\n\n要求：\n- 仅输出一行最终 q 字符串，不要任何解释或多余符号\n- 不要用引号包裹整个表达式\n- 若用户给出多个同义词，用大写 OR 连接\n- 若是“同一行出现 A 与 B”，用正则 /(A.*B|B.*A)/\n- 不要输出任何 <think> 或 </think> 内容\n\n用户需求：{}\n输出：",
-    QUICK_GUIDE, user_nl.trim()
+    QUICK_GUIDE,
+    user_nl.trim()
   )
 }
 
@@ -51,32 +55,31 @@ fn strip_think_sections(input: &str) -> String {
 
 pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
   info!("NL2Q请求: '{}'", nl);
-  
+
   let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1".to_string());
-  let port: u16 = std::env::var("OLLAMA_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(11434);
+  let port: u16 = std::env::var("OLLAMA_PORT")
+    .ok()
+    .and_then(|s| s.parse().ok())
+    .unwrap_or(11434);
   let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".to_string());
-  
+
   debug!("Ollama配置: host={}, port={}, model={}", host, port, model);
 
   let prompt = build_prompt(nl);
   debug!("构建的提示词长度: {} 字符", prompt.len());
-  
+
   let client = Ollama::new(host, port);
   let req = GenerationRequest::new(model, prompt);
-  
+
   debug!("向Ollama发送请求");
   let start = std::time::Instant::now();
-  let resp = client
-    .generate(req)
-    .await
-    .map_err(|e| {
-      error!("Ollama请求失败: {}", e);
-      NL2QError::Http(e.to_string())
-    })?;
-  
+  let resp = client.generate(req).await.map_err(|e| {
+    error!("Ollama请求失败: {}", e);
+    NL2QError::Http(e.to_string())
+  })?;
+
   let duration = start.elapsed();
   info!("Ollama响应耗时: {:?}", duration);
-
 
   let mut q = resp.response.trim().to_string();
   debug!("Ollama原始输出: '{}'", &q);
@@ -97,18 +100,18 @@ pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
   }
   if (q.starts_with('"') && q.ends_with('"')) || (q.starts_with('\'') && q.ends_with('\'')) {
     debug!("移除引号包围");
-    q = q[1..q.len()-1].to_string();
+    q = q[1..q.len() - 1].to_string();
   }
-  if let Some(nl_pos) = q.find('\n') { 
+  if let Some(nl_pos) = q.find('\n') {
     debug!("截取第一行内容");
-    q = q[..nl_pos].trim().to_string(); 
+    q = q[..nl_pos].trim().to_string();
   }
 
-  if q.is_empty() { 
+  if q.is_empty() {
     warn!("AI生成了空结果");
-    return Err(NL2QError::Empty); 
+    return Err(NL2QError::Empty);
   }
-  
+
   info!("NL2Q生成成功: '{}'", &q);
   Ok(q)
 }

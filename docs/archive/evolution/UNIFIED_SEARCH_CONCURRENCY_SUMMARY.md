@@ -1,5 +1,8 @@
 # Unified Search 并发控制增强总结
 
+⚠️ 更新（CST）: 2025-10-08 18:38
+本文件描述的“自适应并发调节（AIMD）”已在当前版本中移除。现有实现仅保留固定的 IO/CPU 并发上限：CPU=min(num_cpus, 16)，IO 并发由 s3_max_concurrency 决定。本文档保留作为历史记录。
+
 ## 🎯 目标
 
 为 `stream_unified_search` 添加完整的并发控制机制，参照 `stream_s3_ndjson` 的实现。

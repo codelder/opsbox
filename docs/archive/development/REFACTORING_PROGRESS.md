@@ -177,7 +177,7 @@ logseek/src/
 │   ├── mod.rs
 │   ├── renderer.rs      # 渲染工具（129 行）
 │   ├── storage.rs       # 存储抽象（309 行）
-│   ├── tuning.rs        # 运行时调参（20 行）
+│   ├── tuning.rs        # 运行时参数（仅 S3：并发/超时/重试）
 │   └── bbip_service.rs  # BBIP 服务（232 行）
 ├── query/                # 查询解析器（未变）
 │   ├── mod.rs           # 查询模型
