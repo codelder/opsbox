@@ -96,6 +96,11 @@
       const source = `source ${parsed.baseUrl}`; // 不显示 dir 字样
       return { title, source };
     }
+    if (parsed.type === 'agent') {
+      const title = parsed.path || parsed.displayName || full;
+      const source = `source agent://${parsed.agentId}`;
+      return { title, source };
+    }
     return { title: full };
   }
 </script>
