@@ -2,7 +2,7 @@
   /**
    * 文件查看页面 - 文件信息头部组件
    */
-  import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
+  import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
 
   interface Props {
     /**
@@ -33,44 +33,57 @@
 
   let { filePath, total, loadedLines, keywords = [], loading = false, onDownload }: Props = $props();
 
-  // 提取文件名
-  function extractFileName(fullPath: string): string {
-    if (!fullPath) return '未知文件';
-    const colonIndex = fullPath.indexOf(':');
-    if (colonIndex >= 0) {
-      const innerPath = fullPath.slice(colonIndex + 1);
-      return innerPath.split('/').pop() || innerPath || '未知文件';
-    }
-    return fullPath.split('/').pop() || fullPath || '未知文件';
-  }
+  // 统一解析标题与来源（与搜索结果卡片保持一致）
+  function parseTitleAndSource(full: string): { title: string; source?: string } {
+    if (!full) return { title: '未知文件' };
+    const parsed = parseFileUrl(full);
+    if (!parsed) return { title: full };
 
-  // 提取tar包名称
-  function extractTarName(fullPath: string): string | null {
-    if (!fullPath) return null;
-    const colonIndex = fullPath.indexOf(':');
-    if (colonIndex >= 0) {
-      const tarPath = fullPath.slice(0, colonIndex);
-      return tarPath.split('/').pop() || tarPath || null;
+    switch (parsed.type) {
+      case 'tar-entry': {
+        const title = parsed.entryPath || parsed.displayName || full;
+        const source = `${parsed.compression}+${parsed.baseUrl}`; // 例如 tar.gz+s3://...
+        return { title, source };
+      }
+      case 'dir-entry': {
+        const title = parsed.entryPath || parsed.displayName || full; // 相对路径
+        const source = parsed.baseUrl; // 例如 file:///root
+        return { title, source };
+      }
+      case 'agent': {
+        const title = parsed.path || parsed.displayName || full; // 去掉前缀
+        const source = `agent://${parsed.agentId}`;
+        return { title, source };
+      }
+      case 'local': {
+        // 保留原样（或可仅显示绝对路径部分）
+        return { title: full };
+      }
+      case 's3': {
+        return { title: full };
+      }
+      default:
+        return { title: full };
     }
-    return null;
   }
 </script>
 
+<!-- 标题栏 -->
 <div
   class="flex-shrink-0 border-b border-slate-200 bg-gradient-to-r from-slate-50 to-gray-100 px-6 py-4 dark:border-gray-700/50 dark:from-gray-800/50 dark:to-gray-700/50"
 >
-  <!-- 三列布局：左侧文件信息，中间LogSeek标志，右侧下载按钮 -->
-  <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+  <!-- 两列布局：左侧文件信息，右侧下载按钮 -->
+  <div class="flex items-center justify-between gap-4">
     <!-- 左侧：文件信息 -->
     <div class="min-w-0">
       <h2
         class="font-mono text-sm leading-tight font-semibold break-all text-slate-900 md:text-base dark:text-gray-100"
       >
-        {extractFileName(filePath)}
+        {parseTitleAndSource(filePath).title}
       </h2>
-      {#if extractTarName(filePath)}
+      {#if parseTitleAndSource(filePath).source}
         <p class="mt-0.5 font-mono text-[11px] break-all text-slate-500 dark:text-gray-400">
-          来自: {extractTarName(filePath)}
+          source {parseTitleAndSource(filePath).source}
         </p>
       {/if}
       {#if total > 0}
@@ -111,11 +124,6 @@
           {/if}
         </div>
       {/if}
-    </div>
-
-    <!-- 中间：LogSeek标志 -->
-    <div class="flex items-center justify-center">
-      <LogSeekLogo size="small" hoverable />
     </div>
 
     <!-- 右侧：下载按钮 -->

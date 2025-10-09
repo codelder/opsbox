@@ -10,6 +10,7 @@
   import { fetchViewCache, escapeHtml, escapeRegExp } from '$lib/modules/logseek';
   import Alert from '$lib/components/Alert.svelte';
   import FileHeader from './FileHeader.svelte';
+  import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
 
   let file = $state('');
   let sid = $state('');
@@ -332,6 +333,10 @@
     {/if}
 
     <div class="flex min-h-0 flex-1 flex-col gap-10">
+      <!-- 页面 Logo（卡片外部） -->
+      <div class="flex items-center justify-center">
+        <LogSeekLogo size="small" hoverable />
+      </div>
       <!-- 主内容卡片：文件信息 + 虚拟滚动容器 -->
       <div
         class="flex flex-1 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
