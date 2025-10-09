@@ -7,6 +7,8 @@ use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::repository::settings;
 use crate::utils::bbip_service::derive_plan;
 use crate::utils::renderer::render_json_chunks;
+use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
+use crate::service::search::SearchProcessor;
 use axum::{
   body::Body,
   extract::{Json, State},
@@ -152,11 +154,10 @@ pub async fn stream_search(
   let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
   log::debug!("profiling: [Search] 建立响应通道，容量={}", cap);
 
-  // 分层限流——IO 并发与 CPU 并发
+  // 分层限流——IO 并发
   let io_sem = Arc::new(tokio::sync::Semaphore::new(s3_max_concurrency()));
-  let cpu_sem = Arc::new(tokio::sync::Semaphore::new(cpu_max_concurrency()));
 
-  // 已简化：不再使用自适应并发调节（AIMD），仅使用固定的 IO/CPU 并发上限
+  // 已简化：仅使用固定的 IO 并发上限
 
   let overall_start = std::time::Instant::now();
 
@@ -175,21 +176,6 @@ pub async fn stream_search(
     return respond_empty_stream(tx, rx);
   }
 
-  // 2. 使用工厂创建存储源
-  let factory = crate::storage::factory::StorageFactory::new(pool.clone());
-  let (sources, errors) = factory.create_sources(source_configs.clone()).await;
-
-  if !errors.is_empty() {
-    log::warn!("[Search] {} 个存储源创建失败: {:?}", errors.len(), errors);
-  }
-
-  if sources.is_empty() {
-    log::error!("[Search] 所有存储源创建失败，无法进行搜索");
-    return respond_empty_stream(tx, rx);
-  }
-
-  log::info!("[Search] 成功创建 {} 个存储源", sources.len());
-
   // 3. 解析查询并准备搜索参数
   let ctx = body.context.unwrap_or(3);
   let parse_start = std::time::Instant::now();
@@ -207,34 +193,27 @@ pub async fn stream_search(
     cleaned_query,
     ctx,
     sid,
-    sources.len()
+    source_configs.len()
   );
 
-  // 4. 为每个存储源启动搜索任务（带并发控制）
+  // 4. 为每个存储源启动搜索任务（带并发控制，基于 EntryStreamFactory）
   let spec = Arc::new(spec);
-  for (idx, (source, config)) in sources.into_iter().zip(source_configs.iter()).enumerate() {
-    let source_name = match &source {
-      crate::storage::StorageSource::Data(ds) => ds.source_type(),
-      crate::storage::StorageSource::Service(ss) => ss.service_type(),
-    };
-
+  for (idx, config) in source_configs.iter().enumerate() {
     let tx_clone = tx.clone();
     let spec_clone = spec.clone();
     let highlights_clone = highlights.clone();
     let sid_clone = sid.clone();
     let io_sem_clone = io_sem.clone();
-    let cpu_sem_clone = cpu_sem.clone();
+    let pool_clone = pool.clone();
     let config_clone = config.clone();
 
     tokio::spawn(async move {
       let task_start = std::time::Instant::now();
 
       log::debug!(
-        "profiling: [Search] 任务开始排队 source_idx={} name={}, io_avail={}, cpu_avail={}",
+        "profiling: [Search] 任务开始排队 source_idx={} io_avail={}",
         idx,
-        source_name,
-        io_sem_clone.available_permits(),
-        cpu_sem_clone.available_permits()
+        io_sem_clone.available_permits()
       );
 
       // 获取 IO 并发许可
@@ -254,53 +233,98 @@ pub async fn stream_search(
         io_wait_time.as_secs_f64()
       );
 
-      // 根据存储源类型调用不同的搜索方法
-      let search_result = match source {
-        crate::storage::StorageSource::Data(data_source) => {
-          // DataSource: Server 端执行搜索
-          search_data_source_with_concurrency(
-            data_source,
-            config_clone,
-            spec_clone,
-            ctx,
-            tx_clone,
-            sid_clone,
-            highlights_clone,
-            cpu_sem_clone,
-            idx,
-          )
-          .await
-        }
-        crate::storage::StorageSource::Service(_search_service) => {
-          // SearchService: 远程执行搜索
-          // TODO: 实现 SearchService 支持
-          log::warn!("[Search] SearchService 尚未实现，跳过 source_idx={}", idx);
-          Ok(0)
+      // 基于 EntryStreamFactory 创建条目流
+      let factory = EntryStreamFactory::new(pool_clone);
+      let mut estream = match factory.from_source(config_clone.clone()).await {
+        Ok(s) => s,
+        Err(e) => {
+          log::error!("[Search] 创建条目流失败 source_idx={} err={}", idx, e);
+          return;
         }
       };
 
-      let total_time = task_start.elapsed();
-      match search_result {
-        Ok(count) => {
-          log::info!(
-            "profiling: [Search] 任务完成 source_idx={} name={}, 结果数={}, 总耗时={:.3}s, io_wait={:.3}s",
-            idx,
-            source_name,
-            count,
-            total_time.as_secs_f64(),
-            io_wait_time.as_secs_f64()
-          );
+      // 准备搜索处理器与条目流处理器
+      let search_proc = Arc::new(SearchProcessor::new(spec_clone, ctx));
+      let mut processor = EntryStreamProcessor::new(search_proc);
+
+      // 中转通道：SearchResult -> NDJSON 字节
+      let (sr_tx, mut sr_rx) = tokio::sync::mpsc::channel::<crate::service::search::SearchResult>(32);
+
+      // 后台发送 NDJSON
+      let tx_bytes = tx_clone.clone();
+      let highlights_s = highlights_clone.clone();
+      let cfg_for_url = config_clone.clone();
+      let sid_for_cache = sid_clone.clone();
+      let sender_task = tokio::spawn(async move {
+        use crate::domain::file_url::{FileUrl, TarCompression};
+        while let Some(res) = sr_rx.recv().await {
+          if tx_bytes.is_closed() { break; }
+
+          // 构造 FileUrl（S3 tar.gz 与 Local 区分）
+          let (file_url, file_id) = match &cfg_for_url {
+            crate::storage::factory::SourceConfig::S3 { profile, bucket, key, .. } => {
+              let bucket_name = bucket.as_deref().unwrap_or("unknown");
+              let base = if let Some(k) = key {
+                FileUrl::s3_with_profile(profile, bucket_name, k)
+              } else {
+                FileUrl::s3_with_profile(profile, bucket_name, &res.path)
+              };
+              match FileUrl::tar_entry(TarCompression::Gzip, base, &res.path) {
+                Ok(url) => {
+                  let id = url.to_string();
+                  (url, id)
+                }
+                Err(e) => {
+                  log::warn!("profiling: [Search] 构造 FileUrl 失败: {}", e);
+                  continue;
+                }
+              }
+            }
+            crate::storage::factory::SourceConfig::Local { path, .. } => {
+              let joined = std::path::Path::new(path).join(&res.path);
+              let url = FileUrl::local(joined.to_string_lossy().to_string());
+              let id = url.to_string();
+              (url, id)
+            }
+            _ => {
+              let url = FileUrl::local(&res.path);
+              let id = url.to_string();
+              (url, id)
+            }
+          };
+
+          // 缓存结果
+          simple_cache().put_lines(&sid_for_cache, &file_url, res.lines.clone()).await;
+
+          // 渲染 JSON 并发送
+          let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
+          match serde_json::to_vec(&json_obj) {
+            Ok(mut v) => {
+              v.push(b'\n');
+              if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
+                break;
+              }
+            }
+            Err(e) => {
+              log::warn!("profiling: [Search] 序列化失败: {}", e);
+            }
+          }
         }
-        Err(e) => {
-          log::error!(
-            "profiling: [Search] 任务失败 source_idx={} name={}, error={}, 耗时={:.3}s",
-            idx,
-            source_name,
-            e,
-            total_time.as_secs_f64()
-          );
-        }
+      });
+
+      // 处理条目流
+      if let Err(e) = processor.process_stream(&mut *estream, sr_tx).await {
+        log::error!("[Search] 处理条目流失败 source_idx={} err={}", idx, e);
       }
+
+      let total_time = task_start.elapsed();
+      let _ = sender_task.await; // 等待发送任务结束
+      log::info!(
+        "profiling: [Search] 任务完成 source_idx={} name=EntryStream 总耗时={:.3}s, io_wait={:.3}s",
+        idx,
+        total_time.as_secs_f64(),
+        io_wait_time.as_secs_f64()
+      );
     });
   }
 
