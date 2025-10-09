@@ -36,6 +36,13 @@ pub enum FileUrl {
     entry_path: String,
   },
 
+  /// 本地目录内的文件（用于标识“来源根目录 + 相对路径”的场景）
+  /// 格式: `dir+<base>:<entry>`，其中 base 通常为 file:///root
+  DirEntry {
+    base: Box<FileUrl>,
+    entry_path: String,
+  },
+
   /// 远程 Agent 节点文件
   /// 格式: `agent://agent-id/path/to/file`
   Agent { agent_id: String, path: String },
@@ -109,6 +116,17 @@ impl FileUrl {
     })
   }
 
+  /// 创建目录内文件 URL（本地目录来源）
+  pub fn dir_entry(base: FileUrl, entry_path: impl Into<String>) -> Result<Self, FileUrlError> {
+    if matches!(base, FileUrl::TarEntry { .. } | FileUrl::DirEntry { .. }) {
+      return Err(FileUrlError::TooManyNestingLevels);
+    }
+    Ok(Self::DirEntry {
+      base: Box::new(base),
+      entry_path: entry_path.into(),
+    })
+  }
+
   /// 创建 Agent 文件 URL
   pub fn agent(agent_id: impl Into<String>, path: impl Into<String>) -> Self {
     Self::Agent {
@@ -123,6 +141,7 @@ impl FileUrl {
       Self::Local { .. } => "local",
       Self::S3 { .. } => "s3",
       Self::TarEntry { .. } => "tar-entry",
+      Self::DirEntry { .. } => "dir-entry",
       Self::Agent { .. } => "agent",
     }
   }
@@ -138,6 +157,7 @@ impl FileUrl {
       Self::Local { path } => path.split('/').last().unwrap_or(path).to_string(),
       Self::S3 { key, .. } => key.split('/').last().unwrap_or(key).to_string(),
       Self::TarEntry { entry_path, .. } => entry_path.split('/').last().unwrap_or(entry_path).to_string(),
+      Self::DirEntry { entry_path, .. } => entry_path.split('/').last().unwrap_or(entry_path).to_string(),
       Self::Agent { path, .. } => path.split('/').last().unwrap_or(path).to_string(),
     }
   }
@@ -166,6 +186,9 @@ impl fmt::Display for FileUrl {
           TarCompression::Gzip => "tar.gz",
         };
         write!(f, "{}+{}:{}", scheme, base, entry_path)
+      }
+      Self::DirEntry { base, entry_path } => {
+        write!(f, "dir+{}:{}", base, entry_path)
       }
       Self::Agent { agent_id, path } => {
         if path.starts_with('/') {
@@ -216,6 +239,20 @@ impl FromStr for FileUrl {
       let entry_path = parts[1].to_string();
 
       return Self::tar_entry(TarCompression::Tar, base, entry_path);
+    }
+
+    if s.starts_with("dir+") {
+      let after_scheme = &s[4..]; // "dir+".len() == 4
+      let mut parts: Vec<&str> = after_scheme.rsplitn(2, ':').collect();
+      parts.reverse();
+      if parts.len() != 2 {
+        return Err(FileUrlError::InvalidFormat(
+          "dir URL 必须包含 ':' 分隔基础 URL 和条目路径".into(),
+        ));
+      }
+      let base = Self::from_str(parts[0])?;
+      let entry_path = parts[1].to_string();
+      return Self::dir_entry(base, entry_path);
     }
 
     // 处理标准 URL 格式

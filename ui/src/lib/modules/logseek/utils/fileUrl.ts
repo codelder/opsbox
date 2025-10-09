@@ -8,7 +8,7 @@
 /**
  * 文件 URL 类型
  */
-export type FileUrlType = 'local' | 's3' | 'tar-entry' | 'agent';
+export type FileUrlType = 'local' | 's3' | 'tar-entry' | 'dir-entry' | 'agent';
 
 /**
  * 解析后的文件 URL 信息
@@ -47,6 +47,12 @@ export interface TarEntryFileUrl extends ParsedFileUrl {
   entryPath: string; // tar 包内路径
 }
 
+export interface DirEntryFileUrl extends ParsedFileUrl {
+  type: 'dir-entry';
+  baseUrl: string; // 例如 file:///root
+  entryPath: string; // 相对路径
+}
+
 /**
  * 解析后的 Agent 文件 URL
  */
@@ -59,7 +65,7 @@ export interface AgentFileUrl extends ParsedFileUrl {
 /**
  * 所有可能的解析结果
  */
-export type AnyParsedFileUrl = LocalFileUrl | S3FileUrl | TarEntryFileUrl | AgentFileUrl;
+export type AnyParsedFileUrl = LocalFileUrl | S3FileUrl | TarEntryFileUrl | DirEntryFileUrl | AgentFileUrl;
 
 /**
  * 解析文件 URL
@@ -120,6 +126,22 @@ export function parseFileUrl(url: string): AnyParsedFileUrl | null {
       };
     }
     
+    // 处理 dir+<base>:<entry>
+    if (url.startsWith('dir+')) {
+      const after = url.substring(4);
+      const colonIndex = after.lastIndexOf(':');
+      if (colonIndex === -1) return null;
+      const baseUrl = after.substring(0, colonIndex);
+      const entryPath = after.substring(colonIndex + 1);
+      return {
+        type: 'dir-entry',
+        baseUrl,
+        entryPath,
+        original: url,
+        displayName,
+      };
+    }
+
     // 处理标准 scheme://... 格式
     const schemeEnd = url.indexOf('://');
     if (schemeEnd === -1) return null;

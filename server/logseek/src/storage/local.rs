@@ -137,7 +137,7 @@ impl DataSource for LocalFileSystem {
         while let Some((dir, depth)) = stack.pop() {
             // 检查深度限制
             if let Some(max) = max_depth {
-                if depth >= max {
+                if depth > max {
                     debug!("达到最大深度 {}，跳过目录: {:?}", max, dir);
                     skipped_dirs += 1;
                     continue;
@@ -203,6 +203,16 @@ impl DataSource for LocalFileSystem {
                     }
                 } else if metadata.is_dir() {
                     if recursive {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::MetadataExt;
+                            let inode = metadata.ino();
+                            if visited_inodes.contains(&inode) {
+                                debug!("检测到已访问目录，跳过: {:?}", path);
+                                continue;
+                            }
+                            visited_inodes.insert(inode);
+                        }
                         stack.push((path, depth + 1));
                     }
                     continue;

@@ -32,7 +32,7 @@ static CLEANER_CANCEL: OnceLock<CancellationToken> = OnceLock::new();
 
 pub fn cache() -> &'static Cache {
   GLOBAL.get_or_init(|| Cache {
-    ttl: Duration::from_secs(2 * 60),
+    ttl: Duration::from_secs(15 * 60),
     keywords: RwLock::new(HashMap::new()),
     files: RwLock::new(HashMap::new()),
   })

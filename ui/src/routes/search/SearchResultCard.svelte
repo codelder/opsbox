@@ -5,6 +5,7 @@
    */
   import type { SearchJsonResult, JsonLine, JsonChunk } from '$lib/modules/logseek';
   import { highlight, snippet } from '$lib/modules/logseek';
+  import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
 
   interface Props {
     /**
@@ -81,13 +82,21 @@
     return flat.slice(0, Math.min(7, flat.length));
   }
 
-  // 解析 item.path 为 { bucket, tar, inner }
-  function splitPath(full: string): { bucket: string | null; tar: string; inner: string | null } {
-    const idx = full.indexOf(':');
-    const tarFull = idx >= 0 ? full.slice(full.indexOf('/'), idx) : full;
-    const inner = idx >= 0 ? full.slice(idx + 1) : null;
-    const bucket = full.slice(0, full.indexOf('/', 1));
-    return { bucket, tar: tarFull, inner };
+  // 解析标题与来源标签
+  function parseTitleAndSource(full: string): { title: string; source?: string } {
+    const parsed = parseFileUrl(full);
+    if (!parsed) return { title: full };
+    if (parsed.type === 'tar-entry') {
+      const title = parsed.entryPath || parsed.displayName || full;
+      const source = `source ${parsed.compression}+${parsed.baseUrl}`;
+      return { title, source };
+    }
+    if (parsed.type === 'dir-entry') {
+      const title = parsed.entryPath || parsed.displayName || full;
+      const source = `source ${parsed.baseUrl}`; // 不显示 dir 字样
+      return { title, source };
+    }
+    return { title: full };
   }
 </script>
 
@@ -105,13 +114,13 @@
       <!-- 左侧：标题 + 元信息 -->
       <span class="min-w-0 flex-1">
         <!-- 主标题 -->
-        {#if splitPath(item.path).inner}
+        {#if parseTitleAndSource(item.path).title}
           <span class="mb-2 flex items-start gap-2">
             <span
               role="link"
               tabindex="0"
               class="group/link cursor-pointer font-mono text-base leading-tight font-semibold text-slate-900 transition-colors duration-200 hover:text-blue-700 md:text-lg lg:text-xl dark:text-gray-100 dark:hover:text-blue-300"
-              title={splitPath(item.path).inner}
+              title={parseTitleAndSource(item.path).title}
               onclick={(e) => {
                 e.stopPropagation();
                 const base = '/view';
@@ -128,7 +137,7 @@
                 }
               }}
             >
-              <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1">{splitPath(item.path).inner}</span>
+              <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1">{parseTitleAndSource(item.path).title}</span>
             </span>
             <svg
               class="mt-1 h-4 w-4 shrink-0 text-blue-600 opacity-0 transition-opacity duration-200 group-hover/link:opacity-100 dark:text-blue-400"
@@ -153,27 +162,16 @@
 
         <!-- 元信息行 -->
         <span class="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-gray-400">
-          {#if splitPath(item.path).bucket}
+          {#if parseTitleAndSource(item.path).source}
             <span
-              class="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800"
+              class="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-700 ring-1 ring-gray-200 dark:bg-gray-700/50 dark:text-gray-300 dark:ring-gray-600"
             >
               <svg class="mr-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  d="M3 4a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1H4a1 1 0 01-1-1V4zM3 10a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1H4a1 1 0 01-1-1v-3zM10 4a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1V4zM10 10a1 1 0 011-1h3a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-3z"
-                />
+                <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
               </svg>
-              bucket {splitPath(item.path).bucket}
+              {parseTitleAndSource(item.path).source}
             </span>
           {/if}
-
-          <span
-            class="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-700 ring-1 ring-gray-200 dark:bg-gray-700/50 dark:text-gray-300 dark:ring-gray-600"
-          >
-            <svg class="mr-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
-              <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
-            </svg>
-            {splitPath(item.path).tar}
-          </span>
 
           {#if item.keywords?.length}
             <span class="flex flex-wrap items-center gap-1.5">

@@ -281,10 +281,21 @@ pub async fn stream_search(
               }
             }
             crate::storage::factory::SourceConfig::Local { path, .. } => {
-              let joined = std::path::Path::new(path).join(&res.path);
-              let url = FileUrl::local(joined.to_string_lossy().to_string());
-              let id = url.to_string();
-              (url, id)
+              // 使用 dir+file:///root:relative 的形式编码来源根目录与相对路径
+              let base = FileUrl::local(path);
+              match FileUrl::dir_entry(base, &res.path) {
+                Ok(url) => {
+                  let id = url.to_string();
+                  (url, id)
+                }
+                Err(_) => {
+                  // 回退：使用绝对路径
+                  let joined = std::path::Path::new(path).join(&res.path);
+                  let url = FileUrl::local(joined.to_string_lossy().to_string());
+                  let id = url.to_string();
+                  (url, id)
+                }
+              }
             }
             _ => {
               let url = FileUrl::local(&res.path);
