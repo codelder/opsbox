@@ -3,3 +3,4 @@
 pub mod coordinator;
 pub mod nl2q;
 pub mod search;
+pub mod entry_stream;

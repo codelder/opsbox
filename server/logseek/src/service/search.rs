@@ -3,8 +3,6 @@ use std::{
   sync::Arc,
 };
 
-use async_compression::tokio::bufread::GzipDecoder;
-use async_tar::Archive as AsyncArchive;
 use async_trait::async_trait;
 use futures::StreamExt;
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
@@ -16,7 +14,7 @@ use tokio::{
   sync::Semaphore,
   task::JoinSet,
 };
-use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -312,93 +310,15 @@ impl Search for tokio::fs::ReadDir {
   ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
     let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
 
-    // 使用 SearchProcessor 封装公共逻辑 ✅
     let spec_arc = Arc::new(spec.clone());
-    let processor = Arc::new(SearchProcessor::new(spec_arc.clone(), context_lines));
+    let search_processor = Arc::new(SearchProcessor::new(spec_arc, context_lines));
 
-    let max_concurrency = std::thread::available_parallelism()
-      .map(|n| n.get())
-      .unwrap_or(4)
-      .saturating_mul(2)
-      .min(256);
-    let semaphore = Arc::new(Semaphore::new(max_concurrency));
-
-    tokio::spawn({
-      let mut stack = vec![self];
-      let processor_outer = Arc::clone(&processor);
-      let semaphore = Arc::clone(&semaphore);
-      let tx = tx.clone();
-
-      async move {
-        let mut tasks = JoinSet::new();
-
-        while let Some(mut rd) = stack.pop() {
-          loop {
-            match rd.next_entry().await {
-              Ok(Some(entry)) => {
-                let path = entry.path();
-
-                // 使用 processor 的路径过滤 ✅
-                let path_str = path.to_string_lossy();
-                if !processor_outer.should_process_path(path_str.as_ref()) {
-                  continue;
-                }
-
-                // 安全起见：跳过符号链接
-                let fty = match entry.file_type().await {
-                  Ok(t) => t,
-                  Err(_) => continue, // 忽略该项，继续
-                };
-                if fty.is_symlink() {
-                  continue;
-                }
-                if fty.is_dir() {
-                  if let Ok(sub) = fs::read_dir(&path).await {
-                    stack.push(sub);
-                  }
-                  continue;
-                }
-                if !fty.is_file() {
-                  continue;
-                }
-
-                // 在 spawn 之前 acquire，避免 spawn 风暴
-                let permit = match semaphore.clone().acquire_owned().await {
-                  Ok(p) => p,
-                  Err(_) => break, // 信号量被关闭
-                };
-
-                let txf = tx.clone();
-                let processor_local = Arc::clone(&processor_outer);
-                let path_owned = path.to_string_lossy().into_owned();
-
-                tasks.spawn(async move {
-                  let _permit = permit; // 持有期间占用并发额度
-                  if let Ok(file) = fs::File::open(&path).await {
-                    let mut reader = BufReader::new(file);
-
-                    // 使用 processor 处理内容 ✅
-                    if let Ok(Some(result)) = processor_local.process_content(path_owned, &mut reader).await {
-                      // 使用 processor 发送结果 ✅
-                      let _ = processor_local.send_result(result, &txf).await;
-                    }
-                  }
-                });
-              }
-              Ok(None) => break, // 当前目录读完
-              Err(_) => break,   // 该目录出错，跳过
-            }
-          }
-        }
-
-        // 等待所有文件任务结束
-        while tasks.join_next().await.is_some() {}
-
-        // 彻底关闭发送端，通知接收者结束
-        drop(tx);
-
-        // 不把错误冒泡给 JoinHandle 的使用者，避免惊扰外层
-        Ok::<(), ()>(())
+    tokio::spawn(async move {
+      // 用 FsEntryStream + EntryStreamProcessor 统一处理目录
+      let mut stream = crate::service::entry_stream::FsEntryStream::from_read_dir(self);
+      let mut processor = crate::service::entry_stream::EntryStreamProcessor::new(search_processor);
+      if let Err(e) = processor.process_stream(&mut stream, tx).await {
+        warn!("处理目录条目流失败: {}", e);
       }
     });
 
@@ -428,26 +348,23 @@ where
     let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
 
     // 使用重构后的组件 ✅
-    let config = SearchConfig::default();
+    let _config = SearchConfig::default();
     let spec_arc = Arc::new(spec.clone());
     let search_processor = Arc::new(SearchProcessor::new(spec_arc, context_lines));
 
     tokio::spawn(async move {
-      // 1. 解压和解析 tar.gz
-      let gz = GzipDecoder::new(BufReader::new(self));
-      //:TODO AsyncRead 不一定是 tar 格式，需要检查
-      let archive = AsyncArchive::new(gz.compat());
-      let Ok(entries) = archive.entries() else {
-        error!("无法创建 tar 归档条目迭代器");
-        return;
+      // 使用 EntryStream 抽象统一处理 tar 条目流
+      let mut stream = match crate::service::entry_stream::TarEntryStream::new(self).await {
+        Ok(s) => s,
+        Err(e) => {
+          error!("无法创建 tar 条目流: {}", e);
+          return;
+        }
       };
-
-      // 2. 使用拆分后的组件处理流 ✅
-      let entry_processor = TarEntryProcessor::new(search_processor, config.clone());
-      let mut stream_processor = TarStreamProcessor::new(entry_processor, config);
-
-      // 3. 处理整个流（所有复杂逻辑都在 TarStreamProcessor 中）✅
-      let _stats = stream_processor.process_stream(entries, tx).await;
+      let mut processor = crate::service::entry_stream::EntryStreamProcessor::new(search_processor);
+      if let Err(e) = processor.process_stream(&mut stream, tx).await {
+        error!("处理 tar 条目流失败: {}", e);
+      }
     });
 
     Ok(rx)
