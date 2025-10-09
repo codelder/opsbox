@@ -3,7 +3,7 @@ use std::{io, path::PathBuf, sync::Arc, time::Duration};
 use async_compression::tokio::bufread::GzipDecoder;
 use async_trait::async_trait;
 use futures::StreamExt;
-use log::{debug, error, warn};
+use log::{debug, warn};
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 

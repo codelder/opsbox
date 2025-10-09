@@ -101,13 +101,6 @@ impl LocalFileSystem {
     self
   }
 
-  /// 检查文件名是否匹配过滤模式
-  fn matches_pattern(&self, file_name: &str) -> bool {
-    match &self.pattern {
-      Some(regex) => regex.is_match(file_name),
-      None => true, // 没有模式则匹配所有文件
-    }
-  }
 }
 
 #[async_trait]

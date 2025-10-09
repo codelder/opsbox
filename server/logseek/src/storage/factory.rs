@@ -234,15 +234,6 @@ pub struct SourceCreationError {
 }
 
 // 手动实现 From<StorageError> 转换
-impl SourceCreationError {
-  fn new(index: usize, config: SourceConfig, error: StorageError) -> Self {
-    Self {
-      index,
-      config,
-      error: error.to_string(),
-    }
-  }
-}
 
 // 为 create_sources 提供辅助方法
 impl StorageFactory {

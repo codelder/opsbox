@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use super::helpers::{cpu_max_concurrency, s3_max_concurrency, stream_channel_capacity};
+use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 
 // ============================================================================
 // 搜索（多存储源并行搜索）
