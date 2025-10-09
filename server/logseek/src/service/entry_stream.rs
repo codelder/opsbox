@@ -8,6 +8,7 @@ use tokio::io::{AsyncRead, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
 use super::search::{SearchProcessor, SearchResult};
+use opsbox_core::SqlitePool;
 
 /// 条目元数据（目录相对路径或归档内路径）
 #[derive(Clone, Debug)]
@@ -178,5 +179,71 @@ impl EntryStreamProcessor {
       }
     }
     Ok(())
+  }
+}
+
+/// 条目流工厂：根据 SourceConfig 构造 Box<dyn EntryStream>
+pub struct EntryStreamFactory {
+  db_pool: SqlitePool,
+}
+
+impl EntryStreamFactory {
+  pub fn new(db_pool: SqlitePool) -> Self { Self { db_pool } }
+
+  /// 从存储源配置创建条目流
+  ///
+  /// - Local: 返回 FsEntryStream（DFS 遍历）
+  /// - S3(key): 读取指定对象并按 tar.gz 展开为条目流
+  /// - 其他: 暂不支持（后续可扩展 Zip/Agent 等）
+  pub async fn from_source(
+    &self,
+    source: crate::storage::factory::SourceConfig,
+  ) -> Result<Box<dyn EntryStream>, String> {
+    match source {
+      crate::storage::factory::SourceConfig::Local { path, .. } => {
+        let root = PathBuf::from(path);
+        let stream = FsEntryStream::new(root).await.map_err(|e| e.to_string())?;
+        Ok(Box::new(stream))
+      }
+      crate::storage::factory::SourceConfig::S3 { profile, bucket: _bucket_opt, prefix: _prefix, pattern: _pattern, key } => {
+        // 仅支持 key 明确指向 tar.gz 对象的场景
+        let key = key.ok_or_else(|| "S3 条目流暂仅支持指定单个对象 key".to_string())?;
+        if !(key.ends_with(".tar.gz") || key.ends_with(".tgz")) {
+          return Err("当前仅支持 S3 tar.gz 对象的条目流".to_string());
+        }
+
+        // 加载 Profile，获取 endpoint/bucket/AK/SK
+        let profile_row = crate::repository::settings::load_s3_profile(&self.db_pool, &profile)
+          .await
+          .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+          .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
+
+        // 构造读取器（复用旧的 S3 客户端工具）
+        let reader = {
+          use crate::utils::storage::{get_or_create_s3_client, S3ReaderProvider, ReaderProvider as _};
+          // 先确保客户端创建（便于日志与错误提前暴露）
+          let _ = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
+            .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
+          let provider = S3ReaderProvider::new(
+            &profile_row.endpoint,
+            &profile_row.access_key,
+            &profile_row.secret_key,
+            &profile_row.bucket,
+            &key,
+          );
+          provider
+            .open()
+            .await
+            .map_err(|e| format!("打开 S3 对象失败: {:?}", e))?
+        };
+
+        // 将对象作为 tar.gz 流展开
+        let stream = TarEntryStream::new(reader).await.map_err(|e| e.to_string())?;
+        Ok(Box::new(stream))
+      }
+      crate::storage::factory::SourceConfig::Agent { .. } => {
+        Err("Agent 来源暂不支持构造 EntryStream（建议走远程 SearchService）".to_string())
+      }
+    }
   }
 }
