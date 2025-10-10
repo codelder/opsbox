@@ -189,7 +189,7 @@ impl EntryStreamProcessor {
       .await
       {
         Ok(Ok(Some(result))) => {
-          if (self.processor.send_result(result, &tx).await).is_err() {
+          if self.processor.send_result(result, &tx).await.is_err() {
             // 接收方关闭
             warn!("下游接收已关闭，终止条目流处理");
             break;
@@ -222,8 +222,10 @@ impl EntryStreamFactory {
   ///
   /// - Local: 返回 FsEntryStream（DFS 遍历）
   /// - S3(key): 读取指定对象并按 tar.gz 展开为条目流
-  /// - 其他: 暂不支持（后续可扩展 Zip/Agent 等）
-  pub async fn from_source(&self, source: crate::domain::config::SourceConfig) -> Result<Box<dyn EntryStream>, String> {
+  pub async fn create_stream(
+    &self,
+    source: crate::domain::config::SourceConfig,
+  ) -> Result<Box<dyn EntryStream>, String> {
     match source {
       crate::domain::config::SourceConfig::Local { path, .. } => {
         let root = PathBuf::from(path);

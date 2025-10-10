@@ -321,7 +321,7 @@ pub async fn stream_search(
 
       // 基于 EntryStreamFactory 创建条目流
       let factory = EntryStreamFactory::new(pool_clone);
-      let mut estream = match factory.from_source(config_clone.clone()).await {
+      let mut estream = match factory.create_stream(config_clone.clone()).await {
         Ok(s) => s,
         Err(e) => {
           log::error!("[Search] 创建条目流失败 source_idx={} err={}", idx, e);
