@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::io::AsyncRead;
 
 // 对外暴露的公共类型与 trait
 
