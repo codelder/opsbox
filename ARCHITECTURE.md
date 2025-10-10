@@ -97,102 +97,20 @@ view_file("tar.gz+s3://prod:logs/archive.tar.gz:app.log", 1, 100)
 
 ---
 
-### 3. 搜索协调器 ✅ **即将发挥作用**
+### 3. 搜索协调器（已弃用）
 
-#### 当前设计（coordinator.rs 200+ 行）
-```rust
-pub struct SearchCoordinator {
-    sources: Vec<StorageSource>,  // 支持混合存储源
-}
+此前的协调器（service/coordinator.rs）用于统一管理多数据源的并发和调度。当前实现已改为在路由层直接并发各来源，结合 EntryStreamFactory + EntryStreamProcessor，且 Agent 走独立的 agent 模块。
 
-// 使用场景（即将实现）
-let mut coordinator = SearchCoordinator::new();
-
-// 添加多个 S3 Profile
-coordinator.add_data_source(s3_prod);
-coordinator.add_data_source(s3_backup);
-
-// 添加本地文件系统
-coordinator.add_data_source(local_logs);
-
-// 添加远程 Agent
-coordinator.add_search_service(agent_server1);
-coordinator.add_search_service(agent_server2);
-
-// 统一搜索
-let results = coordinator.search("error", 3).await?;
-```
-
-#### 重新评估 ✅
-
-**实际需求场景**:
-1. **多环境搜索**: 同时搜索生产、测试、备份环境
-2. **混合搜索**: S3 + Local + Agent 混合搜索
-3. **智能路由**: 根据存储源类型选择不同的搜索策略
-4. **并发控制**: 统一管理多存储源的并发
-
-**价值**:
-- 封装了复杂的并发协调逻辑
-- 统一的错误处理和日志
-- 易于添加新的存储源
-
-**结论**: **当有多个存储源时，Coordinator 是必需的** ✅
+- 现状：coordinator.rs 已移除；并发与限流在 routes/search.rs 内实现（IO 限流、结果通道与 NDJSON 序列化）。
+- 影响：代码路径更短，可观测性在路由层统一；如未来需要更强的跨来源公平与调度，可在 EntryStream 思路下重建轻量协调器。
 
 ---
 
-### 4. 存储工厂 ✅ **配置驱动的必然选择**
+### 4. 来源配置与工厂（调整后）
 
-#### 当前实现（factory.rs 395 行）
-```rust
-pub struct StorageFactory {
-    db_pool: SqlitePool,  // 从数据库加载配置
-}
-
-// 使用场景
-let factory = StorageFactory::new(pool);
-
-// 从数据库配置动态创建存储源
-let sources = factory.create_sources(vec![
-    SourceConfig::S3 { profile: "prod" },
-    SourceConfig::S3 { profile: "backup" },
-    SourceConfig::Local { path: "/var/log" },
-    SourceConfig::Agent { endpoint: "http://server1:8090" },
-]).await;
-```
-
-#### 重新评估 ✅
-
-**为什么需要工厂**:
-1. **配置驱动**: 从数据库加载 Profile 配置
-2. **依赖注入**: 需要 db_pool 来查询配置
-3. **错误处理**: 批量创建时收集所有错误
-4. **健康检查**: Agent 创建时验证连接
-
-**如果没有工厂模式，代码会是这样**:
-```rust
-// ❌ 没有工厂的代码（分散、重复）
-for config in source_configs {
-    match config {
-        SourceConfig::S3 { profile } => {
-            // 重复的数据库查询逻辑
-            let p = load_s3_profile(&pool, &profile).await?;
-            let client = create_s3_client(&p)?;
-            // ...
-        }
-        SourceConfig::Agent { endpoint } => {
-            // 重复的健康检查逻辑
-            let client = AgentClient::new(endpoint);
-            if !client.health_check().await {
-                // 错误处理...
-            }
-            // ...
-        }
-        // ... 更多重复代码
-    }
-}
-```
-
-**结论**: **工厂模式在这里是合理的，避免代码重复** ✅
+- 现状：StorageFactory 与 storage 模块已移除，仅保留来源配置枚举 SourceConfig（位于 domain/config.rs），用于 routes/search.rs 与 EntryStreamFactory.
+- Local/S3：通过 EntryStreamFactory 直接构造 FsEntryStream/TarEntryStream；S3 仅支持指定 key 的 tar.gz 对象展开。
+- Agent：在路由层直接构造 agent::AgentClient 并调用其 SearchService，实现远程搜索。
 
 ---
 
@@ -368,10 +286,10 @@ let io_concurrency = load_setting(&pool, "search.s3.max_concurrency")
 
 | 模块 | 评分 | 评价 |
 |-----|------|------|
-| 存储抽象层 | ⭐⭐⭐⭐⭐ | 优秀的前瞻性设计 |
+| 条目流(EntryStream) | ⭐⭐⭐⭐⭐ | 统一目录/tar 处理，流式高效 |
 | FileUrl | ⭐⭐⭐⭐⭐ | 统一标识符系统，设计精良 |
-| Coordinator | ⭐⭐⭐⭐ | 多存储源场景必需 |
-| Factory | ⭐⭐⭐⭐ | 配置驱动的合理选择 |
+| 路由并发 | ⭐⭐⭐⭐ | 简洁可观测的任务编排 |
+| Agent | ⭐⭐⭐⭐ | 远程搜索，模块清晰 |
 | Profile管理 | ⭐⭐⭐⭐⭐ | 解决实际问题 |
 | routes.rs | ⭐⭐⭐ | 需要拆分模块 |
 
@@ -391,59 +309,26 @@ let io_concurrency = load_setting(&pool, "search.s3.max_concurrency")
 
 ### 第一优先级：完善即将使用的功能 🔥
 
-#### 1.1 完善 Local 文件系统支持
+#### 1.1 完善本地目录条目流（FsEntryStream）
 ```rust
-// storage/local.rs 已有基础实现，需要完善：
-
-impl DataSource for LocalFileSystem {
-    async fn list_files(&self) -> FileIterator {
-        // ✅ 已实现递归遍历
-        // ⏳ 需要添加: 文件过滤、软链接处理
-    }
-    
-    async fn open_file(&self, entry: &FileEntry) -> FileReader {
-        // ✅ 已实现基本打开
-        // ⏳ 需要添加: 错误处理优化
-    }
-}
-
-// 使用场景
-let local = LocalFileSystem::new(PathBuf::from("/var/log"))
-    .with_recursive(true)
-    .with_pattern(r".*\.log$");  // ⏳ 需要实现
+// 目标：在 FsEntryStream 上补齐这些能力
+// - 文件名正则过滤（pattern）
+// - 最大递归深度（max_depth）
+// - 每目录最大文件数（per-dir cap）
+// - 可选跟随符号链接 + inode 循环检测
 ```
 
 **TODO**:
 - [ ] 添加文件名模式过滤
 - [ ] 优化大目录的遍历性能
-- [ ] 添加软链接和挂载点处理
+- [ ] 添加软链接策略与循环检测
 
 ---
 
-#### 1.2 实现 Agent 客户端
+#### 1.2 Agent 客户端
 ```rust
-// storage/agent.rs 框架已有，需要实现：
-
-impl SearchService for AgentClient {
-    async fn search(
-        &self,
-        query: &str,
-        options: SearchOptions,
-    ) -> SearchResultStream {
-        // ⏳ 需要实现: HTTP 客户端调用远程 Agent
-        // ⏳ 需要实现: 结果流式返回
-        // ⏳ 需要实现: 超时和重试
-    }
-    
-    async fn health_check(&self) -> bool {
-        // ⏳ 需要实现: ping Agent 端点
-    }
-}
-
-// Agent API 设计
-// POST http://agent:8090/api/v1/search
-// Request: { "query": "error", "context": 3 }
-// Response: NDJSON stream
+// 现状：agent/mod.rs 已实现 AgentClient + SearchService，支持健康检查、NDJSON 流式结果。
+// 路由：在 /search 中直接构造 AgentClient 并消费结果流。
 ```
 
 **TODO**:
