@@ -14,10 +14,6 @@ use thiserror::Error;
 use tokio::io::AsyncRead;
 
 pub mod agent;
-pub mod factory;
-pub mod local;
-pub mod s3;
-pub mod targz;
 
 // ============================================================================
 // 公共类型定义

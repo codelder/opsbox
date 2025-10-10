@@ -2,5 +2,7 @@
 // 当前 API 模型仍在 routes.rs 中，未来可以逐步提取到此处
 
 pub mod file_url;
+pub mod config;
 
 pub use file_url::{FileUrl, FileUrlError, TarCompression};
+pub use config::SourceConfig;

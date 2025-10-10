@@ -29,8 +29,11 @@ pub mod utils;
 // 查询解析器
 pub mod query;
 
-// 存储抽象层
+// 存储抽象层（保留以兼容；仅保留 Agent 能力等）
 pub mod storage;
+
+// Agent 别名模块（更贴切命名）
+pub mod agent;
 
 use opsbox_core::{Result, SqlitePool};
 

@@ -7,7 +7,7 @@ use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::repository::settings;
 use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
 use crate::service::search::SearchProcessor;
-use crate::storage::{SearchOptions, agent::AgentClient, SearchService};
+use crate::agent::{SearchOptions, AgentClient, SearchService};
 use crate::utils::bbip_service::derive_plan;
 use crate::utils::renderer::render_json_chunks;
 use axum::{
@@ -42,8 +42,8 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
-) -> Result<(Vec<crate::storage::factory::SourceConfig>, String), AppError> {
-  use crate::storage::factory::SourceConfig;
+) -> Result<(Vec<crate::domain::config::SourceConfig>, String), AppError> {
+  use crate::domain::config::SourceConfig;
 
   // 从数据库加载所有 S3 Profiles
   let profiles = settings::list_s3_profiles(pool).await.map_err(|e| {
@@ -237,7 +237,7 @@ pub async fn stream_search(
       );
 
       // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
-      if let crate::storage::factory::SourceConfig::Agent { endpoint } = &config_clone {
+      if let crate::domain::config::SourceConfig::Agent { endpoint } = &config_clone {
         // 直接构造 AgentClient（使用 endpoint 作为 agent_id）
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
           log::error!("[Search] 非法的 Agent endpoint，需以 http:// 或 https:// 开头: {}", endpoint);
@@ -345,7 +345,7 @@ pub async fn stream_search(
 
           // 构造 FileUrl（S3 tar.gz、Local、Agent 区分）
           let (file_url, file_id) = match &cfg_for_url {
-            crate::storage::factory::SourceConfig::S3 {
+            crate::domain::config::SourceConfig::S3 {
               profile, bucket, key, ..
             } => {
               let bucket_name = bucket.as_deref().unwrap_or("unknown");
@@ -365,7 +365,7 @@ pub async fn stream_search(
                 }
               }
             }
-            crate::storage::factory::SourceConfig::Local { path, .. } => {
+            crate::domain::config::SourceConfig::Local { path, .. } => {
               // 使用 dir+file:///root:relative 的形式编码来源根目录与相对路径
               let base = FileUrl::local(path);
               match FileUrl::dir_entry(base, &res.path) {
@@ -382,7 +382,7 @@ pub async fn stream_search(
                 }
               }
             }
-            crate::storage::factory::SourceConfig::Agent { endpoint } => {
+            crate::domain::config::SourceConfig::Agent { endpoint } => {
               let url = FileUrl::agent(endpoint, &res.path);
               let id = url.to_string();
               (url, id)

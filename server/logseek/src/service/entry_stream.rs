@@ -225,15 +225,15 @@ impl EntryStreamFactory {
   /// - 其他: 暂不支持（后续可扩展 Zip/Agent 等）
   pub async fn from_source(
     &self,
-    source: crate::storage::factory::SourceConfig,
+    source: crate::domain::config::SourceConfig,
   ) -> Result<Box<dyn EntryStream>, String> {
     match source {
-      crate::storage::factory::SourceConfig::Local { path, .. } => {
+      crate::domain::config::SourceConfig::Local { path, .. } => {
         let root = PathBuf::from(path);
         let stream = FsEntryStream::new(root).await.map_err(|e| e.to_string())?;
         Ok(Box::new(stream))
       }
-      crate::storage::factory::SourceConfig::S3 {
+      crate::domain::config::SourceConfig::S3 {
         profile,
         bucket: _bucket_opt,
         prefix: _prefix,
@@ -275,7 +275,7 @@ impl EntryStreamFactory {
         let stream = TarEntryStream::new(reader).await.map_err(|e| e.to_string())?;
         Ok(Box::new(stream))
       }
-      crate::storage::factory::SourceConfig::Agent { .. } => {
+      crate::domain::config::SourceConfig::Agent { .. } => {
         Err("Agent 来源暂不支持构造 EntryStream（建议走远程 SearchService）".to_string())
       }
     }
