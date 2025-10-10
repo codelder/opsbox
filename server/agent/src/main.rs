@@ -18,12 +18,11 @@ use futures::StreamExt;
 use log::{debug, error, info, warn};
 use logseek::{
   query::Query,
-  service::search::SearchProcessor,
-  storage::{
-    DataSource,
-    agent::{AgentInfo, AgentMessage, AgentSearchRequest, AgentStatus},
-    local::LocalFileSystem,
+  service::{
+    entry_stream::{EntryStreamProcessor, FsEntryStream},
+    search::SearchProcessor,
   },
+  agent::{AgentInfo, AgentMessage, AgentSearchRequest, AgentStatus, SearchProgress, SearchStatus},
 };
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, mpsc};
@@ -169,7 +168,7 @@ struct TaskManager {
 
 struct TaskInfo {
   task_id: String,
-  status: logseek::storage::SearchStatus,
+  status: SearchStatus,
   processed: usize,
   matched: usize,
 }
@@ -186,7 +185,7 @@ impl TaskManager {
       task_id.clone(),
       TaskInfo {
         task_id,
-        status: logseek::storage::SearchStatus::Running,
+        status: SearchStatus::Running,
         processed: 0,
         matched: 0,
       },
@@ -202,17 +201,17 @@ impl TaskManager {
 
   async fn complete_task(&self, task_id: &str) {
     if let Some(task) = self.tasks.write().await.get_mut(task_id) {
-      task.status = logseek::storage::SearchStatus::Completed;
+      task.status = SearchStatus::Completed;
     }
   }
 
-  async fn get_progress(&self, task_id: &str) -> Option<logseek::storage::SearchProgress> {
+  async fn get_progress(&self, task_id: &str) -> Option<SearchProgress> {
     self
       .tasks
       .read()
       .await
       .get(task_id)
-      .map(|task| logseek::storage::SearchProgress {
+      .map(|task| SearchProgress {
         task_id: task.task_id.clone(),
         processed_files: task.processed,
         matched_files: task.matched,
@@ -271,7 +270,7 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
 async fn handle_progress(
   State(state): State<AppState>,
   Path(task_id): Path<String>,
-) -> Json<Option<logseek::storage::SearchProgress>> {
+) -> Json<Option<SearchProgress>> {
   Json(state.task_manager.get_progress(&task_id).await)
 }
 
@@ -314,79 +313,46 @@ async fn execute_search(
   for root in &config.search_roots {
     info!("开始搜索目录: {}", root);
 
-    // 创建数据源
-    let data_source = LocalFileSystem::new(PathBuf::from(root));
-
-    // 列举文件
-    let mut files = match data_source.list_files().await {
-      Ok(f) => f,
+    // 使用 FsEntryStream + EntryStreamProcessor 遍历并搜索
+    let mut stream = match FsEntryStream::new(PathBuf::from(root)).await {
+      Ok(s) => s,
       Err(e) => {
-        warn!("无法列举目录 {}: {}", root, e);
+        warn!("无法读取目录 {}: {}", root, e);
         continue;
       }
     };
 
-    // 处理每个文件
-    while let Some(entry_result) = files.next().await {
-      let entry = match entry_result {
-        Ok(e) => e,
-        Err(e) => {
-          warn!("文件条目读取失败: {}", e);
-          continue;
-        }
-      };
+    let mut proc_stream = EntryStreamProcessor::new(processor.clone());
+    let (sr_tx, mut sr_rx) = mpsc::channel::<logseek::service::search::SearchResult>(128);
 
-      // 路径过滤
-      if !processor.should_process_path(&entry.path) {
-        debug!("路径不符合过滤条件，跳过: {}", entry.path);
-        continue;
+    // 后台处理条目流
+    let handle = tokio::spawn(async move {
+      let _ = proc_stream.process_stream(&mut stream, sr_tx).await;
+    });
+
+    while let Some(result) = sr_rx.recv().await {
+      all_processed += 1; // 以条目为单位统计处理量
+      if tx.send(AgentMessage::Result(result)).await.is_err() {
+        debug!("接收端已关闭");
+        return;
       }
+      all_matched += 1; // 仅在有结果时递增匹配（此处等同于 processed，因为只有匹配才有结果）
 
-      all_processed += 1;
-
-      // 打开文件
-      let mut reader = match data_source.open_file(&entry).await {
-        Ok(r) => r,
-        Err(e) => {
-          warn!("无法打开文件 {}: {}", entry.path, e);
-          continue;
-        }
-      };
-
-      // 执行搜索
-      match processor.process_content(entry.path.clone(), &mut reader).await {
-        Ok(Some(result)) => {
-          all_matched += 1;
-
-          // 发送结果
-          if tx.send(AgentMessage::Result(result)).await.is_err() {
-            debug!("接收端已关闭");
-            return;
-          }
-        }
-        Ok(None) => {
-          // 无匹配
-        }
-        Err(e) => {
-          warn!("搜索文件 {} 失败: {}", entry.path, e);
-        }
-      }
-
-      // 定期发送进度
       if all_processed % 100 == 0 {
         task_manager.update_progress(&task_id, all_processed, all_matched).await;
-
         let _ = tx
-          .send(AgentMessage::Progress(logseek::storage::SearchProgress {
+          .send(AgentMessage::Progress(SearchProgress {
             task_id: task_id.clone(),
             processed_files: all_processed,
             matched_files: all_matched,
             total_files: None,
-            status: logseek::storage::SearchStatus::Running,
+            status: SearchStatus::Running,
           }))
           .await;
       }
     }
+
+    let _ = handle.await; // 等待条目处理结束
   }
 
   // 标记任务完成
