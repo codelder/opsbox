@@ -3,9 +3,8 @@ use std::{
   sync::Arc,
 };
 
-use async_trait::async_trait;
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use thiserror::Error;
 use tokio::io::{AsyncRead, BufReader};
 
@@ -19,14 +18,6 @@ pub enum SearchError {
 
 use crate::query::Query;
 
-#[async_trait]
-pub trait Search {
-  async fn search(
-    self,
-    spec: &Query,
-    context_lines: usize,
-  ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError>;
-}
 
 // ============================================================================
 // 配置和辅助类型（已简化：删除未使用的旧配置/统计结构）
@@ -254,74 +245,8 @@ impl SearchResult {
   }
 }
 
-#[async_trait]
-impl Search for tokio::fs::ReadDir {
-  async fn search(
-    self,
-    spec: &Query,
-    context_lines: usize,
-  ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(128);
 
-    let spec_arc = Arc::new(spec.clone());
-    let search_processor = Arc::new(SearchProcessor::new(spec_arc, context_lines));
 
-    tokio::spawn(async move {
-      // 用 FsEntryStream + EntryStreamProcessor 统一处理目录
-      let mut stream = crate::service::entry_stream::FsEntryStream::from_read_dir(self);
-      let mut processor = crate::service::entry_stream::EntryStreamProcessor::new(search_processor);
-      if let Err(e) = processor.process_stream(&mut stream, tx).await {
-        warn!("处理目录条目流失败: {}", e);
-      }
-    });
-
-    Ok(rx)
-  }
-}
-
-trait SearchiableAsyncReader: AsyncRead + Send + Unpin + 'static {}
-impl SearchiableAsyncReader for tokio::fs::File {}
-impl SearchiableAsyncReader for Box<dyn AsyncRead + Send + Unpin> {}
-impl<T: AsRef<[u8]> + Send + Unpin + 'static> SearchiableAsyncReader
-  for tokio_util::compat::Compat<futures::io::Cursor<T>>
-{
-}
-
-// 全异步：对 AsyncRead (如 S3 流) 进行 gzip 解压与 tar 迭代
-#[async_trait]
-impl<T> Search for T
-where
-  T: SearchiableAsyncReader,
-{
-  async fn search(
-    self,
-    spec: &Query,
-    context_lines: usize,
-  ) -> Result<tokio::sync::mpsc::Receiver<SearchResult>, SearchError> {
-    let (tx, rx) = tokio::sync::mpsc::channel::<SearchResult>(8);
-
-    // 使用重构后的组件 ✅
-    let spec_arc = Arc::new(spec.clone());
-    let search_processor = Arc::new(SearchProcessor::new(spec_arc, context_lines));
-
-    tokio::spawn(async move {
-      // 使用 EntryStream 抽象统一处理 tar 条目流
-      let mut stream = match crate::service::entry_stream::TarEntryStream::new(self).await {
-        Ok(s) => s,
-        Err(e) => {
-          error!("无法创建 tar 条目流: {}", e);
-          return;
-        }
-      };
-      let mut processor = crate::service::entry_stream::EntryStreamProcessor::new(search_processor);
-      if let Err(e) = processor.process_stream(&mut stream, tx).await {
-        error!("处理 tar 条目流失败: {}", e);
-      }
-    });
-
-    Ok(rx)
-  }
-}
 
 // 旧的 Tar* 处理器与错误跟踪器已移除（改用 EntryStream 抽象）
 
