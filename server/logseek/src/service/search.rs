@@ -909,11 +909,33 @@ foo lower
     gz_data
   }
 
+  // 测试辅助：运行基于 tar.gz 字节的搜索并收集所有结果
+  async fn run_tar_search_bytes(tar_gz: Vec<u8>, spec: &Query, ctx: usize) -> Vec<SearchResult> {
+    use futures::io::Cursor;
+    use tokio::sync::mpsc;
+    use tokio_util::compat::FuturesAsyncReadCompatExt;
+
+    let cursor = Cursor::new(tar_gz).compat();
+    let mut stream = crate::service::entry_stream::TarEntryStream::new(cursor).await.unwrap();
+    let proc = Arc::new(SearchProcessor::new(Arc::new(spec.clone()), ctx));
+    let mut esp = crate::service::entry_stream::EntryStreamProcessor::new(proc);
+    let (tx, mut rx) = mpsc::channel::<SearchResult>(64);
+
+    let handle = tokio::spawn(async move {
+      let _ = esp.process_stream(&mut stream, tx).await;
+    });
+
+    let mut results = Vec::new();
+    while let Some(r) = rx.recv().await {
+      results.push(r);
+    }
+    let _ = handle.await;
+    results
+  }
+
   #[tokio::test]
   async fn test_search_trait_basic() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     // 创建包含两个文件的 tar.gz
     let tar_gz = create_test_tar_gz(vec![
@@ -921,20 +943,10 @@ foo lower
       ("file2.log", "normal line\nanother error\nlast line\n"),
     ]);
 
-    // 创建 AsyncRead（futures::io::Cursor 转换为 tokio 的 AsyncRead）
-    let cursor = Cursor::new(tar_gz).compat();
-
     // 解析查询
     let spec = Query::parse_github_like("error").unwrap();
 
-    // 调用 search
-    let mut rx = cursor.search(&spec, 1).await.unwrap();
-
-    // 收集结果
-    let mut results = Vec::new();
-    while let Some(result) = rx.recv().await {
-      results.push(result);
-    }
+    let results = run_tar_search_bytes(tar_gz, &spec, 1).await;
 
     // 验证：应该找到两个文件
     assert_eq!(results.len(), 2);
@@ -948,8 +960,6 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_no_match() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     // 创建不包含目标字符串的文件
     let tar_gz = create_test_tar_gz(vec![
@@ -957,16 +967,9 @@ foo lower
       ("file2.log", "normal line\nanother line\nlast line\n"),
     ]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     let spec = Query::parse_github_like("notfound").unwrap();
 
-    let mut rx = cursor.search(&spec, 1).await.unwrap();
-
-    // 收集结果
-    let mut results = Vec::new();
-    while let Some(result) = rx.recv().await {
-      results.push(result);
-    }
+    let results = run_tar_search_bytes(tar_gz, &spec, 1).await;
 
     // 验证：没有匹配结果
     assert_eq!(results.len(), 0);
@@ -975,18 +978,15 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_with_context() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let tar_gz = create_test_tar_gz(vec![("file1.log", "line1\nline2\nerror here\nline4\nline5\n")]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     let spec = Query::parse_github_like("error").unwrap();
 
     // context = 2，应该包含前后各2行
-    let mut rx = cursor.search(&spec, 2).await.unwrap();
+    let results = run_tar_search_bytes(tar_gz, &spec, 2).await;
 
-    let result = rx.recv().await.unwrap();
+    let result = results.into_iter().next().unwrap();
 
     // 验证上下文：应该包含 5 行 (error 前2行 + error 行 + error 后2行)
     assert_eq!(result.lines.len(), 5);
@@ -996,17 +996,14 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_multiple_matches_in_one_file() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let tar_gz = create_test_tar_gz(vec![("file1.log", "error1\nline2\nline3\nerror2\nline5\n")]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     let spec = Query::parse_github_like("error").unwrap();
 
-    let mut rx = cursor.search(&spec, 0).await.unwrap();
+    let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
-    let result = rx.recv().await.unwrap();
+    let result = results.into_iter().next().unwrap();
 
     // 验证：找到两行匹配
     assert_eq!(result.merged.len(), 2);
@@ -1015,18 +1012,15 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_regex_pattern() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let tar_gz = create_test_tar_gz(vec![("file1.log", "error123\nline2\nwarn456\n")]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     // 使用正则匹配 error 或 warn
     let spec = Query::parse_github_like("/error|warn/").unwrap();
 
-    let mut rx = cursor.search(&spec, 0).await.unwrap();
+    let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
-    let result = rx.recv().await.unwrap();
+    let result = results.into_iter().next().unwrap();
 
     // 验证：找到两行匹配
     assert_eq!(result.lines.len(), 3); // 包含上下文
@@ -1035,22 +1029,13 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_empty_tar() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     // 创建空的 tar.gz
     let tar_gz = create_test_tar_gz(vec![]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     let spec = Query::parse_github_like("error").unwrap();
 
-    let mut rx = cursor.search(&spec, 0).await.unwrap();
-
-    // 收集结果
-    let mut results = Vec::new();
-    while let Some(result) = rx.recv().await {
-      results.push(result);
-    }
+    let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
     // 验证：没有结果
     assert_eq!(results.len(), 0);
@@ -1059,8 +1044,6 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_binary_file_skipped() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     // 创建包含二进制内容的文件
     let binary_content = "\x00\x01\x02\x03error\x04\x05\x06";
@@ -1069,16 +1052,9 @@ foo lower
       ("text.log", "this is text error\n"),
     ]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     let spec = Query::parse_github_like("error").unwrap();
 
-    let mut rx = cursor.search(&spec, 0).await.unwrap();
-
-    // 收集结果
-    let mut results = Vec::new();
-    while let Some(result) = rx.recv().await {
-      results.push(result);
-    }
+    let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
     // 验证：二进制文件被跳过，只有文本文件
     assert_eq!(results.len(), 1);
@@ -1088,8 +1064,6 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_many_files() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     // 创建多个文件
     let mut files = Vec::new();
@@ -1104,16 +1078,9 @@ foo lower
 
     let tar_gz = create_test_tar_gz(files_ref);
 
-    let cursor = Cursor::new(tar_gz).compat();
     let spec = Query::parse_github_like("error").unwrap();
 
-    let mut rx = cursor.search(&spec, 0).await.unwrap();
-
-    // 收集结果
-    let mut results = Vec::new();
-    while let Some(result) = rx.recv().await {
-      results.push(result);
-    }
+    let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
     // 验证：找到所有 10 个文件
     assert_eq!(results.len(), 10);
@@ -1122,8 +1089,6 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_complex_query() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let tar_gz = create_test_tar_gz(vec![
       ("file1.log", "error and warning\nline2\n"),
@@ -1131,17 +1096,10 @@ foo lower
       ("file3.log", "only warning here\nline2\n"),
     ]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     // 同时包含 error 和 warning
     let spec = Query::parse_github_like("error warning").unwrap();
 
-    let mut rx = cursor.search(&spec, 0).await.unwrap();
-
-    // 收集结果
-    let mut results = Vec::new();
-    while let Some(result) = rx.recv().await {
-      results.push(result);
-    }
+    let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
     // 验证：只有 file1.log 同时包含两个词
     assert_eq!(results.len(), 1);
@@ -1151,24 +1109,15 @@ foo lower
   #[tokio::test]
   async fn test_search_trait_path_with_directory() {
     use crate::query::Query;
-    use futures::io::Cursor;
-    use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let tar_gz = create_test_tar_gz(vec![
       ("logs/app/file1.log", "error in app\n"),
       ("logs/system/file2.log", "error in system\n"),
     ]);
 
-    let cursor = Cursor::new(tar_gz).compat();
     let spec = Query::parse_github_like("error").unwrap();
 
-    let mut rx = cursor.search(&spec, 0).await.unwrap();
-
-    // 收集结果
-    let mut results = Vec::new();
-    while let Some(result) = rx.recv().await {
-      results.push(result);
-    }
+    let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
     // 验证：找到两个文件，且路径包含目录
     assert_eq!(results.len(), 2);
