@@ -6,13 +6,13 @@ use super::{DataSource, FileEntry, FileIterator, FileMetadata, FileReader, Stora
 use async_trait::async_trait;
 use log::{debug, warn};
 use regex::Regex;
-use std::path::PathBuf;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 /// 本地文件系统存储源
 ///
 /// 提供对本地文件系统的访问，搜索逻辑由 Server 端执行
-/// 
+///
 /// # 功能特性
 /// - 递归/非递归目录遍历
 /// - 文件名模式过滤（正则表达式）
@@ -47,7 +47,7 @@ impl LocalFileSystem {
       follow_symlinks: false,
       pattern: None,
       max_files_per_dir: Some(10000), // 默认每目录最多10000个文件
-      max_depth: Some(20),             // 默认最大深度20层
+      max_depth: Some(20),            // 默认最大深度20层
     }
   }
 
@@ -78,9 +78,7 @@ impl LocalFileSystem {
   ///     .with_pattern(r".*\.log$".to_string()).unwrap();
   /// ```
   pub fn with_pattern(mut self, pattern: String) -> Result<Self, StorageError> {
-    let regex = Regex::new(&pattern).map_err(|e| {
-      StorageError::Other(format!("无效的正则表达式: {}", e))
-    })?;
+    let regex = Regex::new(&pattern).map_err(|e| StorageError::Other(format!("无效的正则表达式: {}", e)))?;
     self.pattern = Some(regex);
     Ok(self)
   }
@@ -100,7 +98,6 @@ impl LocalFileSystem {
     self.max_depth = Some(max);
     self
   }
-
 }
 
 #[async_trait]
@@ -119,9 +116,11 @@ impl DataSource for LocalFileSystem {
 
     debug!(
       "开始列举本地文件: root={:?}, recursive={}, follow_symlinks={}, pattern={:?}, max_files_per_dir={:?}, max_depth={:?}",
-      root, recursive, follow_symlinks, 
-      pattern.as_ref().map(|p| p.as_str()), 
-      max_files_per_dir, 
+      root,
+      recursive,
+      follow_symlinks,
+      pattern.as_ref().map(|p| p.as_str()),
+      max_files_per_dir,
       max_depth
     );
 
@@ -224,13 +223,13 @@ impl DataSource for LocalFileSystem {
                 let file_name = path.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("");
-                
-                if let Some(ref regex) = pattern {
-                    if !regex.is_match(file_name) {
+
+                if let Some(ref regex) = pattern
+                &&  !regex.is_match(file_name) {
                         debug!("文件名不匹配过滤模式，跳过: {}", file_name);
                         continue;
                     }
-                }
+
 
                 // 检查文件读取权限
                 if let Err(e) = tokio::fs::File::open(&path).await {
@@ -246,7 +245,7 @@ impl DataSource for LocalFileSystem {
                 // 生成文件条目
                 dir_file_count += 1;
                 total_file_count += 1;
-                
+
                 yield Ok(FileEntry {
                     path: path.to_string_lossy().to_string(),
                     metadata: FileMetadata {
@@ -271,7 +270,7 @@ impl DataSource for LocalFileSystem {
         );
     };
 
-        Ok(Box::new(Box::pin(stream)))
+    Ok(Box::new(Box::pin(stream)))
   }
 
   async fn open_file(&self, entry: &FileEntry) -> Result<FileReader, StorageError> {
@@ -415,158 +414,155 @@ mod tests {
     assert_eq!(content, "hello world");
   }
 
-    #[tokio::test]
-    async fn test_open_nonexistent_file() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let source = LocalFileSystem::new(temp_dir.path().to_path_buf());
-        
-        let entry = FileEntry {
-            path: "/nonexistent/file.txt".to_string(),
-            metadata: FileMetadata::default(),
-        };
-        
-        let result = source.open_file(&entry).await;
-        assert!(result.is_err());
-        // 验证是 NotFound 错误
-        if let Err(e) = result {
-            assert!(matches!(e, StorageError::NotFound(_)));
-        }
+  #[tokio::test]
+  async fn test_open_nonexistent_file() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let source = LocalFileSystem::new(temp_dir.path().to_path_buf());
+
+    let entry = FileEntry {
+      path: "/nonexistent/file.txt".to_string(),
+      metadata: FileMetadata::default(),
+    };
+
+    let result = source.open_file(&entry).await;
+    assert!(result.is_err());
+    // 验证是 NotFound 错误
+    if let Err(e) = result {
+      assert!(matches!(e, StorageError::NotFound(_)));
+    }
+  }
+
+  #[tokio::test]
+  async fn test_pattern_filtering() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    // 创建不同类型的文件
+    std::fs::File::create(temp_dir.path().join("app.log"))
+      .unwrap()
+      .write_all(b"log1")
+      .unwrap();
+    std::fs::File::create(temp_dir.path().join("error.log"))
+      .unwrap()
+      .write_all(b"log2")
+      .unwrap();
+    std::fs::File::create(temp_dir.path().join("config.txt"))
+      .unwrap()
+      .write_all(b"config")
+      .unwrap();
+    std::fs::File::create(temp_dir.path().join("data.json"))
+      .unwrap()
+      .write_all(b"json")
+      .unwrap();
+
+    // 只匹配 .log 文件
+    let source = LocalFileSystem::new(temp_dir.path().to_path_buf())
+      .with_pattern(r".*\.log$".to_string())
+      .unwrap();
+
+    let mut files = source.list_files().await.unwrap();
+    let mut count = 0;
+    let mut log_files = vec![];
+
+    while let Some(result) = files.next().await {
+      assert!(result.is_ok());
+      let entry = result.unwrap();
+      log_files.push(entry.path);
+      count += 1;
     }
 
-    #[tokio::test]
-    async fn test_pattern_filtering() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    assert_eq!(count, 2); // 只有两个 .log 文件
+    assert!(log_files.iter().all(|p| p.ends_with(".log")));
+  }
 
-        // 创建不同类型的文件
-        std::fs::File::create(temp_dir.path().join("app.log"))
-            .unwrap()
-            .write_all(b"log1")
-            .unwrap();
-        std::fs::File::create(temp_dir.path().join("error.log"))
-            .unwrap()
-            .write_all(b"log2")
-            .unwrap();
-        std::fs::File::create(temp_dir.path().join("config.txt"))
-            .unwrap()
-            .write_all(b"config")
-            .unwrap();
-        std::fs::File::create(temp_dir.path().join("data.json"))
-            .unwrap()
-            .write_all(b"json")
-            .unwrap();
+  #[tokio::test]
+  async fn test_max_files_per_dir() {
+    let temp_dir = tempfile::tempdir().unwrap();
 
-        // 只匹配 .log 文件
-        let source = LocalFileSystem::new(temp_dir.path().to_path_buf())
-            .with_pattern(r".*\.log$".to_string())
-            .unwrap();
-
-        let mut files = source.list_files().await.unwrap();
-        let mut count = 0;
-        let mut log_files = vec![];
-
-        while let Some(result) = files.next().await {
-            assert!(result.is_ok());
-            let entry = result.unwrap();
-            log_files.push(entry.path);
-            count += 1;
-        }
-
-        assert_eq!(count, 2); // 只有两个 .log 文件
-        assert!(log_files.iter().all(|p| p.ends_with(".log")));
+    // 创建 100 个文件
+    for i in 0..100 {
+      std::fs::File::create(temp_dir.path().join(format!("file{}.txt", i)))
+        .unwrap()
+        .write_all(b"test")
+        .unwrap();
     }
 
-    #[tokio::test]
-    async fn test_max_files_per_dir() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    // 限制每目录最多 50 个文件
+    let source = LocalFileSystem::new(temp_dir.path().to_path_buf()).with_max_files_per_dir(50);
 
-        // 创建 100 个文件
-        for i in 0..100 {
-            std::fs::File::create(temp_dir.path().join(format!("file{}.txt", i)))
-                .unwrap()
-                .write_all(b"test")
-                .unwrap();
-        }
+    let mut files = source.list_files().await.unwrap();
+    let mut count = 0;
 
-        // 限制每目录最多 50 个文件
-        let source = LocalFileSystem::new(temp_dir.path().to_path_buf())
-            .with_max_files_per_dir(50);
-
-        let mut files = source.list_files().await.unwrap();
-        let mut count = 0;
-
-        while files.next().await.is_some() {
-            count += 1;
-        }
-
-        assert_eq!(count, 50); // 只读取了 50 个文件
+    while files.next().await.is_some() {
+      count += 1;
     }
 
-    #[tokio::test]
-    async fn test_max_depth() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    assert_eq!(count, 50); // 只读取了 50 个文件
+  }
 
-        // 创建深度为 5 的目录树
-        let mut current = temp_dir.path().to_path_buf();
-        for i in 0..5 {
-            current = current.join(format!("level{}", i));
-            std::fs::create_dir(&current).unwrap();
-            std::fs::File::create(current.join(format!("file{}.txt", i)))
-                .unwrap()
-                .write_all(b"test")
-                .unwrap();
-        }
+  #[tokio::test]
+  async fn test_max_depth() {
+    let temp_dir = tempfile::tempdir().unwrap();
 
-        // 限制最大深度为 3
-        let source = LocalFileSystem::new(temp_dir.path().to_path_buf())
-            .with_max_depth(3);
-
-        let mut files = source.list_files().await.unwrap();
-        let mut count = 0;
-
-        while files.next().await.is_some() {
-            count += 1;
-        }
-
-        assert_eq!(count, 3); // 只读取了深度 0, 1, 2 的文件
+    // 创建深度为 5 的目录树
+    let mut current = temp_dir.path().to_path_buf();
+    for i in 0..5 {
+      current = current.join(format!("level{}", i));
+      std::fs::create_dir(&current).unwrap();
+      std::fs::File::create(current.join(format!("file{}.txt", i)))
+        .unwrap()
+        .write_all(b"test")
+        .unwrap();
     }
 
-    #[tokio::test]
-    #[cfg(unix)] // 符号链接只在 Unix 系统上测试
-    async fn test_symlink_loop_detection() {
-        let temp_dir = tempfile::tempdir().unwrap();
+    // 限制最大深度为 3
+    let source = LocalFileSystem::new(temp_dir.path().to_path_buf()).with_max_depth(3);
 
-        // 创建目录 A 和 B
-        let dir_a = temp_dir.path().join("dir_a");
-        let dir_b = temp_dir.path().join("dir_b");
-        std::fs::create_dir(&dir_a).unwrap();
-        std::fs::create_dir(&dir_b).unwrap();
+    let mut files = source.list_files().await.unwrap();
+    let mut count = 0;
 
-        // 创建循环符号链接: A -> B 和 B -> A
-        std::os::unix::fs::symlink(&dir_b, dir_a.join("link_to_b")).unwrap();
-        std::os::unix::fs::symlink(&dir_a, dir_b.join("link_to_a")).unwrap();
-
-        // 创建一个文件在 A 中
-        std::fs::File::create(dir_a.join("file.txt"))
-            .unwrap()
-            .write_all(b"test")
-            .unwrap();
-
-        // 启用符号链接跟随
-        let source = LocalFileSystem::new(temp_dir.path().to_path_buf())
-            .with_follow_symlinks(true);
-
-        let mut files = source.list_files().await.unwrap();
-        let mut count = 0;
-
-        while files.next().await.is_some() {
-            count += 1;
-            // 防止无限循环，设置上限
-            if count > 100 {
-                panic!("检测到可能的无限循环");
-            }
-        }
-
-        // 应该只有一个文件，循环链接被检测并跳过
-        assert_eq!(count, 1);
+    while files.next().await.is_some() {
+      count += 1;
     }
+
+    assert_eq!(count, 3); // 只读取了深度 0, 1, 2 的文件
+  }
+
+  #[tokio::test]
+  #[cfg(unix)] // 符号链接只在 Unix 系统上测试
+  async fn test_symlink_loop_detection() {
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    // 创建目录 A 和 B
+    let dir_a = temp_dir.path().join("dir_a");
+    let dir_b = temp_dir.path().join("dir_b");
+    std::fs::create_dir(&dir_a).unwrap();
+    std::fs::create_dir(&dir_b).unwrap();
+
+    // 创建循环符号链接: A -> B 和 B -> A
+    std::os::unix::fs::symlink(&dir_b, dir_a.join("link_to_b")).unwrap();
+    std::os::unix::fs::symlink(&dir_a, dir_b.join("link_to_a")).unwrap();
+
+    // 创建一个文件在 A 中
+    std::fs::File::create(dir_a.join("file.txt"))
+      .unwrap()
+      .write_all(b"test")
+      .unwrap();
+
+    // 启用符号链接跟随
+    let source = LocalFileSystem::new(temp_dir.path().to_path_buf()).with_follow_symlinks(true);
+
+    let mut files = source.list_files().await.unwrap();
+    let mut count = 0;
+
+    while files.next().await.is_some() {
+      count += 1;
+      // 防止无限循环，设置上限
+      if count > 100 {
+        panic!("检测到可能的无限循环");
+      }
+    }
+
+    // 应该只有一个文件，循环链接被检测并跳过
+    assert_eq!(count, 1);
+  }
 }

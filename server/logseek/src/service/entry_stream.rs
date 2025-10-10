@@ -21,9 +21,7 @@ pub struct EntryMeta {
 /// 统一的“条目流”抽象：每次产出 (EntryMeta, Reader)
 #[async_trait]
 pub trait EntryStream: Send {
-  async fn next_entry(
-    &mut self,
-  ) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>>;
+  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>>;
 }
 
 /// 目录条目流（DFS 遍历）
@@ -36,31 +34,46 @@ impl FsEntryStream {
   /// 从根目录创建条目流
   pub async fn new(root: PathBuf) -> io::Result<Self> {
     let rd = tokio::fs::read_dir(&root).await?;
-    Ok(Self { stack: vec![rd], root: Some(root) })
+    Ok(Self {
+      stack: vec![rd],
+      root: Some(root),
+    })
   }
 
   /// 直接从已存在的 ReadDir 创建（无根路径信息）
   pub fn from_read_dir(rd: tokio::fs::ReadDir) -> Self {
-    Self { stack: vec![rd], root: None }
+    Self {
+      stack: vec![rd],
+      root: None,
+    }
   }
 }
 
 #[async_trait]
 impl EntryStream for FsEntryStream {
-  async fn next_entry(
-    &mut self,
-  ) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     loop {
-      let Some(current) = self.stack.last_mut() else { return Ok(None); };
+      let Some(current) = self.stack.last_mut() else {
+        return Ok(None);
+      };
       match current.next_entry().await {
         Ok(Some(entry)) => {
-          let ft = match entry.file_type().await { Ok(t) => t, Err(_) => continue };
-          if ft.is_symlink() { continue; }
-          if ft.is_dir() {
-            if let Ok(sub) = tokio::fs::read_dir(entry.path()).await { self.stack.push(sub); }
+          let ft = match entry.file_type().await {
+            Ok(t) => t,
+            Err(_) => continue,
+          };
+          if ft.is_symlink() {
             continue;
           }
-          if !ft.is_file() { continue; }
+          if ft.is_dir() {
+            if let Ok(sub) = tokio::fs::read_dir(entry.path()).await {
+              self.stack.push(sub);
+            }
+            continue;
+          }
+          if !ft.is_file() {
+            continue;
+          }
 
           let path_abs = entry.path();
           let rel = if let Some(root) = &self.root {
@@ -74,11 +87,19 @@ impl EntryStream for FsEntryStream {
           };
           let file = tokio::fs::File::open(&path_abs).await?;
           let reader = BufReader::new(file);
-          let meta = EntryMeta { path: rel, size: None, is_compressed: false };
+          let meta = EntryMeta {
+            path: rel,
+            size: None,
+            is_compressed: false,
+          };
           return Ok(Some((meta, Box::new(reader))));
         }
-        Ok(None) => { self.stack.pop(); /* 回溯 */ }
-        Err(_) => { self.stack.pop(); /* 跳过该目录 */ }
+        Ok(None) => {
+          self.stack.pop(); /* 回溯 */
+        }
+        Err(_) => {
+          self.stack.pop(); /* 跳过该目录 */
+        }
       }
     }
   }
@@ -101,9 +122,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
 
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
-  async fn next_entry(
-    &mut self,
-  ) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     match self.entries.next().await {
       Some(Ok(entry)) => {
         let path = entry
@@ -112,7 +131,11 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
           .map(|p| p.to_string_lossy().to_string())
           .unwrap_or_else(|| "<unknown>".into());
         let reader = entry.compat(); // 转为 tokio AsyncRead
-        let meta = EntryMeta { path, size: None, is_compressed: false };
+        let meta = EntryMeta {
+          path,
+          size: None,
+          is_compressed: false,
+        };
         Ok(Some((meta, Box::new(reader))))
       }
       Some(Err(e)) => Err(e),
@@ -129,7 +152,10 @@ pub struct EntryStreamProcessor {
 
 impl EntryStreamProcessor {
   pub fn new(processor: Arc<SearchProcessor>) -> Self {
-    Self { processor, content_timeout: Duration::from_secs(60) }
+    Self {
+      processor,
+      content_timeout: Duration::from_secs(60),
+    }
   }
 
   #[allow(dead_code)]
@@ -145,7 +171,9 @@ impl EntryStreamProcessor {
     tx: tokio::sync::mpsc::Sender<SearchResult>,
   ) -> Result<(), String> {
     loop {
-      let Some((meta, mut reader)) = entries.next_entry().await.map_err(|e| e.to_string())? else { break };
+      let Some((meta, mut reader)) = entries.next_entry().await.map_err(|e| e.to_string())? else {
+        break;
+      };
 
       // 路径过滤
       if !self.processor.should_process_path(&meta.path) {
@@ -161,9 +189,7 @@ impl EntryStreamProcessor {
       .await
       {
         Ok(Ok(Some(result))) => {
-          if let Err(_)
-            = self.processor.send_result(result, &tx).await
-          {
+          if let Err(_) = self.processor.send_result(result, &tx).await {
             // 接收方关闭
             warn!("下游接收已关闭，终止条目流处理");
             break;
@@ -188,7 +214,9 @@ pub struct EntryStreamFactory {
 }
 
 impl EntryStreamFactory {
-  pub fn new(db_pool: SqlitePool) -> Self { Self { db_pool } }
+  pub fn new(db_pool: SqlitePool) -> Self {
+    Self { db_pool }
+  }
 
   /// 从存储源配置创建条目流
   ///
@@ -205,7 +233,13 @@ impl EntryStreamFactory {
         let stream = FsEntryStream::new(root).await.map_err(|e| e.to_string())?;
         Ok(Box::new(stream))
       }
-      crate::storage::factory::SourceConfig::S3 { profile, bucket: _bucket_opt, prefix: _prefix, pattern: _pattern, key } => {
+      crate::storage::factory::SourceConfig::S3 {
+        profile,
+        bucket: _bucket_opt,
+        prefix: _prefix,
+        pattern: _pattern,
+        key,
+      } => {
         // 仅支持 key 明确指向 tar.gz 对象的场景
         let key = key.ok_or_else(|| "S3 条目流暂仅支持指定单个对象 key".to_string())?;
         if !(key.ends_with(".tar.gz") || key.ends_with(".tgz")) {
@@ -220,7 +254,7 @@ impl EntryStreamFactory {
 
         // 构造读取器（复用旧的 S3 客户端工具）
         let reader = {
-          use crate::utils::storage::{get_or_create_s3_client, S3ReaderProvider, ReaderProvider as _};
+          use crate::utils::storage::{ReaderProvider as _, S3ReaderProvider, get_or_create_s3_client};
           // 先确保客户端创建（便于日志与错误提前暴露）
           let _ = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
             .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;

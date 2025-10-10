@@ -1,5 +1,5 @@
 //! 路由辅助函数
-//! 
+//!
 //! 提供路由共享的配置和工具函数
 
 /// 获取流式响应通道容量
@@ -22,7 +22,7 @@ pub fn s3_max_concurrency() -> usize {
 }
 
 /// 读取 CPU 并发上限（限制同时进行解压/检索的任务数）
-/// 
+///
 /// 简化策略：使用硬编码的保守上限 min(物理并发, 16)
 pub fn cpu_max_concurrency() -> usize {
   num_cpus::get().min(16)

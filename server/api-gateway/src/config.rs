@@ -133,7 +133,6 @@ impl AppConfig {
       })
   }
 
-
   /// 获取 S3 最大并发
   pub fn get_s3_max_concurrency(&self) -> usize {
     self
@@ -142,8 +141,6 @@ impl AppConfig {
       .unwrap_or(12)
       .clamp(1, 128)
   }
-
-
 
   /// 获取 S3 超时时间
   pub fn get_s3_timeout_sec(&self) -> u64 {

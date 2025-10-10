@@ -2,7 +2,7 @@
 // 存储源工厂 - 根据配置创建存储源实例
 // ============================================================================
 
-use super::{agent::AgentClient, local::LocalFileSystem, s3::S3Storage, StorageError, StorageSource};
+use super::{StorageError, StorageSource, agent::AgentClient, local::LocalFileSystem, s3::S3Storage};
 use crate::repository::settings;
 use log::{debug, info, warn};
 use opsbox_core::SqlitePool;
@@ -90,7 +90,13 @@ impl StorageFactory {
         self.create_local_source(path, recursive).await
       }
 
-      SourceConfig::S3 { profile, bucket, prefix, pattern, key } => {
+      SourceConfig::S3 {
+        profile,
+        bucket,
+        prefix,
+        pattern,
+        key,
+      } => {
         if let Some(ref k) = key {
           info!("创建 S3 存储源: profile={}, key={}", profile, k);
         } else {
@@ -135,8 +141,10 @@ impl StorageFactory {
       .map_err(|e| StorageError::Other(format!("加载 S3 Profile 失败: {:?}", e)))?
       .ok_or_else(|| StorageError::NotFound(format!("S3 Profile 不存在: {}", profile_name)))?;
 
-    debug!("加载的 S3 Profile: profile_name={}, endpoint={}, bucket={}", 
-           profile.profile_name, profile.endpoint, profile.bucket);
+    debug!(
+      "加载的 S3 Profile: profile_name={}, endpoint={}, bucket={}",
+      profile.profile_name, profile.endpoint, profile.bucket
+    );
 
     // 构造 S3Config
     // 当 key 被指定时，将其作为 prefix 传递，并忽略 pattern
@@ -165,7 +173,10 @@ impl StorageFactory {
   async fn create_agent_source(&self, endpoint: String) -> Result<StorageSource, StorageError> {
     // 验证 endpoint 格式
     if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-      return Err(StorageError::Other(format!("Agent endpoint 必须是有效的 HTTP URL: {}", endpoint)));
+      return Err(StorageError::Other(format!(
+        "Agent endpoint 必须是有效的 HTTP URL: {}",
+        endpoint
+      )));
     }
 
     // 使用 endpoint 作为 agent_id
@@ -188,10 +199,7 @@ impl StorageFactory {
   /// # 返回
   ///
   /// 返回成功创建的存储源列表和失败的错误信息
-  pub async fn create_sources(
-    &self,
-    configs: Vec<SourceConfig>,
-  ) -> (Vec<StorageSource>, Vec<SourceCreationError>) {
+  pub async fn create_sources(&self, configs: Vec<SourceConfig>) -> (Vec<StorageSource>, Vec<SourceCreationError>) {
     let mut sources = Vec::new();
     let mut errors = Vec::new();
 
@@ -211,11 +219,7 @@ impl StorageFactory {
       }
     }
 
-    info!(
-      "批量创建存储源完成: 成功 {}, 失败 {}",
-      sources.len(),
-      errors.len()
-    );
+    info!("批量创建存储源完成: 成功 {}, 失败 {}", sources.len(), errors.len());
 
     (sources, errors)
   }
@@ -244,11 +248,7 @@ impl StorageFactory {
   ) -> Result<Vec<StorageSource>, Vec<SourceCreationError>> {
     let (sources, errors) = self.create_sources(configs).await;
 
-    if errors.is_empty() {
-      Ok(sources)
-    } else {
-      Err(errors)
-    }
+    if errors.is_empty() { Ok(sources) } else { Err(errors) }
   }
 }
 
@@ -293,7 +293,13 @@ mod tests {
     // 测试反序列化
     let deserialized: SourceConfig = serde_json::from_str(&json).unwrap();
     match deserialized {
-      SourceConfig::S3 { profile, bucket, prefix, pattern, key } => {
+      SourceConfig::S3 {
+        profile,
+        bucket,
+        prefix,
+        pattern,
+        key,
+      } => {
         assert_eq!(profile, "default");
         assert_eq!(bucket, Some("my-bucket".to_string()));
         assert_eq!(prefix, Some("logs/".to_string()));

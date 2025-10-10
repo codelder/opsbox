@@ -38,10 +38,7 @@ pub enum FileUrl {
 
   /// 本地目录内的文件（用于标识“来源根目录 + 相对路径”的场景）
   /// 格式: `dir+<base>:<entry>`，其中 base 通常为 file:///root
-  DirEntry {
-    base: Box<FileUrl>,
-    entry_path: String,
-  },
+  DirEntry { base: Box<FileUrl>, entry_path: String },
 
   /// 远程 Agent 节点文件
   /// 格式: `agent://agent-id/path/to/file`

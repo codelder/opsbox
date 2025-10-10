@@ -1,12 +1,9 @@
 //! 自然语言转查询路由
-//! 
+//!
 //! 处理 /nl2q 端点，将自然语言转换为查询字符串
 
-use axum::{
-  extract::Json,
-  http::StatusCode,
-};
 use crate::api::models::NL2QOut;
+use axum::{extract::Json, http::StatusCode};
 use problemdetails::Problem;
 
 // NL → Q 端点，实现将自然语言转换为查询字符串

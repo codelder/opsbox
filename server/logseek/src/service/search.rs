@@ -760,7 +760,6 @@ foo lower
     assert_eq!(result.merged.len(), 1);
   }
 
-
   // === 更多 grep_context 边界测试 ===
   #[tokio::test]
   async fn grep_single_line_file() {
@@ -1426,5 +1425,4 @@ foo lower
         .any(|line| line.contains("200") || line.contains("500"))
     );
   }
-
 }

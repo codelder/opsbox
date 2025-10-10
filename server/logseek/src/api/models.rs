@@ -119,7 +119,7 @@ pub struct ViewParams {
 }
 
 /// S3 Profile 负载（用于 POST 请求）
-/// 
+///
 /// 每个 Profile 包含完整的 S3 访问配置：Endpoint + Bucket + Credentials
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct S3ProfilePayload {

@@ -1,13 +1,13 @@
 //! S3 设置路由
-//! 
+//!
 //! 处理 /settings/s3 端点，管理 S3 存储配置
 
+use crate::api::models::{AppError, S3SettingsPayload};
+use crate::repository::settings;
 use axum::{
   extract::{Json, State},
   http::StatusCode,
 };
-use crate::api::models::{AppError, S3SettingsPayload};
-use crate::repository::settings;
 use opsbox_core::SqlitePool;
 use problemdetails::Problem;
 

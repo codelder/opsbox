@@ -70,20 +70,21 @@ pub struct PathFilter {
 impl PathFilter {
   pub fn is_allowed(&self, path: &str) -> bool {
     if let Some(ex) = &self.exclude
-      && ex.is_match(path) {
-        return false;
-      }
+      && ex.is_match(path)
+    {
+      return false;
+    }
     if self.exclude_contains.iter().any(|s| path.contains(s)) {
       return false;
     }
     if let Some(inc) = &self.include
-      && !inc.is_match(path) {
-        return false;
-      }
-    if !self.include_contains.is_empty()
-      && !self.include_contains.iter().any(|s| path.contains(s)) {
-        return false;
-      }
+      && !inc.is_match(path)
+    {
+      return false;
+    }
+    if !self.include_contains.is_empty() && !self.include_contains.iter().any(|s| path.contains(s)) {
+      return false;
+    }
     true
   }
 }

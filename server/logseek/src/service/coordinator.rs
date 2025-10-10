@@ -167,7 +167,7 @@ impl SearchCoordinator {
 
         // 根据文件类型选择处理方式
         let is_targz = entry.path.ends_with(".tar.gz") || entry.path.ends_with(".tgz");
-        
+
         if is_targz {
           // 对 tar.gz 文件，复用现有的 Search trait 实现
           // 该实现会自动解压 gzip 并解析 tar 归档

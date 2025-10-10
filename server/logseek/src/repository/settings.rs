@@ -21,7 +21,7 @@ pub struct S3Settings {
 }
 
 /// S3 配置 Profile
-/// 
+///
 /// 每个 Profile 包含完整的 S3 访问配置：Endpoint + Bucket + Credentials
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct S3Profile {
@@ -114,7 +114,10 @@ async fn migrate_legacy_s3_config(pool: &SqlitePool) -> Result<()> {
     .await
     .map_err(|e| AppError::internal(format!("迁移 S3 配置失败: {}", e)))?;
 
-    info!("成功将旧 S3 配置迁移到 default profile（endpoint={}, bucket={}）", endpoint, bucket);
+    info!(
+      "成功将旧 S3 配置迁移到 default profile（endpoint={}, bucket={}）",
+      endpoint, bucket
+    );
   }
 
   // 标记已迁移
@@ -279,13 +282,15 @@ pub async fn load_s3_profile(pool: &SqlitePool, profile_name: &str) -> Result<Op
   .await
   .map_err(|e| AppError::internal(format!("查询 S3 Profile 失败: {}", e)))?;
 
-  Ok(row.map(|(profile_name, endpoint, bucket, access_key, secret_key)| S3Profile {
-    profile_name,
-    endpoint,
-    bucket,
-    access_key,
-    secret_key,
-  }))
+  Ok(
+    row.map(|(profile_name, endpoint, bucket, access_key, secret_key)| S3Profile {
+      profile_name,
+      endpoint,
+      bucket,
+      access_key,
+      secret_key,
+    }),
+  )
 }
 
 /// 加载所有 S3 Profiles

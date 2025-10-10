@@ -1,15 +1,15 @@
 //! 文件查看路由
-//! 
+//!
 //! 处理 /view.cache.json 端点，从缓存中读取文件内容
 
+use crate::api::models::ViewParams;
+use crate::domain::FileUrl;
+use crate::repository::cache::cache as simple_cache;
 use axum::{
   body::Body,
   extract::Query,
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
 };
-use crate::api::models::ViewParams;
-use crate::domain::FileUrl;
-use crate::repository::cache::cache as simple_cache;
 use problemdetails::Problem;
 
 /// 查看缓存中的文件内容
