@@ -5,16 +5,18 @@
 use crate::api::models::{AppError, SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::repository::settings;
-use crate::utils::bbip_service::derive_plan;
-use crate::utils::renderer::render_json_chunks;
 use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
 use crate::service::search::SearchProcessor;
+use crate::storage::{SearchOptions, agent::AgentClient, SearchService};
+use crate::utils::bbip_service::derive_plan;
+use crate::utils::renderer::render_json_chunks;
 use axum::{
   body::Body,
   extract::{Json, State},
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
 use chrono::{Datelike, Duration};
+use futures::StreamExt;
 use opsbox_core::SqlitePool;
 use problemdetails::Problem;
 use std::sync::Arc;
@@ -196,7 +198,7 @@ pub async fn stream_search(
     source_configs.len()
   );
 
-  // 4. 为每个存储源启动搜索任务（带并发控制，基于 EntryStreamFactory）
+  // 4. 为每个存储源启动搜索任务（带并发控制，基于 EntryStreamFactory；Agent 走 SearchService）
   let spec = Arc::new(spec);
   for (idx, config) in source_configs.iter().enumerate() {
     let tx_clone = tx.clone();
@@ -206,6 +208,7 @@ pub async fn stream_search(
     let io_sem_clone = io_sem.clone();
     let pool_clone = pool.clone();
     let config_clone = config.clone();
+    let cleaned_query_clone = cleaned_query.clone();
 
     tokio::spawn(async move {
       let task_start = std::time::Instant::now();
@@ -233,6 +236,84 @@ pub async fn stream_search(
         io_wait_time.as_secs_f64()
       );
 
+      // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
+      if let crate::storage::factory::SourceConfig::Agent { endpoint } = &config_clone {
+        // 直接构造 AgentClient（使用 endpoint 作为 agent_id）
+        if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+          log::error!("[Search] 非法的 Agent endpoint，需以 http:// 或 https:// 开头: {}", endpoint);
+          return;
+        }
+        let client = AgentClient::new(endpoint.clone(), endpoint.clone());
+
+        // 可选健康检查
+        if !client.health_check().await {
+          log::error!("[Search] Agent 健康检查失败，跳过: {}", endpoint);
+          return;
+        }
+
+        // 调用远程搜索
+        let mut stream = match client
+          .search(&cleaned_query_clone, ctx, SearchOptions::default())
+          .await
+        {
+          Ok(st) => st,
+          Err(e) => {
+            log::error!("[Search] 调用 Agent 搜索失败 source_idx={} endpoint={} err={}", idx, endpoint, e);
+            return;
+          }
+        };
+
+        // 直接消费结果流并发送 NDJSON
+        let tx_bytes = tx_clone.clone();
+        let highlights_s = highlights_clone.clone();
+        let sid_for_cache = sid_clone.clone();
+        let endpoint_clone = endpoint.clone();
+        let service_task = tokio::spawn(async move {
+          use crate::domain::file_url::FileUrl;
+          while let Some(item) = stream.next().await {
+            let Ok(res) = item else {
+              log::warn!("profiling: [Search] Agent 返回错误条目，已跳过");
+              continue;
+            };
+            if tx_bytes.is_closed() {
+              break;
+            }
+            // 构造 agent://<endpoint>/<path>
+            let file_url = FileUrl::agent(endpoint_clone.clone(), &res.path);
+            let file_id = file_url.to_string();
+
+            // 缓存结果
+            simple_cache()
+              .put_lines(&sid_for_cache, &file_url, res.lines.clone())
+              .await;
+
+            // 渲染 JSON 并发送
+            let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
+            match serde_json::to_vec(&json_obj) {
+              Ok(mut v) => {
+                v.push(b'\n');
+                if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
+                  break;
+                }
+              }
+              Err(e) => {
+                log::warn!("profiling: [Search] 序列化失败: {}", e);
+              }
+            }
+          }
+        });
+
+        let total_time = task_start.elapsed();
+        let _ = service_task.await; // 等待发送结束
+        log::info!(
+          "profiling: [Search] 任务完成 source_idx={} name=AgentService 总耗时={:.3}s, io_wait={:.3}s",
+          idx,
+          total_time.as_secs_f64(),
+          io_wait_time.as_secs_f64()
+        );
+        return; // 结束该任务
+      }
+
       // 基于 EntryStreamFactory 创建条目流
       let factory = EntryStreamFactory::new(pool_clone);
       let mut estream = match factory.from_source(config_clone.clone()).await {
@@ -248,7 +329,7 @@ pub async fn stream_search(
       let mut processor = EntryStreamProcessor::new(search_proc);
 
       // 中转通道：SearchResult -> NDJSON 字节
-      let (sr_tx, mut sr_rx) = tokio::sync::mpsc::channel::<crate::service::search::SearchResult>(32);
+      let (sr_tx, mut sr_rx) = mpsc::channel::<crate::service::search::SearchResult>(32);
 
       // 后台发送 NDJSON
       let tx_bytes = tx_clone.clone();
@@ -258,11 +339,15 @@ pub async fn stream_search(
       let sender_task = tokio::spawn(async move {
         use crate::domain::file_url::{FileUrl, TarCompression};
         while let Some(res) = sr_rx.recv().await {
-          if tx_bytes.is_closed() { break; }
+          if tx_bytes.is_closed() {
+            break;
+          }
 
-          // 构造 FileUrl（S3 tar.gz 与 Local 区分）
+          // 构造 FileUrl（S3 tar.gz、Local、Agent 区分）
           let (file_url, file_id) = match &cfg_for_url {
-            crate::storage::factory::SourceConfig::S3 { profile, bucket, key, .. } => {
+            crate::storage::factory::SourceConfig::S3 {
+              profile, bucket, key, ..
+            } => {
               let bucket_name = bucket.as_deref().unwrap_or("unknown");
               let base = if let Some(k) = key {
                 FileUrl::s3_with_profile(profile, bucket_name, k)
@@ -297,15 +382,17 @@ pub async fn stream_search(
                 }
               }
             }
-            _ => {
-              let url = FileUrl::local(&res.path);
+            crate::storage::factory::SourceConfig::Agent { endpoint } => {
+              let url = FileUrl::agent(endpoint, &res.path);
               let id = url.to_string();
               (url, id)
             }
           };
 
           // 缓存结果
-          simple_cache().put_lines(&sid_for_cache, &file_url, res.lines.clone()).await;
+          simple_cache()
+            .put_lines(&sid_for_cache, &file_url, res.lines.clone())
+            .await;
 
           // 渲染 JSON 并发送
           let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
