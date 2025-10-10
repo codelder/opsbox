@@ -108,8 +108,7 @@ impl AgentManager {
       is_online
     });
 
-    let removed = before_count - agents.len();
-    removed
+    before_count - agents.len()
   }
 }
 

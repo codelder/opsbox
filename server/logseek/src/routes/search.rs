@@ -2,12 +2,12 @@
 //!
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
+use crate::agent::{AgentClient, SearchOptions, SearchService};
 use crate::api::models::{AppError, SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::repository::settings;
 use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
 use crate::service::search::SearchProcessor;
-use crate::agent::{SearchOptions, AgentClient, SearchService};
 use crate::utils::bbip_service::derive_plan;
 use crate::utils::renderer::render_json_chunks;
 use axum::{
@@ -240,7 +240,10 @@ pub async fn stream_search(
       if let crate::domain::config::SourceConfig::Agent { endpoint } = &config_clone {
         // 直接构造 AgentClient（使用 endpoint 作为 agent_id）
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-          log::error!("[Search] 非法的 Agent endpoint，需以 http:// 或 https:// 开头: {}", endpoint);
+          log::error!(
+            "[Search] 非法的 Agent endpoint，需以 http:// 或 https:// 开头: {}",
+            endpoint
+          );
           return;
         }
         let client = AgentClient::new(endpoint.clone(), endpoint.clone());
@@ -252,13 +255,15 @@ pub async fn stream_search(
         }
 
         // 调用远程搜索
-        let mut stream = match client
-          .search(&cleaned_query_clone, ctx, SearchOptions::default())
-          .await
-        {
+        let mut stream = match client.search(&cleaned_query_clone, ctx, SearchOptions::default()).await {
           Ok(st) => st,
           Err(e) => {
-            log::error!("[Search] 调用 Agent 搜索失败 source_idx={} endpoint={} err={}", idx, endpoint, e);
+            log::error!(
+              "[Search] 调用 Agent 搜索失败 source_idx={} endpoint={} err={}",
+              idx,
+              endpoint,
+              e
+            );
             return;
           }
         };

@@ -17,12 +17,12 @@ use axum::{
 use futures::StreamExt;
 use log::{debug, error, info, warn};
 use logseek::{
+  agent::{AgentInfo, AgentMessage, AgentSearchRequest, AgentStatus, SearchProgress, SearchStatus},
   query::Query,
   service::{
     entry_stream::{EntryStreamProcessor, FsEntryStream},
     search::SearchProcessor,
   },
-  agent::{AgentInfo, AgentMessage, AgentSearchRequest, AgentStatus, SearchProgress, SearchStatus},
 };
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, mpsc};
@@ -206,18 +206,13 @@ impl TaskManager {
   }
 
   async fn get_progress(&self, task_id: &str) -> Option<SearchProgress> {
-    self
-      .tasks
-      .read()
-      .await
-      .get(task_id)
-      .map(|task| SearchProgress {
-        task_id: task.task_id.clone(),
-        processed_files: task.processed,
-        matched_files: task.matched,
-        total_files: None,
-        status: task.status.clone(),
-      })
+    self.tasks.read().await.get(task_id).map(|task| SearchProgress {
+      task_id: task.task_id.clone(),
+      processed_files: task.processed,
+      matched_files: task.matched,
+      total_files: None,
+      status: task.status.clone(),
+    })
   }
 }
 
@@ -267,10 +262,7 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
 }
 
 /// 获取搜索进度
-async fn handle_progress(
-  State(state): State<AppState>,
-  Path(task_id): Path<String>,
-) -> Json<Option<SearchProgress>> {
+async fn handle_progress(State(state): State<AppState>, Path(task_id): Path<String>) -> Json<Option<SearchProgress>> {
   Json(state.task_manager.get_progress(&task_id).await)
 }
 

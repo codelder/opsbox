@@ -142,7 +142,9 @@
                 }
               }}
             >
-              <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1">{parseTitleAndSource(item.path).title}</span>
+              <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1"
+                >{parseTitleAndSource(item.path).title}</span
+              >
             </span>
             <svg
               class="mt-1 h-4 w-4 shrink-0 text-blue-600 opacity-0 transition-opacity duration-200 group-hover/link:opacity-100 dark:text-blue-400"

@@ -39,7 +39,12 @@ pub struct SearchOptions {
 
 impl Default for SearchOptions {
   fn default() -> Self {
-    Self { path_filter: None, scope: SearchScope::All, timeout_secs: Some(300), max_results: None }
+    Self {
+      path_filter: None,
+      scope: SearchScope::All,
+      timeout_secs: Some(300),
+      max_results: None,
+    }
   }
 }
 
@@ -201,7 +206,10 @@ impl AgentClient {
     Self {
       agent_id,
       endpoint,
-      client: reqwest::Client::builder().timeout(Duration::from_secs(300)).build().unwrap(),
+      client: reqwest::Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .unwrap(),
       timeout: Duration::from_secs(60),
     }
   }
@@ -246,7 +254,9 @@ impl AgentClient {
 
 #[async_trait]
 impl SearchService for AgentClient {
-  fn service_type(&self) -> &'static str { "AgentClient" }
+  fn service_type(&self) -> &'static str {
+    "AgentClient"
+  }
 
   async fn search(
     &self,
@@ -254,7 +264,10 @@ impl SearchService for AgentClient {
     context_lines: usize,
     options: SearchOptions,
   ) -> Result<SearchResultStream, StorageError> {
-    info!("向 Agent {} 发送搜索请求: query={}, context_lines={}", self.agent_id, query, context_lines);
+    info!(
+      "向 Agent {} 发送搜索请求: query={}, context_lines={}",
+      self.agent_id, query, context_lines
+    );
 
     // 构造搜索请求
     let request = AgentSearchRequest {
@@ -284,7 +297,10 @@ impl SearchService for AgentClient {
     if !response.status().is_success() {
       let status = response.status();
       let error_text = response.text().await.unwrap_or_default();
-      return Err(StorageError::Other(format!("Agent 返回错误: {} - {}", status, error_text)));
+      return Err(StorageError::Other(format!(
+        "Agent 返回错误: {} - {}",
+        status, error_text
+      )));
     }
 
     // 流式接收结果（NDJSON 格式）
@@ -325,11 +341,17 @@ impl SearchService for AgentClient {
                     }
                   })
                   .collect();
-                if results.is_empty() { None } else { Some(futures::stream::iter(results)) }
+                if results.is_empty() {
+                  None
+                } else {
+                  Some(futures::stream::iter(results))
+                }
               }
               Err(e) => {
                 error!("Agent {} 流读取错误: {}", agent_id, e);
-                Some(futures::stream::iter(vec![Err(StorageError::Io(std::io::Error::other(e.to_string())))]))
+                Some(futures::stream::iter(vec![Err(StorageError::Io(
+                  std::io::Error::other(e.to_string()),
+                ))]))
               }
             }
           }
@@ -349,7 +371,12 @@ impl SearchService for AgentClient {
   }
 
   fn capabilities(&self) -> ServiceCapabilities {
-    ServiceCapabilities { supports_progress: true, supports_cancellation: true, supports_streaming: true, max_concurrent_searches: 10 }
+    ServiceCapabilities {
+      supports_progress: true,
+      supports_cancellation: true,
+      supports_streaming: true,
+      max_concurrent_searches: 10,
+    }
   }
 }
 

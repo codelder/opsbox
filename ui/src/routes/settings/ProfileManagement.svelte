@@ -81,7 +81,7 @@
   // 删除 Profile
   async function handleDelete(name: string) {
     if (!confirm(`确认删除 Profile "${name}"？`)) return;
-    
+
     profileStore.clearDeleteState();
     const success = await profileStore.remove(name);
     if (!success && profileStore.deleteError) {
@@ -205,7 +205,7 @@
           <input
             id="profile-name"
             type="text"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm placeholder-slate-400 transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder-slate-400 shadow-sm transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
             bind:value={profileName}
             placeholder="例如：production"
             disabled={!!editingProfile || profileStore.saving}
@@ -223,7 +223,7 @@
           <input
             id="profile-endpoint"
             type="text"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm placeholder-slate-400 transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder-slate-400 shadow-sm transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
             bind:value={endpoint}
             placeholder="http://host:9000"
             disabled={profileStore.saving}
@@ -238,15 +238,13 @@
           <input
             id="profile-bucket"
             type="text"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm placeholder-slate-400 transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder-slate-400 shadow-sm transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
             bind:value={bucket}
             placeholder="bucket"
             disabled={profileStore.saving}
             required
           />
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            指定要访问的 S3 存储桶名称
-          </p>
+          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">指定要访问的 S3 存储桶名称</p>
         </div>
 
         <div>
@@ -256,7 +254,7 @@
           <input
             id="profile-access-key"
             type="text"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm placeholder-slate-400 transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder-slate-400 shadow-sm transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
             bind:value={accessKey}
             placeholder="access key"
             autocomplete="off"
@@ -272,7 +270,7 @@
           <input
             id="profile-secret-key"
             type="password"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm placeholder-slate-400 transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
+            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder-slate-400 shadow-sm transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500"
             bind:value={secretKey}
             placeholder="secret key"
             autocomplete="off"

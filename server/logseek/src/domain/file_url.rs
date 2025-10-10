@@ -151,11 +151,11 @@ impl FileUrl {
   /// 获取人类可读的简短描述
   pub fn display_name(&self) -> String {
     match self {
-      Self::Local { path } => path.split('/').last().unwrap_or(path).to_string(),
-      Self::S3 { key, .. } => key.split('/').last().unwrap_or(key).to_string(),
-      Self::TarEntry { entry_path, .. } => entry_path.split('/').last().unwrap_or(entry_path).to_string(),
-      Self::DirEntry { entry_path, .. } => entry_path.split('/').last().unwrap_or(entry_path).to_string(),
-      Self::Agent { path, .. } => path.split('/').last().unwrap_or(path).to_string(),
+      Self::Local { path } => path.split('/').next_back().unwrap_or(path).to_string(),
+      Self::S3 { key, .. } => key.split('/').next_back().unwrap_or(key).to_string(),
+      Self::TarEntry { entry_path, .. } => entry_path.split('/').next_back().unwrap_or(entry_path).to_string(),
+      Self::DirEntry { entry_path, .. } => entry_path.split('/').next_back().unwrap_or(entry_path).to_string(),
+      Self::Agent { path, .. } => path.split('/').next_back().unwrap_or(path).to_string(),
     }
   }
 }
@@ -204,8 +204,8 @@ impl FromStr for FileUrl {
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     // 处理 tar+<base>:<entry> 或 tar.gz+<base>:<entry> 格式
     // 需要先检查 tar.gz+，因为 tar+ 会匹配 tar.gz+ 的子串
-    if s.starts_with("tar.gz+") {
-      let after_scheme = &s[7..]; // "tar.gz+".len() == 7
+    if let Some(after_scheme) = s.strip_prefix("tar.gz+") {
+      // "tar.gz+".len() == 7
       // 使用 rsplitn 从右边分割，避免基础 URL 中的 : 干扰
       let mut parts: Vec<&str> = after_scheme.rsplitn(2, ':').collect();
       parts.reverse(); // rsplitn 返回反向顺序，需要反转
@@ -221,8 +221,8 @@ impl FromStr for FileUrl {
       return Self::tar_entry(TarCompression::Gzip, base, entry_path);
     }
 
-    if s.starts_with("tar+") {
-      let after_scheme = &s[4..]; // "tar+".len() == 4
+    if let Some(after_scheme) = s.strip_prefix("tar+") {
+      // "tar+".len() == 4
       // 使用 rsplitn 从右边分割，避免基础 URL 中的 : 干扰
       let mut parts: Vec<&str> = after_scheme.rsplitn(2, ':').collect();
       parts.reverse(); // rsplitn 返回反向顺序，需要反转
@@ -238,8 +238,8 @@ impl FromStr for FileUrl {
       return Self::tar_entry(TarCompression::Tar, base, entry_path);
     }
 
-    if s.starts_with("dir+") {
-      let after_scheme = &s[4..]; // "dir+".len() == 4
+    if let Some(after_scheme) = s.strip_prefix("dir+") {
+      // "dir+".len() == 4
       let mut parts: Vec<&str> = after_scheme.rsplitn(2, ':').collect();
       parts.reverse();
       if parts.len() != 2 {

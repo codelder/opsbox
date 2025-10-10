@@ -205,7 +205,7 @@ mod tests {
 
     assert_eq!(deserialized.endpoint, "localhost:9000");
     assert_eq!(deserialized.bucket, "logs");
-    assert_eq!(deserialized.configured, true);
+    assert!(deserialized.configured);
   }
 
   #[test]
@@ -215,7 +215,7 @@ mod tests {
 
     assert_eq!(payload.endpoint, "");
     assert_eq!(payload.bucket, "");
-    assert_eq!(payload.configured, false);
+    assert!(!payload.configured);
     assert_eq!(payload.connection_error, None);
   }
 
@@ -260,7 +260,7 @@ mod tests {
 
     assert_eq!(payload.endpoint, "localhost:9000");
     assert_eq!(payload.bucket, "logs");
-    assert_eq!(payload.configured, false); // 默认值
+    assert!(!payload.configured); // 默认值
     assert_eq!(payload.connection_error, None); // 默认值
   }
 
@@ -294,7 +294,7 @@ mod tests {
     assert_eq!(payload.bucket, "");
     assert_eq!(payload.access_key, "");
     assert_eq!(payload.secret_key, "");
-    assert_eq!(payload.configured, false);
+    assert!(!payload.configured);
     assert_eq!(payload.connection_error, None);
   }
 

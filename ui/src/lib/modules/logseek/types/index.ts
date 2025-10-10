@@ -27,7 +27,7 @@ export interface JsonChunk {
 export interface SearchJsonResult {
   /**
    * 文件 URL 标识符
-   * 
+   *
    * 支持多种格式：
    * - 本地文件: `file:///path/to/file.log`
    * - S3 对象（默认配置）: `s3://bucket/path/to/file`
@@ -70,7 +70,7 @@ export interface S3SettingsResponse extends S3SettingsPayload {
 
 /**
  * S3 Profile 负载（用于 POST 请求）
- * 
+ *
  * 每个 Profile 包含完整的 S3 访问配置：Endpoint + Bucket + Credentials
  */
 export interface S3ProfilePayload {
@@ -113,7 +113,7 @@ export interface ViewParams {
   sid: string; // 会话 ID
   /**
    * 文件 URL 标识符（同 SearchJsonResult.path）
-   * 
+   *
    * 支持的格式示例：
    * - `file:///var/log/app.log`
    * - `s3://backupdr/logs/app.log`
