@@ -16,7 +16,7 @@ Agent Manager 现在是一个**独立的 OpsBox 模块**，而不是 LogSeek 的
 ## 📁 项目结构
 
 ```
-server/
+backend/
 ├── agent-manager/           # ✅ 新创建的独立模块
 │   ├── Cargo.toml
 │   └── src/
@@ -60,7 +60,7 @@ Agent Manager 模块提供以下端点（前缀 `/api/v1/agents`）：
 ### 1. 启动 OpsBox Server
 
 ```bash
-cd /Users/wangyue/workspace/codelder/opsboard/server/api-gateway
+cd /Users/wangyue/workspace/codelder/opsboard/backend/api-gateway
 cargo run --release
 
 # 应该看到:
@@ -79,7 +79,7 @@ cargo run --release
 ### 2. 启动 Agent
 
 ```bash
-cd /Users/wangyue/workspace/codelder/opsboard/server/agent
+cd /Users/wangyue/workspace/codelder/opsboard/backend/agent
 
 # 配置环境变量（注意：路径不再包含 /logseek）
 export SERVER_ENDPOINT="http://localhost:8080"
@@ -140,7 +140,7 @@ POST http://localhost:8080/api/v1/agents/{id}/heartbeat
 
 ### Agent 代码需要修改
 
-`server/agent/src/main.rs` 中的路径需要更新：
+`backend/agent/src/main.rs` 中的路径需要更新：
 
 ```rust
 // 旧代码 ❌
@@ -261,11 +261,11 @@ LogSeek 可以通过以下方式使用 Agent：
 
 ```bash
 # 运行 Agent Manager 单元测试
-cd /Users/wangyue/workspace/codelder/opsboard/server/agent-manager
+cd /Users/wangyue/workspace/codelder/opsboard/backend/agent-manager
 cargo test
 
 # 运行集成测试
-cd /Users/wangyue/workspace/codelder/opsboard/server/api-gateway
+cd /Users/wangyue/workspace/codelder/opsboard/backend/api-gateway
 cargo test --release
 ```
 
@@ -285,7 +285,7 @@ cargo test --release
 ## 📝 下一步
 
 ### 1. 更新 Agent 客户端路径
-修改 `server/agent/src/main.rs`:
+修改 `backend/agent/src/main.rs`:
 - 注册路径: `/api/v1/agents/register`
 - 心跳路径: `/api/v1/agents/{id}/heartbeat`
 

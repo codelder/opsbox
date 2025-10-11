@@ -40,11 +40,11 @@ pub enum Commands {
 #[derive(Parser, Debug, Clone)]
 #[command(
   author = "wangyue",
-  name = "opsbox",
+  // name = "opsbox",
   version,
-  disable_version_flag = true,
   about = "OpsBox 运维工具箱（内置前端静态资源）",
-  long_about = "OpsBox 是一个集成了多个运维功能的工具箱，包括日志检索（LogSeek）等模块。\n支持通过参数设置监听地址/端口，并可选择后台运行（Unix）。"
+  long_about = "OpsBox 是一个集成了多个运维功能的工具箱，包括日志检索（LogSeek）等模块。\n支持通过参数设置监听地址/端口，并可选择后台运行（Unix）。",
+  help_template = "{about}\n\nAuthor: {author}\n\n{usage-heading}\n{usage}\n\n{all-args}{subcommands}"
 )]
 pub struct AppConfig {
   // 服务器配置
@@ -76,7 +76,7 @@ pub struct AppConfig {
   )]
   pub log_level: Option<String>,
 
-  #[arg(global = true, short = 'V', action = clap::ArgAction::Count, help = "增加日志详细程度（-V/-VV/-VVV）")]
+  #[arg(global = true, short = 'v', action = clap::ArgAction::Count, help = "增加日志详细程度（-v/-vv/-vvv）")]
   pub verbose: u8,
 
   // 数据库配置

@@ -28,14 +28,27 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
   // 初始化日志
   env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
   // 加载配置
   let config = Arc::new(AgentConfig::from_env());
 
+  // 创建自定义Tokio运行时，限制工作线程数
+  let worker_threads = config.get_worker_threads();
+  info!("使用 {} 个工作线程", worker_threads);
+
+  let rt = tokio::runtime::Builder::new_multi_thread()
+    .worker_threads(worker_threads)
+    .enable_all()
+    .build()
+    .expect("创建 Tokio 运行时失败");
+
+  rt.block_on(async_main(config))
+}
+
+async fn async_main(config: Arc<AgentConfig>) -> Result<(), Box<dyn std::error::Error>> {
   info!("╔══════════════════════════════════════════╗");
   info!("║     LogSeek Agent 启动中...              ║");
   info!("╚══════════════════════════════════════════╝");
@@ -100,6 +113,7 @@ struct AgentConfig {
   listen_port: u16,
   enable_heartbeat: bool,
   heartbeat_interval_secs: u64,
+  worker_threads: Option<usize>,
 }
 
 impl AgentConfig {
@@ -131,7 +145,30 @@ impl AgentConfig {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(30),
+      worker_threads: std::env::var("AGENT_WORKER_THREADS").ok().and_then(|s| s.parse().ok()),
     }
+  }
+
+  /// 获取工作线程数（优先级：环境变量 > 默认值）
+  ///
+  /// 默认策略：保守使用CPU资源，避免影响业务系统
+  /// - 单核系统：1个线程
+  /// - 2-4核系统：2个线程  
+  /// - 5-8核系统：3个线程
+  /// - 8核以上：CPU核心数的一半（最大限制）
+  fn get_worker_threads(&self) -> usize {
+    self
+      .worker_threads
+      .unwrap_or_else(|| {
+        let cpu_count = num_cpus::get();
+        match cpu_count {
+          1 => 1,
+          2..=4 => 2,
+          5..=7 => 3,
+          _ => cpu_count.div_ceil(2), // 8核以上使用一半核心数（向上取整）
+        }
+      })
+      .clamp(1, 16) // 安全范围：1-16个线程
   }
 
   fn to_agent_info(&self) -> AgentInfo {

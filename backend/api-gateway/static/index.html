@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script>
+      // 在第一时间根据本地存储或系统偏好设置暗色/浅色，避免页面闪烁
+      (function () {
+        try {
+          const saved = localStorage.getItem('theme');
+          const t = saved
+            ? saved
+            : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+          if (t === 'dark') document.documentElement.classList.add('dark');
+          else document.documentElement.classList.remove('dark');
+        } catch (e) {
+          // 忽略：在无 localStorage 的环境（如部分隐私模式）可能会抛错
+        }
+      })();
+    </script>
+    
+		<link rel="modulepreload" href="/_app/immutable/entry/start.UYBES0qH.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/23hc4wI3.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/Biyo7Fb6.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/D7IJw5Bz.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/B1OZnXtz.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/BkHU3DUO.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/D0iwhpLH.js">
+		<link rel="modulepreload" href="/_app/immutable/entry/app.CMcpYbnM.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/DsnmJJEf.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/DEFdJkfp.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/CFy85NHF.js">
+		<link rel="modulepreload" href="/_app/immutable/chunks/B55rEs7P.js">
+		<link rel="modulepreload" href="/_app/env.js">
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">
+			<script>
+				{
+					__sveltekit_r5p6m1 = {
+						base: "",
+						env: null
+					};
+
+					const element = document.currentScript.parentElement;
+
+					import("/_app/env.js").then(({ env }) => {
+						__sveltekit_r5p6m1.env = env;
+
+						Promise.all([
+							import("/_app/immutable/entry/start.UYBES0qH.js"),
+							import("/_app/immutable/entry/app.CMcpYbnM.js")
+						]).then(([kit, app]) => {
+							kit.start(app, element);
+						});
+					});
+				}
+			</script>
+		</div>
+  </body>
+</html>

@@ -4,11 +4,11 @@
 
 ## 架构概览
 
-### 后端 (`server/`)
+### 后端 (`backend/`)
 
 **Monorepo 结构，包含三个 crate：**
 
-- **api-gateway** (主程序，输出二进制名 `opsbox`)
+- **opsbox** (主程序，输出二进制名 `opsbox`)
   - 模块化结构：config、logging、daemon、server
   - 内嵌前端静态资源
   - SQLite 数据库管理
@@ -25,7 +25,7 @@
   - NDJSON 流式搜索
   - 自然语言转查询（基于本地 Ollama）
 
-### 前端 (`ui/`)
+### 前端 (`web/`)
 
 - **SvelteKit** SPA (使用 adapter-static)
 - **模块化架构** (`src/lib/modules/logseek/`)
@@ -49,17 +49,17 @@
 # 前端依赖
 corepack enable
 corepack prepare pnpm@latest --activate
-pnpm --dir ui install
+pnpm --dir web install
 ```
 
 ### 启动开发服务器
 
 ```bash
 # 后端（终端1）
-cargo run --manifest-path server/Cargo.toml -p api-gateway
+cargo run --manifest-path backend/Cargo.toml -p opsbox
 
 # 前端（终端2）
-pnpm --dir ui dev
+pnpm --dir web dev
 ```
 
 访问：http://localhost:5173
@@ -67,11 +67,11 @@ pnpm --dir ui dev
 ### 生产构建
 
 ```bash
-# 构建前端（输出到 server/api-gateway/static）
+# 构建前端（输出到 backend/api-gateway/static）
 node scripts/build-frontend.mjs
 
 # 构建后端
-cargo build --manifest-path server/Cargo.toml -p api-gateway --release
+cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 ```
 
 ## 主要功能
@@ -113,10 +113,10 @@ cargo build --manifest-path server/Cargo.toml -p api-gateway --release
 
 ```bash
 # 启动守护进程
-cargo run -p api-gateway -- start --daemon
+cargo run -p opsbox -- start --daemon
 
 # 停止守护进程
-cargo run -p api-gateway -- stop
+cargo run -p opsbox -- stop
 ```
 
 ## 📚 开发文档
@@ -166,16 +166,16 @@ cargo test
 
 ```bash
 # 格式化
-pnpm --dir ui format
+pnpm --dir web format
 
 # Lint
-pnpm --dir ui lint
+pnpm --dir web lint
 
 # 类型检查
-pnpm --dir ui check
+pnpm --dir web check
 
 # 测试
-pnpm --dir ui test
+pnpm --dir web test
 ```
 
 ## 技术栈

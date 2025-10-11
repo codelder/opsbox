@@ -18,7 +18,7 @@
 #   CPU_SERIES     对比压测的 CPU 并发列表（逗号分隔，默认：8,12,16）
 #   LONG_SECS      长测时长（默认：120）
 #   SHORT_SECS     短测时长（默认：30）
-#   BIN_PATH       opsbox 二进制路径（默认：server/target/release/opsbox）
+#   BIN_PATH       opsbox 二进制路径（默认：backend/target/release/opsbox）
 #   LOG_PATH       日志文件路径（默认：~/.opsbox/opsbox.log）
 #   JEMALLOC_AGGRESSIVE 若为 1/true/yes，则为进程设置更积极回收的 MALLOC_CONF
 #   MALLOC_CONF    如已事先设置，则优先使用该值（覆盖 aggressive 预设）
@@ -26,7 +26,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-BIN_DEFAULT="$ROOT_DIR/server/target/release/opsbox"
+BIN_DEFAULT="$ROOT_DIR/backend/target/release/opsbox"
 LOG_DEFAULT="$HOME/.opsbox/opsbox.log"
 
 BIN="${BIN_PATH:-$BIN_DEFAULT}"

@@ -7,4 +7,4 @@ set -euo pipefail
 export MALLOC_CONF="background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0"
 
 # 中文注释：以工作区 manifest 路径运行 opsbox，透传所有参数
-exec cargo run --manifest-path server/Cargo.toml -p api-gateway -- "$@"
+exec cargo run --manifest-path backend/Cargo.toml -p opsbox -- "$@"

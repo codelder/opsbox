@@ -13,6 +13,7 @@ export SEARCH_ROOTS=${SEARCH_ROOTS:-"/var/log"}
 export AGENT_PORT=${AGENT_PORT:-8090}
 export ENABLE_HEARTBEAT=${ENABLE_HEARTBEAT:-true}
 export HEARTBEAT_INTERVAL=${HEARTBEAT_INTERVAL:-30}
+export AGENT_WORKER_THREADS=${AGENT_WORKER_THREADS:-""}  # 空值使用默认策略
 export RUST_LOG=${RUST_LOG:-info}
 
 echo "╔══════════════════════════════════════════╗"
@@ -26,17 +27,18 @@ echo "  Server:         $SERVER_ENDPOINT"
 echo "  Search Roots:   $SEARCH_ROOTS"
 echo "  Listen Port:    $AGENT_PORT"
 echo "  Heartbeat:      $ENABLE_HEARTBEAT"
+echo "  Worker Threads: ${AGENT_WORKER_THREADS:-"auto (保守策略)"}"
 echo ""
 
 # 检查是否已编译
-if [ ! -f "../server/target/release/logseek-agent" ]; then
+if [ ! -f "../backend/target/release/opsbox-agent" ]; then
     echo "⚠️  未找到编译后的 Agent 程序，正在编译..."
-    cd ../server
-    cargo build --release -p logseek-agent
+    cd ../backend
+    cargo build --release -p opsbox-agent
     cd -
 fi
 
 # 启动 Agent
 echo "🚀 启动 Agent..."
-exec ../server/target/release/logseek-agent
+exec ../backend/target/release/opsbox-agent
 
