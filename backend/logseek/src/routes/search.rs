@@ -15,7 +15,7 @@ use axum::{
   extract::{Json, State},
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
-use chrono::{Datelike, Duration};
+use chrono::Datelike;
 use futures::StreamExt;
 use opsbox_core::SqlitePool;
 use problemdetails::Problem;
@@ -29,21 +29,32 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 // 搜索（多存储源并行搜索）
 // ============================================================================
 
-/// 获取需要搜索的存储源配置列表
+/// 获取存储源配置列表（支持混合数据源）
 ///
-/// 从数据库加载所有 S3 Profiles，并根据查询中的日期范围生成多个 tar.gz 文件配置
+/// 混合数据源策略：
+/// - 当前日期（今天）：使用 Agent 存储源
+/// - 历史日期（昨天及以前）：使用 S3 存储源
+///
+/// 当前实现：
+/// 1. 从数据库加载所有 S3 Profiles
+/// 2. 解析查询中的日期指令（dt:/fdt:/tdt:）
+/// 3. 根据日期分割策略分配数据源：
+///    - 当前日期范围 → Agent 配置
+///    - 历史日期范围 → S3 配置
+/// 4. 返回混合配置列表和清理后的查询
 ///
 /// TODO: 后续扩展：
 /// 1. 支持按权限过滤（不同用户看到不同的存储源）
 /// 2. 支持按标签/分组过滤（例如 "production" 标签的所有存储源）
 /// 3. 支持动态启用/禁用某些存储源
-/// 4. 支持 Agent 存储源配置
-/// 5. 支持本地文件系统存储源配置
+/// 4. 支持本地文件系统存储源配置
+/// 5. 支持可配置的日期分割策略
 pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
 ) -> Result<(Vec<crate::domain::config::SourceConfig>, String), AppError> {
   use crate::domain::config::SourceConfig;
+  use chrono::{Duration, Local};
 
   // 从数据库加载所有 S3 Profiles
   let profiles = settings::list_s3_profiles(pool).await.map_err(|e| {
@@ -53,7 +64,7 @@ pub async fn get_storage_source_configs(
 
   log::info!("从数据库加载到 {} 个 S3 Profile(s)", profiles.len());
 
-  // 解析日期计划，获取日期区间和清理后的查询（无论是否有 profiles 都需要清理查询）
+  // 解析日期计划，获取日期区间和清理后的查询
   let base_dir = "/unused/for/s3"; // 仅为复用 derive_plan 获取日期区间
   let buckets = ["20", "21", "22", "23"];
   let plan = derive_plan(base_dir, &buckets, query);
@@ -66,64 +77,99 @@ pub async fn get_storage_source_configs(
     plan.cleaned_query
   );
 
-  // 如果没有 profiles，直接返回空配置和清理后的查询
-  if profiles.is_empty() {
-    return Ok((Vec::new(), plan.cleaned_query));
-  }
-
   let mut configs: Vec<SourceConfig> = Vec::new();
+  let today = Local::now().naive_local().date();
 
-  // 为每个 Profile 生成多个 tar.gz 文件配置
-  for profile in profiles {
-    log::debug!(
-      "为 Profile '{}' 生成存储源配置 (endpoint={}, bucket={})",
-      profile.profile_name,
-      profile.endpoint,
-      profile.bucket
-    );
+  // 分割日期范围：当前日期 vs 历史日期
+  let (current_date_range, historical_date_range) = split_date_range_by_today(plan.range, today);
 
-    // 遍历日期范围
-    let mut d = plan.range.start;
-    while d <= plan.range.end {
-      let dp1 = d + Duration::days(1);
-      let y = dp1.year();
-      let m = dp1.month();
-      let day = dp1.day();
-      let yyyymm = format!("{:04}{:02}", y, m);
-      let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
-      let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
+  log::info!(
+    "[Search] 日期分割: 当前日期范围={:?}, 历史日期范围={:?}",
+    current_date_range,
+    historical_date_range
+  );
 
-      // 为每个 bucket 生成一个 S3 对象键
-      for b in buckets {
-        let key = format!(
-          "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
-          y, yyyymm, yyyymmdd, b, file_name
-        );
+  // 1. 处理当前日期范围 - 使用 Agent 存储源
+  if let Some(current_range) = current_date_range {
+    let agent_endpoints = get_agent_endpoints().await;
+    if !agent_endpoints.is_empty() {
+      log::info!(
+        "为当前日期范围 {:?} 添加 {} 个 Agent 存储源",
+        current_range,
+        agent_endpoints.len()
+      );
 
-        configs.push(SourceConfig::S3 {
-          profile: profile.profile_name.clone(),
-          bucket: Some(profile.bucket.clone()),
-          prefix: None,
-          pattern: None,
-          key: Some(key.clone()),
+      for endpoint in agent_endpoints {
+        configs.push(SourceConfig::Agent {
+          endpoint: endpoint.clone(),
         });
-
-        log::debug!("添加 S3 存储源: profile={}, key={}", profile.profile_name, key);
+        log::debug!("添加 Agent 存储源: endpoint={}", endpoint);
       }
-
-      d += Duration::days(1);
+    } else {
+      log::warn!(
+        "当前日期范围 {:?} 需要 Agent 存储源，但未找到可用的 Agent 端点",
+        current_range
+      );
     }
   }
 
-  log::info!("[Search] 共生成 {} 个存储源配置", configs.len());
+  // 2. 处理历史日期范围 - 使用 S3 存储源
+  if let Some(historical_range) = historical_date_range {
+    if !profiles.is_empty() {
+      log::info!("为历史日期范围 {:?} 添加 S3 存储源", historical_range);
 
-  // TODO: 后续可以在这里添加 Agent 存储源和本地文件系统存储源
-  // 例如：
-  // configs.push(SourceConfig::Agent {
-  //   endpoint: "http://agent1.example.com:8090".to_string(),
-  // });
+      // 为每个 Profile 生成多个 tar.gz 文件配置
+      for profile in profiles {
+        log::debug!(
+          "为 Profile '{}' 生成历史存储源配置 (endpoint={}, bucket={})",
+          profile.profile_name,
+          profile.endpoint,
+          profile.bucket
+        );
 
-  // 返回存储源配置和清理后的查询（移除了 dt:/fdt:/tdt: 等日期限定符）
+        // 遍历历史日期范围
+        let mut d = historical_range.start;
+        while d <= historical_range.end {
+          let dp1 = d + Duration::days(1);
+          let y = dp1.year();
+          let m = dp1.month();
+          let day = dp1.day();
+          let yyyymm = format!("{:04}{:02}", y, m);
+          let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
+          let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
+
+          // 为每个 bucket 生成一个 S3 对象键
+          for b in buckets {
+            let key = format!(
+              "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
+              y, yyyymm, yyyymmdd, b, file_name
+            );
+
+            configs.push(SourceConfig::S3 {
+              profile: profile.profile_name.clone(),
+              bucket: Some(profile.bucket.clone()),
+              prefix: None,
+              pattern: None,
+              key: Some(key.clone()),
+            });
+
+            log::debug!("添加历史 S3 存储源: profile={}, key={}", profile.profile_name, key);
+          }
+
+          d += Duration::days(1);
+        }
+      }
+    } else {
+      log::warn!(
+        "历史日期范围 {:?} 需要 S3 存储源，但未找到可用的 S3 Profiles",
+        historical_range
+      );
+    }
+  }
+
+  log::info!("[Search] 共生成 {} 个混合存储源配置", configs.len());
+
+  // 返回混合存储源配置和清理后的查询（移除了 dt:/fdt:/tdt: 等日期限定符）
   Ok((configs, plan.cleaned_query))
 }
 
@@ -451,4 +497,121 @@ pub async fn stream_search(
       .body(body)
       .unwrap(),
   )
+}
+
+/// 根据今天分割日期范围
+///
+/// 返回：(当前日期范围, 历史日期范围)
+/// - 当前日期范围：包含今天及以后的日期
+/// - 历史日期范围：包含昨天及以前的日期
+fn split_date_range_by_today(
+  range: crate::utils::bbip_service::DateRange,
+  today: chrono::NaiveDate,
+) -> (
+  Option<crate::utils::bbip_service::DateRange>,
+  Option<crate::utils::bbip_service::DateRange>,
+) {
+  use crate::utils::bbip_service::DateRange;
+
+  let yesterday = today - chrono::Duration::days(1);
+
+  // 如果整个范围都在昨天及以前，全部作为历史日期
+  if range.end <= yesterday {
+    return (None, Some(range));
+  }
+
+  // 如果整个范围都在今天及以后，全部作为当前日期
+  if range.start >= today {
+    return (Some(range), None);
+  }
+
+  // 范围跨越今天，需要分割
+  let historical_range = if range.start <= yesterday {
+    Some(DateRange::new(range.start, yesterday))
+  } else {
+    None
+  };
+
+  let current_range = Some(DateRange::new(today, range.end));
+
+  (current_range, historical_range)
+}
+
+/// 获取可用的 Agent 端点列表
+///
+/// 获取包含 app=bbipapp 标签的在线 Agent 端点
+async fn get_agent_endpoints() -> Vec<String> {
+  // 获取包含 app=bbipapp 标签的在线 Agent
+  let tags = vec![("app".to_string(), "bbipapp".to_string())];
+  let endpoints = agent_manager::get_online_agent_endpoints_by_tags(&tags).await;
+
+  if !endpoints.is_empty() {
+    log::info!("找到 {} 个包含 app=bbipapp 标签的在线 Agent 端点", endpoints.len());
+  } else {
+    log::warn!("没有找到包含 app=bbipapp 标签的在线 Agent");
+  }
+
+  endpoints
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::utils::bbip_service::DateRange;
+  use chrono::NaiveDate;
+
+  #[test]
+  fn test_split_date_range_by_today() {
+    let today = NaiveDate::from_ymd_opt(2024, 10, 12).unwrap();
+
+    // 测试1: 整个范围都在昨天及以前
+    let historical_range = DateRange::new(
+      NaiveDate::from_ymd_opt(2024, 10, 10).unwrap(),
+      NaiveDate::from_ymd_opt(2024, 10, 11).unwrap(),
+    );
+    let (current, historical) = split_date_range_by_today(historical_range, today);
+    assert!(current.is_none());
+    assert!(historical.is_some());
+    assert_eq!(historical.unwrap(), historical_range);
+
+    // 测试2: 整个范围都在今天及以后
+    let future_range = DateRange::new(
+      NaiveDate::from_ymd_opt(2024, 10, 12).unwrap(),
+      NaiveDate::from_ymd_opt(2024, 10, 15).unwrap(),
+    );
+    let (current, historical) = split_date_range_by_today(future_range, today);
+    assert!(current.is_some());
+    assert!(historical.is_none());
+    assert_eq!(current.unwrap(), future_range);
+
+    // 测试3: 范围跨越今天
+    let mixed_range = DateRange::new(
+      NaiveDate::from_ymd_opt(2024, 10, 10).unwrap(),
+      NaiveDate::from_ymd_opt(2024, 10, 15).unwrap(),
+    );
+    let (current, historical) = split_date_range_by_today(mixed_range, today);
+
+    assert!(current.is_some());
+    assert!(historical.is_some());
+
+    let current_range = current.unwrap();
+    let historical_range = historical.unwrap();
+
+    // 当前日期范围应该是从今天开始
+    assert_eq!(current_range.start, today);
+    assert_eq!(current_range.end, NaiveDate::from_ymd_opt(2024, 10, 15).unwrap());
+
+    // 历史日期范围应该是到昨天结束
+    assert_eq!(historical_range.start, NaiveDate::from_ymd_opt(2024, 10, 10).unwrap());
+    assert_eq!(historical_range.end, NaiveDate::from_ymd_opt(2024, 10, 11).unwrap());
+  }
+
+  #[tokio::test]
+  async fn test_get_agent_endpoints() {
+    // 测试获取包含 app=bbipapp 标签的 Agent 端点
+    // 由于没有真实的 AgentManager 实例，这个测试会返回空列表
+    let endpoints = get_agent_endpoints().await;
+    // 在没有 AgentManager 实例的情况下，应该返回空列表
+    assert_eq!(endpoints, Vec::<String>::new());
+  }
 }

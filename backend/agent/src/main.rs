@@ -180,7 +180,7 @@ impl AgentConfig {
         .unwrap_or_else(|_| std::ffi::OsString::from("unknown"))
         .to_string_lossy()
         .to_string(),
-      tags: vec!["production".to_string()],
+      tags: vec![], // Agent 不管理标签，完全由 Agent Manager 负责
       search_roots: self.search_roots.clone(),
       last_heartbeat: chrono::Utc::now().timestamp(),
       status: AgentStatus::Online,

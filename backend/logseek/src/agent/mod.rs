@@ -162,7 +162,7 @@ use log::{debug, error, info, warn};
 use std::time::Duration;
 
 // 复用 agent-manager 的数据模型
-pub use agent_manager::models::{AgentInfo, AgentStatus};
+pub use agent_manager::models::{AgentInfo, AgentStatus, AgentTag};
 
 /// Agent 搜索请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
