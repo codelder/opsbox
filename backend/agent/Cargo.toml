@@ -32,6 +32,14 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 thiserror = "2"
 anyhow = "1"
+clap = { version = "4.0", features = ["derive"] }
+
+# 路径匹配
+globset = "0.4"
+
+# 守护进程支持
+daemonize = "0.5"
+nix = { version = "0.28", features = ["signal", "process"] }
 
 # 系统信息
 hostname = "0.4"
