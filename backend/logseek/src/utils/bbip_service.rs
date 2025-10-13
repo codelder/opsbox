@@ -1,4 +1,5 @@
-use chrono::{Datelike, Local, NaiveDate};
+use chrono::{Datelike, NaiveDate, Utc};
+use chrono_tz::Asia::Shanghai;
 use log::{debug, info};
 
 /// 日期区间（保证 start <= end）
@@ -69,8 +70,8 @@ fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, D
     }
   }
 
-  let prev = today - chrono::Duration::days(1);
-  let prev_str = format!("{:04}{:02}{:02}", prev.year(), prev.month(), prev.day());
+  // 计算今天（已传入 today 参数），并拼装 YYYYMMDD 字符串
+  let today_str = format!("{:04}{:02}{:02}", today.year(), today.month(), today.day());
 
   let (start_yyyymmdd, end_yyyymmdd) = if let Some(d) = dt_q {
     (d.clone(), d)
@@ -85,13 +86,14 @@ fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, D
         let s = e.clone();
         (s, e)
       }
-      (None, None) => (prev_str.clone(), prev_str.clone()),
+      // 无日期输入时，默认使用“今天”
+      (None, None) => (today_str.clone(), today_str.clone()),
     }
   };
 
-  // 容错：解析失败则回退为 prev
-  let parse_or_prev = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap_or(prev);
-  let range = DateRange::new(parse_or_prev(&start_yyyymmdd), parse_or_prev(&end_yyyymmdd));
+  // 容错：解析失败则回退为“今天”（符合需求：无日期时默认为当天）
+  let parse_or_today = |s: &str| NaiveDate::parse_from_str(s, "%Y%m%d").unwrap_or(today);
+  let range = DateRange::new(parse_or_today(&start_yyyymmdd), parse_or_today(&end_yyyymmdd));
 
   // 去除日期属性，组装 cleaned_query
   let cleaned = tokens
@@ -105,7 +107,8 @@ fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, D
 
 /// 从查询字符串推导文件选择计划（基于系统“今天”来计算“前一日”）
 pub fn derive_plan(base_dir: &str, buckets: &[&str], q_raw: &str) -> PathPlan {
-  let today = Local::now().naive_local().date();
+  // 按北京时区计算“今天”
+  let today = Utc::now().with_timezone(&Shanghai).date_naive();
   info!(
     "BBIP计划生成: base_dir='{}', buckets={:?}, 原始查询='{}'",
     base_dir, buckets, q_raw
@@ -204,9 +207,10 @@ mod tests {
     let buckets = ["20"];
     let q = "login";
     let plan = derive_plan_with_today(base, &buckets, q, today);
+    // 无日期输入 => 默认当天（2025-09-10）
     assert_eq!(plan.cleaned_query, "login");
-    assert_eq!(plan.range.start, NaiveDate::from_ymd_opt(2025, 9, 9).unwrap());
-    assert_eq!(plan.range.end, NaiveDate::from_ymd_opt(2025, 9, 9).unwrap());
+    assert_eq!(plan.range.start, NaiveDate::from_ymd_opt(2025, 9, 10).unwrap());
+    assert_eq!(plan.range.end, NaiveDate::from_ymd_opt(2025, 9, 10).unwrap());
   }
 
   #[test]
@@ -228,9 +232,9 @@ mod tests {
     let buckets = ["20"];
     let q = "dt:2025-09-09 something tdt:abc fdt:99990101x other";
     let plan = derive_plan_with_today(base, &buckets, q, today);
-    // 所有日期都无效 => 回退到昨天（2025-09-09）
+    // 所有日期都无效 => 回退到当天（2025-09-10）
     assert_eq!(plan.cleaned_query, "something other");
-    assert_eq!(plan.range.start, NaiveDate::from_ymd_opt(2025, 9, 9).unwrap());
-    assert_eq!(plan.range.end, NaiveDate::from_ymd_opt(2025, 9, 9).unwrap());
+    assert_eq!(plan.range.start, NaiveDate::from_ymd_opt(2025, 9, 10).unwrap());
+    assert_eq!(plan.range.end, NaiveDate::from_ymd_opt(2025, 9, 10).unwrap());
   }
 }

@@ -40,17 +40,25 @@ impl opsbox_core::Module for AgentManagerModule {
     // 初始化 Agent Manager 的数据库表结构
     let repository = AgentRepository::new(pool.clone());
     repository.init_schema().await?;
+
+    // 额外：初始化全局 Agent Manager（避免在运行时内 block_on）
+    if let Err(e) = init_global_agent_manager(pool.clone()).await {
+      // 如果已经初始化则忽略，仅记录告警
+      log::warn!("全局 Agent Manager 初始化跳过: {}", e);
+    }
+
     log::info!("Agent Manager: 数据库表结构初始化完成");
     Ok(())
   }
 
-  fn router(&self, pool: SqlitePool) -> Router {
-    // 创建新的 Agent Manager 实例
-    let manager = tokio::runtime::Handle::current()
-      .block_on(async { AgentManager::new(pool).await.expect("Failed to create AgentManager") });
+  fn router(&self, _pool: SqlitePool) -> Router {
+    // 使用在 init_schema 中初始化的全局实例，避免在运行时中进行阻塞
+    let manager = get_global_agent_manager().unwrap_or_else(|| {
+      panic!("全局 Agent Manager 未初始化，请确保在启动流程中调用了 init_schema");
+    });
 
     // 创建路由
-    routes::create_routes(Arc::new(manager))
+    routes::create_routes(manager)
   }
 
   fn cleanup(&self) {
@@ -73,6 +81,29 @@ pub fn get_global_agent_manager() -> Option<Arc<AgentManager>> {
   GLOBAL_AGENT_MANAGER.get().cloned()
 }
 
+/// 构造 Agent 端点（优先使用注册时推断并存储的 host/listen_port 标签）
+fn build_agent_endpoint(agent: &crate::models::AgentInfo) -> String {
+  // 优先从标签中获取 host 与 listen_port
+  let host_opt = agent.get_tag_value("host");
+  let port_opt = agent.get_tag_value("listen_port");
+
+  if let (Some(host), Some(port)) = (host_opt, port_opt) {
+    // 简单校验端口为数字
+    if port.chars().all(|c| c.is_ascii_digit()) {
+      return format!("http://{}:{}", host, port);
+    }
+  }
+
+  // 回退到模板
+  let endpoint_template =
+    std::env::var("AGENT_ENDPOINT_TEMPLATE").unwrap_or_else(|_| "http://localhost:8090".to_string());
+  if endpoint_template.contains("{id}") {
+    endpoint_template.replace("{id}", &agent.id)
+  } else {
+    endpoint_template
+  }
+}
+
 /// 获取在线 Agent 端点列表
 pub async fn get_online_agent_endpoints() -> Vec<String> {
   if let Some(manager) = get_global_agent_manager() {
@@ -80,17 +111,7 @@ pub async fn get_online_agent_endpoints() -> Vec<String> {
       .list_online_agents()
       .await
       .into_iter()
-      .map(|agent| {
-        // 构造 Agent 端点 URL
-        let endpoint_template =
-          std::env::var("AGENT_ENDPOINT_TEMPLATE").unwrap_or_else(|_| "http://localhost:8090".to_string());
-
-        if endpoint_template.contains("{id}") {
-          endpoint_template.replace("{id}", &agent.id)
-        } else {
-          endpoint_template
-        }
-      })
+      .map(|agent| build_agent_endpoint(&agent))
       .collect()
   } else {
     log::warn!("全局 Agent Manager 未初始化");
@@ -111,17 +132,7 @@ pub async fn get_online_agent_endpoints_by_tags(tags: &[(String, String)]) -> Ve
       .list_online_agents_by_tags(&agent_tags)
       .await
       .into_iter()
-      .map(|agent| {
-        // 构造 Agent 端点 URL
-        let endpoint_template =
-          std::env::var("AGENT_ENDPOINT_TEMPLATE").unwrap_or_else(|_| "http://localhost:8090".to_string());
-
-        if endpoint_template.contains("{id}") {
-          endpoint_template.replace("{id}", &agent.id)
-        } else {
-          endpoint_template
-        }
-      })
+      .map(|agent| build_agent_endpoint(&agent))
       .collect()
   } else {
     log::warn!("全局 Agent Manager 未初始化");

@@ -56,6 +56,19 @@ impl SearchProcessor {
     self.spec.path_filter.is_allowed(path)
   }
 
+  /// 检查路径是否应该被处理（扩展：支持额外的路径过滤谓词，与用户查询的 path: 规则做 AND）
+  ///
+  /// - extra 为 None 时，行为与 should_process_path 完全一致
+  /// - extra 为 Some 时，先检查 extra.is_allowed(path)，若不通过则直接拒绝
+  pub fn should_process_path_with(&self, path: &str, extra: Option<&crate::query::PathFilter>) -> bool {
+    if let Some(f) = extra
+      && !f.is_allowed(path)
+    {
+      return false;
+    }
+    self.should_process_path(path)
+  }
+
   /// 处理文件内容并返回搜索结果（可单独测试）
   ///
   /// # 参数

@@ -148,6 +148,8 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
 pub struct EntryStreamProcessor {
   processor: Arc<SearchProcessor>,
   content_timeout: Duration,
+  // 额外路径过滤器（可选），与用户查询中的 path: 规则做 AND
+  extra_path_filter: Option<crate::query::PathFilter>,
 }
 
 impl EntryStreamProcessor {
@@ -155,7 +157,14 @@ impl EntryStreamProcessor {
     Self {
       processor,
       content_timeout: Duration::from_secs(60),
+      extra_path_filter: None,
     }
+  }
+
+  /// 设置额外路径过滤器（与用户 path: 规则做 AND）
+  pub fn with_extra_path_filter(mut self, filter: crate::query::PathFilter) -> Self {
+    self.extra_path_filter = Some(filter);
+    self
   }
 
   #[allow(dead_code)]
@@ -175,8 +184,11 @@ impl EntryStreamProcessor {
         break;
       };
 
-      // 路径过滤
-      if !self.processor.should_process_path(&meta.path) {
+      // 路径过滤：优先应用额外过滤（若有），再应用用户查询的 path: 规则
+      if !self
+        .processor
+        .should_process_path_with(&meta.path, self.extra_path_filter.as_ref())
+      {
         debug!("路径不匹配，跳过: {}", &meta.path);
         continue;
       }

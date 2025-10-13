@@ -176,9 +176,10 @@ pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Mod
 
   log::info!("OpsBox 服务启动成功，访问地址: http://{}", addr);
 
-  // 启动服务器并支持优雅关闭
-  // 注意: with_graceful_shutdown 只在收到信号后才开始关闭流程
-  axum::serve(listener, app)
+  // 启动服务器并支持优雅关闭（附带连接信息，以便业务侧获取客户端远端地址）
+
+  let svc = app.into_make_service_with_connect_info::<SocketAddr>();
+  axum::serve(listener, svc)
     .with_graceful_shutdown(shutdown_with_timeout(modules))
     .await
     .expect("服务启动失败");

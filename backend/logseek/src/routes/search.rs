@@ -2,7 +2,7 @@
 //!
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
-use crate::agent::{AgentClient, SearchOptions, SearchService};
+use crate::agent::{AgentClient, SearchOptions, SearchScope, SearchService};
 use crate::api::models::{AppError, SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::repository::settings;
@@ -15,7 +15,8 @@ use axum::{
   extract::{Json, State},
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
-use chrono::Datelike;
+use chrono::{Datelike, Utc};
+use chrono_tz::Asia::Shanghai;
 use futures::StreamExt;
 use opsbox_core::SqlitePool;
 use problemdetails::Problem;
@@ -54,7 +55,7 @@ pub async fn get_storage_source_configs(
   query: &str,
 ) -> Result<(Vec<crate::domain::config::SourceConfig>, String), AppError> {
   use crate::domain::config::SourceConfig;
-  use chrono::{Duration, Local};
+  use chrono::Duration;
 
   // 从数据库加载所有 S3 Profiles
   let profiles = settings::list_s3_profiles(pool).await.map_err(|e| {
@@ -78,7 +79,8 @@ pub async fn get_storage_source_configs(
   );
 
   let mut configs: Vec<SourceConfig> = Vec::new();
-  let today = Local::now().naive_local().date();
+  // 使用北京时区计算“今天”
+  let today = Utc::now().with_timezone(&Shanghai).date_naive();
 
   // 分割日期范围：当前日期 vs 历史日期
   let (current_date_range, historical_date_range) = split_date_range_by_today(plan.range, today);
@@ -300,8 +302,17 @@ pub async fn stream_search(
           return;
         }
 
+        let search_options = SearchOptions {
+          scope: SearchScope::Directory {
+            path: "logs".to_string(),
+            recursive: true,
+          },
+          path_filter: Some("**/2025-08-18/**".to_string()),
+          ..Default::default()
+        };
+
         // 调用远程搜索
-        let mut stream = match client.search(&cleaned_query_clone, ctx, SearchOptions::default()).await {
+        let mut stream = match client.search(&cleaned_query_clone, ctx, search_options).await {
           Ok(st) => st,
           Err(e) => {
             log::error!(
@@ -542,8 +553,9 @@ fn split_date_range_by_today(
 /// 获取包含 app=bbipapp 标签的在线 Agent 端点
 async fn get_agent_endpoints() -> Vec<String> {
   // 获取包含 app=bbipapp 标签的在线 Agent
-  let tags = vec![("app".to_string(), "bbipapp".to_string())];
-  let endpoints = agent_manager::get_online_agent_endpoints_by_tags(&tags).await;
+  let _tags = [("app".to_string(), "bbipapp".to_string())];
+  // let endpoints = agent_manager::get_online_agent_endpoints_by_tags(&_tags).await;
+  let endpoints = agent_manager::get_online_agent_endpoints().await;
 
   if !endpoints.is_empty() {
     log::info!("找到 {} 个包含 app=bbipapp 标签的在线 Agent 端点", endpoints.len());

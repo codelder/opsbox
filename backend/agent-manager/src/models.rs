@@ -95,8 +95,14 @@ pub struct AgentListResponse {
   pub total: usize,
 }
 
-/// Agent 注册请求
-pub type AgentRegisterRequest = AgentInfo;
+/// Agent 注册请求（扩展：支持上报监听端口）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentRegisterRequest {
+  #[serde(flatten)]
+  pub info: AgentInfo,
+  /// Agent 本地监听端口（用于服务端结合远端地址推断访问端点）
+  pub listen_port: Option<u16>,
+}
 
 /// Agent 心跳响应
 #[derive(Debug, Serialize, Deserialize)]

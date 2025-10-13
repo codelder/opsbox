@@ -2,13 +2,15 @@
 
 use crate::manager::AgentManager;
 use crate::models::{AgentInfo, AgentListResponse, AgentRegisterRequest, AgentTag, HeartbeatResponse};
+use axum::extract::connect_info::ConnectInfo;
 use axum::{
   extract::{Path, Query, State},
-  http::StatusCode,
+  http::{HeaderMap, StatusCode},
   routing::{delete, get, post},
   Json, Router,
 };
 use serde::Deserialize;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 /// 查询参数
@@ -65,14 +67,41 @@ pub fn create_routes(manager: Arc<AgentManager>) -> Router {
 /// 注册 Agent
 async fn register_agent(
   State(manager): State<Arc<AgentManager>>,
+  ConnectInfo(peer): ConnectInfo<SocketAddr>,
+  headers: HeaderMap,
   Json(req): Json<AgentRegisterRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-  log::info!("收到 Agent 注册请求: id={}, name={}", req.id, req.name);
+  log::info!("收到 Agent 注册请求: id={}, name={}", req.info.id, req.info.name);
 
+  // 先完成 Agent 基础信息注册
   manager
-    .register_agent(req)
+    .register_agent(req.info.clone())
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+  // 从请求中提取客户端 IP（优先 X-Forwarded-For，其次 ConnectInfo）
+  let xfwd_ip = headers
+    .get("x-forwarded-for")
+    .and_then(|v| v.to_str().ok())
+    .and_then(|s| s.split(',').next().map(|x| x.trim().to_string()));
+  let client_ip = xfwd_ip.unwrap_or_else(|| peer.ip().to_string());
+
+  // 组合监听端口（若未上报则使用 Agent 默认端口 4001）
+  let port = req.listen_port.unwrap_or(4001);
+
+  log::info!("推断 Agent 访问端点: host={}, port={}", client_ip, port);
+
+  // 以标签的形式持久化（保留现有用户自定义标签）：host 与 listen_port
+  let host_tag = AgentTag::new("host".to_string(), client_ip);
+  let port_tag = AgentTag::new("listen_port".to_string(), port.to_string());
+
+  // 使用 add 接口避免覆盖已有标签集合
+  if let Err(e) = manager.add_agent_tag(&req.info.id, host_tag).await {
+    log::warn!("保存 host 标签失败: {}", e);
+  }
+  if let Err(e) = manager.add_agent_tag(&req.info.id, port_tag).await {
+    log::warn!("保存 listen_port 标签失败: {}", e);
+  }
 
   Ok(StatusCode::CREATED)
 }
@@ -238,16 +267,21 @@ async fn clear_agent_tags(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use axum::http::{Request, StatusCode};
+  use axum::http::StatusCode;
   use tower::ServiceExt;
 
   #[tokio::test]
   async fn test_register_agent_route() {
+    use axum::extract::connect_info::ConnectInfo;
+    use axum::http::Request;
+    use std::net::SocketAddr;
+
     let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:").await.unwrap();
 
     let manager = Arc::new(AgentManager::new(pool).await.unwrap());
     let app = create_routes(manager);
 
+    // 注册时允许携带 listen_port（可选）
     let agent_info = serde_json::json!({
         "id": "test-agent",
         "name": "Test Agent",
@@ -256,20 +290,23 @@ mod tests {
         "tags": [],
         "search_roots": ["/var/log"],
         "last_heartbeat": 0,
-        "status": {"type": "Online"}
+        "status": {"type": "Online"},
+        "listen_port": 4001
     });
 
-    let response = app
-      .oneshot(
-        Request::builder()
-          .method("POST")
-          .uri("/register")
-          .header("content-type", "application/json")
-          .body(serde_json::to_string(&agent_info).unwrap())
-          .unwrap(),
-      )
-      .await
+    let mut req = Request::builder()
+      .method("POST")
+      .uri("/register")
+      .header("content-type", "application/json")
+      .body(serde_json::to_string(&agent_info).unwrap())
       .unwrap();
+
+    // 注入连接信息，模拟客户端远端地址
+    req
+      .extensions_mut()
+      .insert(ConnectInfo::<SocketAddr>("127.0.0.1:55555".parse().unwrap()));
+
+    let response = app.oneshot(req).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
   }

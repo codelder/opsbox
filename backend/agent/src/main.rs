@@ -380,6 +380,7 @@ impl AgentConfig {
 // ============================================================================
 
 /// 应用路径过滤器
+#[allow(dead_code)]
 fn apply_path_filter(paths: &[PathBuf], filter: &str) -> Result<Vec<PathBuf>, String> {
   let glob = Glob::new(filter).map_err(|e| format!("路径过滤器语法错误: {}", e))?;
 
@@ -405,6 +406,7 @@ fn apply_path_filter(paths: &[PathBuf], filter: &str) -> Result<Vec<PathBuf>, St
 }
 
 /// 在目录中递归查找匹配的文件
+#[allow(dead_code)]
 fn find_matching_files(dir: &StdPath, glob_set: &GlobSet, results: &mut Vec<PathBuf>) -> Result<(), String> {
   if let Ok(entries) = std::fs::read_dir(dir) {
     for entry in entries.flatten() {
@@ -595,22 +597,22 @@ async fn execute_search(
     }
   };
 
-  // 4. 第二层过滤：应用 path_filter
-  let filtered_paths = if let Some(filter) = &request.path_filter {
-    match apply_path_filter(&base_paths, filter) {
-      Ok(paths) => {
-        info!("路径过滤器应用成功: {} -> {} 个路径", filter, paths.len());
-        paths
-      }
+  // 4. 额外路径过滤：将 path_filter 转为仅含 path: 的 Query，提取 PathFilter 作为“硬性 AND 限定”
+  let extra_path_filter: Option<logseek::query::PathFilter> = if let Some(filter) = &request.path_filter {
+    let path_query = format!("path:{}", filter);
+    match Query::parse_github_like(&path_query) {
+      Ok(q) => Some(q.path_filter),
       Err(e) => {
-        error!("路径过滤器应用失败: {}", e);
-        let _ = tx.send(AgentMessage::Error(format!("路径过滤器应用失败: {}", e))).await;
+        error!("路径过滤器解析失败: {}", e);
+        let _ = tx.send(AgentMessage::Error(format!("路径过滤器解析失败: {}", e))).await;
         return;
       }
     }
   } else {
-    base_paths
+    None
   };
+
+  let filtered_paths = base_paths; // 与 LogSeek 对齐：仅以目录为起点，后置过滤
 
   if filtered_paths.is_empty() {
     warn!("没有找到匹配的搜索路径");
@@ -625,40 +627,15 @@ async fn execute_search(
   for search_path in filtered_paths {
     info!("开始搜索路径: {}", search_path.display());
 
-    // 根据 SearchScope 类型选择搜索策略
-    match &request.scope {
-      SearchScope::Directory { recursive, .. } => {
-        if let Err(e) = search_directory(
-          &search_path,
-          *recursive,
-          processor.clone(),
-          &task_id,
-          &tx,
-          &task_manager,
-          &mut all_processed,
-          &mut all_matched,
-        )
-        .await
-        {
-          warn!("搜索目录失败 {}: {}", search_path.display(), e);
-        }
-      }
-      SearchScope::Files { .. } => {
-        if let Err(e) = search_files(
-          &search_path,
-          processor.clone(),
-          &task_id,
-          &tx,
-          &task_manager,
-          &mut all_processed,
-          &mut all_matched,
-        )
-        .await
-        {
-          warn!("搜索文件失败 {}: {}", search_path.display(), e);
-        }
-      }
-      SearchScope::TarGz { .. } => {
+    // 修正：依据路径实际类型选择搜索策略，避免将“文件路径”误按“目录”处理
+    // - 如果是文件：根据扩展名选择普通文件或 tar.gz 搜索
+    // - 如果是目录：按原有逻辑（Directory/All -> 目录搜索；递归默认 true）
+    if search_path.is_file() {
+      // 判断是否为 .tar.gz（扩展名链较难准确判断，采用字符串后缀更稳妥）
+      let path_s = search_path.to_string_lossy().to_lowercase();
+      let is_targz = path_s.ends_with(".tar.gz");
+
+      if is_targz {
         if let Err(e) = search_targz(
           &search_path,
           processor.clone(),
@@ -667,27 +644,47 @@ async fn execute_search(
           &task_manager,
           &mut all_processed,
           &mut all_matched,
+          extra_path_filter.clone(),
         )
         .await
         {
           warn!("搜索压缩包失败 {}: {}", search_path.display(), e);
         }
+      } else if let Err(e) = search_files(
+        &search_path,
+        processor.clone(),
+        &task_id,
+        &tx,
+        &task_manager,
+        &mut all_processed,
+        &mut all_matched,
+        extra_path_filter.clone(),
+      )
+      .await
+      {
+        warn!("搜索文件失败 {}: {}", search_path.display(), e);
       }
-      SearchScope::All => {
-        if let Err(e) = search_directory(
-          &search_path,
-          true,
-          processor.clone(),
-          &task_id,
-          &tx,
-          &task_manager,
-          &mut all_processed,
-          &mut all_matched,
-        )
-        .await
-        {
-          warn!("搜索目录失败 {}: {}", search_path.display(), e);
-        }
+    } else {
+      // 目录路径：按请求的 Scope 决定是否递归；All/Directory 统一目录搜索
+      let recursive = match &request.scope {
+        SearchScope::Directory { recursive, .. } => *recursive,
+        _ => true, // All 或其它场景默认递归
+      };
+
+      if let Err(e) = search_directory(
+        &search_path,
+        recursive,
+        processor.clone(),
+        &task_id,
+        &tx,
+        &task_manager,
+        &mut all_processed,
+        &mut all_matched,
+        extra_path_filter.clone(),
+      )
+      .await
+      {
+        warn!("搜索目录失败 {}: {}", search_path.display(), e);
       }
     }
   }
@@ -715,12 +712,17 @@ async fn search_directory(
   task_manager: &TaskManager,
   all_processed: &mut usize,
   all_matched: &mut usize,
+  extra_path_filter: Option<logseek::query::PathFilter>,
 ) -> Result<(), String> {
   let mut stream = FsEntryStream::new(path.to_path_buf())
     .await
     .map_err(|e| format!("无法读取目录 {}: {}", path.display(), e))?;
 
   let mut proc_stream = EntryStreamProcessor::new(processor);
+  if let Some(f) = extra_path_filter {
+    // 将额外路径过滤器注入处理器（与用户 path: 规则做 AND）
+    proc_stream = proc_stream.with_extra_path_filter(f);
+  }
   let (sr_tx, mut sr_rx) = mpsc::channel::<logseek::service::search::SearchResult>(128);
 
   // 后台处理条目流
@@ -757,7 +759,7 @@ async fn search_directory(
 }
 
 /// 搜索单个文件
-#[allow(clippy::manual_is_multiple_of)]
+#[allow(clippy::too_many_arguments, clippy::manual_is_multiple_of)]
 async fn search_files(
   path: &StdPath,
   processor: Arc<SearchProcessor>,
@@ -766,6 +768,7 @@ async fn search_files(
   task_manager: &TaskManager,
   all_processed: &mut usize,
   all_matched: &mut usize,
+  extra_path_filter: Option<logseek::query::PathFilter>,
 ) -> Result<(), String> {
   if !path.is_file() {
     return Err(format!("路径不是文件: {}", path.display()));
@@ -777,6 +780,10 @@ async fn search_files(
     .map_err(|e| format!("无法读取文件 {}: {}", path.display(), e))?;
 
   let mut proc_stream = EntryStreamProcessor::new(processor);
+  if let Some(f) = extra_path_filter {
+    // 将额外路径过滤器注入处理器（与用户 path: 规则做 AND）
+    proc_stream = proc_stream.with_extra_path_filter(f);
+  }
   let (sr_tx, mut sr_rx) = mpsc::channel::<logseek::service::search::SearchResult>(128);
 
   // 后台处理条目流
@@ -813,6 +820,7 @@ async fn search_files(
 }
 
 /// 搜索 tar.gz 文件
+#[allow(clippy::too_many_arguments)]
 async fn search_targz(
   path: &StdPath,
   processor: Arc<SearchProcessor>,
@@ -821,6 +829,7 @@ async fn search_targz(
   task_manager: &TaskManager,
   all_processed: &mut usize,
   all_matched: &mut usize,
+  extra_path_filter: Option<logseek::query::PathFilter>,
 ) -> Result<(), String> {
   if !path.is_file() {
     return Err(format!("路径不是文件: {}", path.display()));
@@ -831,7 +840,17 @@ async fn search_targz(
   warn!("TarGz 搜索功能尚未实现: {}", path.display());
 
   // 临时实现：将 tar.gz 文件当作普通文件处理
-  search_files(path, processor, task_id, tx, task_manager, all_processed, all_matched).await
+  search_files(
+    path,
+    processor,
+    task_id,
+    tx,
+    task_manager,
+    all_processed,
+    all_matched,
+    extra_path_filter,
+  )
+  .await
 }
 
 // ============================================================================
@@ -869,12 +888,22 @@ async fn shutdown_signal() {
 async fn register_to_server(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error>> {
   let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
 
-  let info = config.to_agent_info();
+  #[derive(serde::Serialize)]
+  struct AgentRegisterPayload {
+    #[serde(flatten)]
+    info: AgentInfo,
+    listen_port: u16,
+  }
+
+  let payload = AgentRegisterPayload {
+    info: config.to_agent_info(),
+    listen_port: config.listen_port,
+  };
   let url = format!("{}/api/v1/agents/register", config.server_endpoint);
 
   debug!("向 Server 注册: {}", url);
 
-  let response = client.post(&url).json(&info).send().await?;
+  let response = client.post(&url).json(&payload).send().await?;
 
   if response.status().is_success() {
     info!("✓ 已成功向 Server 注册");
