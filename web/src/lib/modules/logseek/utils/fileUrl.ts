@@ -159,37 +159,40 @@ export function parseFileUrl(url: string): AnyParsedFileUrl | null {
         };
 
       case 's3': {
-        const parts = afterScheme.split('/', 2);
-        if (parts.length !== 2) return null;
+        // 注意：JS 的 String.split('/', 2) 与 Rust 的 splitn(2, '/') 语义不同。
+        // 这里需要“第一次分隔”，后半段保留所有斜杠。
+        const firstSlash = afterScheme.indexOf('/');
+        if (firstSlash === -1) return null;
+        const bucketPart = afterScheme.substring(0, firstSlash);
+        const key = afterScheme.substring(firstSlash + 1);
 
         // 检查是否包含 profile (格式: profile:bucket)
-        const colonIndex = parts[0].indexOf(':');
+        const colonIndex = bucketPart.indexOf(':');
         let profile: string | undefined;
         let bucket: string;
 
         if (colonIndex !== -1) {
-          profile = parts[0].substring(0, colonIndex);
-          bucket = parts[0].substring(colonIndex + 1);
+          profile = bucketPart.substring(0, colonIndex);
+          bucket = bucketPart.substring(colonIndex + 1);
         } else {
-          bucket = parts[0];
+          bucket = bucketPart;
         }
 
         return {
           type: 's3',
           profile,
           bucket,
-          key: parts[1],
+          key,
           original: url,
           displayName
         };
       }
 
       case 'agent': {
-        const parts = afterScheme.split('/', 2);
-        if (parts.length < 1) return null;
-
-        const agentId = parts[0];
-        const path = parts.length === 2 ? `/${parts[1]}` : '/';
+        // 仅在第一个斜杠处分隔，后半段保留完整路径
+        const firstSlash = afterScheme.indexOf('/');
+        const agentId = firstSlash === -1 ? afterScheme : afterScheme.substring(0, firstSlash);
+        const path = firstSlash === -1 ? '/' : afterScheme.substring(firstSlash);
 
         return {
           type: 'agent',
