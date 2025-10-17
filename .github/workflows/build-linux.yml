@@ -1,0 +1,156 @@
+name: build-linux-reusable
+
+on:
+  workflow_call:
+
+env:
+  RUST_VERSION: '1.90.0'
+  MANYLINUX_IMAGE: 'quay.io/pypa/manylinux2014_x86_64:2025.10.10-1'
+
+jobs:
+  build-linux:
+    name: Build Linux ${{ matrix.target.name }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: 
+          - { name: 'musl', rust_target: 'x86_64-unknown-linux-musl', docker: false }
+          - { name: 'gnu', rust_target: 'x86_64-unknown-linux-gnu', docker: true }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Frontend
+        uses: ./.github/actions/setup-frontend
+
+      - name: Setup Rust
+        id: rust-setup
+        uses: ./.github/actions/setup-rust
+        with:
+          additional-targets: ${{ matrix.target.rust_target }}
+
+      # 优化的缓存策略
+      - name: Restore build cache (${{ matrix.target.name }})
+        uses: actions/cache/restore@v4
+        with:
+          path: backend/target-${{ matrix.target.name }}
+          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            target-${{ matrix.target.name }}-${{ runner.os }}-${{ steps.rust-setup.outputs.cache-key }}-
+            target-${{ matrix.target.name }}-${{ runner.os }}-
+
+      - name: Build backend (${{ matrix.target.name }})
+        if: ${{ !matrix.target.docker }}
+        run: |
+          set -euxo pipefail
+          # 安装 musl 工具链
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools pkg-config
+          
+          # 设置编译环境
+          export CARGO_TARGET_DIR="${PWD}/backend/target-${{ matrix.target.name }}"
+          export OPENSSL_STATIC=1
+          
+          # 构建
+          cargo build \
+            --manifest-path backend/Cargo.toml \
+            -p api-gateway \
+            --target ${{ matrix.target.rust_target }} \
+            --release \
+            --locked
+
+      - name: Build backend with Docker (${{ matrix.target.name }})
+        if: ${{ matrix.target.docker }}
+        run: |
+          set -euxo pipefail
+          # 确保 Docker 镜像存在
+          docker pull ${{ env.MANYLINUX_IMAGE }}
+          
+          # 在容器中构建
+          docker run --rm \
+            -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
+            -v "${PWD}":"${PWD}" -w "${PWD}" ${{ env.MANYLINUX_IMAGE }} bash -lc '
+            set -euxo pipefail
+            
+            # 安装依赖
+            yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
+            
+            # 启用 devtoolset-10
+            if [ -f /opt/rh/devtoolset-10/enable ]; then
+              set +u; source /opt/rh/devtoolset-10/enable; set -u
+            fi
+            
+            # 确保 Perl 模块存在
+            if ! perl -MIPC::Cmd -MText::Template -e 1 2>/dev/null; then
+              yum -y install perl-IPC-Cmd perl-Text-Template || {
+                curl -sL https://cpanmin.us | perl - App::cpanminus
+                cpanm --notest IPC::Cmd Text::Template
+              }
+            fi
+            
+            # 安装 Rust
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            source "$HOME/.cargo/env"
+            rustup toolchain install ${{ env.RUST_VERSION }} --profile minimal --no-self-update
+            rustup default ${{ env.RUST_VERSION }}
+            
+            # 设置编译环境
+            export CARGO_TARGET_DIR="${PWD}/backend/target-${{ matrix.target.name }}"
+            export OPENSSL_STATIC=1
+            
+            # 构建
+            cargo build \
+              --manifest-path backend/Cargo.toml \
+              -p api-gateway \
+              --target ${{ matrix.target.rust_target }} \
+              --release \
+              --locked
+            
+            # 修正权限
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "${PWD}/backend/target-${{ matrix.target.name }}" || true
+          '
+
+      - name: Save build cache (${{ matrix.target.name }})
+        uses: actions/cache/save@v4
+        with:
+          path: backend/target-${{ matrix.target.name }}
+          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Verify binary (${{ matrix.target.name }})
+        if: ${{ matrix.target.name == 'gnu' }}
+        run: |
+          set -euo pipefail
+          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/api-gateway"
+          
+          if [ ! -f "$BIN" ]; then
+            echo "Binary not found: $BIN" >&2
+            exit 1
+          fi
+          
+          # 检查 GLIBC 版本要求
+          max=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -V | tail -1 || true)
+          echo "检测到最高 GLIBC 符号版本: ${max:-none}"
+          
+          if [ -n "${max:-}" ]; then
+            top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
+            if [ "$top" != "2.17" ]; then
+              echo "需要高于 GLIBC_2.17 的版本 (发现 GLIBC_$max)" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Package artifact (${{ matrix.target.name }})
+        run: |
+          set -eux
+          ART_DIR="dist/api-gateway-linux-x86_64-${{ matrix.target.name }}"
+          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/api-gateway"
+          mkdir -p "$ART_DIR"
+          cp "$BIN" "$ART_DIR/"
+
+      - name: Upload artifact (${{ matrix.target.name }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-linux-x86_64-${{ matrix.target.name }}
+          path: dist/api-gateway-linux-x86_64-${{ matrix.target.name }}

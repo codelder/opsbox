@@ -1,0 +1,49 @@
+name: 'Setup Frontend'
+description: 'Setup Node.js, pnpm and build frontend'
+inputs:
+  working-directory:
+    description: 'Frontend working directory'
+    required: false
+    default: 'web'
+
+env:
+  NODE_VERSION: '20'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v5
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'pnpm'
+        cache-dependency-path: ${{ inputs.working-directory }}/pnpm-lock.yaml
+
+    - name: Enable pnpm via corepack
+      shell: bash
+      run: |
+        corepack enable
+        corepack prepare pnpm@latest --activate
+
+    - name: Install frontend dependencies
+      shell: bash
+      run: pnpm --dir ${{ inputs.working-directory }} install --frozen-lockfile
+      env:
+        # 跳过 Playwright 浏览器下载，加速 CI
+        PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+
+    - name: Format frontend code
+      shell: bash
+      run: pnpm --dir ${{ inputs.working-directory }} format
+
+    - name: Lint frontend code
+      shell: bash
+      run: pnpm --dir ${{ inputs.working-directory }} lint
+
+    - name: Run frontend tests
+      shell: bash
+      run: pnpm --dir ${{ inputs.working-directory }} test
+
+    - name: Build frontend
+      shell: bash
+      run: pnpm --dir ${{ inputs.working-directory }} build

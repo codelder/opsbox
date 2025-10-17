@@ -1,0 +1,197 @@
+name: build-optimized
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+
+jobs:
+  # 质量检查 - 快速失败
+  quality-check:
+    name: Quality Check
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Frontend
+        uses: ./.github/actions/setup-frontend
+
+      - name: Setup Rust
+        uses: ./.github/actions/setup-rust
+
+  # 平时仅跑 Linux 构建
+  build-linux:
+    name: Build Linux (Development)
+    needs: quality-check
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    uses: ./.github/workflows/build-linux.yml
+
+  # 发布版本时的 Linux 构建
+  build-linux-release:
+    name: Build Linux (Release)
+    needs: quality-check
+    if: startsWith(github.ref, 'refs/tags/')
+    uses: ./.github/workflows/build-linux.yml
+
+  # 发布版本时的其他平台构建
+  build-other-platforms:
+    name: Build ${{ matrix.config.os }}
+    needs: quality-check
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ${{ matrix.config.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { os: 'macos-x64', runner: 'macos-13', deployment_target: '10.15' }
+          - { os: 'macos-arm64', runner: 'macos-14', deployment_target: '11.0' }
+          - { os: 'windows', runner: 'windows-2022' }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Frontend
+        uses: ./.github/actions/setup-frontend
+
+      - name: Setup Rust
+        id: rust-setup
+        uses: ./.github/actions/setup-rust
+
+      # 缓存策略
+      - name: Restore build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: backend/target
+          key: target-${{ matrix.config.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            target-${{ matrix.config.os }}-${{ steps.rust-setup.outputs.cache-key }}-
+            target-${{ matrix.config.os }}-
+
+      # macOS 构建
+      - name: Build macOS
+        if: startsWith(matrix.config.os, 'macos')
+        env:
+          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.config.deployment_target }}
+        run: |
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+
+      # Windows 构建
+      - name: Build Windows
+        if: matrix.config.os == 'windows'
+        run: |
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+
+      - name: Save build cache
+        uses: actions/cache/save@v4
+        with:
+          path: backend/target
+          key: target-${{ matrix.config.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
+
+      # 打包 artifacts
+      - name: Package artifacts
+        shell: bash
+        run: |
+          set -eux
+          
+          case "${{ matrix.config.os }}" in
+            macos-x64)
+              mkdir -p dist/api-gateway-macos-10.15-x86_64
+              cp backend/target/release/api-gateway dist/api-gateway-macos-10.15-x86_64/
+              ;;
+            macos-arm64)
+              mkdir -p dist/api-gateway-macos-11.0-arm64
+              cp backend/target/release/api-gateway dist/api-gateway-macos-11.0-arm64/
+              ;;
+            windows)
+              mkdir -p dist/api-gateway-windows-x86_64-msvc
+              cp backend/target/release/api-gateway.exe dist/api-gateway-windows-x86_64-msvc/
+              ;;
+          esac
+
+      # 上传 artifacts
+      - name: Upload macOS x64 artifact
+        if: matrix.config.os == 'macos-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-10.15-x86_64
+          path: dist/api-gateway-macos-10.15-x86_64
+
+      - name: Upload macOS arm64 artifact
+        if: matrix.config.os == 'macos-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-11.0-arm64
+          path: dist/api-gateway-macos-11.0-arm64
+
+      - name: Upload Windows artifact
+        if: matrix.config.os == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-windows-x86_64-msvc
+          path: dist/api-gateway-windows-x86_64-msvc
+  # macOS Universal 二进制
+  macos-universal2:
+    name: macOS Universal2
+    needs: build-other-platforms
+    runs-on: macos-13
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download macOS x86_64 artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: api-gateway-macos-10.15-x86_64
+          path: arch_x64
+
+      - name: Download macOS arm64 artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: api-gateway-macos-11.0-arm64
+          path: arch_arm64
+
+      - name: Create universal2 binary
+        run: |
+          set -euxo pipefail
+          OUT_DIR="dist/api-gateway-macos-universal2"
+          mkdir -p "$OUT_DIR"
+          
+          X64_BIN=$(find arch_x64 -type f -name api-gateway | head -n1)
+          ARM_BIN=$(find arch_arm64 -type f -name api-gateway | head -n1)
+          
+          if [ -z "$X64_BIN" ] || [ -z "$ARM_BIN" ]; then
+            echo "未找到需要合并的二进制文件" >&2
+            exit 1
+          fi
+          
+          lipo -create -output "$OUT_DIR/api-gateway" "$X64_BIN" "$ARM_BIN"
+
+      - name: Upload universal2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-gateway-macos-universal2
+          path: dist/api-gateway-macos-universal2
+
+  # 发布
+  release:
+    name: Release
+    needs: [build-linux-release, build-other-platforms, macos-universal2]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: api-gateway-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          prerelease: true
+          generate_release_notes: true
