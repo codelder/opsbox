@@ -43,7 +43,7 @@ jobs:
             target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-
             target-${{ matrix.target.name }}-${{ runner.os }}-
 
-      - name: Build backend (${{ matrix.target.name }})
+      - name: Test and build backend (${{ matrix.target.name }})
         if: ${{ !matrix.target.docker }}
         run: |
           set -euxo pipefail
@@ -55,7 +55,10 @@ jobs:
           export CARGO_TARGET_DIR="${PWD}/backend/target-${{ matrix.target.name }}"
           export OPENSSL_STATIC=1
           
-          # 构建
+          # 先运行测试（会编译所有代码）
+          cargo test --all-features --manifest-path backend/Cargo.toml
+          
+          # 然后构建 release 版本（利用测试阶段的编译缓存）
           cargo build \
             --manifest-path backend/Cargo.toml \
             -p opsbox \
@@ -102,7 +105,10 @@ jobs:
             export CARGO_TARGET_DIR="${PWD}/backend/target-${{ matrix.target.name }}"
             export OPENSSL_STATIC=1
             
-            # 构建
+            # 先运行测试（会编译所有代码）
+            cargo test --all-features --manifest-path backend/Cargo.toml
+            
+            # 然后构建 release 版本（利用测试阶段的编译缓存）
             cargo build \
               --manifest-path backend/Cargo.toml \
               -p opsbox \

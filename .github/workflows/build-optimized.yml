@@ -72,17 +72,23 @@ jobs:
             target-${{ matrix.config.os }}-
 
       # macOS 构建
-      - name: Build macOS
+      - name: Test and build macOS
         if: startsWith(matrix.config.os, 'macos')
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.config.deployment_target }}
         run: |
+          # 先运行测试
+          cargo test --all-features --manifest-path backend/Cargo.toml
+          # 然后构建 release 版本
           cargo build --manifest-path backend/Cargo.toml -p opsbox --release --locked
 
       # Windows 构建
-      - name: Build Windows
+      - name: Test and build Windows
         if: matrix.config.os == 'windows'
         run: |
+          # 先运行测试
+          cargo test --all-features --manifest-path backend/Cargo.toml
+          # 然后构建 release 版本
           cargo build --manifest-path backend/Cargo.toml -p opsbox --release --locked
 
       - name: Save build cache

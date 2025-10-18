@@ -31,7 +31,3 @@ runs:
         for target in ${{ inputs.additional-targets }}; do
           rustup target add $target
         done
-
-    - name: Run Rust tests
-      shell: bash
-      run: cargo test --all-features --manifest-path backend/Cargo.toml
