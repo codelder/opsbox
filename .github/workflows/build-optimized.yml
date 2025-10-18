@@ -77,13 +77,13 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.config.deployment_target }}
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox --release --locked
 
       # Windows 构建
       - name: Build Windows
         if: matrix.config.os == 'windows'
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox --release --locked
 
       - name: Save build cache
         uses: actions/cache/save@v4
@@ -100,15 +100,15 @@ jobs:
           case "${{ matrix.config.os }}" in
             macos-x64)
               mkdir -p dist/api-gateway-macos-10.15-x86_64
-              cp backend/target/release/api-gateway dist/api-gateway-macos-10.15-x86_64/
+              cp backend/target/release/opsbox dist/api-gateway-macos-10.15-x86_64/
               ;;
             macos-arm64)
               mkdir -p dist/api-gateway-macos-11.0-arm64
-              cp backend/target/release/api-gateway dist/api-gateway-macos-11.0-arm64/
+              cp backend/target/release/opsbox dist/api-gateway-macos-11.0-arm64/
               ;;
             windows)
               mkdir -p dist/api-gateway-windows-x86_64-msvc
-              cp backend/target/release/api-gateway.exe dist/api-gateway-windows-x86_64-msvc/
+              cp backend/target/release/opsbox.exe dist/api-gateway-windows-x86_64-msvc/
               ;;
           esac
 
@@ -158,15 +158,15 @@ jobs:
           OUT_DIR="dist/api-gateway-macos-universal2"
           mkdir -p "$OUT_DIR"
           
-          X64_BIN=$(find arch_x64 -type f -name api-gateway | head -n1)
-          ARM_BIN=$(find arch_arm64 -type f -name api-gateway | head -n1)
+          X64_BIN=$(find arch_x64 -type f -name opsbox | head -n1)
+          ARM_BIN=$(find arch_arm64 -type f -name opsbox | head -n1)
           
           if [ -z "$X64_BIN" ] || [ -z "$ARM_BIN" ]; then
             echo "未找到需要合并的二进制文件" >&2
             exit 1
           fi
           
-          lipo -create -output "$OUT_DIR/api-gateway" "$X64_BIN" "$ARM_BIN"
+          lipo -create -output "$OUT_DIR/opsbox" "$X64_BIN" "$ARM_BIN"
 
       - name: Upload universal2 artifact
         uses: actions/upload-artifact@v4

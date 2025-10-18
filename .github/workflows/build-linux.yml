@@ -58,7 +58,7 @@ jobs:
           # 构建
           cargo build \
             --manifest-path backend/Cargo.toml \
-            -p api-gateway \
+            -p opsbox \
             --target ${{ matrix.target.rust_target }} \
             --release \
             --locked
@@ -105,7 +105,7 @@ jobs:
             # 构建
             cargo build \
               --manifest-path backend/Cargo.toml \
-              -p api-gateway \
+              -p opsbox \
               --target ${{ matrix.target.rust_target }} \
               --release \
               --locked
@@ -124,7 +124,7 @@ jobs:
         if: ${{ matrix.target.name == 'gnu' }}
         run: |
           set -euo pipefail
-          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/api-gateway"
+          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
           
           if [ ! -f "$BIN" ]; then
             echo "Binary not found: $BIN" >&2
@@ -147,7 +147,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-${{ matrix.target.name }}"
-          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/api-gateway"
+          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
