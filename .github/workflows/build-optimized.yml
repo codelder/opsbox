@@ -80,7 +80,7 @@ jobs:
           # 先运行测试
           cargo test --all-features --manifest-path backend/Cargo.toml
           # 然后构建 release 版本
-          cargo build --manifest-path backend/Cargo.toml -p opsbox --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox -p opsbox-agent --release --locked
 
       # Windows 构建
       - name: Test and build Windows
@@ -89,7 +89,7 @@ jobs:
           # 先运行测试
           cargo test --all-features --manifest-path backend/Cargo.toml
           # 然后构建 release 版本
-          cargo build --manifest-path backend/Cargo.toml -p opsbox --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox -p opsbox-agent --release --locked
 
       - name: Save build cache
         uses: actions/cache/save@v4
@@ -97,93 +97,213 @@ jobs:
           path: backend/target
           key: target-${{ matrix.config.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
-      # 打包 artifacts
-      - name: Package artifacts
+      # 打包 opsbox artifacts
+      - name: Package opsbox artifacts
         shell: bash
         run: |
           set -eux
           
           case "${{ matrix.config.os }}" in
             macos-x64)
-              mkdir -p dist/api-gateway-macos-10.15-x86_64
-              cp backend/target/release/opsbox dist/api-gateway-macos-10.15-x86_64/
+              mkdir -p dist/opsbox-macos-10.15-x86_64
+              cp backend/target/release/opsbox dist/opsbox-macos-10.15-x86_64/
+              echo "${{ github.sha }}" > dist/opsbox-macos-10.15-x86_64/VERSION
+              echo "Target: x86_64-apple-darwin" >> dist/opsbox-macos-10.15-x86_64/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-macos-10.15-x86_64/VERSION
+              echo "Binary: opsbox" >> dist/opsbox-macos-10.15-x86_64/VERSION
               ;;
             macos-arm64)
-              mkdir -p dist/api-gateway-macos-11.0-arm64
-              cp backend/target/release/opsbox dist/api-gateway-macos-11.0-arm64/
+              mkdir -p dist/opsbox-macos-11.0-arm64
+              cp backend/target/release/opsbox dist/opsbox-macos-11.0-arm64/
+              echo "${{ github.sha }}" > dist/opsbox-macos-11.0-arm64/VERSION
+              echo "Target: aarch64-apple-darwin" >> dist/opsbox-macos-11.0-arm64/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-macos-11.0-arm64/VERSION
+              echo "Binary: opsbox" >> dist/opsbox-macos-11.0-arm64/VERSION
               ;;
             windows)
-              mkdir -p dist/api-gateway-windows-x86_64-msvc
-              cp backend/target/release/opsbox.exe dist/api-gateway-windows-x86_64-msvc/
+              mkdir -p dist/opsbox-windows-x86_64-msvc
+              cp backend/target/release/opsbox.exe dist/opsbox-windows-x86_64-msvc/
+              echo "${{ github.sha }}" > dist/opsbox-windows-x86_64-msvc/VERSION
+              echo "Target: x86_64-pc-windows-msvc" >> dist/opsbox-windows-x86_64-msvc/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-windows-x86_64-msvc/VERSION
+              echo "Binary: opsbox.exe" >> dist/opsbox-windows-x86_64-msvc/VERSION
               ;;
           esac
 
-      # 上传 artifacts
-      - name: Upload macOS x64 artifact
+      # 打包 opsbox-agent artifacts
+      - name: Package opsbox-agent artifacts
+        shell: bash
+        run: |
+          set -eux
+          
+          case "${{ matrix.config.os }}" in
+            macos-x64)
+              mkdir -p dist/opsbox-agent-macos-10.15-x86_64
+              cp backend/target/release/opsbox-agent dist/opsbox-agent-macos-10.15-x86_64/
+              echo "${{ github.sha }}" > dist/opsbox-agent-macos-10.15-x86_64/VERSION
+              echo "Target: x86_64-apple-darwin" >> dist/opsbox-agent-macos-10.15-x86_64/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-agent-macos-10.15-x86_64/VERSION
+              echo "Binary: opsbox-agent" >> dist/opsbox-agent-macos-10.15-x86_64/VERSION
+              ;;
+            macos-arm64)
+              mkdir -p dist/opsbox-agent-macos-11.0-arm64
+              cp backend/target/release/opsbox-agent dist/opsbox-agent-macos-11.0-arm64/
+              echo "${{ github.sha }}" > dist/opsbox-agent-macos-11.0-arm64/VERSION
+              echo "Target: aarch64-apple-darwin" >> dist/opsbox-agent-macos-11.0-arm64/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-agent-macos-11.0-arm64/VERSION
+              echo "Binary: opsbox-agent" >> dist/opsbox-agent-macos-11.0-arm64/VERSION
+              ;;
+            windows)
+              mkdir -p dist/opsbox-agent-windows-x86_64-msvc
+              cp backend/target/release/opsbox-agent.exe dist/opsbox-agent-windows-x86_64-msvc/
+              echo "${{ github.sha }}" > dist/opsbox-agent-windows-x86_64-msvc/VERSION
+              echo "Target: x86_64-pc-windows-msvc" >> dist/opsbox-agent-windows-x86_64-msvc/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-agent-windows-x86_64-msvc/VERSION
+              echo "Binary: opsbox-agent.exe" >> dist/opsbox-agent-windows-x86_64-msvc/VERSION
+              ;;
+          esac
+
+      # 上传 opsbox artifacts
+      - name: Upload opsbox macOS x64 artifact
         if: matrix.config.os == 'macos-x64'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-10.15-x86_64
-          path: dist/api-gateway-macos-10.15-x86_64
+          name: opsbox-macos-10.15-x86_64
+          path: dist/opsbox-macos-10.15-x86_64
 
-      - name: Upload macOS arm64 artifact
+      - name: Upload opsbox macOS arm64 artifact
         if: matrix.config.os == 'macos-arm64'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-11.0-arm64
-          path: dist/api-gateway-macos-11.0-arm64
+          name: opsbox-macos-11.0-arm64
+          path: dist/opsbox-macos-11.0-arm64
 
-      - name: Upload Windows artifact
+      - name: Upload opsbox Windows artifact
         if: matrix.config.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-windows-x86_64-msvc
-          path: dist/api-gateway-windows-x86_64-msvc
-  # macOS Universal 二进制
-  macos-universal2:
-    name: macOS Universal2
+          name: opsbox-windows-x86_64-msvc
+          path: dist/opsbox-windows-x86_64-msvc
+
+      # 上传 opsbox-agent artifacts
+      - name: Upload opsbox-agent macOS x64 artifact
+        if: matrix.config.os == 'macos-x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-agent-macos-10.15-x86_64
+          path: dist/opsbox-agent-macos-10.15-x86_64
+
+      - name: Upload opsbox-agent macOS arm64 artifact
+        if: matrix.config.os == 'macos-arm64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-agent-macos-11.0-arm64
+          path: dist/opsbox-agent-macos-11.0-arm64
+
+      - name: Upload opsbox-agent Windows artifact
+        if: matrix.config.os == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-agent-windows-x86_64-msvc
+          path: dist/opsbox-agent-windows-x86_64-msvc
+  # macOS Universal2 二进制
+  macos-universal2-opsbox:
+    name: macOS Universal2 opsbox
     needs: build-other-platforms
     runs-on: macos-13
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download macOS x86_64 artifact
+      - name: Download opsbox macOS x86_64 artifact
         uses: actions/download-artifact@v5
         with:
-          name: api-gateway-macos-10.15-x86_64
+          name: opsbox-macos-10.15-x86_64
           path: arch_x64
 
-      - name: Download macOS arm64 artifact
+      - name: Download opsbox macOS arm64 artifact
         uses: actions/download-artifact@v5
         with:
-          name: api-gateway-macos-11.0-arm64
+          name: opsbox-macos-11.0-arm64
           path: arch_arm64
 
-      - name: Create universal2 binary
+      - name: Create opsbox universal2 binary
         run: |
           set -euxo pipefail
-          OUT_DIR="dist/api-gateway-macos-universal2"
+          OUT_DIR="dist/opsbox-macos-universal2"
           mkdir -p "$OUT_DIR"
           
           X64_BIN=$(find arch_x64 -type f -name opsbox | head -n1)
           ARM_BIN=$(find arch_arm64 -type f -name opsbox | head -n1)
           
           if [ -z "$X64_BIN" ] || [ -z "$ARM_BIN" ]; then
-            echo "未找到需要合并的二进制文件" >&2
+            echo "未找到需要合并的opsbox二进制文件" >&2
             exit 1
           fi
           
           lipo -create -output "$OUT_DIR/opsbox" "$X64_BIN" "$ARM_BIN"
+          
+          # 添加版本信息
+          echo "${{ github.sha }}" > "$OUT_DIR/VERSION"
+          echo "Target: universal2-apple-darwin" >> "$OUT_DIR/VERSION"
+          echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OUT_DIR/VERSION"
+          echo "Binary: opsbox (universal2)" >> "$OUT_DIR/VERSION"
 
-      - name: Upload universal2 artifact
+      - name: Upload opsbox universal2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-universal2
-          path: dist/api-gateway-macos-universal2
+          name: opsbox-macos-universal2
+          path: dist/opsbox-macos-universal2
+
+  # macOS Universal2 opsbox-agent
+  macos-universal2-agent:
+    name: macOS Universal2 opsbox-agent
+    needs: build-other-platforms
+    runs-on: macos-13
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download opsbox-agent macOS x86_64 artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: opsbox-agent-macos-10.15-x86_64
+          path: arch_x64
+
+      - name: Download opsbox-agent macOS arm64 artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: opsbox-agent-macos-11.0-arm64
+          path: arch_arm64
+
+      - name: Create opsbox-agent universal2 binary
+        run: |
+          set -euxo pipefail
+          OUT_DIR="dist/opsbox-agent-macos-universal2"
+          mkdir -p "$OUT_DIR"
+          
+          X64_BIN=$(find arch_x64 -type f -name opsbox-agent | head -n1)
+          ARM_BIN=$(find arch_arm64 -type f -name opsbox-agent | head -n1)
+          
+          if [ -z "$X64_BIN" ] || [ -z "$ARM_BIN" ]; then
+            echo "未找到需要合并的opsbox-agent二进制文件" >&2
+            exit 1
+          fi
+          
+          lipo -create -output "$OUT_DIR/opsbox-agent" "$X64_BIN" "$ARM_BIN"
+          
+          # 添加版本信息
+          echo "${{ github.sha }}" > "$OUT_DIR/VERSION"
+          echo "Target: universal2-apple-darwin" >> "$OUT_DIR/VERSION"
+          echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OUT_DIR/VERSION"
+          echo "Binary: opsbox-agent (universal2)" >> "$OUT_DIR/VERSION"
+
+      - name: Upload opsbox-agent universal2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-agent-macos-universal2
+          path: dist/opsbox-agent-macos-universal2
 
   # 发布
   release:
     name: Release
-    needs: [build-linux-release, build-other-platforms, macos-universal2]
+    needs: [build-linux-release, build-other-platforms, macos-universal2-opsbox, macos-universal2-agent]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -192,7 +312,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
-          pattern: api-gateway-*
+          pattern: opsbox*
           path: artifacts
           merge-multiple: true
 

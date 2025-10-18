@@ -153,18 +153,42 @@ jobs:
             fi
           done
 
-      - name: Package artifacts (${{ matrix.target.name }})
+      - name: Package opsbox artifact (${{ matrix.target.name }})
         run: |
           set -eux
-          ART_DIR="dist/opsbox-linux-x86_64-${{ matrix.target.name }}"
+          OPSBOX_DIR="dist/opsbox-linux-x86_64-${{ matrix.target.name }}"
           OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
-          AGENT_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-agent"
-          mkdir -p "$ART_DIR"
-          cp "$OPSBOX_BIN" "$ART_DIR/"
-          cp "$AGENT_BIN" "$ART_DIR/"
+          mkdir -p "$OPSBOX_DIR"
+          cp "$OPSBOX_BIN" "$OPSBOX_DIR/"
+          
+          # 添加版本信息
+          echo "${{ github.sha }}" > "$OPSBOX_DIR/VERSION"
+          echo "Target: ${{ matrix.target.rust_target }}" >> "$OPSBOX_DIR/VERSION"
+          echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OPSBOX_DIR/VERSION"
+          echo "Binary: opsbox" >> "$OPSBOX_DIR/VERSION"
 
-      - name: Upload artifacts (${{ matrix.target.name }})
+      - name: Package opsbox-agent artifact (${{ matrix.target.name }})
+        run: |
+          set -eux
+          AGENT_DIR="dist/opsbox-agent-linux-x86_64-${{ matrix.target.name }}"
+          AGENT_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-agent"
+          mkdir -p "$AGENT_DIR"
+          cp "$AGENT_BIN" "$AGENT_DIR/"
+          
+          # 添加版本信息
+          echo "${{ github.sha }}" > "$AGENT_DIR/VERSION"
+          echo "Target: ${{ matrix.target.rust_target }}" >> "$AGENT_DIR/VERSION"
+          echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$AGENT_DIR/VERSION"
+          echo "Binary: opsbox-agent" >> "$AGENT_DIR/VERSION"
+
+      - name: Upload opsbox artifact (${{ matrix.target.name }})
         uses: actions/upload-artifact@v4
         with:
           name: opsbox-linux-x86_64-${{ matrix.target.name }}
           path: dist/opsbox-linux-x86_64-${{ matrix.target.name }}
+
+      - name: Upload opsbox-agent artifact (${{ matrix.target.name }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-agent-linux-x86_64-${{ matrix.target.name }}
+          path: dist/opsbox-agent-linux-x86_64-${{ matrix.target.name }}
