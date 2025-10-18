@@ -5,27 +5,35 @@
 use crate::api::models::{AppError, S3SettingsPayload};
 use crate::repository::settings;
 use axum::{
-  extract::{Json, State},
+  extract::{Json, Query, State},
   http::StatusCode,
 };
 use opsbox_core::SqlitePool;
 use problemdetails::Problem;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct S3Query {
+  /// 是否在返回设置时验证连接（默认 false，不进行外部连接）
+  pub verify: Option<bool>,
+}
 
 /// 获取 S3 设置
-pub async fn get_s3_settings(State(pool): State<SqlitePool>) -> Result<Json<S3SettingsPayload>, Problem> {
+pub async fn get_s3_settings(
+  State(pool): State<SqlitePool>,
+  Query(q): Query<S3Query>,
+) -> Result<Json<S3SettingsPayload>, Problem> {
   let settings_opt = settings::load_s3_settings(&pool).await.map_err(AppError::Settings)?;
-  let mut payload = settings_opt.clone().map_or_else(S3SettingsPayload::default, Into::into);
 
-  if let Some(settings_value) = settings_opt {
-    match settings::verify_s3_settings(&settings_value).await {
-      Ok(_) => {
-        payload.configured = true;
-      }
-      Err(e) => {
-        payload.configured = false;
-        payload.connection_error = Some(format!("无法连接 MinIO：{}", e));
-      }
-    }
+  // 基础负载：仅反映“是否已配置”而非“是否连通”
+  let mut payload = settings_opt.clone().map_or_else(S3SettingsPayload::default, Into::into);
+  payload.configured = settings_opt.is_some();
+
+  // 可选：按需验证连接（仅在显式请求 verify=true 时）
+  if let (true, Some(settings_value)) = (q.verify.unwrap_or(false), settings_opt.as_ref())
+    && let Err(e) = settings::verify_s3_settings(settings_value).await
+  {
+    payload.connection_error = Some(format!("无法连接对象存储：{}", e));
   }
 
   Ok(Json(payload))

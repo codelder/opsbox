@@ -9,9 +9,10 @@ import { getApiBase, commonHeaders } from './config';
 /**
  * 获取 S3 对象存储设置
  */
-export async function fetchS3Settings(): Promise<S3SettingsResponse> {
+export async function fetchS3Settings(verify: boolean = false): Promise<S3SettingsResponse> {
   const API_BASE = getApiBase();
-  const response = await fetch(`${API_BASE}/settings/s3`, {
+  const url = `${API_BASE}/settings/s3${verify ? '?verify=true' : ''}`;
+  const response = await fetch(url, {
     headers: { Accept: 'application/json' }
   });
 

@@ -33,7 +33,7 @@ export function useSettings() {
     connectionError = null;
 
     try {
-      const data = await fetchS3Settings();
+      const data = await fetchS3Settings(true);
       endpoint = data.endpoint ?? '';
       bucket = data.bucket ?? '';
       accessKey = data.access_key ?? '';

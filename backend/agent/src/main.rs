@@ -35,6 +35,14 @@ use std::{
 use tokio::sync::{RwLock, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
+/// 是否启用与 Server 通讯的“线级”调试日志（打印请求/响应、NDJSON 行等）
+/// 通过环境变量 AGENT_DEBUG_WIRE=1 启用
+fn wire_debug_enabled() -> bool {
+  std::env::var("AGENT_DEBUG_WIRE")
+    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
+    .unwrap_or(false)
+}
+
 /// LogSeek Agent - 远程搜索代理
 #[derive(Parser, Debug)]
 #[command(name = "opsbox-agent")]
@@ -513,6 +521,18 @@ async fn list_available_paths(State(state): State<AppState>) -> Json<Vec<String>
 /// 处理搜索请求
 async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentSearchRequest>) -> impl IntoResponse {
   info!("收到搜索请求: task_id={}, query={}", request.task_id, request.query);
+  if wire_debug_enabled() {
+    match serde_json::to_string(&request) {
+      Ok(s) => debug!("[Wire] ← /api/v1/search 请求体: {}", s),
+      Err(e) => debug!("[Wire] ← /api/v1/search 请求体序列化失败: {}", e),
+    }
+  } else {
+    debug!(
+      "搜索参数: ctx={}, path_filter_present={}, scope=...",
+      request.context_lines,
+      request.path_filter.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+    );
+  }
 
   // 添加任务
   state.task_manager.add_task(request.task_id.clone()).await;
@@ -531,6 +551,14 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
   // 将 channel 转换为 NDJSON 流
   let stream = ReceiverStream::new(rx).map(|msg| {
     let json = serde_json::to_string(&msg).unwrap_or_else(|_| "{}".to_string());
+    if wire_debug_enabled() {
+      let preview = if json.len() > 512 {
+        format!("{}...", &json[..512])
+      } else {
+        json.clone()
+      };
+      debug!("[Wire] → NDJSON行: {}", preview);
+    }
     Ok::<_, std::convert::Infallible>(format!("{}\n", json))
   });
 
@@ -909,7 +937,10 @@ async fn register_to_server(config: &AgentConfig) -> Result<(), Box<dyn std::err
     info!("✓ 已成功向 Server 注册");
     Ok(())
   } else {
-    Err(format!("注册失败: {}", response.status()).into())
+    let status = response.status();
+    let body_text = response.text().await.unwrap_or_default();
+    error!("注册失败: {} - {}", status, body_text);
+    Err(format!("注册失败: {} - {}", status, body_text).into())
   }
 }
 
@@ -932,7 +963,9 @@ async fn heartbeat_loop(config: Arc<AgentConfig>) {
         debug!("心跳发送成功");
       }
       Ok(response) => {
-        warn!("心跳失败: {}", response.status());
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        warn!("心跳失败: {} - {}", status, body);
       }
       Err(e) => {
         warn!("心跳发送出错: {}", e);

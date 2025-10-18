@@ -302,12 +302,10 @@ pub async fn stream_search(
           return;
         }
 
+        // 透传：不在服务端强加 scope/path 过滤，由 Agent 根据其配置的 search_roots 与查询自行筛选
         let search_options = SearchOptions {
-          scope: SearchScope::Directory {
-            path: "logs".to_string(),
-            recursive: true,
-          },
-          path_filter: Some("**/2025-08-18/**".to_string()),
+          scope: SearchScope::All,
+          path_filter: None,
           ..Default::default()
         };
 

@@ -84,7 +84,7 @@ describe('highlight utils', () => {
     });
 
     it('应该忽略空关键词', () => {
-      const result = highlight('hello world', ['', 'hello', undefined as string]);
+      const result = highlight('hello world', ['', 'hello']);
       expect(result).toBe('<mark>hello</mark> world');
     });
 

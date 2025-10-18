@@ -161,6 +161,14 @@ use futures::StreamExt;
 use log::{debug, error, info, warn};
 use std::time::Duration;
 
+/// 中文注释：是否启用与 Agent 通讯的“线级”调试日志（打印请求/响应细节、NDJSON行等）
+/// 通过环境变量 LOGSEEK_AGENT_DEBUG_WIRE=1 启用
+fn wire_debug_enabled() -> bool {
+  std::env::var("LOGSEEK_AGENT_DEBUG_WIRE")
+    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
+    .unwrap_or(false)
+}
+
 // 复用 agent-manager 的数据模型
 pub use agent_manager::models::{AgentInfo, AgentStatus, AgentTag};
 
@@ -176,7 +184,7 @@ pub struct AgentSearchRequest {
 
 /// Agent 消息格式（NDJSON 流式传输）
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", content = "data", rename_all = "lowercase")]
 pub enum AgentMessage {
   /// 搜索结果
   Result(crate::service::search::SearchResult),
@@ -278,7 +286,21 @@ impl SearchService for AgentClient {
       scope: options.scope,
     };
 
-    debug!("Agent 搜索请求: {:?}", request);
+    // 中文调试：打印请求明细（仅在 debug 级别或显式开启“线级”调试时）
+    if wire_debug_enabled() {
+      match serde_json::to_string(&request) {
+        Ok(s) => debug!("[Wire] → POST {}/api/v1/search body={}", self.endpoint, s),
+        Err(_) => debug!("[Wire] → POST {}/api/v1/search (body序列化失败)", self.endpoint),
+      }
+    } else {
+      debug!(
+        "Agent 搜索请求: endpoint={}, task_id={}, ctx={}, has_path_filter={}, scope=...",
+        self.endpoint,
+        request.task_id,
+        request.context_lines,
+        request.path_filter.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+      );
+    }
 
     // 发送 POST 请求到 Agent
     let url = format!("{}/api/v1/search", self.endpoint);
@@ -294,8 +316,16 @@ impl SearchService for AgentClient {
         StorageError::ConnectionError(format!("Agent 连接失败: {}", e))
       })?;
 
-    if !response.status().is_success() {
-      let status = response.status();
+    // 中文调试：打印响应状态与头
+    let status = response.status();
+    if wire_debug_enabled() {
+      debug!("[Wire] ← 状态: {}", status);
+      for (k, v) in response.headers() {
+        debug!("[Wire] ← 头: {}: {}", k.as_str(), v.to_str().unwrap_or("<bin>"));
+      }
+    }
+
+    if !status.is_success() {
       let error_text = response.text().await.unwrap_or_default();
       return Err(StorageError::Other(format!(
         "Agent 返回错误: {} - {}",
@@ -303,60 +333,150 @@ impl SearchService for AgentClient {
       )));
     }
 
-    // 流式接收结果（NDJSON 格式）
+    // 流式接收结果（NDJSON 格式，按换行组装，避免跨 chunk 破碎）
     debug!("开始接收 Agent 搜索结果流");
 
-    let stream = response.bytes_stream();
+    let byte_stream = response.bytes_stream();
     let agent_id = self.agent_id.clone();
     let mut result_count = 0;
 
-    let result_stream = Box::pin(
-      stream
-        .filter_map(move |chunk_result| {
-          let agent_id = agent_id.clone();
-          async move {
-            match chunk_result {
-              Ok(chunk) => {
-                let text = String::from_utf8_lossy(&chunk);
-                let results: Vec<Result<_, StorageError>> = text
-                  .lines()
-                  .filter(|line| !line.trim().is_empty())
-                  .filter_map(|line| match serde_json::from_str::<AgentMessage>(line) {
-                    Ok(AgentMessage::Result(result)) => Some(Ok(result)),
-                    Ok(AgentMessage::Progress(progress)) => {
-                      debug!(
-                        "Agent {} 进度: {}/{} 文件",
-                        agent_id, progress.processed_files, progress.matched_files
-                      );
-                      None
+    // 先将字节流组装为“完整的行”（按字节分割，避免 UTF-8 跨 chunk 破碎）
+    use futures::stream;
+    let agent_id_for_scan = agent_id.clone();
+    let line_stream = byte_stream
+      .scan(Vec::<u8>::new(), move |buf, chunk_result| {
+        let agent_id = agent_id_for_scan.clone();
+        let mut out: Option<Vec<String>> = None;
+        match chunk_result {
+          Ok(chunk) => {
+            if wire_debug_enabled() {
+              debug!("[Wire] ← 收到字节块: {} bytes (Agent {})", chunk.len(), agent_id);
+            }
+            buf.extend_from_slice(&chunk);
+            debug!("🔍 Server缓冲区当前大小: {} bytes", buf.len());
+            let mut lines: Vec<String> = Vec::new();
+            loop {
+              if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
+                debug!("🔍 Server找到换行符位置: {}", pos);
+                // 取出一行（包含 \n）
+                let mut line_bytes: Vec<u8> = buf.drain(..=pos).collect();
+                // 去掉结尾的 \n
+                if line_bytes.last() == Some(&b'\n') {
+                  let _ = line_bytes.pop();
+                }
+                // 去掉可选的 \r
+                if line_bytes.last() == Some(&b'\r') {
+                  let _ = line_bytes.pop();
+                }
+                if line_bytes.is_empty() {
+                  continue;
+                }
+                match String::from_utf8(line_bytes) {
+                  Ok(s) => {
+                    if !s.trim().is_empty() {
+                      debug!("🔍 Server解析到NDJSON行: {}", s);
+                      if wire_debug_enabled() {
+                        let preview = if s.len() > 512 {
+                          format!("{}...", &s[..512])
+                        } else {
+                          s.clone()
+                        };
+                        debug!("[Wire] ← NDJSON行: {}", preview);
+                      }
+                      lines.push(s);
                     }
-                    Ok(AgentMessage::Error(err)) => Some(Err(StorageError::Other(format!("Agent 错误: {}", err)))),
-                    Ok(AgentMessage::Complete) => {
-                      debug!("Agent {} 搜索完成", agent_id);
-                      None
-                    }
-                    Err(e) => {
-                      warn!("解析 Agent 消息失败: {} (line: {})", e, line);
-                      None
-                    }
-                  })
-                  .collect();
-                if results.is_empty() {
-                  None
-                } else {
-                  Some(futures::stream::iter(results))
+                  }
+                  Err(e) => {
+                    warn!("Agent {} 行UTF-8解析失败，已跳过: {}", agent_id, e);
+                  }
+                }
+              } else {
+                debug!("🔍 Server缓冲区中没有找到换行符，等待更多数据");
+                break;
+              }
+            }
+            if !lines.is_empty() {
+              debug!("🔍 Server处理了 {} 行NDJSON", lines.len());
+              out = Some(lines);
+            } else if !buf.is_empty() {
+              // 处理最后一个chunk没有换行符的情况
+              debug!("🔍 Server处理最后一个chunk，缓冲区大小: {} bytes", buf.len());
+              // 使用更安全的UTF-8解析，处理不完整的序列
+              match String::from_utf8_lossy(buf) {
+                s if !s.trim().is_empty() => {
+                  debug!("🔍 Server解析到最后的NDJSON行: {}", s);
+                  out = Some(vec![s.to_string()]);
+                }
+                _ => {
+                  debug!("🔍 Server最后的chunk为空或只包含空白字符");
                 }
               }
-              Err(e) => {
-                error!("Agent {} 流读取错误: {}", agent_id, e);
-                Some(futures::stream::iter(vec![Err(StorageError::Io(
-                  std::io::Error::other(e.to_string()),
-                ))]))
+            } else {
+              debug!("🔍 Server没有处理任何行");
+            }
+          }
+          Err(e) => {
+            error!("Agent {} 流读取错误: {}", agent_id, e);
+            // 继续消费后续 chunk
+            out = Some(Vec::new());
+          }
+        }
+        std::future::ready(out)
+      })
+      .flat_map(stream::iter);
+
+    // 将完整行解析为 AgentMessage，再提取结果
+    let result_stream = Box::pin(
+      line_stream
+        .filter_map({
+          let agent_id_for_parse = agent_id.clone();
+          move |line| {
+            let agent_id = agent_id_for_parse.clone();
+            async move {
+              debug!("🔍 Server尝试解析AgentMessage: {}", line);
+              match serde_json::from_str::<AgentMessage>(&line) {
+                Ok(AgentMessage::Result(result)) => {
+                  debug!(
+                    "✅ Server收到Result消息: path={}, lines_count={}",
+                    result.path,
+                    result.lines.len()
+                  );
+                  Some(Ok(result))
+                }
+                Ok(AgentMessage::Progress(progress)) => {
+                  debug!(
+                    "Agent {} 进度: {}/{} 文件",
+                    agent_id, progress.processed_files, progress.matched_files
+                  );
+                  if wire_debug_enabled() {
+                    debug!(
+                      "[Wire] ← Progress: task_id={} status={:?}",
+                      progress.task_id, progress.status
+                    );
+                  }
+                  None
+                }
+                Ok(AgentMessage::Error(err)) => {
+                  if wire_debug_enabled() {
+                    debug!("[Wire] ← Error: {}", err);
+                  }
+                  Some(Err(StorageError::Other(format!("Agent 错误: {}", err))))
+                }
+                Ok(AgentMessage::Complete) => {
+                  debug!("Agent {} 搜索完成", agent_id);
+                  if wire_debug_enabled() {
+                    debug!("[Wire] ← Complete");
+                  }
+                  None
+                }
+                Err(e) => {
+                  warn!("解析 Agent 消息失败: {} (line: {})", e, line);
+                  None
+                }
               }
             }
           }
         })
-        .flatten()
         .inspect(move |result| {
           if result.is_ok() {
             result_count += 1;
