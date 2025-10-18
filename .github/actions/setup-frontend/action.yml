@@ -12,6 +12,12 @@ env:
 runs:
   using: 'composite'
   steps:
+    - name: Enable pnpm via corepack (pre-setup)
+      shell: bash
+      run: |
+        corepack enable
+        corepack prepare pnpm@latest --activate
+
     - name: Setup Node.js
       uses: actions/setup-node@v5
       with:

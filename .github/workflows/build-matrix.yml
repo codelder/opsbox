@@ -43,13 +43,13 @@ jobs:
           corepack prepare pnpm@latest --activate
 
       - name: Install frontend deps
-        run: pnpm --dir ui install --frozen-lockfile
+        run: pnpm --dir web install --frozen-lockfile
         env:
           # 中文注释：跳过 Playwright 浏览器下载，加速 CI
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
       - name: Build frontend
-        run: pnpm --dir ui build
+        run: pnpm --dir web build
 
       - name: Setup Rust toolchain (stable)
         id: rust-toolchain
@@ -74,7 +74,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/cache/restore@v4
         with:
-          path: server/target-musl
+          path: backend/target-musl
           key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: |
             target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
@@ -85,7 +85,7 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/cache/restore@v4
         with:
-          path: server/target-gnu
+          path: backend/target-gnu
           key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
           restore-keys: |
             target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
@@ -119,14 +119,14 @@ jobs:
           export SCCACHE_DIR="$PWD/.sccache"
           export SCCACHE_CACHE_SIZE=2G
           # 中文注释：统一目标目录（musl 专用），避免与 manylinux 宿主产物混用
-          export CARGO_TARGET_DIR="$PWD/server/target-musl"
+          export CARGO_TARGET_DIR="$PWD/backend/target-musl"
           # 中文注释：让 C/C++ 也走 sccache（使用 musl-gcc）。若存在 musl-g++ 则一并设置。
           if command -v musl-gcc >/dev/null 2>&1; then export CC="sccache musl-gcc"; fi
           if command -v musl-g++ >/dev/null 2>&1; then export CXX="sccache musl-g++"; fi
           # 中文注释：静态 OpenSSL（vendored），避免系统依赖
           export OPENSSL_STATIC=1
           # 中文注释：使用传统 cargo build 进行 musl 静态构建
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
 
 
       - name: Ensure manylinux2014 image present
@@ -168,7 +168,7 @@ jobs:
             fi
 
             # 中文注释：统一目标目录（gnu 专用），避免与宿主产物混用
-            export CARGO_TARGET_DIR="$PWD/server/target-gnu"
+          export CARGO_TARGET_DIR="$PWD/backend/target-gnu"
 
             # 安装 Rust 并加载环境，固定版本与宿主一致
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
@@ -181,27 +181,27 @@ jobs:
             # 显式启用静态 OpenSSL（vendored）
             export OPENSSL_STATIC=1
 
-            cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+            cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
 
             # 修正构建产物权限，避免宿主权限问题
             chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target-gnu" || true
           '
-          ls -l server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
+          ls -l backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
 
       # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
       - name: Save target cache (musl)
         if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
-          path: server/target-musl
-          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          path: backend/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Save target cache (gnu)
         if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
-          path: server/target-gnu
-          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          path: backend/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
 
 
@@ -212,8 +212,8 @@ jobs:
         run: |
           set -euxo pipefail
           # 中文注释：GNU 构建在 manylinux 容器中使用 CARGO_TARGET_DIR=server/target-gnu
-          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
           echo "== Version needs (readelf -V) =="
@@ -231,8 +231,8 @@ jobs:
         run: |
           set -euo pipefail
           # 中文注释：优先检查 target-gnu 目录，回退到默认 target
-          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
@@ -254,7 +254,7 @@ jobs:
           # 中文注释：Intel 目标设置为 10.15，以便在旧系统上运行
           MACOSX_DEPLOYMENT_TARGET: '10.15'
         run: |
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
 
       - name: Build backend (macOS arm64, 11.0)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -262,13 +262,13 @@ jobs:
           # 中文注释：Apple Silicon 最低为 11.0
           MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: |
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
 
       # ========================= Windows 专用（MSVC 通用构建） =========================
       - name: Build backend (Windows, MSVC)
         if: runner.os == 'Windows'
         run: |
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
 
       # 非 Linux 平台的打包与上传
       - name: Package artifact (Windows)
@@ -277,7 +277,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-windows-x86_64-msvc"
-          BIN="server/target/release/api-gateway.exe"
+          BIN="backend/target/release/api-gateway.exe"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -294,7 +294,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-macos-10.15-x86_64"
-          BIN="server/target/release/api-gateway"
+          BIN="backend/target/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -311,7 +311,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-macos-11.0-arm64"
-          BIN="server/target/release/api-gateway"
+          BIN="backend/target/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -329,8 +329,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-musl"
-          BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
+          BIN="backend/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-musl/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -347,8 +347,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -388,12 +388,12 @@ jobs:
           corepack prepare pnpm@latest --activate
 
       - name: Install frontend deps
-        run: pnpm --dir ui install --frozen-lockfile
+        run: pnpm --dir web install --frozen-lockfile
         env:
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
       - name: Build frontend
-        run: pnpm --dir ui build
+        run: pnpm --dir web build
 
       - name: Setup Rust toolchain (stable)
         id: rust-toolchain
@@ -415,8 +415,8 @@ jobs:
         if: runner.os == 'macOS'
         uses: actions/cache/restore@v4
         with:
-          path: server/target
-          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          path: backend/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
             target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-
             target-host-${{ runner.os }}-${{ runner.arch }}-
@@ -427,8 +427,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/cache/restore@v4
         with:
-          path: server/target
-          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          path: backend/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
             target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-
             target-host-${{ runner.os }}-${{ runner.arch }}-
@@ -439,8 +439,8 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/cache/restore@v4
         with:
-          path: server/target-musl
-          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          path: backend/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
             target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
             target-musl-${{ runner.os }}-
@@ -450,8 +450,8 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/cache/restore@v4
         with:
-          path: server/target-gnu
-          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          path: backend/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
             target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
             target-gnu-${{ runner.os }}-
@@ -463,8 +463,8 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y musl-tools pkg-config
           # 中文注释：统一目标目录（musl 专用），与非 tag 流程保持一致，便于缓存
-          export CARGO_TARGET_DIR="$PWD/server/target-musl"
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          export CARGO_TARGET_DIR="$PWD/backend/target-musl"
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
 
       - name: Ensure manylinux2014 image present
         if: runner.os == 'Linux'
@@ -504,7 +504,7 @@ jobs:
             fi
 
             # 中文注释：统一目标目录（gnu 专用），避免与宿主产物混用
-            export CARGO_TARGET_DIR="$PWD/server/target-gnu"
+            export CARGO_TARGET_DIR="$PWD/backend/target-gnu"
 
             # 安装 Rust 并加载环境，固定版本与宿主一致
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
@@ -517,35 +517,35 @@ jobs:
             # 显式启用静态 OpenSSL（vendored）
             export OPENSSL_STATIC=1
 
-            cargo build --manifest-path server/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+            cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
 
             # 修正构建产物权限，避免宿主权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target-gnu" || true
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/backend/target-gnu" || true
           '
-          ls -l server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
+          ls -l backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
 
       # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
       - name: Save target cache (musl)
         if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
-          path: server/target-musl
-          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          path: backend/target-musl
+          key: target-musl-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Save target cache (gnu)
         if: runner.os == 'Linux'
         uses: actions/cache/save@v4
         with:
-          path: server/target-gnu
-          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          path: backend/target-gnu
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Diagnose GLIBC requirements (Linux)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euxo pipefail
-          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
           echo "== Version needs (readelf -V) =="
@@ -562,8 +562,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
@@ -583,35 +583,35 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: '10.15'
         run: |
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
 
       - name: Build backend (macOS arm64, 11.0)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         env:
           MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: |
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
 
       # 保存 target（macOS 主机）
       - name: Save target cache (macOS host)
         if: runner.os == 'macOS'
         uses: actions/cache/save@v4
         with:
-          path: server/target
-          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          path: backend/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Build backend (Windows, MSVC)
         if: runner.os == 'Windows'
         run: |
-          cargo build --manifest-path server/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
 
       # 保存 target（Windows 主机）
       - name: Save target cache (Windows host)
         if: runner.os == 'Windows'
         uses: actions/cache/save@v4
         with:
-          path: server/target
-          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}-${{ github.run_id }}
+          path: backend/target
+          key: target-host-${{ runner.os }}-${{ runner.arch }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Package artifact (Windows)
         if: runner.os == 'Windows'
@@ -619,7 +619,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-windows-x86_64-msvc"
-          BIN="server/target/release/api-gateway.exe"
+          BIN="backend/target/release/api-gateway.exe"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -636,7 +636,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-macos-10.15-x86_64"
-          BIN="server/target/release/api-gateway"
+          BIN="backend/target/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -653,7 +653,7 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-macos-11.0-arm64"
-          BIN="server/target/release/api-gateway"
+          BIN="backend/target/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -670,8 +670,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-musl"
-          BIN="server/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-musl/release/api-gateway"
+          BIN="backend/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-musl/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -688,8 +688,8 @@ jobs:
         run: |
           set -eux
           ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-          BIN="server/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="server/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
