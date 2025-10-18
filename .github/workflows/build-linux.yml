@@ -25,8 +25,10 @@ jobs:
       - name: Setup Frontend
         uses: ./.github/actions/setup-frontend
 
+      # 只对 musl 构建使用 setup-rust（Docker 构建会在容器内重新安装）
       - name: Setup Rust
         id: rust-setup
+        if: ${{ !matrix.target.docker }}
         uses: ./.github/actions/setup-rust
         with:
           additional-targets: ${{ matrix.target.rust_target }}
@@ -36,9 +38,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: backend/target-${{ matrix.target.name }}
-          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}
+          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
-            target-${{ matrix.target.name }}-${{ runner.os }}-${{ steps.rust-setup.outputs.cache-key }}-
+            target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-
             target-${{ matrix.target.name }}-${{ runner.os }}-
 
       - name: Build backend (${{ matrix.target.name }})
@@ -116,7 +118,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: backend/target-${{ matrix.target.name }}
-          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
+          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Verify binary (${{ matrix.target.name }})
         if: ${{ matrix.target.name == 'gnu' }}
