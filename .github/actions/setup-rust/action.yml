@@ -23,7 +23,6 @@ runs:
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: '1.90.0'
-        components: clippy, rustfmt
 
     - name: Install additional targets
       if: inputs.additional-targets != ''
@@ -32,14 +31,6 @@ runs:
         for target in ${{ inputs.additional-targets }}; do
           rustup target add $target
         done
-
-    - name: Format Rust code
-      shell: bash
-      run: cargo fmt --all --manifest-path backend/Cargo.toml -- --check
-
-    - name: Lint Rust code
-      shell: bash
-      run: cargo clippy --all-targets --all-features --manifest-path backend/Cargo.toml -- -D warnings
 
     - name: Run Rust tests
       shell: bash

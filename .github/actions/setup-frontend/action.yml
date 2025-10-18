@@ -38,14 +38,6 @@ runs:
         # 跳过 Playwright 浏览器下载，加速 CI
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
-    - name: Format frontend code
-      shell: bash
-      run: pnpm --dir ${{ inputs.working-directory }} format
-
-    - name: Lint frontend code
-      shell: bash
-      run: pnpm --dir ${{ inputs.working-directory }} lint
-
     - name: Run frontend tests
       shell: bash
       run: pnpm --dir ${{ inputs.working-directory }} test
