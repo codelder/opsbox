@@ -14,12 +14,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Setup Frontend
-        uses: ./.github/actions/setup-frontend
-
-      - name: Setup Rust
-        uses: ./.github/actions/setup-rust
+        
+      # 简单检查：确保重要文件存在
+      - name: Verify project structure
+        run: |
+          test -f backend/Cargo.toml || (echo "backend/Cargo.toml not found" && exit 1)
+          test -f web/package.json || (echo "web/package.json not found" && exit 1)
+          echo "Project structure verified"
 
   # 平时仅跑 Linux 构建
   build-linux:
