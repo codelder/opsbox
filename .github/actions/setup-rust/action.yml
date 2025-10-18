@@ -10,9 +10,6 @@ inputs:
     required: false
     default: ''
 
-env:
-  RUST_VERSION: '1.90.0'
-
 outputs:
   cache-key:
     description: 'Rust toolchain cache key'
@@ -25,7 +22,7 @@ runs:
       id: rust-toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: ${{ env.RUST_VERSION }}
+        toolchain: '1.90.0'
         components: clippy, rustfmt
 
     - name: Install additional targets
