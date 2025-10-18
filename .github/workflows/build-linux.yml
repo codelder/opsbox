@@ -61,7 +61,7 @@ jobs:
           # 然后构建 release 版本（利用测试阶段的编译缓存）
           cargo build \
             --manifest-path backend/Cargo.toml \
-            -p opsbox \
+            -p opsbox -p opsbox-agent \
             --target ${{ matrix.target.rust_target }} \
             --release \
             --locked
@@ -111,7 +111,7 @@ jobs:
             # 然后构建 release 版本（利用测试阶段的编译缓存）
             cargo build \
               --manifest-path backend/Cargo.toml \
-              -p opsbox \
+              -p opsbox -p opsbox-agent \
               --target ${{ matrix.target.rust_target }} \
               --release \
               --locked
@@ -126,39 +126,45 @@ jobs:
           path: backend/target-${{ matrix.target.name }}
           key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
-      - name: Verify binary (${{ matrix.target.name }})
+      - name: Verify binaries (${{ matrix.target.name }})
         if: ${{ matrix.target.name == 'gnu' }}
         run: |
           set -euo pipefail
-          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          AGENT_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-agent"
           
-          if [ ! -f "$BIN" ]; then
-            echo "Binary not found: $BIN" >&2
-            exit 1
-          fi
-          
-          # 检查 GLIBC 版本要求
-          max=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -V | tail -1 || true)
-          echo "检测到最高 GLIBC 符号版本: ${max:-none}"
-          
-          if [ -n "${max:-}" ]; then
-            top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
-            if [ "$top" != "2.17" ]; then
-              echo "需要高于 GLIBC_2.17 的版本 (发现 GLIBC_$max)" >&2
+          for BIN in "$OPSBOX_BIN" "$AGENT_BIN"; do
+            if [ ! -f "$BIN" ]; then
+              echo "Binary not found: $BIN" >&2
               exit 1
             fi
-          fi
+            
+            echo "Verifying $BIN"
+            # 检查 GLIBC 版本要求
+            max=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -V | tail -1 || true)
+            echo "检测到最高 GLIBC 符号版本: ${max:-none}"
+            
+            if [ -n "${max:-}" ]; then
+              top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
+              if [ "$top" != "2.17" ]; then
+                echo "需要高于 GLIBC_2.17 的版本 (发现 GLIBC_$max)" >&2
+                exit 1
+              fi
+            fi
+          done
 
-      - name: Package artifact (${{ matrix.target.name }})
+      - name: Package artifacts (${{ matrix.target.name }})
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-linux-x86_64-${{ matrix.target.name }}"
-          BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          ART_DIR="dist/opsbox-linux-x86_64-${{ matrix.target.name }}"
+          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          AGENT_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-agent"
           mkdir -p "$ART_DIR"
-          cp "$BIN" "$ART_DIR/"
+          cp "$OPSBOX_BIN" "$ART_DIR/"
+          cp "$AGENT_BIN" "$ART_DIR/"
 
-      - name: Upload artifact (${{ matrix.target.name }})
+      - name: Upload artifacts (${{ matrix.target.name }})
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-linux-x86_64-${{ matrix.target.name }}
-          path: dist/api-gateway-linux-x86_64-${{ matrix.target.name }}
+          name: opsbox-linux-x86_64-${{ matrix.target.name }}
+          path: dist/opsbox-linux-x86_64-${{ matrix.target.name }}
