@@ -1,27 +1,202 @@
-Opsbox Monorepo
+# OpsBox 日志检索平台
 
-目录结构
-- server/api-gateway: 后端入口，监听 127.0.0.1:4000，挂载 /api/v1/logsearch/*
-- server/logsearch: 日志检索工具库，导出 router()，提供 /stream
-- ui/: Next.js 前端（开发端口 3001）
+基于 Rust 后端和 SvelteKit 前端的日志搜索分析平台。
 
-启动
-- 后端：
-  cd server/api-gateway && cargo run
-- 前端：
-  cd ui && npm i && npm run dev
+## 架构概览
 
-配置
-- MinIO 目前硬编码在 server/api-gateway/src/main.rs，后续改为环境变量
-- 前端代理默认指向 http://127.0.0.1:4000/api/v1/logsearch/stream
+### 后端 (`backend/`)
 
-AI 查询串生成（本地 Ollama）
-- 新增后端接口：POST /api/v1/logsearch/nl2q
-  - 请求体：{ "nl": "自然语言需求" }
-  - 响应体：{ "q": "生成的查询字符串" }
-- 依赖本地 Ollama（默认 http://127.0.0.1:11434）和模型 qwen3:8b
-- 可通过环境变量覆盖：
-  - OLLAMA_BASE_URL（默认 http://127.0.0.1:11434）
-  - OLLAMA_MODEL（默认 qwen3:8b）
-- 前端：搜索输入框右侧新增 AI 按钮；输入自然语言后点击即可自动生成 q 并执行搜索（中文错误提示）
+**Monorepo 结构，包含三个 crate：**
+
+- **opsbox** (主程序，输出二进制名 `opsbox`)
+  - 模块化结构：config、logging、daemon、server
+  - 内嵌前端静态资源
+  - SQLite 数据库管理
+  - 监听 127.0.0.1:4000
+  
+- **opsbox-core** (共享库)
+  - 统一错误处理 (RFC 7807 Problem Details)
+  - 数据库连接池管理
+  - 标准响应格式封装
+  
+- **logseek** (日志检索模块)
+  - 分层架构：api、service、repository、utils
+  - 支持本地文件系统和 S3/MinIO
+  - NDJSON 流式搜索
+  - 自然语言转查询（基于本地 Ollama）
+
+### 前端 (`web/`)
+
+- **SvelteKit** SPA (使用 adapter-static)
+- **模块化架构** (`src/lib/modules/logseek/`)
+  - types/: TypeScript 类型定义
+  - api/: 后端 API 客户端封装
+  - utils/: 文本处理工具
+  - composables/: Svelte 5 Runes 状态管理
+- **Vite** 开发服务器（代理 /api 到后端）
+
+## 快速开始
+
+### 环境要求
+
+- **Rust**: 1.90.0 (通过 rust-toolchain.toml 固定)
+- **Node.js**: 20 (使用 nvm: `nvm use 20`)
+- **pnpm**: 通过 corepack 启用
+
+### 安装依赖
+
+```bash
+# 前端依赖
+corepack enable
+corepack prepare pnpm@latest --activate
+pnpm --dir web install
+```
+
+### 启动开发服务器
+
+```bash
+# 后端（终端1）
+cargo run --manifest-path backend/Cargo.toml -p opsbox
+
+# 前端（终端2）
+pnpm --dir web dev
+```
+
+访问：http://localhost:5173
+
+### 生产构建
+
+```bash
+# 构建前端（输出到 backend/api-gateway/static）
+node scripts/build-frontend.mjs
+
+# 构建后端
+cargo build --manifest-path backend/Cargo.toml -p opsbox --release
+```
+
+## 主要功能
+
+### 日志搜索
+
+- GitHub 风格的查询语法（AND/OR/NOT、正则、短语）
+- 本地文件系统和 S3/MinIO 支持
+- NDJSON 流式结果返回
+- 上下文窗口和关键词高亮
+
+### MinIO 设置
+
+- 通过 Web UI 配置 MinIO 连接
+- 设置持久化到 SQLite 数据库
+- 连接验证和错误提示
+
+### AI 查询生成
+
+- 将自然语言转换为查询字符串
+- 依赖本地 Ollama (默认 http://127.0.0.1:11434)
+- 默认模型：qwen3:8b
+- 环境变量配置：`OLLAMA_BASE_URL`、`OLLAMA_MODEL`
+
+## 配置
+
+### 数据库
+
+- 默认：`./opsbox.db`
+- 覆盖：`--database-url` 或 `DATABASE_URL` 环境变量
+
+### 日志级别
+
+- `--log-level error|warn|info|debug|trace`
+- 或使用 `-V`/`-VV`/`-VVV`
+- 或设置 `RUST_LOG` 环境变量
+
+### 守护进程（macOS/Linux）
+
+```bash
+# 启动守护进程
+cargo run -p opsbox -- start --daemon
+
+# 停止守护进程
+cargo run -p opsbox -- stop
+```
+
+## 📚 开发文档
+
+### 项目文档
+- **架构说明**: [ARCHITECTURE.md](ARCHITECTURE.md) - 系统架构设计
+- **项目指南**: [WARP.md](WARP.md) - WARP AI 开发指南
+
+### 模块文档
+- **模块架构**: [docs/modules/module-architecture.md](docs/modules/module-architecture.md) - 模块系统设计
+- **Agent Manager**: [docs/modules/agent-manager.md](docs/modules/agent-manager.md) - Agent 管理模块
+- **Agent API**: [docs/modules/agent-api-spec.md](docs/modules/agent-api-spec.md) - Agent HTTP API 规范
+
+### 功能文档
+- **FileUrl 设计**: [docs/features/file-url.md](docs/features/file-url.md) - 文件 URL 抽象层
+- **S3 Profiles**: [docs/features/s3-profiles.md](docs/features/s3-profiles.md) - S3 配置管理
+
+### 使用指南
+- **查询语法**: [docs/guides/query-syntax.md](docs/guides/query-syntax.md) - 搜索查询语法
+- **存储层使用**: [docs/guides/storage-usage.md](docs/guides/storage-usage.md) - 存储抽象层示例
+- **前端开发**: [docs/FRONTEND_DEVELOPMENT.md](docs/FRONTEND_DEVELOPMENT.md) - 前端模块化架构
+
+### 测试报告
+- **Agent Manager 测试**: [tests/agent-manager-test-report.md](tests/agent-manager-test-report.md) - 集成测试报告
+
+### 脚本工具
+- **启动 Server**: [scripts/start_server.sh](scripts/start_server.sh)
+- **启动 Agent**: [scripts/start_agent.sh](scripts/start_agent.sh)
+- **API 测试**: [scripts/test_agent_api.sh](scripts/test_agent_api.sh)
+
+## 代码规范
+
+### Rust
+
+```bash
+# 格式化
+cargo fmt --all
+
+# Lint
+cargo clippy --workspace --all-targets -- -D warnings
+
+# 测试
+cargo test
+```
+
+### 前端
+
+```bash
+# 格式化
+pnpm --dir web format
+
+# Lint
+pnpm --dir web lint
+
+# 类型检查
+pnpm --dir web check
+
+# 测试
+pnpm --dir web test
+```
+
+## 技术栈
+
+### 后端
+
+- Rust 1.90.0
+- Axum (HTTP 框架)
+- SQLite + sqlx (数据库)
+- tokio (异步运行时)
+- ollama-rs (AI 集成)
+
+### 前端
+
+- SvelteKit (框架)
+- Svelte 5 (UI 库，Runes API)
+- TypeScript (类型系统)
+- TailwindCSS (样式)
+- Vite (构建工具)
+
+## License
+
+MIT
 

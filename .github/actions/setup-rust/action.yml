@@ -1,0 +1,33 @@
+name: 'Setup Rust'
+description: 'Setup Rust toolchain with caching'
+inputs:
+  cache-key-prefix:
+    description: 'Cache key prefix'
+    required: false
+    default: 'rust'
+  additional-targets:
+    description: 'Additional targets to install (space separated)'
+    required: false
+    default: ''
+
+outputs:
+  cache-key:
+    description: 'Rust toolchain cache key'
+    value: ${{ steps.rust-toolchain.outputs.cachekey }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust toolchain
+      id: rust-toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: '1.90.0'
+
+    - name: Install additional targets
+      if: inputs.additional-targets != ''
+      shell: bash
+      run: |
+        for target in ${{ inputs.additional-targets }}; do
+          rustup target add $target
+        done

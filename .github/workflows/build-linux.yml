@@ -1,0 +1,194 @@
+name: build-linux-reusable
+
+on:
+  workflow_call:
+
+env:
+  RUST_VERSION: '1.90.0'
+  MANYLINUX_IMAGE: 'quay.io/pypa/manylinux2014_x86_64:2025.10.10-1'
+
+jobs:
+  build-linux:
+    name: Build Linux ${{ matrix.target.name }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: 
+          - { name: 'musl', rust_target: 'x86_64-unknown-linux-musl', docker: false }
+          - { name: 'gnu', rust_target: 'x86_64-unknown-linux-gnu', docker: true }
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Frontend
+        uses: ./.github/actions/setup-frontend
+
+      # 只对 musl 构建使用 setup-rust（Docker 构建会在容器内重新安装）
+      - name: Setup Rust
+        id: rust-setup
+        if: ${{ !matrix.target.docker }}
+        uses: ./.github/actions/setup-rust
+        with:
+          additional-targets: ${{ matrix.target.rust_target }}
+
+      # 优化的缓存策略
+      - name: Restore build cache (${{ matrix.target.name }})
+        uses: actions/cache/restore@v4
+        with:
+          path: backend/target-${{ matrix.target.name }}
+          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-
+            target-${{ matrix.target.name }}-${{ runner.os }}-
+
+      - name: Test and build backend (${{ matrix.target.name }})
+        if: ${{ !matrix.target.docker }}
+        run: |
+          set -euxo pipefail
+          # 安装 musl 工具链
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools pkg-config
+          
+          # 设置编译环境
+          export CARGO_TARGET_DIR="${PWD}/backend/target-${{ matrix.target.name }}"
+          export OPENSSL_STATIC=1
+          
+          # 先运行测试（会编译所有代码）
+          cargo test --all-features --manifest-path backend/Cargo.toml
+          
+          # 然后构建 release 版本（利用测试阶段的编译缓存）
+          cargo build \
+            --manifest-path backend/Cargo.toml \
+            -p opsbox -p opsbox-agent \
+            --target ${{ matrix.target.rust_target }} \
+            --release \
+            --locked
+
+      - name: Build backend with Docker (${{ matrix.target.name }})
+        if: ${{ matrix.target.docker }}
+        run: |
+          set -euxo pipefail
+          # 确保 Docker 镜像存在
+          docker pull ${{ env.MANYLINUX_IMAGE }}
+          
+          # 在容器中构建
+          docker run --rm \
+            -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
+            -v "${PWD}":"${PWD}" -w "${PWD}" ${{ env.MANYLINUX_IMAGE }} bash -lc '
+            set -euxo pipefail
+            
+            # 安装依赖
+            yum -y install curl git xz tar which binutils perl-core make gcc gcc-c++ pkgconfig
+            
+            # 启用 devtoolset-10
+            if [ -f /opt/rh/devtoolset-10/enable ]; then
+              set +u; source /opt/rh/devtoolset-10/enable; set -u
+            fi
+            
+            # 确保 Perl 模块存在
+            if ! perl -MIPC::Cmd -MText::Template -e 1 2>/dev/null; then
+              yum -y install perl-IPC-Cmd perl-Text-Template || {
+                curl -sL https://cpanmin.us | perl - App::cpanminus
+                cpanm --notest IPC::Cmd Text::Template
+              }
+            fi
+            
+            # 安装 Rust
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+            source "$HOME/.cargo/env"
+            rustup toolchain install ${{ env.RUST_VERSION }} --profile minimal --no-self-update
+            rustup default ${{ env.RUST_VERSION }}
+            
+            # 设置编译环境
+            export CARGO_TARGET_DIR="${PWD}/backend/target-${{ matrix.target.name }}"
+            export OPENSSL_STATIC=1
+            
+            # 先运行测试（会编译所有代码）
+            cargo test --all-features --manifest-path backend/Cargo.toml
+            
+            # 然后构建 release 版本（利用测试阶段的编译缓存）
+            cargo build \
+              --manifest-path backend/Cargo.toml \
+              -p opsbox -p opsbox-agent \
+              --target ${{ matrix.target.rust_target }} \
+              --release \
+              --locked
+            
+            # 修正权限
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "${PWD}/backend/target-${{ matrix.target.name }}" || true
+          '
+
+      - name: Save build cache (${{ matrix.target.name }})
+        uses: actions/cache/save@v4
+        with:
+          path: backend/target-${{ matrix.target.name }}
+          key: target-${{ matrix.target.name }}-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Verify binaries (${{ matrix.target.name }})
+        if: ${{ matrix.target.name == 'gnu' }}
+        run: |
+          set -euo pipefail
+          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          AGENT_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-agent"
+          
+          for BIN in "$OPSBOX_BIN" "$AGENT_BIN"; do
+            if [ ! -f "$BIN" ]; then
+              echo "Binary not found: $BIN" >&2
+              exit 1
+            fi
+            
+            echo "Verifying $BIN"
+            # 检查 GLIBC 版本要求
+            max=$(objdump -T "$BIN" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' | sed 's/^GLIBC_//' | sort -V | tail -1 || true)
+            echo "检测到最高 GLIBC 符号版本: ${max:-none}"
+            
+            if [ -n "${max:-}" ]; then
+              top=$(printf '%s\n%s\n' "$max" "2.17" | sort -V | tail -1)
+              if [ "$top" != "2.17" ]; then
+                echo "需要高于 GLIBC_2.17 的版本 (发现 GLIBC_$max)" >&2
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Package opsbox artifact (${{ matrix.target.name }})
+        run: |
+          set -eux
+          OPSBOX_DIR="dist/opsbox-linux-x86_64-${{ matrix.target.name }}"
+          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          mkdir -p "$OPSBOX_DIR"
+          cp "$OPSBOX_BIN" "$OPSBOX_DIR/"
+          
+          # 添加版本信息
+          echo "${{ github.sha }}" > "$OPSBOX_DIR/VERSION"
+          echo "Target: ${{ matrix.target.rust_target }}" >> "$OPSBOX_DIR/VERSION"
+          echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OPSBOX_DIR/VERSION"
+          echo "Binary: opsbox" >> "$OPSBOX_DIR/VERSION"
+
+      - name: Package opsbox-agent artifact (${{ matrix.target.name }})
+        run: |
+          set -eux
+          AGENT_DIR="dist/opsbox-agent-linux-x86_64-${{ matrix.target.name }}"
+          AGENT_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-agent"
+          mkdir -p "$AGENT_DIR"
+          cp "$AGENT_BIN" "$AGENT_DIR/"
+          
+          # 添加版本信息
+          echo "${{ github.sha }}" > "$AGENT_DIR/VERSION"
+          echo "Target: ${{ matrix.target.rust_target }}" >> "$AGENT_DIR/VERSION"
+          echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$AGENT_DIR/VERSION"
+          echo "Binary: opsbox-agent" >> "$AGENT_DIR/VERSION"
+
+      - name: Upload opsbox artifact (${{ matrix.target.name }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-linux-x86_64-${{ matrix.target.name }}
+          path: dist/opsbox-linux-x86_64-${{ matrix.target.name }}
+
+      - name: Upload opsbox-agent artifact (${{ matrix.target.name }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-agent-linux-x86_64-${{ matrix.target.name }}
+          path: dist/opsbox-agent-linux-x86_64-${{ matrix.target.name }}
