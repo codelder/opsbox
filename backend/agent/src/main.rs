@@ -499,6 +499,28 @@ impl TaskManager {
 }
 
 // ============================================================================
+// 工具函数
+// ============================================================================
+
+/// 按 UTF-8 字符边界安全截断字符串，避免跨多字节字符导致的切片 panic
+///
+/// 参数:
+/// - s: 原始字符串
+/// - max: 允许的最大字节数（非字符数）
+///
+/// 返回：不超过 max 字节且落在字符边界上的 &str 视图
+fn truncate_utf8(s: &str, max: usize) -> &str {
+  if s.len() <= max {
+    return s;
+  }
+  let mut end = max;
+  while end > 0 && !s.is_char_boundary(end) {
+    end -= 1;
+  }
+  &s[..end]
+}
+
+// ============================================================================
 // 路由处理器
 // ============================================================================
 
@@ -553,7 +575,7 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
     let json = serde_json::to_string(&msg).unwrap_or_else(|_| "{}".to_string());
     if wire_debug_enabled() {
       let preview = if json.len() > 512 {
-        format!("{}...", &json[..512])
+        format!("{}...", truncate_utf8(&json, 512))
       } else {
         json.clone()
       };

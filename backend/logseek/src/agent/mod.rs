@@ -157,7 +157,6 @@ pub trait SearchService: Send + Sync {
 }
 
 // =========================== Agent 客户端实现 ===============================
-use futures::StreamExt;
 use log::{debug, error, info, warn};
 use std::time::Duration;
 
@@ -167,6 +166,22 @@ fn wire_debug_enabled() -> bool {
   std::env::var("LOGSEEK_AGENT_DEBUG_WIRE")
     .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
     .unwrap_or(false)
+}
+
+/// 按 UTF-8 字符边界安全截断字符串，用于调试预览，避免跨多字节字符导致 panic
+///
+/// 参数:
+/// - s: 原始字符串
+/// - max: 允许的最大字节数
+fn truncate_utf8(s: &str, max: usize) -> &str {
+  if s.len() <= max {
+    return s;
+  }
+  let mut end = max;
+  while end > 0 && !s.is_char_boundary(end) {
+    end -= 1;
+  }
+  &s[..end]
 }
 
 // 复用 agent-manager 的数据模型
@@ -333,97 +348,71 @@ impl SearchService for AgentClient {
       )));
     }
 
-    // 流式接收结果（NDJSON 格式，按换行组装，避免跨 chunk 破碎）
+    // 流式接收结果（NDJSON 格式，使用 LinesCodec 处理 UTF-8 和行分割）
     debug!("开始接收 Agent 搜索结果流");
 
-    let byte_stream = response.bytes_stream();
     let agent_id = self.agent_id.clone();
     let mut result_count = 0;
 
-    // 先将字节流组装为“完整的行”（按字节分割，避免 UTF-8 跨 chunk 破碎）
-    use futures::stream;
-    let agent_id_for_scan = agent_id.clone();
-    let line_stream = byte_stream
-      .scan(Vec::<u8>::new(), move |buf, chunk_result| {
-        let agent_id = agent_id_for_scan.clone();
-        let mut out: Option<Vec<String>> = None;
-        match chunk_result {
-          Ok(chunk) => {
-            if wire_debug_enabled() {
-              debug!("[Wire] ← 收到字节块: {} bytes (Agent {})", chunk.len(), agent_id);
-            }
-            buf.extend_from_slice(&chunk);
-            debug!("🔍 Server缓冲区当前大小: {} bytes", buf.len());
-            let mut lines: Vec<String> = Vec::new();
-            loop {
-              if let Some(pos) = buf.iter().position(|&b| b == b'\n') {
-                debug!("🔍 Server找到换行符位置: {}", pos);
-                // 取出一行（包含 \n）
-                let mut line_bytes: Vec<u8> = buf.drain(..=pos).collect();
-                // 去掉结尾的 \n
-                if line_bytes.last() == Some(&b'\n') {
-                  let _ = line_bytes.pop();
-                }
-                // 去掉可选的 \r
-                if line_bytes.last() == Some(&b'\r') {
-                  let _ = line_bytes.pop();
-                }
-                if line_bytes.is_empty() {
-                  continue;
-                }
-                match String::from_utf8(line_bytes) {
-                  Ok(s) => {
-                    if !s.trim().is_empty() {
-                      debug!("🔍 Server解析到NDJSON行: {}", s);
-                      if wire_debug_enabled() {
-                        let preview = if s.len() > 512 {
-                          format!("{}...", &s[..512])
-                        } else {
-                          s.clone()
-                        };
-                        debug!("[Wire] ← NDJSON行: {}", preview);
-                      }
-                      lines.push(s);
-                    }
-                  }
-                  Err(e) => {
-                    warn!("Agent {} 行UTF-8解析失败，已跳过: {}", agent_id, e);
-                  }
-                }
-              } else {
-                debug!("🔍 Server缓冲区中没有找到换行符，等待更多数据");
+    // 使用 LinesCodec 处理流式 UTF-8 解码和行分割
+    use futures::StreamExt;
+    use tokio_util::codec::{FramedRead, LinesCodec};
+    use tokio_util::io::StreamReader;
+
+    let stream = response.bytes_stream();
+    // 将 reqwest::Error 转换为 std::io::Error
+    let stream = stream.map(|result| result.map_err(std::io::Error::other));
+    let stream_reader = StreamReader::new(stream);
+    let mut lines = FramedRead::new(stream_reader, LinesCodec::new());
+
+    // 创建结果流
+    let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+
+    // 在后台任务中处理行流
+    let agent_id_for_task = agent_id.clone();
+    tokio::spawn(async move {
+      // 处理正常的行
+      while let Some(line_result) = lines.next().await {
+        match line_result {
+          Ok(line) => {
+            if !line.trim().is_empty() {
+              debug!("🔍 Server解析到NDJSON行: {}", line);
+              if wire_debug_enabled() {
+                let preview = if line.len() > 512 {
+                  format!("{}...", truncate_utf8(&line, 512))
+                } else {
+                  line.clone()
+                };
+                debug!("[Wire] ← NDJSON行: {}", preview);
+              }
+
+              // 发送到结果流
+              if tx.send(line).await.is_err() {
+                debug!("结果流接收端已关闭");
                 break;
               }
             }
-            if !lines.is_empty() {
-              debug!("🔍 Server处理了 {} 行NDJSON", lines.len());
-              out = Some(lines);
-            } else if !buf.is_empty() {
-              // 处理最后一个chunk没有换行符的情况
-              debug!("🔍 Server处理最后一个chunk，缓冲区大小: {} bytes", buf.len());
-              // 使用更安全的UTF-8解析，处理不完整的序列
-              match String::from_utf8_lossy(buf) {
-                s if !s.trim().is_empty() => {
-                  debug!("🔍 Server解析到最后的NDJSON行: {}", s);
-                  out = Some(vec![s.to_string()]);
-                }
-                _ => {
-                  debug!("🔍 Server最后的chunk为空或只包含空白字符");
-                }
-              }
-            } else {
-              debug!("🔍 Server没有处理任何行");
-            }
           }
           Err(e) => {
-            error!("Agent {} 流读取错误: {}", agent_id, e);
-            // 继续消费后续 chunk
-            out = Some(Vec::new());
+            warn!("Agent {} 行解析失败: {}", agent_id_for_task, e);
+            // 继续处理其他行
           }
         }
-        std::future::ready(out)
-      })
-      .flat_map(stream::iter);
+      }
+
+      // 流结束时，尝试处理最后一行（可能没有换行符）
+      // LinesCodec 会自动处理最后一行，无需手动flush
+
+      // 关闭发送端
+      drop(tx);
+    });
+
+    // 将接收端转换为流
+    let line_stream = async_stream::stream! {
+      while let Some(line) = rx.recv().await {
+        yield line;
+      }
+    };
 
     // 将完整行解析为 AgentMessage，再提取结果
     let result_stream = Box::pin(
