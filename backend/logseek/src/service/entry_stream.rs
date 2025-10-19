@@ -213,7 +213,12 @@ impl EntryStreamProcessor {
       if meta.is_compressed {
         // tar.gz 等共享底层读取器的来源：必须保证串行处理，避免并发读取导致解码错乱
         while in_flight.next().await.is_some() {}
-        match tokio::time::timeout(content_timeout, processor.process_content(meta.path.clone(), &mut reader)).await {
+        match tokio::time::timeout(
+          content_timeout,
+          processor.process_content(meta.path.clone(), &mut reader),
+        )
+        .await
+        {
           Ok(Ok(Some(result))) => {
             if processor.send_result(result, &tx).await.is_err() {
               warn!("下游接收已关闭，终止条目流处理");
