@@ -167,7 +167,7 @@ pub async fn stream_search(
       );
 
       // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
-      if let crate::domain::config::SourceConfig::Agent { endpoint } = &config_clone {
+      if let crate::domain::config::SourceConfig::Agent { endpoint, .. } = &config_clone {
         // 使用 Agent ID 构造 AgentClient（标准格式）
         let client = match AgentClient::new_by_agent_id(endpoint.clone()).await {
           Ok(client) => client,
@@ -188,13 +188,25 @@ pub async fn stream_search(
           return;
         }
 
-        // 透传：不在服务端强加 scope/path 过滤，由 Agent 根据其配置的 search_roots 与查询自行筛选
+        // 从来源规划中读取 scope/path 过滤提示
+        // 默认 scope_root="logs"，path_filter 不设置
+        let (scope_root, path_glob) = match &config_clone {
+          crate::domain::config::SourceConfig::Agent {
+            scope_root,
+            path_filter_glob,
+            ..
+          } => (
+            scope_root.clone().unwrap_or_else(|| "logs".to_string()),
+            path_filter_glob.clone(),
+          ),
+          _ => ("logs".to_string(), None),
+        };
         let search_options = SearchOptions {
           scope: SearchScope::Directory {
-            path: "logs".to_string(),
+            path: scope_root,
             recursive: true,
           },
-          path_filter: Some(format!("**/{}/**", chrono::Local::now().format("%Y-%m-%d"))),
+          path_filter: path_glob,
           ..Default::default()
         };
 
@@ -337,7 +349,7 @@ pub async fn stream_search(
                 }
               }
             }
-            crate::domain::config::SourceConfig::Agent { endpoint } => {
+            crate::domain::config::SourceConfig::Agent { endpoint, .. } => {
               let url = FileUrl::agent(endpoint, &res.path);
               let id = url.to_string();
               (url, id)

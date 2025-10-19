@@ -135,8 +135,14 @@ impl SourcePlanner for BbipPlanner {
         );
 
         for endpoint in agent_endpoints {
+          // 为 Agent 来源附带 scope 与路径过滤提示：
+          // - scope_root: 固定为 "logs"
+          // - path_filter_glob: 仅检索“今天”的目录（北京时区）
+          let today_glob = format!("**/{}/**", today.format("%Y-%m-%d"));
           configs.push(SourceConfig::Agent {
             endpoint: endpoint.clone(),
+            scope_root: Some("logs".to_string()),
+            path_filter_glob: Some(today_glob),
           });
           log::debug!("添加 Agent 存储源: endpoint={}", endpoint);
         }
