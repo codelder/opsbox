@@ -18,6 +18,7 @@ use axum::{
 use chrono::{Datelike, Utc};
 use chrono_tz::Asia::Shanghai;
 use futures::StreamExt;
+use log::debug;
 use opsbox_core::SqlitePool;
 use problemdetails::Problem;
 use std::sync::Arc;
@@ -286,15 +287,19 @@ pub async fn stream_search(
 
       // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
       if let crate::domain::config::SourceConfig::Agent { endpoint } = &config_clone {
-        // 直接构造 AgentClient（使用 endpoint 作为 agent_id）
-        if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-          log::error!(
-            "[Search] 非法的 Agent endpoint，需以 http:// 或 https:// 开头: {}",
-            endpoint
-          );
-          return;
-        }
-        let client = AgentClient::new(endpoint.clone(), endpoint.clone());
+        // 使用 Agent ID 构造 AgentClient（标准格式）
+        let client = match AgentClient::new_by_agent_id(endpoint.clone()).await {
+          Ok(client) => client,
+          Err(e) => {
+            log::error!(
+              "[Search] 无法创建 Agent 客户端 source_idx={} agent_id={} err={}",
+              idx,
+              endpoint,
+              e
+            );
+            return;
+          }
+        };
 
         // 可选健康检查
         if !client.health_check().await {
@@ -304,8 +309,11 @@ pub async fn stream_search(
 
         // 透传：不在服务端强加 scope/path 过滤，由 Agent 根据其配置的 search_roots 与查询自行筛选
         let search_options = SearchOptions {
-          scope: SearchScope::All,
-          path_filter: None,
+          scope: SearchScope::Directory {
+            path: "logs".to_string(),
+            recursive: true,
+          },
+          path_filter: Some(format!("**/{}/**", chrono::Local::now().format("%Y-%m-%d"))),
           ..Default::default()
         };
 
@@ -343,6 +351,12 @@ pub async fn stream_search(
             let file_id = file_url.to_string();
 
             // 缓存结果
+            debug!(
+              "🔍 Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
+              sid_for_cache,
+              file_url,
+              res.lines.len()
+            );
             simple_cache()
               .put_lines(&sid_for_cache, &file_url, res.lines.clone())
               .await;

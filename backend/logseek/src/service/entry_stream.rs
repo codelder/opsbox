@@ -2,7 +2,7 @@ use std::{io, path::PathBuf, sync::Arc, time::Duration};
 
 use async_compression::tokio::bufread::GzipDecoder;
 use async_trait::async_trait;
-use futures::StreamExt;
+use futures::{StreamExt, stream::FuturesUnordered};
 use log::{debug, warn};
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
@@ -134,7 +134,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
         let meta = EntryMeta {
           path,
           size: None,
-          is_compressed: false,
+          is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
         };
         Ok(Some((meta, Box::new(reader))))
       }
@@ -173,18 +173,35 @@ impl EntryStreamProcessor {
     self
   }
 
-  /// 顺序处理条目（稳妥；后续可在确保 Reader 是 'static 时加入并发）
+  /// 并发处理条目（有界并发，默认并发度 8，可通过 AGENT_ENTRY_CONCURRENCY 环境变量调整，范围 1-64）
   pub async fn process_stream(
     &mut self,
     entries: &mut dyn EntryStream,
     tx: tokio::sync::mpsc::Sender<SearchResult>,
   ) -> Result<(), String> {
+    let processor = self.processor.clone();
+    let content_timeout = self.content_timeout;
+    let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+    let max_conc = std::env::var("AGENT_ENTRY_CONCURRENCY")
+      .ok()
+      .and_then(|s| s.parse::<usize>().ok())
+      .unwrap_or(8)
+      .clamp(1, 64);
+
     loop {
-      let Some((meta, mut reader)) = entries.next_entry().await.map_err(|e| e.to_string())? else {
+      // 如果并发达到上限，先等待一个任务完成
+      if in_flight.len() >= max_conc {
+        let _ = in_flight.next().await; // 丢弃一个完成结果
+        continue;
+      }
+
+      // 拉取下一个条目
+      let next = entries.next_entry().await.map_err(|e| e.to_string())?;
+      let Some((meta, mut reader)) = next else {
         break;
       };
 
-      // 路径过滤：优先应用额外过滤（若有），再应用用户查询的 path: 规则
+      // 路径过滤（仅在主循环进行，任务内无需再次判断）
       if !self
         .processor
         .should_process_path_with(&meta.path, self.extra_path_filter.as_ref())
@@ -193,29 +210,45 @@ impl EntryStreamProcessor {
         continue;
       }
 
-      // 带超时的内容处理
-      match tokio::time::timeout(
-        self.content_timeout,
-        self.processor.process_content(meta.path.clone(), &mut reader),
-      )
-      .await
-      {
-        Ok(Ok(Some(result))) => {
-          if self.processor.send_result(result, &tx).await.is_err() {
-            // 接收方关闭
-            warn!("下游接收已关闭，终止条目流处理");
-            break;
+      if meta.is_compressed {
+        // tar.gz 等共享底层读取器的来源：必须保证串行处理，避免并发读取导致解码错乱
+        while in_flight.next().await.is_some() {}
+        match tokio::time::timeout(content_timeout, processor.process_content(meta.path.clone(), &mut reader)).await {
+          Ok(Ok(Some(result))) => {
+            if processor.send_result(result, &tx).await.is_err() {
+              warn!("下游接收已关闭，终止条目流处理");
+              break;
+            }
           }
+          Ok(Ok(None)) => {}
+          Ok(Err(e)) => warn!("处理条目内容失败: {}", e),
+          Err(_) => warn!("处理条目超时: {}", meta.path),
         }
-        Ok(Ok(None)) => {}
-        Ok(Err(e)) => {
-          warn!("处理条目内容失败: {}", e);
-        }
-        Err(_) => {
-          warn!("处理条目超时: {}", meta.path);
-        }
+      } else {
+        // 本地文件等独立 Reader：可以并发处理
+        let proc_clone = processor.clone();
+        let tx_clone = tx.clone();
+        let path = meta.path.clone();
+        in_flight.push(async move {
+          match tokio::time::timeout(content_timeout, proc_clone.process_content(path.clone(), &mut reader)).await {
+            Ok(Ok(Some(result))) => {
+              let _ = proc_clone.send_result(result, &tx_clone).await;
+            }
+            Ok(Ok(None)) => {}
+            Ok(Err(e)) => {
+              warn!("处理条目内容失败: {}", e);
+            }
+            Err(_) => {
+              warn!("处理条目超时: {}", path);
+            }
+          }
+        });
       }
     }
+
+    // 等待所有在途任务完成
+    while in_flight.next().await.is_some() {}
+
     Ok(())
   }
 }

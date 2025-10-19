@@ -118,13 +118,21 @@ impl Cache {
   pub async fn put_lines(&self, sid: &str, file_url: &FileUrl, lines: Vec<String>) {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
+    let key = (sid.to_string(), file_url.clone());
+    log::debug!(
+      "🔍 Cache存储: key=({:?}, {:?}), lines_count={}",
+      key.0,
+      key.1,
+      lines.len()
+    );
     map.insert(
-      (sid.to_string(), file_url.clone()),
+      key,
       Entry {
         last_touch: Instant::now(),
         value: lines,
       },
     );
+    log::debug!("🔍 Cache当前大小: {}", map.len());
   }
   pub async fn get_lines_slice(
     &self,
@@ -136,8 +144,21 @@ impl Cache {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
     let key = (sid.to_string(), file_url.clone());
+    log::debug!("🔍 Cache查找: key=({:?}, {:?}), cache_size={}", key.0, key.1, map.len());
+
+    // 打印所有现有的键用于调试
+    for (existing_key, entry) in map.iter() {
+      log::debug!(
+        "🔍 Cache现有条目: key=({:?}, {:?}), expired={}",
+        existing_key.0,
+        existing_key.1,
+        self.expired(entry)
+      );
+    }
+
     let e = map.get_mut(&key)?;
     if self.expired(e) {
+      log::debug!("🔍 Cache条目已过期，移除");
       map.remove(&key);
       return None;
     }

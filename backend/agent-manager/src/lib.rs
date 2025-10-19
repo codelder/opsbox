@@ -81,27 +81,10 @@ pub fn get_global_agent_manager() -> Option<Arc<AgentManager>> {
   GLOBAL_AGENT_MANAGER.get().cloned()
 }
 
-/// 构造 Agent 端点（优先使用注册时推断并存储的 host/listen_port 标签）
+/// 构造 Agent 端点（使用 Agent ID 作为标准标识符）
 fn build_agent_endpoint(agent: &crate::models::AgentInfo) -> String {
-  // 优先从标签中获取 host 与 listen_port
-  let host_opt = agent.get_tag_value("host");
-  let port_opt = agent.get_tag_value("listen_port");
-
-  if let (Some(host), Some(port)) = (host_opt, port_opt) {
-    // 简单校验端口为数字
-    if port.chars().all(|c| c.is_ascii_digit()) {
-      return format!("http://{}:{}", host, port);
-    }
-  }
-
-  // 回退到模板
-  let endpoint_template =
-    std::env::var("AGENT_ENDPOINT_TEMPLATE").unwrap_or_else(|_| "http://localhost:8090".to_string());
-  if endpoint_template.contains("{id}") {
-    endpoint_template.replace("{id}", &agent.id)
-  } else {
-    endpoint_template
-  }
+  // 直接使用 Agent ID 作为标识符
+  agent.id.clone()
 }
 
 /// 获取在线 Agent 端点列表

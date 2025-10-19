@@ -224,17 +224,50 @@ pub struct AgentClient {
 }
 
 impl AgentClient {
-  /// 创建新的 Agent 客户端
+  /// 创建新的 Agent 客户端（使用 Agent ID 作为标识符）
   pub fn new(agent_id: String, endpoint: String) -> Self {
+    // 如果endpoint不包含协议，自动添加http://
+    let full_endpoint = if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+      endpoint
+    } else {
+      format!("http://{}", endpoint)
+    };
+
     Self {
       agent_id,
-      endpoint,
+      endpoint: full_endpoint,
       client: reqwest::Client::builder()
         .timeout(Duration::from_secs(300))
         .build()
         .unwrap(),
       timeout: Duration::from_secs(60),
     }
+  }
+
+  /// 通过 Agent ID 创建客户端（需要查找实际的 HTTP endpoint）
+  pub async fn new_by_agent_id(agent_id: String) -> Result<Self, StorageError> {
+    use agent_manager::get_global_agent_manager;
+
+    if let Some(manager) = get_global_agent_manager() {
+      // 查找 Agent 信息
+      if let Some(agent_info) = manager.get_agent(&agent_id).await {
+        // 从标签中获取实际的 HTTP endpoint
+        let host_opt = agent_info.get_tag_value("host");
+        let port_opt = agent_info.get_tag_value("listen_port");
+
+        if let (Some(host), Some(port)) = (host_opt, port_opt)
+          && port.chars().all(|c| c.is_ascii_digit())
+        {
+          let http_endpoint = format!("http://{}:{}", host, port);
+          return Ok(Self::new(agent_id, http_endpoint));
+        }
+      }
+    }
+
+    Err(StorageError::Other(format!(
+      "无法找到 Agent {} 的 HTTP endpoint",
+      agent_id
+    )))
   }
 
   /// 检查 Agent 健康状态
@@ -495,9 +528,17 @@ mod tests {
 
   #[test]
   fn test_agent_client_creation() {
-    let client = AgentClient::new("test-agent".to_string(), "http://localhost:8090".to_string());
-    assert_eq!(client.agent_id, "test-agent");
+    let client = AgentClient::new("agent-localhost".to_string(), "localhost:8090".to_string());
+    assert_eq!(client.agent_id, "agent-localhost");
     // 端点字段不可见（私有），只验证构造未 panic
+    let _ = client.capabilities();
+  }
+
+  #[test]
+  fn test_agent_client_with_standard_format() {
+    let client = AgentClient::new("agent-prod-01".to_string(), "192.168.50.146:4001".to_string());
+    assert_eq!(client.agent_id, "agent-prod-01");
+    // 验证内部endpoint会自动添加http://协议
     let _ = client.capabilities();
   }
 }

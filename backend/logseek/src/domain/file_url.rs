@@ -286,7 +286,15 @@ impl FromStr for FileUrl {
         }
         "agent" => {
           // 处理 agent://agent-id/path 格式
-          // path 可能以 / 开头，也可能不以 / 开头
+          // agent-id 可以是简单标识符或 host:port，但不支持 http:// 前缀
+
+          // 首先检查是否包含协议前缀
+          if after_scheme.starts_with("http://") || after_scheme.starts_with("https://") {
+            return Err(FileUrlError::InvalidFormat(
+              "agent URL 不支持协议前缀，请使用 agent://host:port/path 格式".into(),
+            ));
+          }
+
           let parts: Vec<&str> = after_scheme.splitn(2, '/').collect();
           if parts.is_empty() {
             return Err(FileUrlError::InvalidFormat(
@@ -296,7 +304,7 @@ impl FromStr for FileUrl {
 
           let agent_id = parts[0].to_string();
           let path = if parts.len() == 2 {
-            format!("/{}", parts[1])
+            parts[1].to_string()
           } else {
             "/".to_string()
           };
@@ -354,6 +362,59 @@ mod tests {
     let url = FileUrl::agent("prod-server-01", "/var/log/app.log");
     assert_eq!(url.to_string(), "agent://prod-server-01/var/log/app.log");
     assert_eq!(url.file_type(), "agent");
+  }
+
+  #[test]
+  fn test_agent_file_with_host_port() {
+    let url = FileUrl::agent("192.168.50.146:4001", "logs/app.log");
+    assert_eq!(url.to_string(), "agent://192.168.50.146:4001/logs/app.log");
+    assert_eq!(url.file_type(), "agent");
+
+    // 测试解析
+    let parsed: FileUrl = "agent://192.168.50.146:4001/logs/app.log".parse().unwrap();
+    match parsed {
+      FileUrl::Agent { agent_id, path } => {
+        assert_eq!(agent_id, "192.168.50.146:4001");
+        assert_eq!(path, "logs/app.log");
+      }
+      _ => panic!("Expected Agent URL"),
+    }
+  }
+
+  #[test]
+  fn test_agent_file_with_standard_id() {
+    let url = FileUrl::agent("agent-localhost", "logs/app.log");
+    assert_eq!(url.to_string(), "agent://agent-localhost/logs/app.log");
+    assert_eq!(url.file_type(), "agent");
+
+    // 测试解析
+    let parsed: FileUrl = "agent://agent-localhost/logs/app.log".parse().unwrap();
+    match parsed {
+      FileUrl::Agent { agent_id, path } => {
+        assert_eq!(agent_id, "agent-localhost");
+        assert_eq!(path, "logs/app.log");
+      }
+      _ => panic!("Expected Agent URL"),
+    }
+  }
+
+  #[test]
+  fn test_agent_file_rejects_http_prefix() {
+    // 测试 http:// 前缀被拒绝
+    assert!(
+      "agent://http://192.168.50.146:4001/logs/app.log"
+        .parse::<FileUrl>()
+        .is_err()
+    );
+    assert!(
+      "agent://https://192.168.50.146:4001/logs/app.log"
+        .parse::<FileUrl>()
+        .is_err()
+    );
+
+    // 测试其他格式仍然有效
+    assert!("agent://192.168.50.146:4001/logs/app.log".parse::<FileUrl>().is_ok());
+    assert!("agent://agent-localhost/logs/app.log".parse::<FileUrl>().is_ok());
   }
 
   #[test]
