@@ -1,4 +1,4 @@
-use crate::utils::storage::{self, StorageError};
+use crate::utils::storage::{self, S3Error};
 use log::{debug, error, info};
 use opsbox_core::{AppError, Result, SqlitePool, run_migration};
 use serde::{Deserialize, Serialize};
@@ -221,19 +221,19 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
       info!("S3配置验证成功");
       Ok(())
     }
-    Err(StorageError::InvalidBaseUrl(_)) => {
+    Err(S3Error::InvalidBaseUrl(_)) => {
       error!("S3 Endpoint地址无效: {}", settings.endpoint);
       Err(AppError::external_service(
         "S3连接失败: Endpoint 地址无效，请确认格式例如 http://host:9000",
       ))
     }
-    Err(StorageError::S3Build) => {
+    Err(S3Error::S3Build) => {
       error!("S3客户端构建失败: endpoint={}", settings.endpoint);
       Err(AppError::external_service(
         "S3连接失败: 无法建立 S3 连接，请检查 Endpoint、Access Key 和 Secret Key",
       ))
     }
-    Err(StorageError::S3ListObjects(msg)) => {
+    Err(S3Error::S3ListObjects(msg)) => {
       let lower = msg.to_ascii_lowercase();
       if lower.contains("nosuchbucket") {
         Err(AppError::external_service(format!(
@@ -251,16 +251,14 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
         )))
       }
     }
-    Err(StorageError::S3GetObject(msg)) => {
-      Err(AppError::external_service(format!("S3连接失败: 无法读取对象：{}", msg)))
-    }
-    Err(StorageError::S3ToStream(msg)) => Err(AppError::external_service(format!(
+    Err(S3Error::S3GetObject(msg)) => Err(AppError::external_service(format!("S3连接失败: 无法读取对象：{}", msg))),
+    Err(S3Error::S3ToStream(msg)) => Err(AppError::external_service(format!(
       "S3连接失败: 读取对象流失败：{}",
       msg
     ))),
-    Err(StorageError::Regex(msg)) => Err(AppError::bad_request(format!("无效的对象筛选正则：{}", msg))),
-    Err(StorageError::Io(err)) => Err(AppError::external_service(format!("S3连接失败: 网络通信错误：{}", err))),
-    Err(StorageError::ConnectionTimeout) => Err(AppError::external_service(
+    Err(S3Error::Regex(msg)) => Err(AppError::bad_request(format!("无效的对象筛选正则：{}", msg))),
+    Err(S3Error::Io(err)) => Err(AppError::external_service(format!("S3连接失败: 网络通信错误：{}", err))),
+    Err(S3Error::ConnectionTimeout) => Err(AppError::external_service(
       "S3连接失败: 连接超时，请检查网络或 S3 服务状态",
     )),
   }

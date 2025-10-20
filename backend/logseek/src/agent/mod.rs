@@ -61,33 +61,17 @@ pub struct SearchProgress {
 /// 搜索状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SearchStatus {
-  Pending,
   Running,
   Completed,
-  Failed(String),
-  Cancelled,
-}
-
-/// 服务能力
-#[derive(Debug, Clone, Default)]
-pub struct ServiceCapabilities {
-  /// 支持进度查询
-  pub supports_progress: bool,
-  /// 支持取消
-  pub supports_cancellation: bool,
-  /// 支持流式返回
-  pub supports_streaming: bool,
-  /// 最大并发搜索数
-  pub max_concurrent_searches: usize,
 }
 
 /// 搜索结果流
 pub type SearchResultStream =
-  Box<dyn Stream<Item = Result<crate::service::search::SearchResult, StorageError>> + Send + Unpin>;
+  Box<dyn Stream<Item = Result<crate::service::search::SearchResult, AgentClientError>> + Send + Unpin>;
 
 /// Agent/搜索相关错误统一
 #[derive(Debug, Error)]
-pub enum StorageError {
+pub enum AgentClientError {
   #[error("IO错误: {0}")]
   Io(#[from] std::io::Error),
   #[error("权限被拒绝: {0}")]
@@ -108,22 +92,6 @@ pub enum StorageError {
   Other(String),
 }
 
-// 从 utils::storage 错误类型转换
-impl From<crate::utils::storage::StorageError> for StorageError {
-  fn from(e: crate::utils::storage::StorageError) -> Self {
-    match e {
-      crate::utils::storage::StorageError::Io(e) => Self::Io(e),
-      crate::utils::storage::StorageError::InvalidBaseUrl(s) => Self::Other(format!("Invalid base URL: {}", s)),
-      crate::utils::storage::StorageError::S3Build => Self::Other("S3 client build error".to_string()),
-      crate::utils::storage::StorageError::S3GetObject(s) => Self::Other(format!("S3 get object: {}", s)),
-      crate::utils::storage::StorageError::S3ToStream(s) => Self::Other(format!("S3 to_stream: {}", s)),
-      crate::utils::storage::StorageError::S3ListObjects(s) => Self::Other(format!("S3 list objects: {}", s)),
-      crate::utils::storage::StorageError::Regex(s) => Self::QueryParseError(s),
-      crate::utils::storage::StorageError::ConnectionTimeout => Self::Timeout,
-    }
-  }
-}
-
 /// 搜索服务 trait（远程执行搜索，直接返回结果）
 #[async_trait]
 pub trait SearchService: Send + Sync {
@@ -136,37 +104,24 @@ pub trait SearchService: Send + Sync {
     query: &str,
     context_lines: usize,
     options: SearchOptions,
-  ) -> Result<SearchResultStream, StorageError>;
-
-  /// 获取搜索能力（可选）
-  fn capabilities(&self) -> ServiceCapabilities {
-    ServiceCapabilities::default()
-  }
+  ) -> Result<SearchResultStream, AgentClientError>;
 
   /// 获取搜索进度（可选）
-  async fn get_progress(&self, task_id: &str) -> Result<Option<SearchProgress>, StorageError> {
+  async fn get_progress(&self, task_id: &str) -> Result<Option<SearchProgress>, AgentClientError> {
     let _ = task_id;
     Ok(None)
   }
 
   /// 取消搜索（可选）
-  async fn cancel(&self, task_id: &str) -> Result<(), StorageError> {
+  async fn cancel(&self, task_id: &str) -> Result<(), AgentClientError> {
     let _ = task_id;
     Ok(())
   }
 }
 
 // =========================== Agent 客户端实现 ===============================
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use std::time::Duration;
-
-/// 中文注释：是否启用与 Agent 通讯的“线级”调试日志（打印请求/响应细节、NDJSON行等）
-/// 通过环境变量 LOGSEEK_AGENT_DEBUG_WIRE=1 启用
-fn wire_debug_enabled() -> bool {
-  std::env::var("LOGSEEK_AGENT_DEBUG_WIRE")
-    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE"))
-    .unwrap_or(false)
-}
 
 /// 按 UTF-8 字符边界安全截断字符串，用于调试预览，避免跨多字节字符导致 panic
 ///
@@ -245,7 +200,7 @@ impl AgentClient {
   }
 
   /// 通过 Agent ID 创建客户端（需要查找实际的 HTTP endpoint）
-  pub async fn new_by_agent_id(agent_id: String) -> Result<Self, StorageError> {
+  pub async fn new_by_agent_id(agent_id: String) -> Result<Self, AgentClientError> {
     use agent_manager::get_global_agent_manager;
 
     if let Some(manager) = get_global_agent_manager() {
@@ -264,7 +219,7 @@ impl AgentClient {
       }
     }
 
-    Err(StorageError::Other(format!(
+    Err(AgentClientError::Other(format!(
       "无法找到 Agent {} 的 HTTP endpoint",
       agent_id
     )))
@@ -287,7 +242,7 @@ impl AgentClient {
   }
 
   /// 获取 Agent 信息
-  pub async fn get_info(&self) -> Result<AgentInfo, StorageError> {
+  pub async fn get_info(&self) -> Result<AgentInfo, AgentClientError> {
     let url = format!("{}/api/v1/info", self.endpoint);
     let response = self
       .client
@@ -295,16 +250,19 @@ impl AgentClient {
       .timeout(Duration::from_secs(10))
       .send()
       .await
-      .map_err(|e| StorageError::ConnectionError(format!("获取 Agent 信息失败: {}", e)))?;
+      .map_err(|e| AgentClientError::ConnectionError(format!("获取 Agent 信息失败: {}", e)))?;
 
     if !response.status().is_success() {
-      return Err(StorageError::Other(format!("Agent 返回错误: {}", response.status())));
+      return Err(AgentClientError::Other(format!(
+        "Agent 返回错误: {}",
+        response.status()
+      )));
     }
 
     response
       .json()
       .await
-      .map_err(|e| StorageError::Other(format!("解析 Agent 信息失败: {}", e)))
+      .map_err(|e| AgentClientError::Other(format!("解析 Agent 信息失败: {}", e)))
   }
 }
 
@@ -319,7 +277,7 @@ impl SearchService for AgentClient {
     query: &str,
     context_lines: usize,
     options: SearchOptions,
-  ) -> Result<SearchResultStream, StorageError> {
+  ) -> Result<SearchResultStream, AgentClientError> {
     info!(
       "向 Agent {} 发送搜索请求: query={}, context_lines={}",
       self.agent_id, query, context_lines
@@ -335,10 +293,10 @@ impl SearchService for AgentClient {
     };
 
     // 中文调试：打印请求明细（仅在 debug 级别或显式开启“线级”调试时）
-    if wire_debug_enabled() {
+    if log::log_enabled!(log::Level::Trace) {
       match serde_json::to_string(&request) {
-        Ok(s) => debug!("[Wire] → POST {}/api/v1/search body={}", self.endpoint, s),
-        Err(_) => debug!("[Wire] → POST {}/api/v1/search (body序列化失败)", self.endpoint),
+        Ok(s) => trace!("[Wire] → POST {}/api/v1/search body={}", self.endpoint, s),
+        Err(_) => trace!("[Wire] → POST {}/api/v1/search (body序列化失败)", self.endpoint),
       }
     } else {
       debug!(
@@ -361,21 +319,21 @@ impl SearchService for AgentClient {
       .await
       .map_err(|e| {
         error!("Agent {} 连接失败: {}", self.agent_id, e);
-        StorageError::ConnectionError(format!("Agent 连接失败: {}", e))
+        AgentClientError::ConnectionError(format!("Agent 连接失败: {}", e))
       })?;
 
     // 中文调试：打印响应状态与头
     let status = response.status();
-    if wire_debug_enabled() {
-      debug!("[Wire] ← 状态: {}", status);
+    trace!("[Wire] ← 状态: {}", status);
+    if log::log_enabled!(log::Level::Trace) {
       for (k, v) in response.headers() {
-        debug!("[Wire] ← 头: {}: {}", k.as_str(), v.to_str().unwrap_or("<bin>"));
+        trace!("[Wire] ← 头: {}: {}", k.as_str(), v.to_str().unwrap_or("<bin>"));
       }
     }
 
     if !status.is_success() {
       let error_text = response.text().await.unwrap_or_default();
-      return Err(StorageError::Other(format!(
+      return Err(AgentClientError::Other(format!(
         "Agent 返回错误: {} - {}",
         status, error_text
       )));
@@ -410,13 +368,13 @@ impl SearchService for AgentClient {
           Ok(line) => {
             if !line.trim().is_empty() {
               debug!("🔍 Server解析到NDJSON行: {}", line);
-              if wire_debug_enabled() {
+              if log::log_enabled!(log::Level::Trace) {
                 let preview = if line.len() > 512 {
                   format!("{}...", truncate_utf8(&line, 512))
                 } else {
                   line.clone()
                 };
-                debug!("[Wire] ← NDJSON行: {}", preview);
+                trace!("[Wire] ← NDJSON行: {}", preview);
               }
 
               // 发送到结果流
@@ -470,25 +428,19 @@ impl SearchService for AgentClient {
                     "Agent {} 进度: {}/{} 文件",
                     agent_id, progress.processed_files, progress.matched_files
                   );
-                  if wire_debug_enabled() {
-                    debug!(
-                      "[Wire] ← Progress: task_id={} status={:?}",
-                      progress.task_id, progress.status
-                    );
-                  }
+                  trace!(
+                    "[Wire] ← Progress: task_id={} status={:?}",
+                    progress.task_id, progress.status
+                  );
                   None
                 }
                 Ok(AgentMessage::Error(err)) => {
-                  if wire_debug_enabled() {
-                    debug!("[Wire] ← Error: {}", err);
-                  }
-                  Some(Err(StorageError::Other(format!("Agent 错误: {}", err))))
+                  trace!("[Wire] ← Error: {}", err);
+                  Some(Err(AgentClientError::Other(format!("Agent 错误: {}", err))))
                 }
                 Ok(AgentMessage::Complete) => {
                   debug!("Agent {} 搜索完成", agent_id);
-                  if wire_debug_enabled() {
-                    debug!("[Wire] ← Complete");
-                  }
+                  trace!("[Wire] ← Complete");
                   None
                 }
                 Err(e) => {
@@ -511,15 +463,6 @@ impl SearchService for AgentClient {
 
     Ok(Box::new(result_stream))
   }
-
-  fn capabilities(&self) -> ServiceCapabilities {
-    ServiceCapabilities {
-      supports_progress: true,
-      supports_cancellation: true,
-      supports_streaming: true,
-      max_concurrent_searches: 10,
-    }
-  }
 }
 
 #[cfg(test)]
@@ -531,7 +474,6 @@ mod tests {
     let client = AgentClient::new("agent-localhost".to_string(), "localhost:8090".to_string());
     assert_eq!(client.agent_id, "agent-localhost");
     // 端点字段不可见（私有），只验证构造未 panic
-    let _ = client.capabilities();
   }
 
   #[test]
@@ -539,6 +481,5 @@ mod tests {
     let client = AgentClient::new("agent-prod-01".to_string(), "192.168.50.146:4001".to_string());
     assert_eq!(client.agent_id, "agent-prod-01");
     // 验证内部endpoint会自动添加http://协议
-    let _ = client.capabilities();
   }
 }
