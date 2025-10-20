@@ -239,12 +239,13 @@ fn split_date_range_by_today(range: DateRange, today: chrono::NaiveDate) -> (Opt
 }
 
 async fn get_agent_endpoints() -> Vec<String> {
-  // 这里暂未按标签过滤，复用现有全量在线列表
-  let endpoints = agent_manager::get_online_agent_endpoints().await;
+  // 查找包含标签 app=bbipapp 的在线 Agent
+  let endpoints =
+    agent_manager::get_online_agent_endpoints_by_tags(&[("app".to_string(), "bbipapp".to_string())]).await;
   if !endpoints.is_empty() {
-    log::info!("找到 {} 个在线 Agent 端点", endpoints.len());
+    log::info!("按标签 app=bbipapp 找到 {} 个在线 Agent", endpoints.len());
   } else {
-    log::warn!("没有找到在线 Agent");
+    log::warn!("按标签 app=bbipapp 未找到在线 Agent");
   }
   endpoints
 }

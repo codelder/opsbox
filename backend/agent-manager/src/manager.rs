@@ -2,7 +2,7 @@
 //!
 //! 负责 Agent 的注册、注销、查询和状态管理
 
-use crate::models::{AgentInfo, AgentTag};
+use crate::models::{AgentInfo, AgentStatus, AgentTag};
 use crate::repository::AgentRepository;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
@@ -158,7 +158,21 @@ impl AgentManager {
     Ok(())
   }
 
-  /// 获取 Agent 信息
+  /// 内部：根据最后心跳动态计算并修正状态
+  fn apply_dynamic_status(&self, mut agent: AgentInfo) -> AgentInfo {
+    // 超时则一律视为离线
+    if !agent.is_online(self.heartbeat_timeout) {
+      agent.status = AgentStatus::Offline;
+      return agent;
+    }
+    // 在线窗口内：保留原有状态（Online 或 Busy）
+    if let AgentStatus::Offline = agent.status {
+      agent.status = AgentStatus::Online;
+    }
+    agent
+  }
+
+  /// 获取 Agent 信息（动态状态）
   pub async fn get_agent(&self, agent_id: &str) -> Option<AgentInfo> {
     self
       .repository
@@ -167,46 +181,47 @@ impl AgentManager {
       .map_err(|e| log::error!("获取 Agent 失败: {}", e))
       .ok()
       .flatten()
+      .map(|a| self.apply_dynamic_status(a))
   }
 
-  /// 获取所有 Agent
+  /// 获取所有 Agent（动态状态）
   pub async fn list_agents(&self) -> Vec<AgentInfo> {
-    self
+    let list = self
       .repository
       .list_agents()
       .await
       .map_err(|e| log::error!("获取 Agent 列表失败: {}", e))
-      .unwrap_or_default()
+      .unwrap_or_default();
+    list.into_iter().map(|a| self.apply_dynamic_status(a)).collect()
   }
 
-  /// 获取在线 Agent
+  /// 获取在线 Agent（动态过滤）
   pub async fn list_online_agents(&self) -> Vec<AgentInfo> {
-    self
-      .repository
-      .list_online_agents()
-      .await
-      .map_err(|e| log::error!("获取在线 Agent 列表失败: {}", e))
-      .unwrap_or_default()
+    let list = self.list_agents().await;
+    list
+      .into_iter()
+      .filter(|a| a.is_online(self.heartbeat_timeout))
+      .collect()
   }
 
-  /// 按标签筛选 Agent
+  /// 按标签筛选 Agent（动态状态）
   pub async fn list_agents_by_tags(&self, tag_filters: &[AgentTag]) -> Vec<AgentInfo> {
-    self
+    let list = self
       .repository
       .list_agents_by_tags(tag_filters)
       .await
       .map_err(|e| log::error!("按标签筛选 Agent 失败: {}", e))
-      .unwrap_or_default()
+      .unwrap_or_default();
+    list.into_iter().map(|a| self.apply_dynamic_status(a)).collect()
   }
 
-  /// 按标签筛选在线 Agent
+  /// 按标签筛选在线 Agent（动态过滤）
   pub async fn list_online_agents_by_tags(&self, tag_filters: &[AgentTag]) -> Vec<AgentInfo> {
-    self
-      .repository
-      .list_online_agents_by_tags(tag_filters)
-      .await
-      .map_err(|e| log::error!("按标签筛选在线 Agent 失败: {}", e))
-      .unwrap_or_default()
+    let list = self.list_agents_by_tags(tag_filters).await;
+    list
+      .into_iter()
+      .filter(|a| a.is_online(self.heartbeat_timeout))
+      .collect()
   }
 
   /// 获取所有可用的标签键
