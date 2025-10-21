@@ -92,13 +92,22 @@ impl SourcePlanner for BbipPlanner {
     use chrono::{Datelike, Utc};
     use chrono_tz::Asia::Shanghai;
 
-    // 1) 从数据库加载所有 S3 Profiles
-    let profiles = crate::repository::settings::list_s3_profiles(pool).await.map_err(|e| {
-      log::error!("加载 S3 Profiles 失败: {:?}", e);
-      e
-    })?;
-
-    log::info!("从数据库加载到 {} 个 S3 Profile(s)", profiles.len());
+    // 1) 从数据库加载指定的OSS Profile（而不是所有profiles）
+    let profiles = match crate::repository::settings::load_s3_profile(pool, "default")
+      .await
+      .map_err(|e| {
+        log::error!("加载OSS S3 Profile失败: {:?}", e);
+        e
+      })? {
+      Some(profile) => {
+        log::info!("从数据库加载到OSS S3 Profile: {}", profile.profile_name);
+        vec![profile]
+      }
+      None => {
+        log::warn!("未找到OSS S3 Profile，将跳过S3存储源");
+        vec![]
+      }
+    };
 
     // 2) 解析日期计划，获取日期区间和清理后的查询
     let plan = self.derive_plan(query);

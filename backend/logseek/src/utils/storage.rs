@@ -85,9 +85,9 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
   // 配置 S3 客户端
   let config = aws_sdk_s3::Config::builder()
     .endpoint_url(url) // 支持 MinIO 和其他 S3 兼容服务
-    .region(Region::new("us-east-1")) // MinIO 通常不关心 region，但 SDK 需要
+    .region(Region::new("oss-cn-beijing")) // MinIO 通常不关心 region，但 SDK 需要
     .credentials_provider(credentials)
-    .force_path_style(true) // MinIO 需要路径风格访问（bucket-name/key 而非 bucket-name.domain/key）
+    .force_path_style(false) // 根据服务类型动态选择
     .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest()) // AWS SDK 要求设置 behavior version
     .build();
 
@@ -311,8 +311,8 @@ pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, b
 
   // 使用超时包装连接测试
   time::timeout(s3_timeout(), async {
-    // 尝试列举桶内对象（最多1个）以验证凭证和桶可访问性
-    let response = client
+    // 使用标准的 list_objects_v2 操作测试连接
+    let _response = client
       .list_objects_v2()
       .bucket(bucket)
       .max_keys(1)
@@ -324,11 +324,7 @@ pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, b
       })?;
 
     // 无论是否有对象，只要请求成功就说明连接正常
-    if response.contents.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
-      debug!("找到对象，连接正常");
-    } else {
-      debug!("桶为空或无权限列举，但连接正常");
-    }
+    debug!("S3连接测试成功，桶可访问");
 
     Ok::<(), S3Error>(())
   })

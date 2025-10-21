@@ -25,10 +25,26 @@ pub async fn save_profile(
   State(pool): State<SqlitePool>,
   Json(payload): Json<S3ProfilePayload>,
 ) -> Result<StatusCode, Problem> {
+  // 将前端负载转换为内部 Profile 结构
   let profile: settings::S3Profile = payload.into();
+
+  // 在持久化前先验证 S3 连接可用性（防止保存不可用配置）
+  // 校验内容：Endpoint、Bucket、Access Key、Secret Key
+  let verify_target = settings::S3Settings {
+    endpoint: profile.endpoint.clone(),
+    bucket: profile.bucket.clone(),
+    access_key: profile.access_key.clone(),
+    secret_key: profile.secret_key.clone(),
+  };
+  settings::verify_s3_settings(&verify_target)
+    .await
+    .map_err(AppError::Settings)?;
+
+  // 验证通过后再保存/更新 Profile
   settings::save_s3_profile(&pool, &profile)
     .await
     .map_err(AppError::Settings)?;
+
   Ok(StatusCode::NO_CONTENT)
 }
 
