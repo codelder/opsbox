@@ -290,15 +290,15 @@ def main():
     print("开始生成测试日志文件...")
     
     # 执行4遍，每遍生成10个文件
-    for batch in range(4):
+    for batch in range(2):
         print(f"\n{'='*50}")
         print(f"第 {batch+1} 轮生成开始")
         print(f"{'='*50}")
         
         # 生成10个文件，日期从2025-08-19开始
-        start_date = datetime.date(2025, 8, 19)
+        start_date = datetime.date(2025, 10, 21)
         
-        for i in range(10):
+        for i in range(17):
             current_date = start_date + datetime.timedelta(days=i)
             date_str = current_date.strftime("%Y-%m-%d")
             

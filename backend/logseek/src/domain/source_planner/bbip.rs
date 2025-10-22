@@ -92,22 +92,22 @@ impl SourcePlanner for BbipPlanner {
     use chrono::{Datelike, Utc};
     use chrono_tz::Asia::Shanghai;
 
-    // 1) 从数据库加载指定的OSS Profile（而不是所有profiles）
-    let profiles = match crate::repository::settings::load_s3_profile(pool, "default")
+    // 1) 从数据库加载指定的OSS Profile
+    let profile = crate::repository::settings::load_s3_profile(pool, "oss")
       .await
       .map_err(|e| {
         log::error!("加载OSS S3 Profile失败: {:?}", e);
         e
-      })? {
+      })?;
+
+    match &profile {
       Some(profile) => {
         log::info!("从数据库加载到OSS S3 Profile: {}", profile.profile_name);
-        vec![profile]
       }
       None => {
         log::warn!("未找到OSS S3 Profile，将跳过S3存储源");
-        vec![]
       }
-    };
+    }
 
     // 2) 解析日期计划，获取日期区间和清理后的查询
     let plan = self.derive_plan(query);
@@ -165,7 +165,7 @@ impl SourcePlanner for BbipPlanner {
 
     // 5) 历史日期范围 → S3 来源（按 bbip 现有 key 结构展开）
     if let Some(historical_range) = historical_date_range {
-      if !profiles.is_empty() {
+      if let Some(profile) = &profile {
         log::info!("为历史日期范围 {:?} 添加 S3 存储源", historical_range);
 
         use chrono::Duration;
@@ -179,37 +179,35 @@ impl SourcePlanner for BbipPlanner {
           let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
           let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
 
-          for profile in &profiles {
-            log::debug!(
-              "为 Profile '{}' 生成历史存储源配置 (endpoint={}, bucket={})",
-              profile.profile_name,
-              profile.endpoint,
-              profile.bucket
+          log::debug!(
+            "为 Profile '{}' 生成历史存储源配置 (endpoint={}, bucket={})",
+            profile.profile_name,
+            profile.endpoint,
+            profile.bucket
+          );
+
+          for b in Self::BUCKETS {
+            let key = format!(
+              "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
+              y, yyyymm, yyyymmdd, b, file_name
             );
 
-            for b in Self::BUCKETS {
-              let key = format!(
-                "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
-                y, yyyymm, yyyymmdd, b, file_name
-              );
+            configs.push(SourceConfig::S3 {
+              profile: profile.profile_name.clone(),
+              bucket: Some(profile.bucket.clone()),
+              prefix: None,
+              pattern: None,
+              key: Some(key.clone()),
+            });
 
-              configs.push(SourceConfig::S3 {
-                profile: profile.profile_name.clone(),
-                bucket: Some(profile.bucket.clone()),
-                prefix: None,
-                pattern: None,
-                key: Some(key.clone()),
-              });
-
-              log::debug!("添加历史 S3 存储源: profile={}, key={}", profile.profile_name, key);
-            }
+            log::debug!("添加历史 S3 存储源: profile={}, key={}", profile.profile_name, key);
           }
 
           d += Duration::days(1);
         }
       } else {
         log::warn!(
-          "历史日期范围 {:?} 需要 S3 存储源，但未找到可用的 S3 Profiles",
+          "历史日期范围 {:?} 需要 S3 存储源，但未找到OSS S3 Profile",
           historical_range
         );
       }
