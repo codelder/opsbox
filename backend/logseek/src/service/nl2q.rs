@@ -1,7 +1,8 @@
 use log::{debug, error, info, warn};
-use ollama_rs::Ollama;
-use ollama_rs::generation::completion::request::GenerationRequest;
 use serde::{Deserialize, Serialize};
+// 使用新的 LLM 客户端
+use opsbox_core::{ChatMessage, ChatRequest, InjectionMode, Role, build_llm_from_env};
+
 // 将快速指南在编译期内嵌，使用基于 crate 根目录的绝对路径，避免相对路径失效
 const QUICK_GUIDE: &str = include_str!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -28,13 +29,17 @@ pub enum NL2QError {
   Empty,
 }
 
-fn build_prompt(user_nl: &str) -> String {
-  // 严格约束输出，仅允许输出一行最终 q 字符串；禁止输出 <think> 思考内容
-  format!(
-    "你是一名日志检索查询串生成器。请严格遵循以下文档把用户的自然语言需求转换为本站使用的查询字符串（q）。\n\n=== 文档开始 ===\n{}\n=== 文档结束 ===\n\n要求：\n- 仅输出一行最终 q 字符串，不要任何解释或多余符号\n- 不要用引号包裹整个表达式\n- 若用户给出多个同义词，用大写 OR 连接\n- 若是“同一行出现 A 与 B”，用正则 /(A.*B|B.*A)/\n- 不要输出任何 <think> 或 </think> 内容\n\n用户需求：{}\n输出：",
-    QUICK_GUIDE,
-    user_nl.trim()
-  )
+fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
+  // 将整份规范作为 system 消息提供，保持与客户端无关
+  let system = ChatMessage {
+    role: Role::System,
+    content: QUICK_GUIDE.to_string(),
+  };
+  let user = ChatMessage {
+    role: Role::User,
+    content: user_nl.trim().to_string(),
+  };
+  vec![system, user]
 }
 
 // 移除大模型推理模型产生的 <think> 思考片段，保留真实输出
@@ -56,45 +61,46 @@ fn strip_think_sections(input: &str) -> String {
 pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
   info!("NL2Q请求: '{}'", nl);
 
-  let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1".to_string());
-  let port: u16 = std::env::var("OLLAMA_PORT")
-    .ok()
-    .and_then(|s| s.parse().ok())
-    .unwrap_or(11434);
-  let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".to_string());
+  let messages = build_messages(nl);
+  debug!("消息数: {}（system + user）", messages.len());
 
-  debug!("Ollama配置: host={}, port={}, model={}", host, port, model);
-
-  let prompt = build_prompt(nl);
-  debug!("构建的提示词长度: {} 字符", prompt.len());
-
-  let client = Ollama::new(host, port);
-  let req = GenerationRequest::new(model, prompt);
-
-  debug!("向Ollama发送请求");
-  let start = std::time::Instant::now();
-  let resp = client.generate(req).await.map_err(|e| {
-    error!("Ollama请求失败: {}", e);
+  // 构建统一 LLM 客户端（支持 Ollama / OpenAI 等）
+  let client = build_llm_from_env().map_err(|e| {
+    error!("LLM 客户端初始化失败: {}", e);
     NL2QError::Http(e.to_string())
   })?;
 
+  let req = ChatRequest {
+    messages,
+    model: None,
+    temperature: Some(0.2),
+    max_tokens: None, // 默认不限制长度，由提供方按模型策略决定
+    // 使用结构化输出，并用 replace 避免与文档自身的系统提示冲突
+    separate_think: true,
+    injection_mode: InjectionMode::Replace,
+  };
+
+  debug!("发送 ChatRequest（separate_think=true, injection=Replace）");
+  let start = std::time::Instant::now();
+  let resp = client.chat(req).await.map_err(|e| {
+    error!("LLM 调用失败: {}", e);
+    NL2QError::Http(e.to_string())
+  })?;
   let duration = start.elapsed();
-  info!("Ollama响应耗时: {:?}", duration);
+  info!("LLM 响应耗时: {:?}，模型: {}", duration, resp.model);
 
-  let mut q = resp.response.trim().to_string();
-  debug!("Ollama原始输出: '{}'", &q);
+  let mut q = resp.content.trim().to_string();
+  info!("LLM 内容输出: '{}'", &q);
+  info!("LLM 内容输出: '{:?}'", resp);
 
-  // 先移除 <think> 思考片段，再做其它清理
+  // 兜底清理：移除 <think> 片段、去掉代码块/外层引号，仅取首行
   let before_strip = q.clone();
   q = strip_think_sections(&q).trim().to_string();
   if q != before_strip {
     debug!("移除<think>片段后: '{}'", &q);
   }
-
-  // 容错清理——去除围绕的代码块/引号，仅保留单行
   if q.starts_with("```") && q.ends_with("```") {
     debug!("移除代码块围栏");
-    // 去掉围栏
     let inner = q.trim_start_matches("```\n").trim_end_matches("\n```");
     q = inner.trim().to_string();
   }
