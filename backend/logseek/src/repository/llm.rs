@@ -318,8 +318,16 @@ async fn verify_openai(base_url: &str, api_key: Option<&str>) -> Result<()> {
     .build()
     .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
 
-  let mut url = Url::parse(base_url).map_err(|_| AppError::bad_request("OpenAI 基础地址无效"))?;
-  url.set_path("/api/v1/deployments/models");
+  let mut base_url = Url::parse(base_url).map_err(|_| AppError::bad_request("OpenAI 基础地址无效"))?;
+
+  // 确保 base_url 以 / 结尾，这样 join 行为更可预测
+  if !base_url.path().ends_with('/') {
+    base_url.set_path(&format!("{}/", base_url.path()));
+  }
+
+  let url = base_url
+    .join("models")
+    .map_err(|_| AppError::bad_request("无法构建 OpenAI API URL"))?;
 
   debug!("OpenAI 验证请求 URL: {}", url);
 
