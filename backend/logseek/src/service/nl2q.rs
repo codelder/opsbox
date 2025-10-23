@@ -1,7 +1,12 @@
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 // 使用新的 LLM 客户端
-use opsbox_core::{ChatMessage, ChatRequest, InjectionMode, Role, build_llm_from_env};
+use crate::repository::llm::{self, ProviderKind};
+use opsbox_core::SqlitePool;
+use opsbox_core::{
+  ChatMessage, ChatRequest, DynLlmClient, InjectionMode, OllamaConfig, OpenAIConfig, Role, build_llm_from_env,
+  build_ollama_client, build_openai_client,
+};
 
 // 将快速指南在编译期内嵌，使用基于 crate 根目录的绝对路径，避免相对路径失效
 const QUICK_GUIDE: &str = include_str!(concat!(
@@ -58,17 +63,23 @@ fn strip_think_sections(input: &str) -> String {
   out
 }
 
-pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
+pub async fn call_llm(pool: &SqlitePool, nl: &str) -> Result<String, NL2QError> {
   info!("NL2Q请求: '{}'", nl);
 
   let messages = build_messages(nl);
   debug!("消息数: {}（system + user）", messages.len());
 
-  // 构建统一 LLM 客户端（支持 Ollama / OpenAI 等）
-  let client = build_llm_from_env().map_err(|e| {
-    error!("LLM 客户端初始化失败: {}", e);
-    NL2QError::Http(e.to_string())
-  })?;
+  // 构建统一 LLM 客户端（优先使用数据库中的默认配置；不存在则回退到环境变量）
+  let client = match resolve_llm_client(pool).await {
+    Ok(c) => c,
+    Err(e) => {
+      warn!("使用数据库默认 LLM 失败，回退到环境变量：{}", e);
+      build_llm_from_env().map_err(|e| {
+        error!("LLM 客户端初始化失败: {}", e);
+        NL2QError::Http(e.to_string())
+      })?
+    }
+  };
 
   let req = ChatRequest {
     messages,
@@ -120,4 +131,42 @@ pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
 
   info!("NL2Q生成成功: '{}'", &q);
   Ok(q)
+}
+
+/// 解析默认 LLM 客户端（从数据库），失败则返回错误
+async fn resolve_llm_client(pool: &SqlitePool) -> Result<DynLlmClient, NL2QError> {
+  let default = llm::get_default(pool)
+    .await
+    .map_err(|e| NL2QError::Http(format!("加载默认 LLM 失败: {}", e)))?;
+
+  let name = default.ok_or_else(|| NL2QError::Http("未设置默认大模型".to_string()))?;
+  let backend = llm::get_backend(pool, &name)
+    .await
+    .map_err(|e| NL2QError::Http(format!("读取 LLM 配置失败: {}", e)))?
+    .ok_or_else(|| NL2QError::Http("默认大模型不存在".to_string()))?;
+
+  match backend.provider {
+    ProviderKind::Ollama => {
+      let cfg = OllamaConfig {
+        base_url: backend.base_url,
+        model: backend.model,
+        timeout_secs: backend.timeout_secs as u64,
+      };
+      Ok(build_ollama_client(cfg))
+    }
+    ProviderKind::OpenAI => {
+      let api_key = backend
+        .api_key
+        .ok_or_else(|| NL2QError::Http("OpenAI 配置缺少 API Key".to_string()))?;
+      let cfg = OpenAIConfig {
+        base_url: backend.base_url,
+        api_key,
+        model: backend.model,
+        timeout_secs: backend.timeout_secs as u64,
+        organization: backend.organization,
+        project: backend.project,
+      };
+      Ok(build_openai_client(cfg))
+    }
+  }
 }

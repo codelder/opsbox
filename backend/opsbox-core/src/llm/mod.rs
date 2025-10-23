@@ -4,7 +4,7 @@
 //! - 通过 `LlmClient` trait 定义抽象能力
 //! - 提供 `OllamaClient` 与 `OpenAIClient` 实现
 //! - 支持从环境变量快速构建客户端
-//! - 包含调试工具用于查看原始输出
+//! - 包含详细的调试日志用于查看原始输出
 //!
 //! 环境变量（建议）：
 //! - LLM_PROVIDER=ollama|openai
@@ -13,8 +13,6 @@
 //! - OPENAI_BASE_URL（默认：https://api.openai.com）
 //! - OPENAI_API_KEY（必填，当 provider=openai 时）
 //! - OPENAI_MODEL（默认：gpt-4o-mini）
-
-pub mod debug;
 use crate::error::AppError;
 use async_trait::async_trait;
 use log::{debug, info, warn};
@@ -212,64 +210,6 @@ pub fn build_openai_client(cfg: OpenAIConfig) -> DynLlmClient {
   Arc::new(OpenAIClient::new(cfg))
 }
 
-/// 调试 Ollama 原始输出的辅助函数
-pub async fn debug_ollama_raw_output(
-  base_url: &str,
-  model: &str,
-  messages: Vec<ChatMessage>,
-) -> Result<String, AppError> {
-  let timeout = Duration::from_secs(60);
-  let http = reqwest::Client::builder()
-    .timeout(timeout)
-    .build()
-    .expect("创建 HTTP 客户端失败");
-
-  let mut url = Url::parse(base_url).unwrap_or_else(|_| Url::parse("http://127.0.0.1:11434").unwrap());
-  url.set_path("/api/chat");
-
-  let body = OllamaChatReq {
-    model,
-    messages: &messages,
-    stream: false,
-    format: None, // 不强制 JSON 格式，看原始输出
-    options: Some(OllamaOptions {
-      temperature: Some(0.7),
-      num_predict: Some(1000),
-      stop: None,
-    }),
-  };
-
-  println!("=== Ollama 调试请求 ===");
-  println!("URL: {}", url);
-  println!(
-    "请求体: {}",
-    serde_json::to_string_pretty(&body).unwrap_or_else(|_| "序列化失败".to_string())
-  );
-  println!("========================");
-
-  let resp = http
-    .post(url)
-    .json(&body)
-    .send()
-    .await
-    .map_err(|e| AppError::external_service(format!("Ollama 请求失败: {}", e)))?;
-
-  println!("=== Ollama 响应状态 ===");
-  println!("状态码: {}", resp.status());
-  println!("========================");
-
-  let response_text = resp
-    .text()
-    .await
-    .map_err(|e| AppError::external_service(format!("读取响应失败: {}", e)))?;
-
-  println!("=== Ollama 原始响应 ===");
-  println!("{}", response_text);
-  println!("========================");
-
-  Ok(response_text)
-}
-
 /// Ollama 客户端实现
 struct OllamaClient {
   http: reqwest::Client,
@@ -458,9 +398,18 @@ impl OpenAIClient {
       .build()
       .expect("创建 HTTP 客户端失败");
 
-    // {base}/v1/chat/completions
+    // 构造聊天 URL：在保留 base_url 现有路径前缀的基础上追加 chat/completions
+    // 规则：
+    // - 若 base_url 无路径（/ 或空），生成 /v1/chat/completions
+    // - 若已有路径（如 /v1 或 /compatible-mode/v1），生成 {existing}/chat/completions
     let mut base = Url::parse(&cfg.base_url).unwrap_or_else(|_| Url::parse("https://api.openai.com").unwrap());
-    base.set_path("/v1/chat/completions");
+    let existing = base.path().trim_end_matches('/');
+    let chat_path = if existing.is_empty() || existing == "/" {
+      "/v1/chat/completions".to_string()
+    } else {
+      format!("{}/chat/completions", existing)
+    };
+    base.set_path(&chat_path);
 
     Self {
       http,
@@ -538,6 +487,13 @@ impl LlmClient for OpenAIClient {
         .then_some(OpenAIResponseFormat { r#type: "json_object" }),
     };
 
+    // 调试：输出请求详情
+    debug!("OpenAI 请求 URL: {}", self.chat_url);
+    debug!(
+      "OpenAI 请求体: {}",
+      serde_json::to_string_pretty(&body).unwrap_or_else(|_| "序列化失败".to_string())
+    );
+
     let mut req_builder = self.http.post(self.chat_url.clone()).json(&body);
     req_builder = req_builder.bearer_auth(&self.cfg.api_key);
     if let Some(org) = &self.cfg.organization {
@@ -552,19 +508,30 @@ impl LlmClient for OpenAIClient {
       .await
       .map_err(|e| AppError::external_service(format!("OpenAI 请求失败: {}", e)))?;
 
+    // 调试：输出响应状态
+    debug!("OpenAI 响应状态: {}", resp.status());
+
     if !resp.status().is_success() {
       let status = resp.status();
       let text = resp.text().await.unwrap_or_default();
+      warn!("OpenAI 响应错误（{}）: {}", status, text);
       return Err(AppError::external_service(format!(
         "OpenAI 响应错误（{}）: {}",
         status, text
       )));
     }
 
-    let data: OpenAIChatResp = resp
-      .json()
+    // 获取原始响应文本用于调试
+    let response_text = resp
+      .text()
       .await
-      .map_err(|e| AppError::external_service(format!("解析 OpenAI 响应失败: {}", e)))?;
+      .map_err(|e| AppError::external_service(format!("读取 OpenAI 响应失败: {}", e)))?;
+
+    // 调试：输出原始响应
+    info!("OpenAI 原始响应: {}", response_text);
+
+    let data: OpenAIChatResp = serde_json::from_str(&response_text)
+      .map_err(|e| AppError::external_service(format!("解析 OpenAI 响应失败: {}，原始响应: {}", e, response_text)))?;
 
     let content = data
       .choices

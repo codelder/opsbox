@@ -51,10 +51,12 @@
   >
     <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
       <div class="flex flex-1 flex-col gap-3 md:max-w-2xl">
-        <label class="text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400"
-          >标签筛选</label
+        <label
+          for="agent-filter"
+          class="text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400">标签筛选</label
         >
         <input
+          id="agent-filter"
           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-inner shadow-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:shadow-none dark:focus:border-indigo-400 dark:focus:ring-indigo-500/30"
           placeholder="key=value,team=frontend"
           bind:value={agentsStore.tagFilter}
