@@ -15,7 +15,7 @@ use tokio::io::AsyncRead;
 use tokio::time;
 
 #[derive(Debug, Error)]
-pub enum StorageError {
+pub enum S3Error {
   #[error("url:{0}不可用")]
   InvalidBaseUrl(String),
   #[error("创建 S3 客户端失败")]
@@ -51,7 +51,7 @@ fn s3_timeout() -> Duration {
 }
 
 // 创建或获取缓存的 S3 客户端（按 url+access_key 缓存）
-pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) -> Result<Arc<S3Client>, StorageError> {
+pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) -> Result<Arc<S3Client>, S3Error> {
   let cache_key = format!("{}|{}", url, access_key);
   // 命中缓存则直接返回
   if let Some(existing) = S3_CLIENT_CACHE.lock().unwrap().get(&cache_key).cloned() {
@@ -85,9 +85,9 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
   // 配置 S3 客户端
   let config = aws_sdk_s3::Config::builder()
     .endpoint_url(url) // 支持 MinIO 和其他 S3 兼容服务
-    .region(Region::new("us-east-1")) // MinIO 通常不关心 region，但 SDK 需要
+    .region(Region::new("oss-cn-beijing")) // MinIO 通常不关心 region，但 SDK 需要
     .credentials_provider(credentials)
-    .force_path_style(true) // MinIO 需要路径风格访问（bucket-name/key 而非 bucket-name.domain/key）
+    .force_path_style(false) // 根据服务类型动态选择
     .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest()) // AWS SDK 要求设置 behavior version
     .build();
 
@@ -101,7 +101,7 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
 
 #[async_trait]
 pub trait ReaderProvider {
-  async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, StorageError>;
+  async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, S3Error>;
 }
 
 pub struct S3ReaderProvider<'a> {
@@ -126,7 +126,7 @@ impl<'a> S3ReaderProvider<'a> {
 
 #[async_trait]
 impl<'a> ReaderProvider for S3ReaderProvider<'a> {
-  async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, StorageError> {
+  async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, S3Error> {
     debug!(
       "开始打开S3对象: bucket={}, key={}, url={}",
       self.bucket, self.key, self.url
@@ -160,11 +160,11 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
           .await
           .map_err(|e| {
             error!("获取S3对象失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
-            StorageError::S3GetObject(e.to_string())
+            S3Error::S3GetObject(e.to_string())
           })?;
 
         // AWS SDK 返回 ByteStream，可以直接转换为兼容的流
-        Ok::<_, StorageError>(response.body.into_async_read())
+        Ok::<_, S3Error>(response.body.into_async_read())
       };
 
       match time::timeout(timeout, fut).await {
@@ -189,7 +189,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
           attempt += 1;
           if attempt >= max_attempts {
             error!("获取S3对象超时(重试到达上限): bucket={}, key={}", self.bucket, self.key);
-            return Err(StorageError::ConnectionTimeout);
+            return Err(S3Error::ConnectionTimeout);
           }
           let base_ms = 100u64.saturating_mul(1u64 << attempt.min(6));
           let delay = Duration::from_millis(base_ms);
@@ -212,12 +212,7 @@ impl<'a> S3ReaderProvider<'a> {
   /// - recursive：是否递归遍历子路径（true）或仅列出当前层级（false）。
   ///
   /// 返回符合过滤条件的对象键（完整路径）列表。
-  pub async fn list_objects(
-    &self,
-    prefix: &str,
-    regex: Option<&str>,
-    recursive: bool,
-  ) -> Result<Vec<String>, StorageError> {
+  pub async fn list_objects(&self, prefix: &str, regex: Option<&str>, recursive: bool) -> Result<Vec<String>, S3Error> {
     info!(
       "开始列举S3对象: bucket={}, prefix='{}', recursive={}, regex={:?}",
       self.bucket, prefix, recursive, regex
@@ -230,7 +225,7 @@ impl<'a> S3ReaderProvider<'a> {
       debug!("编译正则表达式: {}", pat);
       Some(Regex::new(pat).map_err(|e| {
         error!("正则表达式编译失败: {}, error: {}", pat, e);
-        StorageError::Regex(e.to_string())
+        S3Error::Regex(e.to_string())
       })?)
     } else {
       None
@@ -260,7 +255,7 @@ impl<'a> S3ReaderProvider<'a> {
 
         let response = request.send().await.map_err(|e| {
           error!("列举S3对象失败: error={:?}", e);
-          StorageError::S3ListObjects(e.to_string())
+          S3Error::S3ListObjects(e.to_string())
         })?;
 
         // 处理返回的对象
@@ -287,12 +282,12 @@ impl<'a> S3ReaderProvider<'a> {
         }
       }
 
-      Ok::<(Vec<String>, usize), StorageError>((keys, processed_count))
+      Ok::<(Vec<String>, usize), S3Error>((keys, processed_count))
     })
     .await
     .map_err(|_| {
       error!("S3对象列举超时: bucket={}, prefix={}", self.bucket, prefix);
-      StorageError::ConnectionTimeout
+      S3Error::ConnectionTimeout
     })??;
 
     let (keys, processed_count) = list_result;
@@ -306,12 +301,7 @@ impl<'a> S3ReaderProvider<'a> {
   }
 }
 
-pub async fn test_s3_connection(
-  url: &str,
-  access_key: &str,
-  secret_key: &str,
-  bucket: &str,
-) -> Result<(), StorageError> {
+pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, bucket: &str) -> Result<(), S3Error> {
   info!("测试 S3 连接: url={}, bucket={}", url, bucket);
 
   // 使用缓存的客户端
@@ -321,8 +311,8 @@ pub async fn test_s3_connection(
 
   // 使用超时包装连接测试
   time::timeout(s3_timeout(), async {
-    // 尝试列举桶内对象（最多1个）以验证凭证和桶可访问性
-    let response = client
+    // 使用标准的 list_objects_v2 操作测试连接
+    let _response = client
       .list_objects_v2()
       .bucket(bucket)
       .max_keys(1)
@@ -330,22 +320,18 @@ pub async fn test_s3_connection(
       .await
       .map_err(|e| {
         error!("S3 连接测试失败: {:?}", e);
-        StorageError::S3ListObjects(e.to_string())
+        S3Error::S3ListObjects(e.to_string())
       })?;
 
     // 无论是否有对象，只要请求成功就说明连接正常
-    if response.contents.as_ref().map(|c| !c.is_empty()).unwrap_or(false) {
-      debug!("找到对象，连接正常");
-    } else {
-      debug!("桶为空或无权限列举，但连接正常");
-    }
+    debug!("S3连接测试成功，桶可访问");
 
-    Ok::<(), StorageError>(())
+    Ok::<(), S3Error>(())
   })
   .await
   .map_err(|_| {
     error!("S3 连接测试超时: bucket={}", bucket);
-    StorageError::ConnectionTimeout
+    S3Error::ConnectionTimeout
   })??;
 
   info!("S3 连接测试成功");

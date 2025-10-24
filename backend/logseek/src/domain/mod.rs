@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod file_url;
+pub mod source_planner;
 
 pub use config::SourceConfig;
 pub use file_url::{FileUrl, FileUrlError, TarCompression};

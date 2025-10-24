@@ -1,4 +1,4 @@
-use crate::utils::storage::{self, StorageError};
+use crate::utils::storage::{self, S3Error};
 use log::{debug, error, info};
 use opsbox_core::{AppError, Result, SqlitePool, run_migration};
 use serde::{Deserialize, Serialize};
@@ -34,18 +34,8 @@ pub struct S3Profile {
 
 /// 初始化 LogSeek 模块的数据库表
 pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
+  // 完全采用 profiles 存储（默认 profile_name='default'）
   let schema_sql = r#"
-    -- LogSeek S3 兼容对象存储配置表（单一配置，向后兼容）
-    CREATE TABLE IF NOT EXISTS logseek_s3_config (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        endpoint TEXT NOT NULL,
-        bucket TEXT NOT NULL,
-        access_key TEXT NOT NULL,
-        secret_key TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-    );
-
-    -- S3 配置 Profiles 表（每个 Profile 包含完整的访问配置）
     CREATE TABLE IF NOT EXISTS s3_profiles (
         profile_name TEXT PRIMARY KEY,
         endpoint TEXT NOT NULL,
@@ -55,100 +45,25 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
     );
-
-    -- LogSeek 通用设置表
-    CREATE TABLE IF NOT EXISTS logseek_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-    );
   "#;
 
   run_migration(db_pool, schema_sql, "logseek").await?;
-
-  // 迁移旧配置到 profiles（如果存在）
-  migrate_legacy_s3_config(db_pool).await?;
-
-  Ok(())
-}
-
-/// 将旧的 S3 配置迁移到 profiles 表
-async fn migrate_legacy_s3_config(pool: &SqlitePool) -> Result<()> {
-  // 检查是否已迁移
-  let migrated: Option<(String,)> =
-    sqlx::query_as("SELECT value FROM logseek_settings WHERE key = 's3_config_migrated'")
-      .fetch_optional(pool)
-      .await
-      .map_err(|e| AppError::internal(format!("检查迁移状态失败: {}", e)))?;
-
-  if migrated.is_some() {
-    debug!("S3 配置已迁移，跳过");
-    return Ok(());
-  }
-
-  // 读取旧配置
-  let old_config: Option<(String, String, String, String)> =
-    sqlx::query_as("SELECT endpoint, bucket, access_key, secret_key FROM logseek_s3_config WHERE id = 1")
-      .fetch_optional(pool)
-      .await
-      .map_err(|e| AppError::internal(format!("读取旧 S3 配置失败: {}", e)))?;
-
-  if let Some((endpoint, bucket, access_key, secret_key)) = old_config {
-    let now = std::time::SystemTime::now()
-      .duration_since(std::time::UNIX_EPOCH)
-      .unwrap()
-      .as_secs() as i64;
-
-    // 迁移到 default profile
-    sqlx::query(
-      "INSERT OR IGNORE INTO s3_profiles (profile_name, endpoint, bucket, access_key, secret_key, created_at, updated_at)
-       VALUES ('default', ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&endpoint)
-    .bind(&bucket)
-    .bind(&access_key)
-    .bind(&secret_key)
-    .bind(now)
-    .bind(now)
-    .execute(pool)
-    .await
-    .map_err(|e| AppError::internal(format!("迁移 S3 配置失败: {}", e)))?;
-
-    info!(
-      "成功将旧 S3 配置迁移到 default profile（endpoint={}, bucket={}）",
-      endpoint, bucket
-    );
-  }
-
-  // 标记已迁移
-  let now = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .unwrap()
-    .as_secs() as i64;
-
-  sqlx::query(
-    "INSERT OR REPLACE INTO logseek_settings (key, value, updated_at) VALUES ('s3_config_migrated', 'true', ?)",
-  )
-  .bind(now)
-  .execute(pool)
-  .await
-  .map_err(|e| AppError::internal(format!("标记迁移状态失败: {}", e)))?;
 
   Ok(())
 }
 
 pub async fn load_s3_settings(pool: &SqlitePool) -> Result<Option<S3Settings>> {
-  debug!("加载 S3 配置");
+  debug!("加载 S3 配置（default profile）");
   let row = sqlx::query_as::<_, (String, String, String, String)>(
-    "SELECT endpoint, bucket, access_key, secret_key FROM logseek_s3_config WHERE id = 1",
+    "SELECT endpoint, bucket, access_key, secret_key FROM s3_profiles WHERE profile_name = 'default'",
   )
   .fetch_optional(pool)
   .await
   .map_err(|e| AppError::internal(format!("查询 S3 配置失败: {}", e)))?;
 
   match &row {
-    Some(_) => info!("S3 配置加载成功"),
-    None => info!("S3 配置不存在"),
+    Some(_) => info!("S3 配置加载成功 (profile=default)"),
+    None => info!("S3 配置不存在 (profile=default)"),
   }
 
   Ok(row.map(|(endpoint, bucket, access_key, secret_key)| S3Settings {
@@ -167,39 +82,54 @@ pub async fn load_required_s3_settings(pool: &SqlitePool) -> Result<S3Settings> 
 
 pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Result<()> {
   info!(
-    "保存 S3 配置: endpoint={}, bucket={}",
+    "保存 S3 配置(default): endpoint={}, bucket={}",
     settings.endpoint, settings.bucket
   );
 
   debug!("验证 S3 配置有效性");
   verify_s3_settings(settings).await?;
 
-  debug!("将 S3 配置写入数据库");
+  debug!("将 S3 配置写入 s3_profiles(default)");
   let now = std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap()
     .as_secs() as i64;
 
-  sqlx::query(
-    "INSERT INTO logseek_s3_config (id, endpoint, bucket, access_key, secret_key, updated_at)
-     VALUES (1, ?, ?, ?, ?, ?)
-     ON CONFLICT(id) DO UPDATE SET 
-       endpoint = excluded.endpoint, 
-       bucket = excluded.bucket,
-       access_key = excluded.access_key, 
-       secret_key = excluded.secret_key,
-       updated_at = excluded.updated_at",
-  )
-  .bind(&settings.endpoint)
-  .bind(&settings.bucket)
-  .bind(&settings.access_key)
-  .bind(&settings.secret_key)
-  .bind(now)
-  .execute(pool)
-  .await
-  .map_err(|e| AppError::internal(format!("保存 S3 配置失败: {}", e)))?;
+  // 如果存在则更新，否则插入
+  let existing: Option<(String,)> =
+    sqlx::query_as("SELECT profile_name FROM s3_profiles WHERE profile_name = 'default'")
+      .fetch_optional(pool)
+      .await
+      .map_err(|e| AppError::internal(format!("查询 S3 Profile 失败: {}", e)))?;
 
-  info!("S3 配置保存成功");
+  if existing.is_some() {
+    sqlx::query(
+      "UPDATE s3_profiles SET endpoint = ?, bucket = ?, access_key = ?, secret_key = ?, updated_at = ? WHERE profile_name = 'default'",
+    )
+    .bind(&settings.endpoint)
+    .bind(&settings.bucket)
+    .bind(&settings.access_key)
+    .bind(&settings.secret_key)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::internal(format!("更新 S3 配置失败: {}", e)))?;
+  } else {
+    sqlx::query(
+      "INSERT INTO s3_profiles (profile_name, endpoint, bucket, access_key, secret_key, created_at, updated_at) VALUES ('default', ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&settings.endpoint)
+    .bind(&settings.bucket)
+    .bind(&settings.access_key)
+    .bind(&settings.secret_key)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| AppError::internal(format!("保存 S3 配置失败: {}", e)))?;
+  }
+
+  info!("S3 配置保存成功 (profile=default)");
   Ok(())
 }
 
@@ -221,19 +151,19 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
       info!("S3配置验证成功");
       Ok(())
     }
-    Err(StorageError::InvalidBaseUrl(_)) => {
+    Err(S3Error::InvalidBaseUrl(_)) => {
       error!("S3 Endpoint地址无效: {}", settings.endpoint);
       Err(AppError::external_service(
         "S3连接失败: Endpoint 地址无效，请确认格式例如 http://host:9000",
       ))
     }
-    Err(StorageError::S3Build) => {
+    Err(S3Error::S3Build) => {
       error!("S3客户端构建失败: endpoint={}", settings.endpoint);
       Err(AppError::external_service(
         "S3连接失败: 无法建立 S3 连接，请检查 Endpoint、Access Key 和 Secret Key",
       ))
     }
-    Err(StorageError::S3ListObjects(msg)) => {
+    Err(S3Error::S3ListObjects(msg)) => {
       let lower = msg.to_ascii_lowercase();
       if lower.contains("nosuchbucket") {
         Err(AppError::external_service(format!(
@@ -251,16 +181,14 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
         )))
       }
     }
-    Err(StorageError::S3GetObject(msg)) => {
-      Err(AppError::external_service(format!("S3连接失败: 无法读取对象：{}", msg)))
-    }
-    Err(StorageError::S3ToStream(msg)) => Err(AppError::external_service(format!(
+    Err(S3Error::S3GetObject(msg)) => Err(AppError::external_service(format!("S3连接失败: 无法读取对象：{}", msg))),
+    Err(S3Error::S3ToStream(msg)) => Err(AppError::external_service(format!(
       "S3连接失败: 读取对象流失败：{}",
       msg
     ))),
-    Err(StorageError::Regex(msg)) => Err(AppError::bad_request(format!("无效的对象筛选正则：{}", msg))),
-    Err(StorageError::Io(err)) => Err(AppError::external_service(format!("S3连接失败: 网络通信错误：{}", err))),
-    Err(StorageError::ConnectionTimeout) => Err(AppError::external_service(
+    Err(S3Error::Regex(msg)) => Err(AppError::bad_request(format!("无效的对象筛选正则：{}", msg))),
+    Err(S3Error::Io(err)) => Err(AppError::external_service(format!("S3连接失败: 网络通信错误：{}", err))),
+    Err(S3Error::ConnectionTimeout) => Err(AppError::external_service(
       "S3连接失败: 连接超时，请检查网络或 S3 服务状态",
     )),
   }

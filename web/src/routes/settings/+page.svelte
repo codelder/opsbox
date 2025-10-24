@@ -5,9 +5,11 @@
    * 支持 AWS S3、MinIO、阿里云 OSS 等 S3 兼容存储
    */
   import ProfileManagement from './ProfileManagement.svelte';
+  import AgentManagement from './AgentManagement.svelte';
+  import LlmManagement from './LlmManagement.svelte';
 
   // 选项卡状态（保留以便未来扩展）
-  let activeTab = $state<'profiles' | 'alerts' | 'notifications' | 'team'>('profiles');
+  let activeTab = $state<'profiles' | 'agents' | 'llm' | 'alerts' | 'notifications' | 'team'>('profiles');
 </script>
 
 <svelte:head>
@@ -32,6 +34,24 @@
       onclick={() => (activeTab = 'profiles')}
     >
       对象存储
+    </button>
+    <button
+      type="button"
+      class="rounded-full px-3 py-1 transition {activeTab === 'agents'
+        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
+        : 'hover:text-slate-700 dark:hover:text-slate-300'}"
+      onclick={() => (activeTab = 'agents')}
+    >
+      Agent
+    </button>
+    <button
+      type="button"
+      class="rounded-full px-3 py-1 transition {activeTab === 'llm'
+        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
+        : 'hover:text-slate-700 dark:hover:text-slate-300'}"
+      onclick={() => (activeTab = 'llm')}
+    >
+      大模型
     </button>
     <button
       type="button"
@@ -67,6 +87,10 @@
 
   {#if activeTab === 'profiles'}
     <ProfileManagement />
+  {:else if activeTab === 'agents'}
+    <AgentManagement />
+  {:else if activeTab === 'llm'}
+    <LlmManagement />
   {:else if activeTab === 'alerts'}
     <div
       class="rounded-3xl border border-dashed border-slate-200 bg-white/60 px-8 py-16 text-center dark:border-slate-700 dark:bg-slate-900/30"

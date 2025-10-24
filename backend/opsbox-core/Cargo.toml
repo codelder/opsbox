@@ -36,3 +36,9 @@ log = "0.4"
 
 # HTTP types
 http = "1.0"
+
+# HTTP 客户端（用于大模型调用）
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+
+# Stream/trait 支持
+futures = "0.3"

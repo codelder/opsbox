@@ -1,7 +1,13 @@
 use log::{debug, error, info, warn};
-use ollama_rs::Ollama;
-use ollama_rs::generation::completion::request::GenerationRequest;
 use serde::{Deserialize, Serialize};
+// 使用新的 LLM 客户端
+use crate::repository::llm::{self, ProviderKind};
+use opsbox_core::SqlitePool;
+use opsbox_core::{
+  ChatMessage, ChatRequest, DynLlmClient, InjectionMode, OllamaConfig, OpenAIConfig, Role, build_llm_from_env,
+  build_ollama_client, build_openai_client,
+};
+
 // 将快速指南在编译期内嵌，使用基于 crate 根目录的绝对路径，避免相对路径失效
 const QUICK_GUIDE: &str = include_str!(concat!(
   env!("CARGO_MANIFEST_DIR"),
@@ -28,13 +34,17 @@ pub enum NL2QError {
   Empty,
 }
 
-fn build_prompt(user_nl: &str) -> String {
-  // 严格约束输出，仅允许输出一行最终 q 字符串；禁止输出 <think> 思考内容
-  format!(
-    "你是一名日志检索查询串生成器。请严格遵循以下文档把用户的自然语言需求转换为本站使用的查询字符串（q）。\n\n=== 文档开始 ===\n{}\n=== 文档结束 ===\n\n要求：\n- 仅输出一行最终 q 字符串，不要任何解释或多余符号\n- 不要用引号包裹整个表达式\n- 若用户给出多个同义词，用大写 OR 连接\n- 若是“同一行出现 A 与 B”，用正则 /(A.*B|B.*A)/\n- 不要输出任何 <think> 或 </think> 内容\n\n用户需求：{}\n输出：",
-    QUICK_GUIDE,
-    user_nl.trim()
-  )
+fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
+  // 将整份规范作为 system 消息提供，保持与客户端无关
+  let system = ChatMessage {
+    role: Role::System,
+    content: QUICK_GUIDE.to_string(),
+  };
+  let user = ChatMessage {
+    role: Role::User,
+    content: user_nl.trim().to_string(),
+  };
+  vec![system, user]
 }
 
 // 移除大模型推理模型产生的 <think> 思考片段，保留真实输出
@@ -53,48 +63,55 @@ fn strip_think_sections(input: &str) -> String {
   out
 }
 
-pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
+pub async fn call_llm(pool: &SqlitePool, nl: &str) -> Result<String, NL2QError> {
   info!("NL2Q请求: '{}'", nl);
 
-  let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1".to_string());
-  let port: u16 = std::env::var("OLLAMA_PORT")
-    .ok()
-    .and_then(|s| s.parse().ok())
-    .unwrap_or(11434);
-  let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen3:8b".to_string());
+  let messages = build_messages(nl);
+  debug!("消息数: {}（system + user）", messages.len());
 
-  debug!("Ollama配置: host={}, port={}, model={}", host, port, model);
+  // 构建统一 LLM 客户端（优先使用数据库中的默认配置；不存在则回退到环境变量）
+  let client = match resolve_llm_client(pool).await {
+    Ok(c) => c,
+    Err(e) => {
+      warn!("使用数据库默认 LLM 失败，回退到环境变量：{}", e);
+      build_llm_from_env().map_err(|e| {
+        error!("LLM 客户端初始化失败: {}", e);
+        NL2QError::Http(e.to_string())
+      })?
+    }
+  };
 
-  let prompt = build_prompt(nl);
-  debug!("构建的提示词长度: {} 字符", prompt.len());
+  let req = ChatRequest {
+    messages,
+    model: None,
+    temperature: Some(0.2),
+    max_tokens: None, // 默认不限制长度，由提供方按模型策略决定
+    // 使用结构化输出，并用 replace 避免与文档自身的系统提示冲突
+    separate_think: true,
+    injection_mode: InjectionMode::Replace,
+  };
 
-  let client = Ollama::new(host, port);
-  let req = GenerationRequest::new(model, prompt);
-
-  debug!("向Ollama发送请求");
+  debug!("发送 ChatRequest（separate_think=true, injection=Replace）");
   let start = std::time::Instant::now();
-  let resp = client.generate(req).await.map_err(|e| {
-    error!("Ollama请求失败: {}", e);
+  let resp = client.chat(req).await.map_err(|e| {
+    error!("LLM 调用失败: {}", e);
     NL2QError::Http(e.to_string())
   })?;
-
   let duration = start.elapsed();
-  info!("Ollama响应耗时: {:?}", duration);
+  info!("LLM 响应耗时: {:?}，模型: {}", duration, resp.model);
 
-  let mut q = resp.response.trim().to_string();
-  debug!("Ollama原始输出: '{}'", &q);
+  let mut q = resp.content.trim().to_string();
+  info!("LLM 内容输出: '{}'", &q);
+  info!("LLM 内容输出: '{:?}'", resp);
 
-  // 先移除 <think> 思考片段，再做其它清理
+  // 兜底清理：移除 <think> 片段、去掉代码块/外层引号，仅取首行
   let before_strip = q.clone();
   q = strip_think_sections(&q).trim().to_string();
   if q != before_strip {
     debug!("移除<think>片段后: '{}'", &q);
   }
-
-  // 容错清理——去除围绕的代码块/引号，仅保留单行
   if q.starts_with("```") && q.ends_with("```") {
     debug!("移除代码块围栏");
-    // 去掉围栏
     let inner = q.trim_start_matches("```\n").trim_end_matches("\n```");
     q = inner.trim().to_string();
   }
@@ -114,4 +131,42 @@ pub async fn call_ollama(nl: &str) -> Result<String, NL2QError> {
 
   info!("NL2Q生成成功: '{}'", &q);
   Ok(q)
+}
+
+/// 解析默认 LLM 客户端（从数据库），失败则返回错误
+async fn resolve_llm_client(pool: &SqlitePool) -> Result<DynLlmClient, NL2QError> {
+  let default = llm::get_default(pool)
+    .await
+    .map_err(|e| NL2QError::Http(format!("加载默认 LLM 失败: {}", e)))?;
+
+  let name = default.ok_or_else(|| NL2QError::Http("未设置默认大模型".to_string()))?;
+  let backend = llm::get_backend(pool, &name)
+    .await
+    .map_err(|e| NL2QError::Http(format!("读取 LLM 配置失败: {}", e)))?
+    .ok_or_else(|| NL2QError::Http("默认大模型不存在".to_string()))?;
+
+  match backend.provider {
+    ProviderKind::Ollama => {
+      let cfg = OllamaConfig {
+        base_url: backend.base_url,
+        model: backend.model,
+        timeout_secs: backend.timeout_secs as u64,
+      };
+      Ok(build_ollama_client(cfg))
+    }
+    ProviderKind::OpenAI => {
+      let api_key = backend
+        .api_key
+        .ok_or_else(|| NL2QError::Http("OpenAI 配置缺少 API Key".to_string()))?;
+      let cfg = OpenAIConfig {
+        base_url: backend.base_url,
+        api_key,
+        model: backend.model,
+        timeout_secs: backend.timeout_secs as u64,
+        organization: backend.organization,
+        project: backend.project,
+      };
+      Ok(build_openai_client(cfg))
+    }
+  }
 }

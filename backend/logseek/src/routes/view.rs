@@ -10,6 +10,7 @@ use axum::{
   extract::Query,
   http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
 };
+use log::debug;
 use problemdetails::Problem;
 
 /// 查看缓存中的文件内容
@@ -43,6 +44,7 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
 
   // 读取 keywords 与行切片
   let keywords = simple_cache().get_keywords(&params.sid).await.unwrap_or_default();
+  debug!("🔍 Server查找缓存: sid={}, file_url={}", params.sid, file_url);
   let (total, slice) = match simple_cache()
     .get_lines_slice(
       &params.sid,
@@ -52,9 +54,18 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
     )
     .await
   {
-    Some(v) => v,
+    Some(v) => {
+      debug!(
+        "✅ Server缓存命中: sid={}, file_url={}, total={}, slice_len={}",
+        params.sid,
+        file_url,
+        v.0,
+        v.1.len()
+      );
+      v
+    }
     None => {
-      log::debug!("view-miss: sid={} file={}", params.sid, params.file);
+      debug!("❌ Server缓存未命中: sid={}, file_url={}", params.sid, file_url);
       return Ok(
         HttpResponse::builder()
           .status(404)

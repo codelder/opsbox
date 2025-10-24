@@ -47,8 +47,6 @@ openssl = { version = "0.10", features = ["vendored"] }
 # 为确保各平台无需系统级 sqlite3，开启 sqlx 的 sqlite 并显式依赖打包版 libsqlite3-sys。
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 libsqlite3-sys = { version = "0.30", features = ["bundled"] }
-# Ollama Rust 客户端
-ollama-rs = "0.3"
 # 统一日志宏
 log = "0.4"
 # 用于全局单例客户端缓存

@@ -5,19 +5,16 @@
 use crate::agent::{AgentClient, SearchOptions, SearchScope, SearchService};
 use crate::api::models::{AppError, SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
-use crate::repository::settings;
 use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
 use crate::service::search::SearchProcessor;
-use crate::utils::bbip_service::derive_plan;
 use crate::utils::renderer::render_json_chunks;
 use axum::{
   body::Body,
   extract::{Json, State},
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
-use chrono::{Datelike, Utc};
-use chrono_tz::Asia::Shanghai;
 use futures::StreamExt;
+use log::debug;
 use opsbox_core::SqlitePool;
 use problemdetails::Problem;
 use std::sync::Arc;
@@ -54,125 +51,10 @@ pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
 ) -> Result<(Vec<crate::domain::config::SourceConfig>, String), AppError> {
-  use crate::domain::config::SourceConfig;
-  use chrono::Duration;
-
-  // 从数据库加载所有 S3 Profiles
-  let profiles = settings::list_s3_profiles(pool).await.map_err(|e| {
-    log::error!("加载 S3 Profiles 失败: {:?}", e);
-    e
-  })?;
-
-  log::info!("从数据库加载到 {} 个 S3 Profile(s)", profiles.len());
-
-  // 解析日期计划，获取日期区间和清理后的查询
-  let base_dir = "/unused/for/s3"; // 仅为复用 derive_plan 获取日期区间
-  let buckets = ["20", "21", "22", "23"];
-  let plan = derive_plan(base_dir, &buckets, query);
-
-  log::info!(
-    "[Search] 日期范围解析: start={}, end={}, 原始查询='{}', 清理后查询='{}'",
-    plan.range.start,
-    plan.range.end,
-    query,
-    plan.cleaned_query
-  );
-
-  let mut configs: Vec<SourceConfig> = Vec::new();
-  // 使用北京时区计算“今天”
-  let today = Utc::now().with_timezone(&Shanghai).date_naive();
-
-  // 分割日期范围：当前日期 vs 历史日期
-  let (current_date_range, historical_date_range) = split_date_range_by_today(plan.range, today);
-
-  log::info!(
-    "[Search] 日期分割: 当前日期范围={:?}, 历史日期范围={:?}",
-    current_date_range,
-    historical_date_range
-  );
-
-  // 1. 处理当前日期范围 - 使用 Agent 存储源
-  if let Some(current_range) = current_date_range {
-    let agent_endpoints = get_agent_endpoints().await;
-    if !agent_endpoints.is_empty() {
-      log::info!(
-        "为当前日期范围 {:?} 添加 {} 个 Agent 存储源",
-        current_range,
-        agent_endpoints.len()
-      );
-
-      for endpoint in agent_endpoints {
-        configs.push(SourceConfig::Agent {
-          endpoint: endpoint.clone(),
-        });
-        log::debug!("添加 Agent 存储源: endpoint={}", endpoint);
-      }
-    } else {
-      log::warn!(
-        "当前日期范围 {:?} 需要 Agent 存储源，但未找到可用的 Agent 端点",
-        current_range
-      );
-    }
-  }
-
-  // 2. 处理历史日期范围 - 使用 S3 存储源
-  if let Some(historical_range) = historical_date_range {
-    if !profiles.is_empty() {
-      log::info!("为历史日期范围 {:?} 添加 S3 存储源", historical_range);
-
-      // 为每个 Profile 生成多个 tar.gz 文件配置
-      for profile in profiles {
-        log::debug!(
-          "为 Profile '{}' 生成历史存储源配置 (endpoint={}, bucket={})",
-          profile.profile_name,
-          profile.endpoint,
-          profile.bucket
-        );
-
-        // 遍历历史日期范围
-        let mut d = historical_range.start;
-        while d <= historical_range.end {
-          let dp1 = d + Duration::days(1);
-          let y = dp1.year();
-          let m = dp1.month();
-          let day = dp1.day();
-          let yyyymm = format!("{:04}{:02}", y, m);
-          let yyyymmdd = format!("{:04}{:02}{:02}", y, m, day);
-          let file_name = format!("{:04}-{:02}-{:02}", d.year(), d.month(), d.day());
-
-          // 为每个 bucket 生成一个 S3 对象键
-          for b in buckets {
-            let key = format!(
-              "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz",
-              y, yyyymm, yyyymmdd, b, file_name
-            );
-
-            configs.push(SourceConfig::S3 {
-              profile: profile.profile_name.clone(),
-              bucket: Some(profile.bucket.clone()),
-              prefix: None,
-              pattern: None,
-              key: Some(key.clone()),
-            });
-
-            log::debug!("添加历史 S3 存储源: profile={}, key={}", profile.profile_name, key);
-          }
-
-          d += Duration::days(1);
-        }
-      }
-    } else {
-      log::warn!(
-        "历史日期范围 {:?} 需要 S3 存储源，但未找到可用的 S3 Profiles",
-        historical_range
-      );
-    }
-  }
-
-  log::info!("[Search] 共生成 {} 个混合存储源配置", configs.len());
-
-  // 返回混合存储源配置和清理后的查询（移除了 dt:/fdt:/tdt: 等日期限定符）
-  Ok((configs, plan.cleaned_query))
+  // 使用默认应用规划器（当前为 bbip）生成来源配置
+  let planner = crate::domain::source_planner::default_planner();
+  let plan = planner.plan(pool, query).await?;
+  Ok((plan.sources, plan.cleaned_query))
 }
 
 /// 搜索处理函数（多存储源并行搜索）
@@ -285,16 +167,20 @@ pub async fn stream_search(
       );
 
       // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
-      if let crate::domain::config::SourceConfig::Agent { endpoint } = &config_clone {
-        // 直接构造 AgentClient（使用 endpoint 作为 agent_id）
-        if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
-          log::error!(
-            "[Search] 非法的 Agent endpoint，需以 http:// 或 https:// 开头: {}",
-            endpoint
-          );
-          return;
-        }
-        let client = AgentClient::new(endpoint.clone(), endpoint.clone());
+      if let crate::domain::config::SourceConfig::Agent { endpoint, .. } = &config_clone {
+        // 使用 Agent ID 构造 AgentClient（标准格式）
+        let client = match AgentClient::new_by_agent_id(endpoint.clone()).await {
+          Ok(client) => client,
+          Err(e) => {
+            log::error!(
+              "[Search] 无法创建 Agent 客户端 source_idx={} agent_id={} err={}",
+              idx,
+              endpoint,
+              e
+            );
+            return;
+          }
+        };
 
         // 可选健康检查
         if !client.health_check().await {
@@ -302,10 +188,25 @@ pub async fn stream_search(
           return;
         }
 
-        // 透传：不在服务端强加 scope/path 过滤，由 Agent 根据其配置的 search_roots 与查询自行筛选
+        // 从来源规划中读取 scope/path 过滤提示
+        // 默认 scope_root="logs"，path_filter 不设置
+        let (scope_root, path_glob) = match &config_clone {
+          crate::domain::config::SourceConfig::Agent {
+            scope_root,
+            path_filter_glob,
+            ..
+          } => (
+            scope_root.clone().unwrap_or_else(|| "logs".to_string()),
+            path_filter_glob.clone(),
+          ),
+          _ => ("logs".to_string(), None),
+        };
         let search_options = SearchOptions {
-          scope: SearchScope::All,
-          path_filter: None,
+          scope: SearchScope::Directory {
+            path: scope_root,
+            recursive: true,
+          },
+          path_filter: path_glob,
           ..Default::default()
         };
 
@@ -343,6 +244,12 @@ pub async fn stream_search(
             let file_id = file_url.to_string();
 
             // 缓存结果
+            debug!(
+              "🔍 Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
+              sid_for_cache,
+              file_url,
+              res.lines.len()
+            );
             simple_cache()
               .put_lines(&sid_for_cache, &file_url, res.lines.clone())
               .await;
@@ -442,7 +349,7 @@ pub async fn stream_search(
                 }
               }
             }
-            crate::domain::config::SourceConfig::Agent { endpoint } => {
+            crate::domain::config::SourceConfig::Agent { endpoint, .. } => {
               let url = FileUrl::agent(endpoint, &res.path);
               let id = url.to_string();
               (url, id)
@@ -513,14 +420,15 @@ pub async fn stream_search(
 /// 返回：(当前日期范围, 历史日期范围)
 /// - 当前日期范围：包含今天及以后的日期
 /// - 历史日期范围：包含昨天及以前的日期
+#[allow(dead_code)]
 fn split_date_range_by_today(
-  range: crate::utils::bbip_service::DateRange,
+  range: crate::domain::source_planner::DateRange,
   today: chrono::NaiveDate,
 ) -> (
-  Option<crate::utils::bbip_service::DateRange>,
-  Option<crate::utils::bbip_service::DateRange>,
+  Option<crate::domain::source_planner::DateRange>,
+  Option<crate::domain::source_planner::DateRange>,
 ) {
-  use crate::utils::bbip_service::DateRange;
+  use crate::domain::source_planner::DateRange;
 
   let yesterday = today - chrono::Duration::days(1);
 
@@ -549,6 +457,7 @@ fn split_date_range_by_today(
 /// 获取可用的 Agent 端点列表
 ///
 /// 获取包含 app=bbipapp 标签的在线 Agent 端点
+#[allow(dead_code)]
 async fn get_agent_endpoints() -> Vec<String> {
   // 获取包含 app=bbipapp 标签的在线 Agent
   let _tags = [("app".to_string(), "bbipapp".to_string())];
@@ -566,8 +475,9 @@ async fn get_agent_endpoints() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+  use crate::domain::source_planner::DateRange;
+
   use super::*;
-  use crate::utils::bbip_service::DateRange;
   use chrono::NaiveDate;
 
   #[test]

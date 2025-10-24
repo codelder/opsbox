@@ -88,6 +88,35 @@ export interface S3ProfileListResponse {
   profiles: S3ProfilePayload[];
 }
 
+// ============ LLM 设置相关类型 ============
+
+export type LlmProviderType = 'ollama' | 'openai';
+
+export interface LlmBackendUpsertPayload {
+  name: string;
+  provider: LlmProviderType;
+  base_url: string;
+  model: string;
+  timeout_secs?: number;
+  api_key?: string; // openai
+  organization?: string; // openai
+  project?: string; // openai
+}
+
+export interface LlmBackendListItem {
+  name: string;
+  provider: LlmProviderType;
+  base_url: string;
+  model: string;
+  timeout_secs: number;
+  has_api_key: boolean;
+}
+
+export interface LlmBackendListResponse {
+  backends: LlmBackendListItem[];
+  default: string | null;
+}
+
 // ============ 自然语言转查询 ============
 
 /**

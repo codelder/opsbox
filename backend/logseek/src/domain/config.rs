@@ -38,6 +38,12 @@ pub enum SourceConfig {
   Agent {
     /// Agent 端点 URL (例如: "http://192.168.1.10:8090")
     endpoint: String,
+    /// 作用域根目录（可选），例如 "logs"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope_root: Option<String>,
+    /// 额外路径过滤（glob，可选），例如 "**/2025-10-19/**"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path_filter_glob: Option<String>,
   },
 }
 

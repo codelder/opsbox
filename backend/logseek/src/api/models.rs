@@ -1,7 +1,7 @@
 // API 层数据模型
 use crate::repository::settings;
 use crate::service::search::SearchError;
-use crate::utils::storage::StorageError;
+use crate::utils::storage::S3Error;
 use axum::extract::rejection::JsonRejection;
 use axum::http::StatusCode;
 use problemdetails::Problem;
@@ -12,7 +12,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum AppError {
   #[error("存储错误")]
-  StorageError(StorageError),
+  S3Error(S3Error),
   #[error("检索错误")]
   SearchError(SearchError),
   #[error(transparent)]
@@ -26,7 +26,7 @@ pub enum AppError {
 impl From<AppError> for Problem {
   fn from(error: AppError) -> Self {
     match error {
-      AppError::StorageError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
+      AppError::S3Error(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
         .with_title("存储错误")
         .with_detail(e.to_string()),
       AppError::SearchError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)

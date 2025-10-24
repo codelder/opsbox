@@ -41,7 +41,11 @@ pub fn router(db_pool: SqlitePool) -> axum::Router {
 
 /// 初始化 LogSeek 模块数据库 schema
 pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
-  repository::settings::init_schema(db_pool).await
+  // 初始化 S3 配置表
+  repository::settings::init_schema(db_pool).await?;
+  // 初始化 LLM 配置表
+  repository::llm::init_schema(db_pool).await?;
+  Ok(())
 }
 
 // ============================================================================
