@@ -60,6 +60,9 @@ pub struct LlmBackendUpsertPayload {
   /// OpenAI: 项目 ID（可选）
   #[serde(default)]
   pub project: Option<String>,
+  /// 是否进行严格校验（会做一次最小 chat 探针），默认否
+  #[serde(default)]
+  pub verify_strict: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +92,23 @@ impl From<LlmBackendPublic> for LlmBackendListItem {
 pub struct LlmBackendListResponse {
   pub backends: Vec<LlmBackendListItem>,
   pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmModelsResponse {
+  pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmModelsParamsPayload {
+  pub provider: ProviderKindPayload,
+  pub base_url: String,
+  #[serde(default)]
+  pub api_key: Option<String>,
+  #[serde(default)]
+  pub organization: Option<String>,
+  #[serde(default)]
+  pub project: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,8 +179,10 @@ pub async fn upsert_backend(
     backend.api_key = existing.and_then(|b| b.api_key);
   }
 
-  // 保存前验证连通性
-  llm::verify_backend(&backend).await.map_err(AppError::Settings)?;
+  // 保存前验证：基于模型列表；可选严格探针
+  llm::verify_backend(&backend, payload.verify_strict)
+    .await
+    .map_err(AppError::Settings)?;
 
   // 持久化
   llm::save_backend(&pool, &backend, update_secret)
@@ -174,6 +196,34 @@ pub async fn upsert_backend(
 pub async fn delete_backend(State(pool): State<SqlitePool>, Path(name): Path<String>) -> Result<StatusCode, Problem> {
   llm::delete_backend(&pool, &name).await.map_err(AppError::Settings)?;
   Ok(StatusCode::NO_CONTENT)
+}
+
+/// 列出指定已保存后端的可用模型
+pub async fn list_models_by_backend(
+  State(pool): State<SqlitePool>,
+  Path(name): Path<String>,
+) -> Result<Json<LlmModelsResponse>, Problem> {
+  let models = llm::list_models_for_backend(&pool, &name)
+    .await
+    .map_err(AppError::Settings)?;
+  Ok(Json(LlmModelsResponse { models }))
+}
+
+/// 基于临时参数列出可用模型（用于前端编辑未保存配置时）
+pub async fn list_models_by_params(
+  Json(payload): Json<LlmModelsParamsPayload>,
+) -> Result<Json<LlmModelsResponse>, Problem> {
+  let provider: ProviderKind = payload.provider.into();
+  let models = llm::list_models_with_params(
+    provider,
+    &payload.base_url,
+    payload.api_key.as_deref(),
+    payload.organization.as_deref(),
+    payload.project.as_deref(),
+  )
+  .await
+  .map_err(AppError::Settings)?;
+  Ok(Json(LlmModelsResponse { models }))
 }
 
 /// 获取默认 LLM 后端

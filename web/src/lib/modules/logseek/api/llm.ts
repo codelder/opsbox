@@ -2,7 +2,7 @@
  * LLM 设置 API 客户端
  */
 
-import type { LlmBackendListItem, LlmBackendListResponse, LlmBackendUpsertPayload } from '../types';
+import type { LlmBackendListItem, LlmBackendListResponse, LlmBackendUpsertPayload, ApiProblem } from '../types';
 import { getApiBase, commonHeaders } from './config';
 
 export async function listLlmBackends(): Promise<{ backends: LlmBackendListItem[]; defaultName: string | null }> {
@@ -79,4 +79,42 @@ export async function setDefaultLlm(name: string): Promise<void> {
     }
     throw new Error(msg);
   }
+}
+
+export async function listLlmModelsByParams(payload: {
+  provider: 'ollama' | 'openai';
+  base_url: string;
+  api_key?: string;
+  organization?: string;
+  project?: string;
+}): Promise<string[]> {
+  const API_BASE = getApiBase();
+  const resp = await fetch(`${API_BASE}/settings/llm/models`, {
+    method: 'POST',
+    headers: commonHeaders,
+    body: JSON.stringify(payload)
+  });
+  if (!resp.ok) {
+    let msg = `加载模型失败：HTTP ${resp.status}`;
+    const problem = (await resp.json().catch(() => null)) as ApiProblem | null;
+    msg = problem?.detail || problem?.title || msg;
+    throw new Error(msg);
+  }
+  const data: { models: string[] } = await resp.json();
+  return data.models || [];
+}
+
+export async function listLlmModelsByBackend(name: string): Promise<string[]> {
+  const API_BASE = getApiBase();
+  const resp = await fetch(`${API_BASE}/settings/llm/backends/${encodeURIComponent(name)}/models`, {
+    headers: { Accept: 'application/json' }
+  });
+  if (!resp.ok) {
+    let msg = `加载模型失败：HTTP ${resp.status}`;
+    const problem = (await resp.json().catch(() => null)) as ApiProblem | null;
+    msg = problem?.detail || problem?.title || msg;
+    throw new Error(msg);
+  }
+  const data: { models: string[] } = await resp.json();
+  return data.models || [];
 }

@@ -37,6 +37,11 @@ pub fn router(db_pool: SqlitePool) -> Router {
       axum::routing::delete(llm::delete_backend),
     )
     .route(
+      "/settings/llm/backends/{name}/models",
+      axum::routing::get(llm::list_models_by_backend),
+    )
+    .route("/settings/llm/models", axum::routing::post(llm::list_models_by_params))
+    .route(
       "/settings/llm/default",
       axum::routing::get(llm::get_default).post(llm::set_default),
     )

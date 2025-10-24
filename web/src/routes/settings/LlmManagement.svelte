@@ -6,6 +6,7 @@
   import Alert from '$lib/components/Alert.svelte';
   import { useLlmBackends } from '$lib/modules/logseek/composables/useLlmBackends.svelte';
   import type { LlmBackendUpsertPayload, LlmProviderType } from '$lib/modules/logseek';
+  import { listLlmModelsByParams, listLlmModelsByBackend } from '$lib/modules/logseek/api';
 
   const store = useLlmBackends();
 
@@ -30,6 +31,69 @@
   let apiKey = $state(''); // openai
   let organization = $state(''); // openai
   let project = $state(''); // openai
+
+  // 模型下拉候选
+  let modelOptions = $state<string[]>([]);
+  let modelsLoading = $state(false);
+  let modelsError = $state<string | null>(null);
+
+  async function refreshModels() {
+    modelsError = null;
+
+    // 已保存配置（含密钥）时优先按名称拉取，避免要求用户重复输入 API Key
+    if (editingName) {
+      modelsLoading = true;
+      try {
+        modelOptions = await listLlmModelsByBackend(editingName);
+        return;
+      } catch (e: unknown) {
+        const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+        modelsError = err.message ?? '加载模型失败';
+        modelOptions = [];
+      } finally {
+        modelsLoading = false;
+      }
+      return;
+    }
+
+    // 未保存时，依据当前表单参数临时拉取
+    if (!baseUrl.trim()) {
+      modelOptions = [];
+      return;
+    }
+    if (provider === 'openai' && !apiKey.trim()) {
+      modelOptions = [];
+      return;
+    }
+
+    modelsLoading = true;
+    try {
+      const list = await listLlmModelsByParams({
+        provider,
+        base_url: baseUrl.trim(),
+        api_key: provider === 'openai' ? apiKey.trim() || undefined : undefined,
+        organization: provider === 'openai' ? organization.trim() || undefined : undefined,
+        project: provider === 'openai' ? project.trim() || undefined : undefined
+      });
+      modelOptions = list;
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      modelsError = err.message ?? '加载模型失败';
+      modelOptions = [];
+    } finally {
+      modelsLoading = false;
+    }
+  }
+
+  // 当关键字段变化时自动刷新模型列表（简单防抖）
+  let modelsTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    if (!editing) return;
+    if (modelsTimer) clearTimeout(modelsTimer);
+    modelsTimer = setTimeout(() => {
+      refreshModels();
+    }, 400);
+  });
 
   function startNew() {
     editing = true;
@@ -248,14 +312,33 @@
             />
           </div>
           <div>
-            <label for="llm-model" class="block text-sm font-medium text-slate-700 dark:text-slate-300">模型</label>
+            <div class="flex items-center justify-between">
+              <label for="llm-model" class="block text-sm font-medium text-slate-700 dark:text-slate-300">模型</label>
+              <button
+                type="button"
+                class="text-xs text-indigo-600 hover:underline disabled:text-slate-400"
+                onclick={refreshModels}
+                disabled={modelsLoading}
+              >
+                {modelsLoading ? '加载中…' : '加载模型'}
+              </button>
+            </div>
             <input
               id="llm-model"
               class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
               bind:value={model}
-              placeholder="qwen3:8b 或 gpt-4o-mini"
+              placeholder="从下拉选择或手动输入"
               required
+              list="llm-models"
             />
+            {#if modelsError}
+              <p class="mt-1 text-xs text-red-600 dark:text-red-400">{modelsError}</p>
+            {/if}
+            <datalist id="llm-models">
+              {#each modelOptions as m (m)}
+                <option value={m}></option>
+              {/each}
+            </datalist>
           </div>
           <div>
             <label for="llm-timeout" class="block text-sm font-medium text-slate-700 dark:text-slate-300"

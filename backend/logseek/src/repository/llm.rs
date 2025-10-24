@@ -1,4 +1,4 @@
-use log::{debug, info, warn};
+use log::{debug, warn};
 use opsbox_core::{AppError, Result, SqlitePool, run_migration};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -277,21 +277,73 @@ pub async fn get_default(pool: &SqlitePool) -> Result<Option<String>> {
   Ok(row)
 }
 
-/// 验证后端连通性
-pub async fn verify_backend(backend: &LlmBackend) -> Result<()> {
-  match backend.provider {
-    ProviderKind::Ollama => verify_ollama(&backend.base_url).await,
-    ProviderKind::OpenAI => verify_openai(&backend.base_url, backend.api_key.as_deref()).await,
+/// 基于“列出模型”进行验证；当 strict=true 时再做一次最小对话探针
+pub async fn verify_backend(backend: &LlmBackend, strict: bool) -> Result<()> {
+  // 1) 列出模型，确保基础连通性与鉴权，并校验模型存在
+  let models = match backend.provider {
+    ProviderKind::Ollama => list_models_ollama(&backend.base_url).await?,
+    ProviderKind::OpenAI => {
+      let key = backend
+        .api_key
+        .as_deref()
+        .ok_or_else(|| AppError::bad_request("缺少 OpenAI API Key"))?;
+      list_models_openai(
+        &backend.base_url,
+        key,
+        backend.organization.as_deref(),
+        backend.project.as_deref(),
+      )
+      .await?
+    }
+  };
+  if !models.iter().any(|m| m == &backend.model) {
+    return Err(AppError::bad_request(format!(
+      "指定模型不存在：{}，可用模型：{}",
+      backend.model,
+      models.join(", ")
+    )));
   }
+
+  // 2) 可选严格校验：对该模型发起一次最小 chat 探针
+  if strict {
+    match backend.provider {
+      ProviderKind::Ollama => verify_chat_ollama(&backend.base_url, &backend.model).await?,
+      ProviderKind::OpenAI => {
+        let key = backend
+          .api_key
+          .as_deref()
+          .ok_or_else(|| AppError::bad_request("缺少 OpenAI API Key"))?;
+        verify_chat_openai(
+          &backend.base_url,
+          key,
+          backend.organization.as_deref(),
+          backend.project.as_deref(),
+          &backend.model,
+        )
+        .await?;
+      }
+    }
+  }
+
+  Ok(())
 }
 
-async fn verify_ollama(base_url: &str) -> Result<()> {
+/// 列出 Ollama 模型
+async fn list_models_ollama(base_url: &str) -> Result<Vec<String>> {
+  #[derive(Deserialize)]
+  struct OllamaModelItem {
+    name: String,
+  }
+  #[derive(Deserialize)]
+  struct OllamaTagsResp {
+    models: Vec<OllamaModelItem>,
+  }
+
   let client = reqwest::Client::builder()
     .timeout(std::time::Duration::from_secs(10))
     .build()
     .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
 
-  // 尝试访问 /api/tags
   let mut url = Url::parse(base_url).map_err(|_| AppError::bad_request("Ollama 地址无效"))?;
   url.set_path("/api/tags");
   let resp = client
@@ -299,57 +351,207 @@ async fn verify_ollama(base_url: &str) -> Result<()> {
     .send()
     .await
     .map_err(|e| AppError::external_service(format!("无法连接 Ollama：{}", e)))?;
-
   if !resp.status().is_success() {
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
     return Err(AppError::external_service(format!(
-      "Ollama 响应失败：{}",
-      resp.status()
+      "Ollama 响应失败：{} {}",
+      status, text
     )));
   }
-  Ok(())
+  let data: OllamaTagsResp = resp
+    .json()
+    .await
+    .map_err(|e| AppError::external_service(format!("解析 Ollama 模型列表失败: {}", e)))?;
+  Ok(data.models.into_iter().map(|m| m.name).collect())
 }
 
-async fn verify_openai(base_url: &str, api_key: Option<&str>) -> Result<()> {
-  debug!("开始验证 OpenAI 连接: {}", base_url);
+/// 列出 OpenAI 模型
+async fn list_models_openai(
+  base_url: &str,
+  api_key: &str,
+  organization: Option<&str>,
+  project: Option<&str>,
+) -> Result<Vec<String>> {
+  #[derive(Deserialize)]
+  struct OpenAIModelItem {
+    id: String,
+  }
+  #[derive(Deserialize)]
+  struct OpenAIModelsResp {
+    data: Vec<OpenAIModelItem>,
+  }
 
-  let key = api_key.ok_or_else(|| AppError::bad_request("缺少 OpenAI API Key"))?;
+  debug!("开始列出 OpenAI 模型: {}", base_url);
+
   let client = reqwest::Client::builder()
     .timeout(std::time::Duration::from_secs(10))
     .build()
     .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
 
-  let mut base_url = Url::parse(base_url).map_err(|_| AppError::bad_request("OpenAI 基础地址无效"))?;
-
-  // 确保 base_url 以 / 结尾，这样 join 行为更可预测
-  if !base_url.path().ends_with('/') {
-    base_url.set_path(&format!("{}/", base_url.path()));
+  let mut base = Url::parse(base_url).map_err(|_| AppError::bad_request("OpenAI 基础地址无效"))?;
+  if !base.path().ends_with('/') {
+    base.set_path(&format!("{}/", base.path()));
   }
-
-  let url = base_url
+  let url = base
     .join("models")
     .map_err(|_| AppError::bad_request("无法构建 OpenAI API URL"))?;
 
-  debug!("OpenAI 验证请求 URL: {}", url);
+  debug!("OpenAI 列表请求 URL: {}", url);
 
-  let resp = client
-    .get(url.clone())
-    .bearer_auth(key)
+  let mut req = client.get(url).bearer_auth(api_key.to_string());
+  if let Some(org) = organization {
+    req = req.header("OpenAI-Organization", org);
+  }
+  if let Some(proj) = project {
+    req = req.header("OpenAI-Project", proj);
+  }
+
+  let resp = req
     .send()
     .await
     .map_err(|e| AppError::external_service(format!("无法连接 OpenAI：{}", e)))?;
-
-  debug!("OpenAI 验证响应状态: {}", resp.status());
-
   if !resp.status().is_success() {
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
-    warn!("OpenAI 验证失败 {}（{}）: {}", url, status, text);
+    warn!("OpenAI 模型列表失败: {} {}", status, text);
     return Err(AppError::external_service(format!(
-      "OpenAI 验证失败：{} {}",
+      "OpenAI 列出模型失败：{} {}",
       status, text
     )));
   }
 
-  info!("OpenAI 验证成功");
+  let data: OpenAIModelsResp = resp
+    .json()
+    .await
+    .map_err(|e| AppError::external_service(format!("解析 OpenAI 模型列表失败: {}", e)))?;
+  Ok(data.data.into_iter().map(|m| m.id).collect())
+}
+
+/// 基于已保存后端列出模型
+pub async fn list_models_for_backend(pool: &SqlitePool, name: &str) -> Result<Vec<String>> {
+  let backend = get_backend(pool, name)
+    .await?
+    .ok_or_else(|| AppError::not_found(format!("后端不存在: {}", name)))?;
+  match backend.provider {
+    ProviderKind::Ollama => list_models_ollama(&backend.base_url).await,
+    ProviderKind::OpenAI => {
+      let key = backend
+        .api_key
+        .as_deref()
+        .ok_or_else(|| AppError::bad_request("未配置 OpenAI API Key，无法列出模型"))?;
+      list_models_openai(
+        &backend.base_url,
+        key,
+        backend.organization.as_deref(),
+        backend.project.as_deref(),
+      )
+      .await
+    }
+  }
+}
+
+/// 基于临时参数列出模型
+pub async fn list_models_with_params(
+  provider: ProviderKind,
+  base_url: &str,
+  api_key: Option<&str>,
+  organization: Option<&str>,
+  project: Option<&str>,
+) -> Result<Vec<String>> {
+  match provider {
+    ProviderKind::Ollama => list_models_ollama(base_url).await,
+    ProviderKind::OpenAI => {
+      let key = api_key.ok_or_else(|| AppError::bad_request("缺少 OpenAI API Key"))?;
+      list_models_openai(base_url, key, organization, project).await
+    }
+  }
+}
+
+///// 最小对话探针：Ollama
+async fn verify_chat_ollama(base_url: &str, model: &str) -> Result<()> {
+  let client = reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(10))
+    .build()
+    .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
+
+  let mut url = Url::parse(base_url).map_err(|_| AppError::bad_request("Ollama 地址无效"))?;
+  url.set_path("/api/chat");
+
+  let body = serde_json::json!({
+    "model": model,
+    "messages": [
+      {"role": "user", "content": "ping"}
+    ],
+    "stream": false
+  });
+
+  let resp = client
+    .post(url)
+    .json(&body)
+    .send()
+    .await
+    .map_err(|e| AppError::external_service(format!("Ollama 对话探针失败: {}", e)))?;
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    return Err(AppError::external_service(format!(
+      "Ollama 对话探针失败：{} {}",
+      status, text
+    )));
+  }
+  Ok(())
+}
+
+/// 最小对话探针：OpenAI
+async fn verify_chat_openai(
+  base_url: &str,
+  api_key: &str,
+  organization: Option<&str>,
+  project: Option<&str>,
+  model: &str,
+) -> Result<()> {
+  let client = reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(10))
+    .build()
+    .map_err(|e| AppError::internal(format!("创建 HTTP 客户端失败: {}", e)))?;
+
+  let mut base = Url::parse(base_url).map_err(|_| AppError::bad_request("OpenAI 基础地址无效"))?;
+  let existing = base.path().trim_end_matches('/');
+  let chat_path = if existing.is_empty() || existing == "/" {
+    "/v1/chat/completions".to_string()
+  } else {
+    format!("{}/chat/completions", existing)
+  };
+  base.set_path(&chat_path);
+
+  let body = serde_json::json!({
+    "model": model,
+    "messages": [
+      {"role": "user", "content": "ping"}
+    ],
+    "max_tokens": 1
+  });
+
+  let mut req = client.post(base).json(&body).bearer_auth(api_key.to_string());
+  if let Some(org) = organization {
+    req = req.header("OpenAI-Organization", org);
+  }
+  if let Some(proj) = project {
+    req = req.header("OpenAI-Project", proj);
+  }
+
+  let resp = req
+    .send()
+    .await
+    .map_err(|e| AppError::external_service(format!("OpenAI 对话探针失败: {}", e)))?;
+  if !resp.status().is_success() {
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    return Err(AppError::external_service(format!(
+      "OpenAI 对话探针失败：{} {}",
+      status, text
+    )));
+  }
   Ok(())
 }
