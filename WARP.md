@@ -13,42 +13,45 @@ Project overview
 
 Toolchains and prerequisites
 - Rust: pinned via rust-toolchain.toml to 1.90.0 with clippy and rustfmt components.
-- Node: prefer Node 20. Use pnpm via corepack. If you manage Node with nvm: nvm use 20.
-- pnpm: enable through corepack (corepack enable; corepack prepare pnpm@latest --activate) or install pnpm globally.
+- Node: prefer Node 22. Use pnpm via corepack. If you manage Node with nvm: nvm use 22.
+- pnpm: enable through corepack (corepack enable; corepack prepare pnpm@10.17.1 --activate) or install pnpm globally.
 
 Common commands
+- Set repo root (useful when not in project root)
+  - ROOT=$(git rev-parse --show-toplevel)
 - Install frontend deps
-  - corepack enable; corepack prepare pnpm@latest --activate
-  - pnpm --dir web install
+  - corepack enable; corepack prepare pnpm@10.17.1 --activate
+  - pnpm --dir $ROOT/web install
 - Run backend (dev)
-  - cargo run --manifest-path backend/Cargo.toml -p api-gateway --
+  - cargo run --manifest-path $ROOT/backend/Cargo.toml -p api-gateway --
   - Options (api-gateway):
     - --host/-H (default 127.0.0.1), --port/-P (default 4000), or --addr/-a HOST:PORT
     - --log-level error|warn|info|debug|trace or -v/-vv for verbosity
     - Subcommands (macOS/Linux): start [--daemon] [--pid-file FILE], stop [--pid-file FILE] [--force]
   - Health check: curl http://127.0.0.1:4000/healthy
 - Run frontend (dev)
-  - pnpm --dir web dev
+  - pnpm --dir $ROOT/web dev
   - Vite proxy forwards /api → http://127.0.0.1:4000
 - Build frontend (outputs to backend/api-gateway/static and will clear that directory)
-  - node scripts/build-frontend.mjs
-  - or: bash scripts/build-frontend.sh (Unix only)
+  - pnpm --dir $ROOT/web build
+  - Note: This will clear $ROOT/backend/api-gateway/static before building
 - Build backend (release)
-  - cargo build --manifest-path backend/Cargo.toml -p api-gateway --release
+  - cargo build --manifest-path $ROOT/backend/Cargo.toml -p api-gateway --release  # bin: opsbox
+  - cargo build --manifest-path $ROOT/backend/Cargo.toml -p agent --release       # bin: opsbox-agent
 - Lint and format
-  - Rust format (check): cargo fmt --all -- --check
-  - Rust format (write): cargo fmt --all
-  - Rust lint: cargo clippy --workspace --all-targets -- -D warnings
-  - Frontend format: pnpm --dir web format
-  - Frontend lint: pnpm --dir web lint
+  - Rust format (check): cargo fmt --manifest-path $ROOT/backend/Cargo.toml --all -- --check
+  - Rust format (write): cargo fmt --manifest-path $ROOT/backend/Cargo.toml --all
+  - Rust lint: cargo clippy --manifest-path $ROOT/backend/Cargo.toml --workspace --all-targets -- -D warnings
+  - Frontend format: pnpm --dir $ROOT/web format
+  - Frontend lint: pnpm --dir $ROOT/web lint
 - Tests
-  - Rust (workspace): cargo test
-  - Rust (lib only): cargo test -p logseek
-  - Rust (single test): cargo test -p logseek <test_name>
-  - Frontend (all unit tests): pnpm --dir web test
-  - Frontend (watch): pnpm --dir web test:unit
-  - Frontend (single test by name): pnpm --dir web test:unit -- -t "name"
-  - Frontend (single file): pnpm --dir web exec vitest run path/to/file.test.ts
+  - Rust (workspace): cargo test --manifest-path $ROOT/backend/Cargo.toml
+  - Rust (lib only): cargo test --manifest-path $ROOT/backend/Cargo.toml -p logseek
+  - Rust (single test): cargo test --manifest-path $ROOT/backend/Cargo.toml -p logseek <test_name>
+  - Frontend (all unit tests): pnpm --dir $ROOT/web test
+  - Frontend (watch): pnpm --dir $ROOT/web test:unit
+  - Frontend (single test by name): pnpm --dir $ROOT/web test:unit -- -t "name"
+  - Frontend (single file): pnpm --dir $ROOT/web exec vitest run path/to/file.test.ts
 
 Key runtime configuration
 - All application settings are persisted in a unified SQLite database (default file: ~/.opsbox/opsbox.db). Override path via --database-url CLI flag or OPSBOX_DATABASE_URL/DATABASE_URL environment variables (accepts a filesystem path or sqlite:// URL).
@@ -115,7 +118,7 @@ Architecture (modular design)
     - agent/: agent management APIs and composables
 
 Conventions and notes
-- Align with CI toolchain versions when possible: Rust 1.90.0 and Node 20.
+- Align with CI toolchain versions when possible: Rust 1.90.0 and Node 22.
 - Frontend build will delete and repopulate backend/api-gateway/static. Rebuild frontend whenever UI changes must be reflected in the embedded binary.
 - api-gateway embeds static assets at compile time; after changing UI, you must rebuild the backend to ship updated assets.
 
@@ -127,8 +130,8 @@ Performance benchmarking (NDJSON)
     - Runs a 120s test at CPU=16 and exports adaptive logs to a CSV in $HOME
     - Runs 30s tests at CPU=8,12,16 and prints a Markdown summary (lines, duration, avg tput)
   - Usage (macOS/Linux):
-    - bash scripts/bench-ndjson.sh
-    - JEMALLOC_AGGRESSIVE=1 bash scripts/bench-ndjson.sh  # enable jemalloc aggressive reclaim preset
+    - bash $ROOT/scripts/bench-ndjson.sh
+    - JEMALLOC_AGGRESSIVE=1 bash $ROOT/scripts/bench-ndjson.sh  # enable jemalloc aggressive reclaim preset
   - Tunables via env vars:
     - QUERY_JSON (default: {"q":"error fdt:20250816 tdt:20250819"})
     - ADDR (default: 127.0.0.1:4000)
