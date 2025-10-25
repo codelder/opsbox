@@ -222,6 +222,9 @@ impl SourcePlanner for BbipPlanner {
   }
 }
 
+// 注册到全局规划器注册表（通过 inventory 收集）
+crate::register_planner!("bbip", BbipPlanner);
+
 // =============
 // 私有辅助函数
 // =============

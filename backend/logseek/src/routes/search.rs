@@ -51,9 +51,35 @@ pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
 ) -> Result<(Vec<crate::domain::config::SourceConfig>, String), AppError> {
-  // 使用默认应用规划器（当前为 bbip）生成来源配置
-  let planner = crate::domain::source_planner::default_planner();
-  let plan = planner.plan(pool, query).await?;
+  // 从查询字符串中提取 app 限定词（形如 app:bbip / app:bbos），未指定则默认为 bbip
+  // 同时移除该限定词以得到传入规划器的“清理前”查询（随后规划器还会继续清理日期指令等）
+  let mut app: Option<String> = None;
+  let mut tokens: Vec<&str> = Vec::new();
+  for t in query.split_whitespace() {
+    if let Some(rest) = t.strip_prefix("app:")
+      && !rest.is_empty()
+    {
+      app = Some(rest.to_string());
+      continue; // 跳过该限定词，不纳入后续查询
+    }
+    tokens.push(t);
+  }
+  let cleaned_before_plan = tokens.join(" ");
+
+  // 选择规划器：优先使用 app 对应的规划器，否则回退到默认（bbip）
+  let planner = if let Some(ref a) = app
+    && let Some(p) = crate::domain::source_planner::planner_by_app(a)
+  {
+    log::info!("[Search] 使用指定应用的规划器: app={}", a);
+    p
+  } else {
+    if let Some(a) = app {
+      log::warn!("[Search] 未找到 app={} 的规划器，回退到默认 bbip", a);
+    }
+    crate::domain::source_planner::default_planner()
+  };
+
+  let plan = planner.plan(pool, &cleaned_before_plan).await?;
   Ok((plan.sources, plan.cleaned_query))
 }
 
