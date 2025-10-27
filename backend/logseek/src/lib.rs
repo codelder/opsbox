@@ -45,6 +45,8 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
   repository::settings::init_schema(db_pool).await?;
   // 初始化 LLM 配置表
   repository::llm::init_schema(db_pool).await?;
+  // 初始化 Planner 脚本表
+  repository::planners::init_schema(db_pool).await?;
   Ok(())
 }
 

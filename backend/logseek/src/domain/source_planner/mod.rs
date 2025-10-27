@@ -8,8 +8,10 @@ use crate::{api::models::AppError, domain::config::SourceConfig};
 
 // 子模块：通用类型与具体存储源规划器实现
 mod bbip;
+mod starlark_runtime;
 mod types;
 
+pub use starlark_runtime::plan_with_starlark;
 pub use types::DateRange;
 
 /// 规划结果：来源配置 + 清理后的查询
@@ -18,6 +20,7 @@ pub struct PlanResult {
   pub cleaned_query: String,
 }
 
+// 旧的 Rust 规划器机制仍保留，以便回退/测试；默认走 Starlark
 #[async_trait]
 pub trait SourcePlanner: Send + Sync {
   /// 应用标识（如 "bbip"）

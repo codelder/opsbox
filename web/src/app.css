@@ -62,3 +62,91 @@ label[for='search'],
 input#search {
   font-family: var(--font-ui), sans-serif;
 }
+
+/* 简易 Markdown 样式（用于渲染 README 的 .prose 容器）*/
+.prose {
+  line-height: 1.7;
+}
+.prose h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 1.25rem 0 0.75rem;
+}
+.prose h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 1rem 0 0.5rem;
+}
+.prose h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem;
+}
+.prose p {
+  margin: 0.5rem 0;
+}
+.prose ul,
+.prose ol {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose code {
+  background: #f3f4f6;
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+  font-family: var(--font-ui), monospace;
+  font-size: 0.9em;
+}
+.dark .prose code {
+  background: #111827;
+}
+.prose pre {
+  background: #f8fafc;
+  color: #111827;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  overflow: auto;
+  margin: 0.75rem 0;
+}
+.dark .prose pre {
+  background: #0b1220;
+  color: #e5e7eb;
+}
+.prose table {
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  width: 100%;
+}
+.prose th,
+.prose td {
+  border: 1px solid #e5e7eb;
+  padding: 0.5rem 0.6rem;
+  text-align: left;
+}
+.dark .prose th,
+.dark .prose td {
+  border-color: #374151;
+}
+.prose a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+.dark .prose a {
+  color: #60a5fa;
+}
+.prose blockquote {
+  border-left: 4px solid #e5e7eb;
+  padding-left: 1rem;
+  color: #6b7280;
+  margin: 0.75rem 0;
+}
+.dark .prose blockquote {
+  border-left-color: #374151;
+  color: #9ca3af;
+}

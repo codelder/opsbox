@@ -57,6 +57,10 @@ num_cpus = "1"
 async-stream = "0.3"
 # HTTP 客户端 (用于 Agent 通信)
 reqwest = { version = "0.12", features = ["json", "stream"] }
+# Starlark runtime for scriptable source planning
+starlark = "0.13"
+# Markdown rendering for README → HTML
+comrak = "0.24"
 
 [dev-dependencies]
 tempfile = "3"

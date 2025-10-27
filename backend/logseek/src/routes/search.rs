@@ -66,20 +66,8 @@ pub async fn get_storage_source_configs(
   }
   let cleaned_before_plan = tokens.join(" ");
 
-  // 选择规划器：优先使用 app 对应的规划器，否则回退到默认（bbip）
-  let planner = if let Some(ref a) = app
-    && let Some(p) = crate::domain::source_planner::planner_by_app(a)
-  {
-    log::info!("[Search] 使用指定应用的规划器: app={}", a);
-    p
-  } else {
-    if let Some(a) = app {
-      log::warn!("[Search] 未找到 app={} 的规划器，回退到默认 bbip", a);
-    }
-    crate::domain::source_planner::default_planner()
-  };
-
-  let plan = planner.plan(pool, &cleaned_before_plan).await?;
+  // 通过 Starlark 调度：优先使用 app 对应脚本，不存在时回退到内置 bbip.star
+  let plan = crate::domain::source_planner::plan_with_starlark(pool, app.as_deref(), &cleaned_before_plan).await?;
   Ok((plan.sources, plan.cleaned_query))
 }
 
@@ -193,15 +181,15 @@ pub async fn stream_search(
       );
 
       // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
-      if let crate::domain::config::SourceConfig::Agent { endpoint, .. } = &config_clone {
+      if let crate::domain::config::SourceConfig::Agent { agent_id, .. } = &config_clone {
         // 使用 Agent ID 构造 AgentClient（标准格式）
-        let client = match AgentClient::new_by_agent_id(endpoint.clone()).await {
+        let client = match AgentClient::new_by_agent_id(agent_id.clone()).await {
           Ok(client) => client,
           Err(e) => {
             log::error!(
               "[Search] 无法创建 Agent 客户端 source_idx={} agent_id={} err={}",
               idx,
-              endpoint,
+              agent_id,
               e
             );
             return;
@@ -210,7 +198,7 @@ pub async fn stream_search(
 
         // 可选健康检查
         if !client.health_check().await {
-          log::error!("[Search] Agent 健康检查失败，跳过: {}", endpoint);
+          log::error!("[Search] Agent 健康检查失败，跳过: {}", agent_id);
           return;
         }
 
@@ -241,9 +229,9 @@ pub async fn stream_search(
           Ok(st) => st,
           Err(e) => {
             log::error!(
-              "[Search] 调用 Agent 搜索失败 source_idx={} endpoint={} err={}",
+              "[Search] 调用 Agent 搜索失败 source_idx={} agent_id={} err={}",
               idx,
-              endpoint,
+              agent_id,
               e
             );
             return;
@@ -254,7 +242,7 @@ pub async fn stream_search(
         let tx_bytes = tx_clone.clone();
         let highlights_s = highlights_clone.clone();
         let sid_for_cache = sid_clone.clone();
-        let endpoint_clone = endpoint.clone();
+        let agent_id_clone = agent_id.clone();
         let service_task = tokio::spawn(async move {
           use crate::domain::file_url::FileUrl;
           while let Some(item) = stream.next().await {
@@ -265,8 +253,8 @@ pub async fn stream_search(
             if tx_bytes.is_closed() {
               break;
             }
-            // 构造 agent://<endpoint>/<path>
-            let file_url = FileUrl::agent(endpoint_clone.clone(), &res.path);
+            // 构造 agent://<agent_id>/<path>
+            let file_url = FileUrl::agent(agent_id_clone.clone(), &res.path);
             let file_id = file_url.to_string();
 
             // 缓存结果
@@ -375,8 +363,8 @@ pub async fn stream_search(
                 }
               }
             }
-            crate::domain::config::SourceConfig::Agent { endpoint, .. } => {
-              let url = FileUrl::agent(endpoint, &res.path);
+            crate::domain::config::SourceConfig::Agent { agent_id, .. } => {
+              let url = FileUrl::agent(agent_id, &res.path);
               let id = url.to_string();
               (url, id)
             }
