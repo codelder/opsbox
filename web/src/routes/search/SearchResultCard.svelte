@@ -72,7 +72,32 @@
     return arr;
   }
 
+  // 统计真正包含关键词的匹配行数（不包含上下文行）
   function totalMatches(item: SearchJsonResult): number {
+    if (!item.keywords || item.keywords.length === 0) {
+      return flattenLines(item).length;
+    }
+
+    const lines = flattenLines(item);
+    let matchCount = 0;
+
+    for (const ln of lines) {
+      // 检查该行是否包含任何关键词
+      const hasKeyword = item.keywords.some((keyword) => {
+        if (!keyword || keyword.trim() === '') return false;
+        return ln.text.includes(keyword);
+      });
+
+      if (hasKeyword) {
+        matchCount++;
+      }
+    }
+
+    return matchCount;
+  }
+
+  // 计算总行数（包括所有上下文行）
+  function totalLines(item: SearchJsonResult): number {
     return flattenLines(item).length;
   }
 
@@ -289,7 +314,7 @@
     </div>
 
     <!-- 展开更多按钮 -->
-    {#if totalMatches(item) > 7}
+    {#if totalLines(item) > 7}
       <div
         class="border-t border-slate-200 bg-gradient-to-r from-slate-100 to-gray-100 px-6 py-4 dark:border-gray-700/50 dark:from-gray-800/80 dark:to-gray-700/80"
       >
@@ -317,8 +342,8 @@
             显示剩余的
             <span
               class="mx-1 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-900/50 dark:text-blue-200"
-              >{totalMatches(item) - 7}</span
-            > 行匹配
+              >{totalLines(item) - 7}</span
+            > 行
           {/if}
         </button>
       </div>

@@ -324,7 +324,7 @@
 </script>
 
 <!-- 页面标题与状态栏 -->
-<div class="h-screen overflow-hidden bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
+<div class="h-screen overflow-hidden bg-[var(--bg)]">
   <div class="mx-auto flex h-full max-w-[1560px] flex-col px-4 py-8">
     {#if error}
       <div class="mx-auto mb-6 max-w-md">
@@ -339,14 +339,14 @@
       </div>
       <!-- 主内容卡片：文件信息 + 虚拟滚动容器 -->
       <div
-        class="flex flex-1 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
+        class="flex flex-1 flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)] shadow-xl shadow-black/5 transition-all duration-300 hover:shadow-2xl hover:shadow-black/10"
       >
         <!-- 文件信息标题栏 -->
         <FileHeader filePath={file} {total} loadedLines={end} {keywords} {loading} onDownload={downloadCurrentFile} />
 
         <!-- 虚拟滚动内容区域 -->
         <div
-          class="relative min-h-0 flex-1 overflow-auto bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
+          class="relative min-h-0 flex-1 overflow-auto bg-transparent transition-all duration-500 ease-in-out"
           bind:this={parentEl}
           onscroll={handleScroll}
         >
@@ -360,19 +360,19 @@
                     class="group/line grid grid-cols-[70px_1fr] font-mono text-xs leading-[16px] transition-colors duration-150 hover:bg-blue-50/40 dark:hover:bg-blue-900/10"
                   >
                     <div
-                      class="border-r border-slate-300 bg-gradient-to-r from-slate-100 to-slate-50 px-3 py-0.5 text-right font-medium text-slate-600 transition-all duration-150 select-none group-hover/line:from-blue-100 group-hover/line:to-blue-50 group-hover/line:text-blue-700 dark:border-gray-700/60 dark:from-gray-800/80 dark:to-gray-900/80 dark:text-gray-400 dark:group-hover/line:from-blue-900/20 dark:group-hover/line:to-blue-800/20 dark:group-hover/line:text-blue-400"
+                      class="border-r border-[var(--border)] bg-[var(--surface-2)] px-3 py-0.5 text-right font-medium text-[var(--muted)] transition-all duration-150 select-none group-hover/line:bg-[var(--surface)] group-hover/line:text-[var(--text)]"
                     >
                       {ln.no}
                     </div>
                     <div
-                      class="code-content bg-white px-3 py-0.5 break-all whitespace-pre-wrap text-slate-900 transition-colors duration-150 group-hover/line:bg-blue-50/20 group-hover/line:text-slate-950 dark:bg-transparent dark:text-gray-200 dark:group-hover/line:text-gray-100"
+                      class="code-content bg-[var(--surface)] px-3 py-0.5 break-all whitespace-pre-wrap text-[var(--text)] transition-colors duration-150 group-hover/line:bg-[var(--surface-2)]"
                     >
                       {@html highlightKeywords(ln.text)}
                     </div>
                   </div>
                 {/each}
               {:else}
-                <div class="p-3 text-sm text-gray-500 dark:text-gray-400">暂无内容</div>
+                <div class="p-3 text-sm text-[var(--muted)]">暂无内容</div>
               {/if}
             {:else}
               {#each vItems as item (item.key)}
@@ -401,15 +401,11 @@
                     <!-- 占位行（尚未加载到该行），高度尽量匹配 estimateSize -->
                     <div class="grid grid-cols-[70px_1fr] font-mono text-xs leading-[16px] opacity-60">
                       <div
-                        class="border-r border-slate-300 bg-gradient-to-r from-slate-100 to-slate-50 px-3 py-0.5 text-right font-medium text-slate-400 select-none dark:border-gray-700/60 dark:from-gray-800/80 dark:to-gray-900/80 dark:text-gray-600"
+                        class="border-r border-[var(--border)] bg-[var(--surface-2)] px-3 py-0.5 text-right font-medium text-[var(--muted)] select-none"
                       >
                         {item.index + 1}
                       </div>
-                      <div
-                        class="code-content bg-white px-3 py-0.5 text-slate-500 dark:bg-transparent dark:text-gray-500"
-                      >
-                        加载中…
-                      </div>
+                      <div class="code-content bg-[var(--surface)] px-3 py-0.5 text-[var(--muted)]">加载中…</div>
                     </div>
                   {/if}
                 </div>

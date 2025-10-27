@@ -17,21 +17,19 @@
   <title>对象存储设置 · Opsboard</title>
 </svelte:head>
 
-<div class="mx-auto flex max-w-5xl flex-col gap-6 px-6 pb-16 text-slate-900 dark:text-slate-100">
+<div class="mx-auto flex max-w-5xl flex-col gap-6 px-6 pb-16 text-[var(--text)]">
   <header class="pt-6">
-    <p class="text-xs font-semibold tracking-[0.2em] text-slate-500 uppercase dark:text-slate-400">Settings</p>
-    <h1 class="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-50">系统设置</h1>
-    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">管理对象存储、Agent、大模型与规划脚本。</p>
+    <p class="text-xs font-semibold tracking-[0.2em] text-[var(--muted)] uppercase">Settings</p>
+    <h1 class="mt-2 text-2xl font-semibold text-[var(--text)]">系统设置</h1>
+    <p class="mt-2 text-sm text-[var(--muted)]">管理对象存储、Agent、大模型与规划脚本。</p>
   </header>
 
-  <nav
-    class="flex items-center gap-6 border-b border-slate-200 pb-3 text-sm font-medium text-slate-500 dark:border-slate-800 dark:text-slate-400"
-  >
+  <nav class="flex items-center gap-6 border-b border-[var(--border)] pb-3 text-sm font-medium text-[var(--muted)]">
     <button
       type="button"
       class="rounded-full px-3 py-1 transition {activeTab === 'profiles'
-        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
-        : 'hover:text-slate-700 dark:hover:text-slate-300'}"
+        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
       onclick={() => (activeTab = 'profiles')}
     >
       对象存储
@@ -39,8 +37,8 @@
     <button
       type="button"
       class="rounded-full px-3 py-1 transition {activeTab === 'agents'
-        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
-        : 'hover:text-slate-700 dark:hover:text-slate-300'}"
+        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
       onclick={() => (activeTab = 'agents')}
     >
       Agent
@@ -48,8 +46,8 @@
     <button
       type="button"
       class="rounded-full px-3 py-1 transition {activeTab === 'planners'
-        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
-        : 'hover:text-slate-700 dark:hover:text-slate-300'}"
+        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
       onclick={() => (activeTab = 'planners')}
     >
       规划脚本
@@ -57,8 +55,8 @@
     <button
       type="button"
       class="rounded-full px-3 py-1 transition {activeTab === 'llm'
-        ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-slate-100'
-        : 'hover:text-slate-700 dark:hover:text-slate-300'}"
+        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
       onclick={() => (activeTab = 'llm')}
     >
       大模型

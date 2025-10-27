@@ -75,7 +75,7 @@
           <!-- 搜索图标（仅装饰，不可交互） -->
           <span
             aria-hidden="true"
-            class="pointer-events-none absolute inset-y-0 left-4 flex items-center text-gray-400"
+            class="pointer-events-none absolute inset-y-0 left-4 flex items-center text-[var(--muted)]"
           >
             <svg
               class="h-5 w-5"
@@ -95,8 +95,8 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="w-full rounded-3xl border border-gray-200 bg-white py-4 pr-14 pl-12 text-sm shadow-sm transition outline-none placeholder:text-gray-500 focus:border-blue-200
-                   focus:ring-4 focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-800 dark:shadow-gray-600 dark:focus:border-gray-400 dark:focus:ring-gray-400"
+            class="w-full rounded-3xl border border-[var(--border)] bg-[var(--surface)] py-4 pr-14 pl-12 text-sm shadow-sm transition outline-none placeholder:text-[var(--muted)] focus:border-[var(--primary)]
+                   focus:ring-4 focus:ring-[var(--ring)]"
             id="search"
             name="q"
             placeholder="Try: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
@@ -106,7 +106,7 @@
           <!-- 右侧模式切换按钮：默认 表达式；切换为“AI”时，回车将按自然语言生成查询串 -->
           <button
             type="button"
-            class="absolute top-1/2 right-2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center text-gray-600 hover:text-gray-800 active:scale-95 disabled:opacity-60 dark:text-gray-300 hover:dark:text-gray-100"
+            class="absolute top-1/2 right-2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center text-[var(--muted)] hover:text-[var(--text)] active:scale-95 disabled:opacity-60"
             title={aiMode ? 'AI 模式：回车将按自然语言生成查询串' : '表达式模式：回车将按查询串直接检索'}
             aria-label={aiMode ? 'AI 模式' : '表达式模式'}
             onclick={() => (aiMode = !aiMode)}
@@ -114,7 +114,7 @@
           >
             {#if aiLoading}
               <!-- 简易加载指示器 -->
-              <svg class="h-4 w-4 animate-spin text-gray-500" viewBox="0 0 24 24">
+              <svg class="h-4 w-4 animate-spin text-[var(--muted)]" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
               </svg>

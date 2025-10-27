@@ -48,6 +48,34 @@
   --font-ui:
     'Google Sans Code', 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
+
+  /* 统一配色（浅色）*/
+  --bg: #f7f9fc;
+  --text: #0b1220;
+  --muted: #64748b;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9; /* 次级面板/悬停 */
+  --border: #e5e7eb;
+  --primary: #2563eb; /* 品牌主色（蓝）*/
+  --primary-foreground: #ffffff;
+  --accent: #7c3aed;
+  --accent-foreground: #ffffff;
+  --ring: rgba(37, 99, 235, 0.35);
+}
+
+.dark {
+  /* 统一配色（深色）*/
+  --bg: #0b1220; /* 深海军蓝基底 */
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --surface: #111827; /* 主卡片 */
+  --surface-2: #0f172a; /* 次级面板/悬停 */
+  --border: #374151;
+  --primary: #60a5fa;
+  --primary-foreground: #0b1220;
+  --accent: #a78bfa;
+  --accent-foreground: #0b1220;
+  --ring: rgba(96, 165, 250, 0.35);
 }
 
 html,

@@ -225,9 +225,11 @@ fn load_planner_script(app: &str) -> Option<String> {
     let mut p = PathBuf::from(home);
     p.push(".opsbox/planners");
     p.push(format!("{}.star", app));
-  if p.exists() && let Ok(s) = fs::read_to_string(&p) {
-    return Some(s);
-  }
+    if p.exists()
+      && let Ok(s) = fs::read_to_string(&p)
+    {
+      return Some(s);
+    }
   }
   None
 }
@@ -301,7 +303,9 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
 /// 规范化 SourceConfig 的 type 标签，避免用户脚本误写成 '"s3"' 等
 fn normalize_source_tag(j: &mut serde_json::Value) {
   use serde_json::Value as V;
-  if let V::Object(map) = j && let Some(V::String(t)) = map.get_mut("type") {
+  if let V::Object(map) = j
+    && let Some(V::String(t)) = map.get_mut("type")
+  {
     let trimmed = t.trim();
     let normalized = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
       trimmed.trim_matches('"').to_ascii_lowercase()
