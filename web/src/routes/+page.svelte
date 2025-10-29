@@ -4,17 +4,18 @@
    * 使用 LogSeek 模块的 API 客户端
    */
   import { goto } from '$app/navigation';
-  import { IconRobot, IconFunction } from '@tabler/icons-svelte';
   import { convertNaturalLanguage } from '$lib/modules/logseek';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import SyntaxHints from '$lib/components/SyntaxHints.svelte';
+  import AiModeIcon from '$lib/components/AiModeIcon.svelte';
 
   // 工具函数：将片段插入到输入框光标位置
   let inputEl: HTMLInputElement | null = null;
 
-  // 首页搜索框模式：true=AI（自然语言），false=表达式（查询串）
-  let aiMode = $state(false);
+  // AI 加载状态（点击 AI 按钮时使用）；不再持久切换模式
   let aiLoading = $state(false);
+  // 按压态，用于提供“按下”视觉反馈
+  let pressing = $state(false);
 
   /**
    * 在当前光标位置插入文本片段
@@ -35,20 +36,20 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
-  // 处理首页搜索框提交逻辑
+  // 提交：始终按“普通模式”直接检索
   async function handleHomeSubmit(e: Event) {
     e.preventDefault();
     const text = (inputEl?.value || '').trim();
     if (!text || aiLoading) return;
+    // 表达式模式：直接跳到 /search?q=
+    // eslint-disable-next-line svelte/no-navigation-without-resolve
+    goto(`/search?q=${encodeURIComponent(text)}`);
+  }
 
-    if (!aiMode) {
-      // 表达式模式：直接跳到 /search?q=（使用客户端路由，避免触发 layout.ts 重新加载）
-      // eslint-disable-next-line svelte/no-navigation-without-resolve
-      goto(`/search?q=${encodeURIComponent(text)}`);
-      return;
-    }
-
-    // AI 模式：先调用 nl2q，再跳转
+  // 点击右侧“AI 模式”按钮：临时使用 AI 把自然语言转查询后再检索
+  async function handleAiClick() {
+    const text = (inputEl?.value || '').trim();
+    if (!text || aiLoading) return;
     aiLoading = true;
     try {
       const query = await convertNaturalLanguage(text);
@@ -63,22 +64,22 @@
 </script>
 
 <main class="flex min-h-[100svh] justify-center">
-  <div class="w-210 px-6 pt-28 sm:pt-36 md:pt-44">
+  <div class="w-240 px-6 pt-28 sm:pt-36 md:pt-44">
     <div class="mx-auto w-full text-center">
       <div class="mb-4 block md:mb-10" id="logo-label">
         <LogSeekLogo size="large" asLabel htmlFor="search" />
       </div>
 
-      <!-- 输入框容器（相对定位），在左侧放置搜索图标；右侧是模式切换（AI/表达式） -->
+      <!-- 输入框容器（相对定位），左侧为搜索图标；右侧为“AI 模式”按钮（按下生效） -->
       <form role="search" onsubmit={handleHomeSubmit}>
         <div class="relative">
           <!-- 搜索图标（仅装饰，不可交互） -->
           <span
             aria-hidden="true"
-            class="pointer-events-none absolute inset-y-0 left-4 flex items-center text-[var(--muted)]"
+            class="pointer-events-none absolute top-1/2 left-4 z-10 -translate-y-1/2 text-[var(--muted)]"
           >
             <svg
-              class="h-5 w-5"
+              class="h-6 w-6"
               stroke="currentColor"
               stroke-linecap="round"
               stroke-linejoin="round"
@@ -95,7 +96,7 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="w-full rounded-3xl border border-[var(--border)] bg-[var(--surface)] py-4 pr-14 pl-12 text-sm shadow-sm transition outline-none placeholder:text-[var(--muted)] focus:border-[var(--primary)]
+            class="h-16 w-full rounded-3xl border border-[var(--border)] bg-[var(--surface)] pr-28 pl-14 text-sm shadow-sm transition outline-none placeholder:text-[var(--muted)] focus:border-[var(--primary)]
                    focus:ring-4 focus:ring-[var(--ring)]"
             id="search"
             name="q"
@@ -103,26 +104,39 @@
             type="text"
           />
 
-          <!-- 右侧模式切换按钮：默认 表达式；切换为“AI”时，回车将按自然语言生成查询串 -->
+          <!-- 右侧"AI 模式"按钮：点击后临时以 AI 生成查询并检索 -->
           <button
             type="button"
-            class="absolute top-1/2 right-2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center text-[var(--muted)] hover:text-[var(--text)] active:scale-95 disabled:opacity-60"
-            title={aiMode ? 'AI 模式：回车将按自然语言生成查询串' : '表达式模式：回车将按查询串直接检索'}
-            aria-label={aiMode ? 'AI 模式' : '表达式模式'}
-            onclick={() => (aiMode = !aiMode)}
+            class="group/ai absolute top-1/2 right-3 z-20 inline-flex -translate-y-1/2 items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none
+            {aiLoading || pressing
+              ? 'bg-[var(--surface-hover)] text-[var(--text)]'
+              : 'bg-[var(--surface)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'}"
+            title="按下使用 AI 模式；直接回车为普通模式"
+            aria-label="AI 模式按钮"
+            aria-pressed={aiLoading || pressing}
+            onmousedown={() => (pressing = true)}
+            onmouseup={() => (pressing = false)}
+            onmouseleave={() => (pressing = false)}
+            onclick={handleAiClick}
             disabled={aiLoading}
           >
-            {#if aiLoading}
-              <!-- 简易加载指示器 -->
-              <svg class="h-4 w-4 animate-spin text-[var(--muted)]" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-            {:else if aiMode}
-              <IconRobot size={24} stroke={2} aria-hidden="true" />
-            {:else}
-              <IconFunction size={24} stroke={2} aria-hidden="true" />
-            {/if}
+            <!-- 彩虹流动边框（悬停或 loading 时显示），通过遮罩形成"边框"效果，不影响按钮内容 -->
+            <span
+              class="pointer-events-none absolute z-0 rounded-full transition-opacity duration-300
+              {aiLoading || pressing ? 'opacity-100' : 'opacity-0 group-hover/ai:opacity-100'}"
+              style="inset:-2px;padding:2px;-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;"
+              aria-hidden="true"
+            >
+              <span
+                class="absolute inset-0 rounded-full {aiLoading || pressing ? 'ai-rainbow-ring' : ''}"
+                style="background:conic-gradient(from 0deg, #60a5fa 0deg, #a78bfa 72deg, #f472b6 144deg, #f59e0b 216deg, #34d399 288deg, #60a5fa 360deg);"
+              ></span>
+            </span>
+
+            <span class="relative z-10 inline-flex items-center gap-1.5">
+              <AiModeIcon size={16} />
+              <span>AI 模式</span>
+            </span>
           </button>
         </div>
       </form>
@@ -131,3 +145,17 @@
     </div>
   </div>
 </main>
+
+<style>
+  /* AI 按钮：彩虹流动边框动画（仅 loading 时旋转渐变背景） */
+  .ai-rainbow-ring {
+    animation: ai-ring-rotate 5s linear infinite;
+    will-change: transform;
+  }
+
+  @keyframes ai-ring-rotate {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+</style>
