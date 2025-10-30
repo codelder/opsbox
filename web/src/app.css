@@ -54,7 +54,13 @@
   --text: #0b1220;
   --muted: #64748b;
   --surface: #ffffff;
-  --surface-2: #f1f5f9; /* 次级面板/悬停 */
+  --surface-2: #f1f5f9; /* 次级面板/卡片 */
+  /* 辅助变量：用于按钮/控件悬停或按压的浅灰背景（与输入框区分）*/
+  --surface-hover: #eef2f7;
+  /* 次级文字颜色（用于次要按钮、说明文字），保证在浅底上有足够对比 */
+  --text-secondary: #475569;
+  /* 控件默认底色（按钮等），提升与输入框的对比度 */
+  --control-bg: #eef2f7;
   --border: #e5e7eb;
   --primary: #2563eb; /* 品牌主色（蓝）*/
   --primary-foreground: #ffffff;
@@ -69,7 +75,13 @@
   --text: #e5e7eb;
   --muted: #9ca3af;
   --surface: #111827; /* 主卡片 */
-  --surface-2: #0f172a; /* 次级面板/悬停 */
+  --surface-2: #0f172a; /* 次级面板/卡片 */
+  /* 辅助变量：深色下的悬停/按压底色（略亮于主面板以便区分）*/
+  --surface-hover: #1f2937;
+  /* 深色下的次级文字颜色（在深底上可读）*/
+  --text-secondary: #cbd5e1;
+  /* 深色控件默认底色：比主面板更亮，保证与输入框（--surface）有明显区分 */
+  --control-bg: #1f2937;
   --border: #374151;
   --primary: #60a5fa;
   --primary-foreground: #0b1220;

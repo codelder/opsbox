@@ -109,8 +109,8 @@
             type="button"
             class="group/ai absolute top-1/2 right-3 z-20 inline-flex -translate-y-1/2 items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none
             {aiLoading || pressing
-              ? 'bg-[var(--surface-hover)] text-[var(--text)]'
-              : 'bg-[var(--surface)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'}"
+              ? 'bg-[var(--surface)] text-[var(--text)]'
+              : 'bg-[var(--control-bg)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'}"
             title="按下使用 AI 模式；直接回车为普通模式"
             aria-label="AI 模式按钮"
             aria-pressed={aiLoading || pressing}
