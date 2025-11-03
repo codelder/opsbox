@@ -287,7 +287,8 @@
             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">用于标识配置，创建后不可修改</p>
           </div>
           <div>
-            <label for="llm-provider" class="block text-sm font-medium text-slate-700 dark:text-slate-300">提供方</label
+            <label for="llm-provider" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
+              >接口类型</label
             >
             <select
               id="llm-provider"
