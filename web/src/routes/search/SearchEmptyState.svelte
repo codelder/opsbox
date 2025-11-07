@@ -54,9 +54,9 @@
       {/if}
     </div>
   {:else if type === 'no-results'}
-    <div class="rounded-2xl bg-gray-50 p-8 shadow-lg ring-1 ring-gray-200 dark:bg-gray-800/50 dark:ring-gray-700">
-      <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700">
-        <svg class="h-8 w-8 text-gray-400" viewBox="0 0 24 24" stroke="currentColor">
+    <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
+      <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
+        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" stroke="currentColor">
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
@@ -65,17 +65,13 @@
           />
         </svg>
       </div>
-      <h3 class="mt-4 text-lg font-semibold text-gray-900 dark:text-gray-200">无匹配结果</h3>
-      <p class="mt-2 text-sm text-gray-600 dark:text-gray-400">尝试使用不同的关键词或更广泛的搜索词汇</p>
+      <h3 class="mt-4 text-lg font-semibold text-[var(--text)]">无匹配结果</h3>
+      <p class="mt-2 text-sm text-[var(--muted)]">尝试使用不同的关键词或更广泛的搜索词汇</p>
     </div>
   {:else if type === 'initial'}
-    <div
-      class="rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 p-8 shadow-lg ring-1 ring-blue-200 dark:from-blue-900/20 dark:to-indigo-900/20 dark:ring-blue-800/50"
-    >
-      <div
-        class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-800/50 dark:to-indigo-800/50"
-      >
-        <svg class="h-8 w-8 text-blue-600 dark:text-blue-400" viewBox="0 0 24 24" stroke="currentColor">
+    <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
+      <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
+        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" stroke="currentColor">
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
@@ -84,8 +80,8 @@
           />
         </svg>
       </div>
-      <h3 class="mt-4 text-xl font-semibold text-blue-900 dark:text-blue-200">开始搜索</h3>
-      <p class="mt-2 text-sm text-blue-700 dark:text-blue-300">在上方输入框中输入关键词或自然语言查询，开始搜索日志</p>
+      <h3 class="mt-4 text-xl font-semibold text-[var(--text)]">开始搜索</h3>
+      <p class="mt-2 text-sm text-[var(--muted)]">在上方输入框中输入关键词或自然语言查询，开始搜索日志</p>
     </div>
   {/if}
 </div>

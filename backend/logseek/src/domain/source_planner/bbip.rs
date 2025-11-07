@@ -143,17 +143,17 @@ impl SourcePlanner for BbipPlanner {
           agent_endpoints.len()
         );
 
-        for endpoint in agent_endpoints {
+        for agent_id in agent_endpoints {
           // 为 Agent 来源附带 scope 与路径过滤提示：
           // - scope_root: 固定为 "logs"
           // - path_filter_glob: 仅检索“今天”的目录（北京时区）
           let today_glob = format!("**/{}/**", today.format("%Y-%m-%d"));
           configs.push(SourceConfig::Agent {
-            endpoint: endpoint.clone(),
+            agent_id: agent_id.clone(),
             scope_root: Some("logs".to_string()),
             path_filter_glob: Some(today_glob),
           });
-          log::debug!("添加 Agent 存储源: endpoint={}", endpoint);
+          log::debug!("添加 Agent 存储源: agent_id={}", agent_id);
         }
       } else {
         log::warn!(
@@ -221,6 +221,9 @@ impl SourcePlanner for BbipPlanner {
     })
   }
 }
+
+// 注册到全局规划器注册表（通过 inventory 收集）
+crate::register_planner!("bbip", BbipPlanner);
 
 // =============
 // 私有辅助函数

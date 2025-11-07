@@ -14,9 +14,7 @@
   <link rel="preload" href="/fonts/GoogleSansCode-Italic.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
 </svelte:head>
 
-<div
-  class="min-h-screen bg-white text-gray-900 transition-colors duration-200 ease-in-out dark:bg-gray-900 dark:text-gray-100"
->
+<div class="min-h-screen bg-[var(--bg)] text-[var(--text)] transition-colors duration-200 ease-in-out">
   <div class="fixed top-3 left-3 z-50"><Settings /></div>
   <div class="fixed top-3 right-3"><ThemeToggle /></div>
   <main>

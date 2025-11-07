@@ -104,7 +104,8 @@ pub async fn call_llm(pool: &SqlitePool, nl: &str) -> Result<String, NL2QError> 
   info!("LLM 内容输出: '{}'", &q);
   info!("LLM 内容输出: '{:?}'", resp);
 
-  // 兜底清理：移除 <think> 片段、去掉代码块/外层引号，仅取首行
+  // 兜底清理：移除 <think> 片段、去掉代码块，仅取首行
+  // 注意：不要移除双引号！双引号是查询语法的一部分（精确查找）
   let before_strip = q.clone();
   q = strip_think_sections(&q).trim().to_string();
   if q != before_strip {
@@ -115,10 +116,7 @@ pub async fn call_llm(pool: &SqlitePool, nl: &str) -> Result<String, NL2QError> 
     let inner = q.trim_start_matches("```\n").trim_end_matches("\n```");
     q = inner.trim().to_string();
   }
-  if (q.starts_with('"') && q.ends_with('"')) || (q.starts_with('\'') && q.ends_with('\'')) {
-    debug!("移除引号包围");
-    q = q[1..q.len() - 1].to_string();
-  }
+  // 已移除自动删除引号的逻辑：双引号是查询语法的一部分（用于精确查找），必须保留
   if let Some(nl_pos) = q.find('\n') {
     debug!("截取第一行内容");
     q = q[..nl_pos].trim().to_string();

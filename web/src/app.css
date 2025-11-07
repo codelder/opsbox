@@ -48,6 +48,46 @@
   --font-ui:
     'Google Sans Code', 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
     'Courier New', monospace;
+
+  /* 统一配色（浅色）*/
+  --bg: #f7f9fc;
+  --text: #0b1220;
+  --muted: #64748b;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9; /* 次级面板/卡片 */
+  /* 辅助变量：用于按钮/控件悬停或按压的浅灰背景（与输入框区分）*/
+  --surface-hover: #eef2f7;
+  /* 次级文字颜色（用于次要按钮、说明文字），保证在浅底上有足够对比 */
+  --text-secondary: #475569;
+  /* 控件默认底色（按钮等），提升与输入框的对比度 */
+  --control-bg: #eef2f7;
+  --border: #e5e7eb;
+  --primary: #2563eb; /* 品牌主色（蓝）*/
+  --primary-foreground: #ffffff;
+  --accent: #7c3aed;
+  --accent-foreground: #ffffff;
+  --ring: rgba(37, 99, 235, 0.35);
+}
+
+.dark {
+  /* 统一配色（深色）*/
+  --bg: #0b1220; /* 深海军蓝基底 */
+  --text: #e5e7eb;
+  --muted: #9ca3af;
+  --surface: #111827; /* 主卡片 */
+  --surface-2: #0f172a; /* 次级面板/卡片 */
+  /* 辅助变量：深色下的悬停/按压底色（略亮于主面板以便区分）*/
+  --surface-hover: #1f2937;
+  /* 深色下的次级文字颜色（在深底上可读）*/
+  --text-secondary: #cbd5e1;
+  /* 深色控件默认底色：比主面板更亮，保证与输入框（--surface）有明显区分 */
+  --control-bg: #1f2937;
+  --border: #374151;
+  --primary: #60a5fa;
+  --primary-foreground: #0b1220;
+  --accent: #a78bfa;
+  --accent-foreground: #0b1220;
+  --ring: rgba(96, 165, 250, 0.35);
 }
 
 html,
@@ -61,4 +101,92 @@ label[for='search'],
 }
 input#search {
   font-family: var(--font-ui), sans-serif;
+}
+
+/* 简易 Markdown 样式（用于渲染 README 的 .prose 容器）*/
+.prose {
+  line-height: 1.7;
+}
+.prose h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 1.25rem 0 0.75rem;
+}
+.prose h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 1rem 0 0.5rem;
+}
+.prose h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem;
+}
+.prose p {
+  margin: 0.5rem 0;
+}
+.prose ul,
+.prose ol {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+.prose ul {
+  list-style: disc;
+}
+.prose ol {
+  list-style: decimal;
+}
+.prose code {
+  background: #f3f4f6;
+  padding: 0.15rem 0.35rem;
+  border-radius: 0.25rem;
+  font-family: var(--font-ui), monospace;
+  font-size: 0.9em;
+}
+.dark .prose code {
+  background: #111827;
+}
+.prose pre {
+  background: #f8fafc;
+  color: #111827;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  overflow: auto;
+  margin: 0.75rem 0;
+}
+.dark .prose pre {
+  background: #0b1220;
+  color: #e5e7eb;
+}
+.prose table {
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  width: 100%;
+}
+.prose th,
+.prose td {
+  border: 1px solid #e5e7eb;
+  padding: 0.5rem 0.6rem;
+  text-align: left;
+}
+.dark .prose th,
+.dark .prose td {
+  border-color: #374151;
+}
+.prose a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+.dark .prose a {
+  color: #60a5fa;
+}
+.prose blockquote {
+  border-left: 4px solid #e5e7eb;
+  padding-left: 1rem;
+  color: #6b7280;
+  margin: 0.75rem 0;
+}
+.dark .prose blockquote {
+  border-left-color: #374151;
+  color: #9ca3af;
 }

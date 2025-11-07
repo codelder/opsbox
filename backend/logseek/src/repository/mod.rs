@@ -2,4 +2,5 @@
 
 pub mod cache;
 pub mod llm;
+pub mod planners;
 pub mod settings;

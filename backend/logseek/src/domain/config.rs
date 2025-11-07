@@ -36,8 +36,8 @@ pub enum SourceConfig {
 
   /// Agent 配置
   Agent {
-    /// Agent 端点 URL (例如: "http://192.168.1.10:8090")
-    endpoint: String,
+    /// Agent 标识 ID（例如: "agent-localhost" 或 "192.168.1.10:8090"）
+    agent_id: String,
     /// 作用域根目录（可选），例如 "logs"
     #[serde(skip_serializing_if = "Option::is_none")]
     scope_root: Option<String>,

@@ -9,6 +9,7 @@ use opsbox_core::SqlitePool;
 pub mod helpers;
 pub mod llm;
 pub mod nl2q;
+pub mod planners;
 pub mod profiles;
 pub mod search;
 pub mod settings;
@@ -51,6 +52,20 @@ pub fn router(db_pool: SqlitePool) -> Router {
       axum::routing::get(profiles::list_profiles).post(profiles::save_profile),
     )
     .route("/profiles/{name}", axum::routing::delete(profiles::delete_profile))
+    // Planner 脚本管理
+    .route(
+      "/settings/planners",
+      axum::routing::get(planners::list_scripts).post(planners::save_script),
+    )
+    .route(
+      "/settings/planners/{app}",
+      axum::routing::get(planners::get_script).delete(planners::delete_script),
+    )
+    .route("/settings/planners/test", axum::routing::post(planners::test_script))
+    .route(
+      "/settings/planners/readme",
+      axum::routing::get(planners::get_readme_html),
+    )
     // 自然语言 → 查询字符串
     .route("/nl2q", axum::routing::post(nl2q::nl2q))
     .with_state(db_pool)
