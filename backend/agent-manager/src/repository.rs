@@ -113,8 +113,10 @@ impl AgentRepository {
     .execute(&self.pool)
     .await?;
 
-    // 保存标签
-    self.save_agent_tags(&info.id, &info.tags).await?;
+    // 仅当 info.tags 非空时才覆盖（避免空上报清空已存在的标签）
+    if !info.tags.is_empty() {
+      self.save_agent_tags(&info.id, &info.tags).await?;
+    }
 
     Ok(())
   }
