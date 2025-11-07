@@ -16,7 +16,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SearchScope {
   /// 搜索指定目录
-  Directory { path: String, recursive: bool },
+  Directory { path: Option<String>, recursive: bool },
   /// 搜索指定文件列表
   Files { paths: Vec<String> },
   /// 搜索 tar.gz 文件

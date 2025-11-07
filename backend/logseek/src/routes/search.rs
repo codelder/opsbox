@@ -208,7 +208,7 @@ pub async fn stream_search(
         let search_scope = match (&config_clone.endpoint, &config_clone.target) {
           (Endpoint::Agent { root, .. }, Target::Dir { path, recursive }) => {
             let joined = if path == "." { root.clone() } else { format!("{}/{}", root, path) };
-            SearchScope::Directory { path: joined, recursive: *recursive }
+            SearchScope::Directory { path: Some(joined), recursive: *recursive }
           }
           (Endpoint::Agent { root, .. }, Target::Files { paths }) => {
             let ps = paths.iter().map(|p| if p.starts_with('/') { p.clone() } else { format!("{}/{}", root, p) }).collect();
@@ -219,7 +219,7 @@ pub async fn stream_search(
             SearchScope::TarGz { path: p }
           }
           (Endpoint::Agent { root, .. }, Target::All) => {
-            SearchScope::Directory { path: root.clone(), recursive: true }
+            SearchScope::Directory { path: Some(root.clone()), recursive: true }
           }
           _ => {
             // 不会到这里

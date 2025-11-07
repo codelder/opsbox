@@ -22,7 +22,7 @@ APPS = {
 if len(AGENTS) > 0:
     # 筛选生产环境的 Agent（标签 env=prod）
     for agent in AGENTS:
-        if "env" in agent["tags"] and agent["tags"]["env"] == "prod":
+        if agent.get("tags", {}).get("env") == "prod":
             # 为每个日期生成 tar.gz 归档文件源
             for d in DATES:
                 date_iso = d["iso"]
@@ -33,66 +33,40 @@ if len(AGENTS) > 0:
                         tar_filename = "{}_{}_{:02d}.tar.gz".format(tar_prefix, date_iso, hour)
                         
                         SOURCES.append({
-                            "type": "agent",
-                            "agent_id": agent["id"],
-                            "scope_root": "logs",
-                            # 新增：指定搜索范围为 TarGz 类型
-                            # Agent 将自动识别这是归档文件并解压搜索
-                            "scope": {
-                                "TarGz": {
-                                    "path": tar_filename
-                                }
-                            },
-                            # 可选：在 tar.gz 内过滤文件
-                            "path_filter_glob": "**/*.log",
+                            "endpoint": { "kind": "agent", "agent_id": agent["id"], "root": "logs" },
+                            "target":   { "type": "targz", "path": tar_filename },
+                            "filter_glob": "**/*.log",
                         })
 
 # 方案 2: 混合搜索范围示例
 # SOURCES = []
 # for agent in AGENTS:
-#     if "app" in agent["tags"] and agent["tags"]["app"] == "web":
+#     if agent.get("tags", {}).get("app") == "web":
 #         # 示例1: 搜索特定目录
 #         SOURCES.append({
-#             "type": "agent",
-#             "agent_id": agent["id"],
-#             "scope": {
-#                 "Directory": {
-#                     "path": "logs/web",
-#                     "recursive": True
-#                 }
-#             },
-#             "path_filter_glob": "**/*error*.log",
+#             "endpoint": { "kind": "agent", "agent_id": agent["id"], "root": "logs" },
+#             "target":   { "type": "dir", "path": "web", "recursive": True },
+#             "filter_glob": "**/*error*.log",
 #         })
 #         
 #         # 示例2: 搜索特定 tar.gz 文件
 #         SOURCES.append({
-#             "type": "agent",
-#             "agent_id": agent["id"],
-#             "scope": {
-#                 "TarGz": {
-#                     "path": "backup/web_2025-01-15.tar.gz"
-#                 }
-#             },
-#             "path_filter_glob": "**/*.log",
+#             "endpoint": { "kind": "agent", "agent_id": agent["id"], "root": "." },
+#             "target":   { "type": "targz", "path": "backup/web_2025-01-15.tar.gz" },
+#             "filter_glob": "**/*.log",
 #         })
 #         
 #         # 示例3: 搜索特定文件列表
 #         SOURCES.append({
-#             "type": "agent",
-#             "agent_id": agent["id"],
-#             "scope": {
-#                 "Files": {
-#                     "paths": ["logs/access.log", "logs/error.log"]
-#                 }
-#             },
+#             "endpoint": { "kind": "agent", "agent_id": agent["id"], "root": "." },
+#             "target":   { "type": "files", "paths": ["logs/access.log", "logs/error.log"] },
 #         })
 #         
 #         # 示例4: 搜索所有范围
 #         SOURCES.append({
-#             "type": "agent",
-#             "agent_id": agent["id"],
-#             "scope": "All",
-#             "path_filter_glob": "**/*.log",
+#             "endpoint": { "kind": "agent", "agent_id": agent["id"], "root": "." },
+#             "target":   { "type": "all" },
+#             "filter_glob": "**/*.log",
 #         })
 
 # 方案 3: 按日期范围和 Agent 标签分配 tar.gz

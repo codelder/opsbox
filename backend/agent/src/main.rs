@@ -279,7 +279,10 @@ impl AgentConfig {
   /// 解析 SearchScope 到实际的文件系统路径
   fn resolve_scope_paths(&self, scope: &SearchScope) -> Result<Vec<PathBuf>, String> {
     match scope {
-      SearchScope::Directory { path, recursive: _ } => self.resolve_directory_path(path),
+      SearchScope::Directory { path, recursive: _ } => {
+        let rel = path.as_deref().unwrap_or(".");
+        self.resolve_directory_path(rel)
+      }
       SearchScope::Files { paths } => self.resolve_file_paths(paths),
       SearchScope::TarGz { path } => self.resolve_targz_path(path),
       SearchScope::All => Ok(self.search_roots.iter().map(PathBuf::from).collect()),
@@ -1043,7 +1046,7 @@ mod tests {
 
     // 测试 SearchScope::Directory
     let scope = SearchScope::Directory {
-      path: "nonexistent".to_string(),
+      path: Some("nonexistent".to_string()),
       recursive: true,
     };
     let result = config.resolve_scope_paths(&scope);

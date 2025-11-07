@@ -2,6 +2,8 @@
 
 本指南说明如何在用户侧用 Starlark 编写“存储源规划脚本”，由后端解释执行，决定一次搜索要访问的存储源（S3、Agent、本地等）。
 
+已简化为统一的来源模型：Source = Endpoint(在哪里) + Target(查什么) + 可选 filter_glob。
+
 ## 放置路径与命名
 - 用户脚本路径：`~/.opsbox/planners/<app>.star`
 - 选择方式：在搜索 `q` 中使用 `app:<name>`（例如 `app:bbip`）。若未指定，则默认 `bbip`。
@@ -25,19 +27,23 @@
 
 ## 脚本需要导出的变量
 - 必须导出：
-  - SOURCES: list[dict]，用于告诉后端要搜索的存储源列表。
+  - SOURCES: list[Source]，用于告诉后端要搜索的存储源列表。
 - 可选导出：
   - CLEANED_QUERY: string（若导出则覆盖运行时注入的值，可用于追加 path 限定等）。
 
-## SOURCES 项（与后端 SourceConfig 对齐）
-- Agent：
-  - { type: "agent", agent_id: string, scope_root?: string, path_filter_glob?: string }
-  - 例：{"type":"agent","agent_id":"agent-localhost","scope_root":"logs","path_filter_glob":"**/2025-10-27/**"}
-- S3：
-  - { type: "s3", profile: string, bucket?: string, prefix?: string, pattern?: string, key?: string }
-  - 建议：若明确对象文件则提供 `key`；否则可用 `prefix`+`pattern`。
-- Local：
-  - { type: "local", path: string, recursive?: bool }
+## Source 结构
+- Endpoint（在哪里）
+  - { kind: "local", root: "/abs/path" }
+  - { kind: "agent", agent_id: "agent-01", root: "logs" }  # root 为相对 search_roots 的子路径，"." 表示不限制
+  - { kind: "s3", profile: "oss", bucket: "logs-bucket" }
+- Target（查什么；所有 path 均相对 endpoint.root）
+  - { type: "dir", path: "."|"sub/dir", recursive: true|false }
+  - { type: "files", paths: ["a.log", "b.log"] }
+  - { type: "targz", path: "archive/app_2025-01-15.tar.gz" }
+  - { type: "all" }
+- Source 其它字段
+  - filter_glob?: string  # 额外路径过滤（与查询中的 path: 规则做 AND）
+  - display_name?: string # 可选的 UI 友好名称
 
 ## 示例：BBIP 典型策略（可按需调整）
 - 需求：
@@ -45,13 +51,13 @@
   - 历史（昨天及以前）使用名为 `oss` 的 S3 Profile，并按固定桶集合展开对象键；
   - 如需追加路径限定，覆盖 CLEANED_QUERY。
 
-```python path=null start=null
+```python
 # 定义业务分桶（如无分桶可修改或留空）
 BUCKETS = ['20','21','22','23']
 
 SOURCES = []
 
-# 判断日期范围是否包含今天（Starlark 不支持 any(...) 生成器，使用显式循环）
+# 判断日期范围是否包含今天
 has_today = False
 for d in DATES:
     if d['iso'] == TODAY:
@@ -60,17 +66,16 @@ for d in DATES:
 
 # 1) Agent（今天）：按标签 app=bbipapp 筛选
 if has_today:
-    today_glob = "**/{}/**".format(TODAY)  # 避免 f-string，使用 format()
+    today_glob = "**/{}/**".format(TODAY)
     for a in AGENTS:
         if a['tags'].get('app') == 'bbipapp':
             SOURCES.append({
-                'type': 'agent',
-                'agent_id': a['id'],
-                'scope_root': 'logs',
-                'path_filter_glob': today_glob,
+                'endpoint': { 'kind': 'agent', 'agent_id': a['id'], 'root': 'logs' },
+                'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
+                'filter_glob': today_glob,
             })
 
-# 2) S3（历史）：选择名为 oss 的 profile 并展开对象键（避免 next(...) 生成器）
+# 2) S3（历史）：选择名为 oss 的 profile 并展开对象键
 oss = None
 for p in S3_PROFILES:
     if p['profile_name'] == 'oss':
@@ -79,7 +84,7 @@ for p in S3_PROFILES:
 
 if oss != None:
     for d in DATES:
-        if d['iso'] < TODAY:  # 字符串比较等价于日期顺序
+        if d['iso'] < TODAY:
             y = d['next_yyyymmdd'][0:4]
             yyyymm = d['next_yyyymmdd'][0:6]
             yyyymmdd = d['next_yyyymmdd']
@@ -87,10 +92,8 @@ if oss != None:
             for b in BUCKETS:
                 key = "bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz".format(y, yyyymm, yyyymmdd, b, file)
                 SOURCES.append({
-                    'type': 's3',
-                    'profile': oss['profile_name'],
-                    'bucket': oss['bucket'],
-                    'key': key,
+                    'endpoint': { 'kind': 's3', 'profile': oss['profile_name'], 'bucket': oss['bucket'] },
+                    'target':   { 'type': 'targz', 'path': key },
                 })
 
 # 3) 可选：覆盖 CLEANED_QUERY（例如追加路径限定）
@@ -119,6 +122,5 @@ if oss != None:
 ## 参考与官方语法
 - 官方语言规范（Language Specification）: https://github.com/bazelbuild/starlark/blob/master/spec.md
 - Bazel 官方语言页面（概览与示例）: https://bazel.build/rules/language
-
 
 如需更多能力（例如 date_* 工具函数），可以反馈需求以便在运行时注入对应内建函数。
