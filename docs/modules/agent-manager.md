@@ -60,7 +60,7 @@ Agent Manager 模块提供以下端点（前缀 `/api/v1/agents`）：
 ### 1. 启动 OpsBox Server
 
 ```bash
-cd /Users/wangyue/workspace/codelder/opsbox/backend/api-gateway
+cd PROJECT_ROOT/backend/api-gateway
 cargo run --release
 
 # 应该看到:
@@ -79,7 +79,7 @@ cargo run --release
 ### 2. 启动 Agent
 
 ```bash
-cd /Users/wangyue/workspace/codelder/opsbox/backend/agent
+cd PROJECT_ROOT/backend/agent
 
 # 配置环境变量（注意：路径不再包含 /logseek）
 export SERVER_ENDPOINT="http://localhost:4000"
@@ -261,11 +261,11 @@ LogSeek 可以通过以下方式使用 Agent：
 
 ```bash
 # 运行 Agent Manager 单元测试
-cd /Users/wangyue/workspace/codelder/opsbox/backend/agent-manager
+cd PROJECT_ROOT/backend/agent-manager
 cargo test
 
 # 运行集成测试
-cd /Users/wangyue/workspace/codelder/opsbox/backend/api-gateway
+cd PROJECT_ROOT/backend/api-gateway
 cargo test --release
 ```
 

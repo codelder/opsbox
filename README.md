@@ -100,7 +100,7 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 
 ### 数据库
 
-- 默认：`~/.opsbox/opsbox.db`
+- 默认：`$HOME/.opsbox/opsbox.db`
 - 覆盖：`--database-url` 或 `OPSBOX_DATABASE_URL`/`DATABASE_URL` 环境变量
 
 ### 日志级别

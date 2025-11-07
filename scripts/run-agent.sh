@@ -30,15 +30,19 @@ echo "  Heartbeat:      $ENABLE_HEARTBEAT"
 echo "  Worker Threads: ${AGENT_WORKER_THREADS:-"auto (保守策略)"}"
 echo ""
 
+# 获取项目根目录（相对于脚本位置）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
 # 检查是否已编译
-if [ ! -f "../backend/target/release/opsbox-agent" ]; then
+if [ ! -f "$PROJECT_ROOT/backend/target/release/opsbox-agent" ]; then
     echo "⚠️  未找到编译后的 Agent 程序，正在编译..."
-    cd ../backend
+    cd "$PROJECT_ROOT/backend"
     cargo build --release -p opsbox-agent
     cd -
 fi
 
 # 启动 Agent
 echo "🚀 启动 Agent..."
-exec ../backend/target/release/opsbox-agent
+exec "$PROJECT_ROOT/backend/target/release/opsbox-agent"
 

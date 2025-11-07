@@ -1,6 +1,9 @@
 #!/bin/bash
 
-cd /Users/wangyue/workspace/codelder/opsbox/backend/api-gateway
+# 获取项目根目录（相对于脚本位置）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT/backend/api-gateway"
 
 echo "🚀 启动 OpsBox Server..."
 cargo run --release

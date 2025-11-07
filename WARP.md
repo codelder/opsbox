@@ -55,7 +55,7 @@ Common commands
   - Frontend (single file): pnpm --dir $ROOT/web exec vitest run path/to/file.test.ts
 
 Key runtime configuration
-- All application settings are persisted in a unified SQLite database (default file: ~/.opsbox/opsbox.db). Override path via --database-url CLI flag or OPSBOX_DATABASE_URL/DATABASE_URL environment variables (accepts a filesystem path or sqlite:// URL).
+- All application settings are persisted in a unified SQLite database (default file: $HOME/.opsbox/opsbox.db). Override path via --database-url CLI flag or OPSBOX_DATABASE_URL/DATABASE_URL environment variables (accepts a filesystem path or sqlite:// URL).
 - Database structure:
   - Managed by opsbox-core with automatic migrations
   - LogSeek module tables include s3_profiles (stores default and named S3 profiles)
