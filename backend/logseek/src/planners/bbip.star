@@ -23,10 +23,9 @@ if has_today and len(AGENTS) > 0:
     for a in AGENTS:
         if "app" in a["tags"] and a["tags"]["app"] == "bbipapp":
             SOURCES.append({
-                "type": "agent",
-                "agent_id": a["id"],
-                "scope_root": "logs",
-                "path_filter_glob": today_glob,
+                "endpoint": {"kind": "agent", "agent_id": a["id"], "root": "logs"},
+                "target": {"type": "dir", "path": ".", "recursive": True},
+                "filter_glob": today_glob,
             })
 
 # S3（昨天及以前）
@@ -48,10 +47,8 @@ if oss != None:
                     y, yyyymm, yyyymmdd, b, file,
                 )
                 SOURCES.append({
-                    "type": "s3",
-                    "profile": oss["profile_name"],
-                    "bucket": oss["bucket"],
-                    "key": key,
+                    "endpoint": {"kind": "s3", "profile": oss["profile_name"], "bucket": oss["bucket"]},
+                    "target": {"type": "targz", "path": key},
                 })
 
 # 可选：覆写 CLEANED_QUERY，例如追加路径限定

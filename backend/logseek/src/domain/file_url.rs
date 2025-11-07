@@ -200,19 +200,14 @@ impl fmt::Display for FileUrl {
 
 /// 根据来源配置和相对路径构造 FileUrl 及其字符串 ID
 pub fn build_file_url_for_result(
-  source: &crate::domain::config::SourceConfig,
+  source: &crate::domain::config::Source,
   rel_path: &str,
 ) -> Option<(FileUrl, String)> {
-  match source {
-    crate::domain::config::SourceConfig::S3 {
-      profile, bucket, key, ..
-    } => {
-      let bucket_name = bucket.as_deref().unwrap_or("unknown");
-      let base = if let Some(k) = key {
-        FileUrl::s3_with_profile(profile, bucket_name, k)
-      } else {
-        FileUrl::s3_with_profile(profile, bucket_name, rel_path)
-      };
+  use crate::domain::config::{Endpoint, Target};
+  match (&source.endpoint, &source.target) {
+    (Endpoint::S3 { profile, bucket }, Target::TarGz { .. }) => {
+      // S3 tar.gz 内部条目
+      let base = FileUrl::s3_with_profile(profile, bucket, "<object>");
       match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
         Ok(url) => {
           let id = url.to_string();
@@ -221,26 +216,56 @@ pub fn build_file_url_for_result(
         Err(_) => None,
       }
     }
-    crate::domain::config::SourceConfig::Local { path, .. } => {
-      let base = FileUrl::local(path);
+    (Endpoint::Local { root }, Target::Dir { path, .. }) => {
+      // 以实际扫描根作为 base：root/path
+      let real_base = if path == "." { root.clone() } else { format!("{}/{}", root, path) };
+      let base = FileUrl::local(real_base);
       match FileUrl::dir_entry(base, rel_path) {
         Ok(url) => {
           let id = url.to_string();
           Some((url, id))
         }
-        Err(_) => {
-          let joined = std::path::Path::new(path).join(rel_path);
-          let url = FileUrl::local(joined.to_string_lossy().to_string());
+        Err(_) => None,
+      }
+    }
+    (Endpoint::Local { root }, Target::TarGz { .. }) => {
+      // tar.gz 条目不走 dir_entry
+      let base = FileUrl::local(root);
+      match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
+        Ok(url) => {
           let id = url.to_string();
           Some((url, id))
         }
+        Err(_) => None,
       }
     }
-    crate::domain::config::SourceConfig::Agent { agent_id, .. } => {
+    (Endpoint::Local { root }, Target::Files { .. }) => {
+      // 单文件也可以按 dir_entry 表示
+      let base = FileUrl::local(root);
+      match FileUrl::dir_entry(base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => None,
+      }
+    }
+    (Endpoint::Local { root }, Target::All) => {
+      let base = FileUrl::local(root);
+      match FileUrl::dir_entry(base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => None,
+      }
+    }
+    (Endpoint::Agent { agent_id, .. }, _) => {
       let url = FileUrl::agent(agent_id, rel_path);
       let id = url.to_string();
       Some((url, id))
     }
+    _ => None,
   }
 }
 

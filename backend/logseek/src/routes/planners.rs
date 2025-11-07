@@ -8,7 +8,7 @@ use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
 
 use crate::api::models::AppError;
-use crate::domain::config::SourceConfig;
+use crate::domain::config::Source;
 use crate::repository::planners;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,8 +47,8 @@ pub struct PlannerTestPayload {
 pub struct PlannerTestResponse {
   /// 清理后的查询（移除了 app:/dt:/fdt:/tdt: 等）
   pub cleaned_query: String,
-  /// 规划出的来源列表（与 SourceConfig 对齐）
-  pub sources: Vec<SourceConfig>,
+  /// 规划出的来源列表（与 Source 对齐）
+  pub sources: Vec<Source>,
 }
 
 /// 列出所有脚本（仅元信息）

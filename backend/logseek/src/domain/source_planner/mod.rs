@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use opsbox_core::SqlitePool;
 
-use crate::{api::models::AppError, domain::config::SourceConfig};
+use crate::{api::models::AppError, domain::config::Source};
 
 // 子模块：通用类型与具体存储源规划器实现
 mod bbip;
@@ -16,7 +16,7 @@ pub use types::DateRange;
 
 /// 规划结果：来源配置 + 清理后的查询
 pub struct PlanResult {
-  pub sources: Vec<SourceConfig>,
+  pub sources: Vec<Source>,
   pub cleaned_query: String,
 }
 

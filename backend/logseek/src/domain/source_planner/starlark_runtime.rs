@@ -4,7 +4,7 @@ use opsbox_core::SqlitePool;
 
 use crate::{
   api::models::AppError,
-  domain::config::SourceConfig,
+  domain::config::Source,
   domain::source_planner::{DateRange, PlanResult},
 };
 
@@ -131,21 +131,19 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
     .get("SOURCES")
     .ok_or_else(|| AppError::Settings(opsbox_core::AppError::internal("Starlark 未导出 SOURCES")))?;
 
-  // 转为 JSON，再转为 SourceConfig
+  // 转为 JSON，再转为 Source
   let list = starlark::values::list::ListRef::from_value(sources_val)
     .ok_or_else(|| AppError::Settings(opsbox_core::AppError::internal("SOURCES 不是列表类型")))?;
 
-  let mut sources: Vec<SourceConfig> = Vec::new();
+  let mut sources: Vec<Source> = Vec::new();
   for i in 0..list.len() {
     let Some(v) = list.get(i) else {
       continue;
     };
-    let mut j = starlark_to_json(*v).map_err(|e| AppError::Settings(opsbox_core::AppError::internal(e)))?;
-    normalize_source_tag(&mut j);
-    normalize_source_strings(&mut j);
-    let cfg: SourceConfig = serde_json::from_value(j).map_err(|e| {
+    let j = starlark_to_json(*v).map_err(|e| AppError::Settings(opsbox_core::AppError::internal(e)))?;
+    let cfg: Source = serde_json::from_value(j).map_err(|e| {
       AppError::Settings(opsbox_core::AppError::internal(format!(
-        "解析 SourceConfig 失败: {}",
+        "解析 Source 失败: {}",
         e
       )))
     })?;
@@ -300,85 +298,50 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
   Err(format!("不支持的 Starlark 值类型: {:?}", v))
 }
 
-/// 规范化 SourceConfig 的 type 标签，避免用户脚本误写成 '"s3"' 等
-fn normalize_source_tag(j: &mut serde_json::Value) {
-  use serde_json::Value as V;
-  if let V::Object(map) = j
-    && let Some(V::String(t)) = map.get_mut("type")
-  {
-    let trimmed = t.trim();
-    let normalized = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-      trimmed.trim_matches('"').to_ascii_lowercase()
-    } else {
-      trimmed.to_ascii_lowercase()
-    };
-    if *t != normalized {
-      log::warn!("规范化脚本返回的来源类型: '{}' -> '{}'", t, normalized);
-      *t = normalized;
-    }
-  }
-}
 
-/// 去除顶层所有字符串字段的首尾引号（若存在），修复脚本误写例如 '"s3"'
-fn normalize_source_strings(j: &mut serde_json::Value) {
-  use serde_json::Value as V;
-  if let V::Object(map) = j {
-    for (_k, v) in map.iter_mut() {
-      if let V::String(s) = v {
-        let trimmed = s.trim();
-        if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-          let newv = trimmed.trim_matches('"').to_string();
-          log::warn!("规范化脚本返回的字符串: '{}' -> '{}'", s, newv);
-          *s = newv;
-        }
-      }
-    }
-  }
-}
-
-/// 日志输出用户脚本返回的来源（已规范化并成功解析）
-fn log_script_source(idx: usize, cfg: &SourceConfig) {
-  match cfg {
-    SourceConfig::S3 {
-      profile,
-      bucket,
-      prefix,
-      pattern,
-      key,
-    } => {
+/// 日志输出用户脚本返回的来源（新结构）
+fn log_script_source(idx: usize, src: &Source) {
+  use crate::domain::config::{Endpoint, Target};
+  match (&src.endpoint, &src.target) {
+    (Endpoint::S3 { profile, bucket }, Target::TarGz { path }) => {
       log::info!(
-        "[Planner] 来源[{}] type=s3 profile={} bucket={} key={} prefix={} pattern={}",
-        idx,
-        profile,
-        bucket.as_deref().unwrap_or("<none>"),
-        key.as_deref().unwrap_or("<none>"),
-        prefix.as_deref().unwrap_or("<none>"),
-        pattern.as_deref().unwrap_or("<none>")
+        "[Planner] 来源[{}] s3 profile={} bucket={} targz={}",
+        idx, profile, bucket, path
       );
     }
-    SourceConfig::Agent {
-      agent_id,
-      scope_root,
-      path_filter_glob,
-      scope,
-    } => {
+    (Endpoint::Agent { agent_id, root }, tgt) => {
+      let scope = match tgt {
+        Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
+        Target::Files { paths } => format!("Files count={}", paths.len()),
+        Target::TarGz { path } => format!("TarGz path={}", path),
+        Target::All => "All".to_string(),
+      };
       log::info!(
-        "[Planner] 来源[{}] type=agent id={} scope_root={} path_glob={} scope={}",
+        "[Planner] 来源[{}] agent id={} root={} scope={} filter_glob={}",
         idx,
         agent_id,
-        scope_root.as_deref().unwrap_or("logs"),
-        path_filter_glob.as_deref().unwrap_or("<none>"),
-        if scope.is_some() { "是" } else { "否" }
+        root,
+        scope,
+        src.filter_glob.as_deref().unwrap_or("<none>")
       );
     }
-    SourceConfig::Local { path, recursive, scope } => {
+    (Endpoint::Local { root }, tgt) => {
+      let scope = match tgt {
+        Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
+        Target::Files { paths } => format!("Files count={}", paths.len()),
+        Target::TarGz { path } => format!("TarGz path={}", path),
+        Target::All => "All".to_string(),
+      };
       log::info!(
-        "[Planner] 来源[{}] type=local path={} recursive={} scope={}",
+        "[Planner] 来源[{}] local root={} scope={} filter_glob={}",
         idx,
-        path,
-        recursive,
-        if scope.is_some() { "yes" } else { "no" }
+        root,
+        scope,
+        src.filter_glob.as_deref().unwrap_or("<none>")
       );
+    }
+    (Endpoint::S3 { .. }, _) => {
+      log::warn!("[Planner] S3 目前仅支持 target=targz 组合");
     }
   }
 }

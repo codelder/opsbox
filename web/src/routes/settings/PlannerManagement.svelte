@@ -25,8 +25,8 @@
   let testQ = $state('');
   let testing = $state(false);
   let testError = $state<string | null>(null);
-  import type { SourceConfig } from '$lib/modules/logseek';
-  let testResult: { cleaned_query: string; sources: SourceConfig[] } | null = $state(null);
+  import type { Source } from '$lib/modules/logseek';
+  let testResult: { cleaned_query: string; sources: Source[] } | null = $state(null);
 
   // 帮助文档
   let showHelp = $state(false);
@@ -119,7 +119,7 @@
     testing = true;
     try {
       const r = await testPlanner({ app: app.trim(), q: testQ });
-      testResult = r as { cleaned_query: string; sources: SourceConfig[] };
+      testResult = r as { cleaned_query: string; sources: Source[] };
     } catch (e: unknown) {
       const err = e as { message?: string };
       testError = err?.message || '测试失败';

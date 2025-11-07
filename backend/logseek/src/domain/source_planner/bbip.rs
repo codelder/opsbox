@@ -1,5 +1,5 @@
 use super::{DateRange, PlanResult, SourcePlanner};
-use crate::{api::models::AppError, domain::config::SourceConfig};
+use crate::{api::models::AppError, domain::config::{Source, Endpoint, Target}};
 use async_trait::async_trait;
 use opsbox_core::SqlitePool;
 
@@ -120,7 +120,7 @@ impl SourcePlanner for BbipPlanner {
       plan.cleaned_query
     );
 
-    let mut configs: Vec<SourceConfig> = Vec::new();
+    let mut configs: Vec<Source> = Vec::new();
     // 使用北京时区计算“今天”
     let today = Utc::now().with_timezone(&Shanghai).date_naive();
 
@@ -148,11 +148,11 @@ impl SourcePlanner for BbipPlanner {
           // - scope_root: 固定为 "logs"
           // - path_filter_glob: 仅检索“今天”的目录（北京时区）
           let today_glob = format!("**/{}/**", today.format("%Y-%m-%d"));
-          configs.push(SourceConfig::Agent {
-            agent_id: agent_id.clone(),
-            scope_root: Some("logs".to_string()),
-            path_filter_glob: Some(today_glob),
-            scope: None,
+          configs.push(Source {
+            endpoint: Endpoint::Agent { agent_id: agent_id.clone(), root: "logs".to_string() },
+            target: Target::Dir { path: ".".to_string(), recursive: true },
+            filter_glob: Some(today_glob),
+            display_name: None,
           });
           log::debug!("添加 Agent 存储源: agent_id={}", agent_id);
         }
@@ -193,12 +193,11 @@ impl SourcePlanner for BbipPlanner {
               y, yyyymm, yyyymmdd, b, file_name
             );
 
-            configs.push(SourceConfig::S3 {
-              profile: profile.profile_name.clone(),
-              bucket: Some(profile.bucket.clone()),
-              prefix: None,
-              pattern: None,
-              key: Some(key.clone()),
+            configs.push(Source {
+              endpoint: Endpoint::S3 { profile: profile.profile_name.clone(), bucket: profile.bucket.clone() },
+              target: Target::TarGz { path: key.clone() },
+              filter_glob: None,
+              display_name: None,
             });
 
             log::debug!("添加历史 S3 存储源: profile={}, key={}", profile.profile_name, key);

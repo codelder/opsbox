@@ -353,64 +353,102 @@ impl EntryStreamFactory {
     }
   }
 
-  /// 从存储源配置创建条目流
+  /// 从来源配置创建条目流（不含 Agent）
   ///
-  /// - Local: 返回 FsEntryStream/SingleFileEntryStream/TarEntryStream
-  /// - S3(key): 读取指定对象并按 tar.gz 展开为条目流
+  /// - Local: Dir/Files/TarGz
+  /// - S3: 仅支持 TarGz（单对象）
   pub async fn create_stream(
     &self,
-    source: crate::domain::config::SourceConfig,
+    source: crate::domain::config::Source,
   ) -> Result<Box<dyn EntryStream>, String> {
-    match source {
-      crate::domain::config::SourceConfig::Local { path, scope, .. } => {
-        crate::service::entry_stream::build_local_entry_stream(&path, scope).await
+    use crate::domain::config::{Endpoint, Target};
+    match (&source.endpoint, &source.target) {
+      (Endpoint::Local { root }, Target::Dir { path, .. }) => {
+        let joined = if path == "." { root.clone() } else { format!("{}/{}", root, path) };
+        crate::service::entry_stream::build_local_entry_stream(&joined, None).await
       }
-      crate::domain::config::SourceConfig::S3 {
-        profile,
-        bucket: _bucket_opt,
-        prefix: _prefix,
-        pattern: _pattern,
-        key,
-      } => {
-        // 仅支持 key 明确指向 tar.gz 对象的场景
-        let key = key.ok_or_else(|| "S3 条目流暂仅支持指定单个对象 key".to_string())?;
-        if !(key.ends_with(".tar.gz") || key.ends_with(".tgz")) {
-          return Err("当前仅支持 S3 tar.gz 对象的条目流".to_string());
-        }
-
-        // 加载 Profile，获取 endpoint/bucket/AK/SK
-        let profile_row = crate::repository::settings::load_s3_profile(&self.db_pool, &profile)
+      (Endpoint::Local { root }, Target::Files { paths }) => {
+        let files: Vec<String> = paths
+          .iter()
+          .map(|p| if p.starts_with('/') { p.clone() } else { format!("{}/{}", root, p) })
+          .collect();
+        Ok(Box::new(MultiFileEntryStream::new(files)))
+      }
+      (Endpoint::Local { root }, Target::TarGz { path }) => {
+        let joined_root = root.clone();
+        // 使用 scope=TarGz 的方式在 root 下打开归档
+        crate::service::entry_stream::build_local_entry_stream(
+          &joined_root,
+          Some(crate::agent::SearchScope::TarGz { path: path.clone() }),
+        )
+        .await
+      }
+      (Endpoint::S3 { profile, bucket }, Target::TarGz { path }) => {
+        // 加载 Profile
+        let profile_row = crate::repository::settings::load_s3_profile(&self.db_pool, profile)
           .await
           .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
           .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
-
-        // 构造读取器（复用旧的 S3 客户端工具）
+        if &profile_row.bucket != bucket {
+          log::warn!("S3 配置中的桶与脚本提供不一致：db='{}' script='{}'，以脚本为准", profile_row.bucket, bucket);
+        }
+        // 构造读取器
         let reader = {
           use crate::utils::storage::{ReaderProvider as _, S3ReaderProvider, get_or_create_s3_client};
-          // 先确保客户端创建（便于日志与错误提前暴露）
           let _ = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
             .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
+        
           let provider = S3ReaderProvider::new(
             &profile_row.endpoint,
             &profile_row.access_key,
             &profile_row.secret_key,
-            &profile_row.bucket,
-            &key,
+            bucket,
+            path,
           );
           provider
             .open()
             .await
             .map_err(|e| format!("打开 S3 对象失败: {:?}", e))?
         };
-
-        // 将对象作为 tar.gz 流展开
         let stream = TarEntryStream::new(reader).await.map_err(|e| e.to_string())?;
         Ok(Box::new(stream))
       }
-      crate::domain::config::SourceConfig::Agent { .. } => {
-        Err("Agent 来源暂不支持构造 EntryStream（建议走远程 SearchService）".to_string())
+      (Endpoint::Local { root }, Target::All) => {
+        crate::service::entry_stream::build_local_entry_stream(root, None).await
       }
+      (Endpoint::S3 { .. }, _) => Err("S3 仅支持 targz 目标".to_string()),
+      (Endpoint::Agent { .. }, _) => Err("Agent 来源请通过远程 SearchService 处理".to_string()),
     }
+  }
+}
+
+/// 多文件条目流
+pub struct MultiFileEntryStream {
+  files: Vec<String>,
+  idx: usize,
+}
+
+impl MultiFileEntryStream {
+  pub fn new(files: Vec<String>) -> Self { Self { files, idx: 0 } }
+}
+
+#[async_trait]
+impl EntryStream for MultiFileEntryStream {
+  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    if self.idx >= self.files.len() {
+      return Ok(None);
+    }
+    let path = std::mem::take(&mut self.files[self.idx]);
+    self.idx += 1;
+    let file = tokio::fs::File::open(&path).await?;
+    let reader = BufReader::new(file);
+    let name = std::path::Path::new(&path)
+      .file_name()
+      .and_then(|s| s.to_str())
+      .map(|s| s.to_string())
+      .unwrap_or_else(|| path.clone());
+    let meta = EntryMeta { path: name, size: None, is_compressed: false };
+    Ok(Some((meta, Box::new(reader))))
   }
 }
 

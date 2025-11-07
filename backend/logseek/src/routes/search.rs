@@ -50,7 +50,7 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
-) -> Result<(Vec<crate::domain::config::SourceConfig>, String), AppError> {
+) -> Result<(Vec<crate::domain::config::Source>, String), AppError> {
   // 从查询字符串中提取 app 限定词（形如 app:bbip / app:bbos），未指定则默认为 bbip
   // 同时移除该限定词以得到传入规划器的“清理前”查询（随后规划器还会继续清理日期指令等）
   let mut app: Option<String> = None;
@@ -181,7 +181,7 @@ pub async fn stream_search(
       );
 
       // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
-      if let crate::domain::config::SourceConfig::Agent { agent_id, .. } = &config_clone {
+      if let crate::domain::config::Endpoint::Agent { agent_id, .. } = &config_clone.endpoint {
         // 使用 Agent ID 构造 AgentClient（标准格式）
         let client = match AgentClient::new_by_agent_id(agent_id.clone()).await {
           Ok(client) => client,
@@ -202,37 +202,29 @@ pub async fn stream_search(
           return;
         }
 
-        // 从来源规划中读取 scope/path 过滤提示
-        // 如果规划脚本指定了 scope，则使用规划脚本的 scope；否则默认使用 Directory 搜索范围
-        let (search_scope, path_glob) = match &config_clone {
-          crate::domain::config::SourceConfig::Agent {
-            scope,
-            scope_root,
-            path_filter_glob,
-            ..
-          } => {
-            if let Some(s) = scope {
-              // 使用规划脚本指定的 scope
-              (s.clone(), path_filter_glob.clone())
-            } else {
-              // 回退到传统的 scope_root + 构造 Directory scope
-              let scope_root_val = scope_root.clone().unwrap_or_else(|| "logs".to_string());
-              (
-                SearchScope::Directory {
-                  path: scope_root_val,
-                  recursive: true,
-                },
-                path_filter_glob.clone(),
-              )
-            }
+        // 从来源规划中读取 endpoint/target/filter，并转换为 Agent 的 SearchScope
+        use crate::domain::config::{Endpoint, Target};
+        let path_glob = config_clone.filter_glob.clone();
+        let search_scope = match (&config_clone.endpoint, &config_clone.target) {
+          (Endpoint::Agent { root, .. }, Target::Dir { path, recursive }) => {
+            let joined = if path == "." { root.clone() } else { format!("{}/{}", root, path) };
+            SearchScope::Directory { path: joined, recursive: *recursive }
           }
-          _ => (
-            SearchScope::Directory {
-              path: "logs".to_string(),
-              recursive: true,
-            },
-            None,
-          ),
+          (Endpoint::Agent { root, .. }, Target::Files { paths }) => {
+            let ps = paths.iter().map(|p| if p.starts_with('/') { p.clone() } else { format!("{}/{}", root, p) }).collect();
+            SearchScope::Files { paths: ps }
+          }
+          (Endpoint::Agent { root, .. }, Target::TarGz { path }) => {
+            let p = if path.starts_with('/') { path.clone() } else { format!("{}/{}", root, path) };
+            SearchScope::TarGz { path: p }
+          }
+          (Endpoint::Agent { root, .. }, Target::All) => {
+            SearchScope::Directory { path: root.clone(), recursive: true }
+          }
+          _ => {
+            // 不会到这里
+            SearchScope::All
+          }
         };
         let search_options = SearchOptions {
           scope: search_scope,

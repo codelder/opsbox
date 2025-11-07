@@ -17,14 +17,27 @@ export interface PlannerTestPayload {
   app: string;
   q: string;
 }
-export type SourceConfig =
-  | { type: 'agent'; agent_id: string; scope_root?: string; path_filter_glob?: string }
-  | { type: 's3'; profile: string; bucket?: string; prefix?: string; pattern?: string; key?: string }
-  | { type: 'local'; path: string; recursive?: boolean };
+export type Endpoint =
+  | { kind: 'local'; root: string }
+  | { kind: 'agent'; agent_id: string; root: string }
+  | { kind: 's3'; profile: string; bucket: string };
+
+export type Target =
+  | { type: 'dir'; path: string; recursive?: boolean }
+  | { type: 'files'; paths: string[] }
+  | { type: 'targz'; path: string }
+  | { type: 'all' };
+
+export interface Source {
+  endpoint: Endpoint;
+  target: Target;
+  filter_glob?: string;
+  display_name?: string;
+}
 
 export interface PlannerTestResponse {
   cleaned_query: string;
-  sources: SourceConfig[];
+  sources: Source[];
 }
 
 export async function listPlanners(): Promise<PlannerMeta[]> {
