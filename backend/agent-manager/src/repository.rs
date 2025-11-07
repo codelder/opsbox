@@ -395,20 +395,24 @@ impl AgentRepository {
     Ok(())
   }
 
-  /// 保存 Agent 标签
+  /// 保存 Agent 标签（部分覆盖）
+  /// 仅覆盖本次上报中出现的 tag_key：
+  /// - 对于每个 tag_key：先删除该 Agent 下该 key 的所有旧值，再插入新值
+  /// - 未出现在本次上报中的其他 key 将被保留，不做变更
   pub async fn save_agent_tags(&self, agent_id: &str, tags: &[AgentTag]) -> Result<(), sqlx::Error> {
-    // 先删除现有标签
-    sqlx::query(
-      r#"
-            DELETE FROM agent_tags WHERE agent_id = ?
-            "#,
-    )
-    .bind(agent_id)
-    .execute(&self.pool)
-    .await?;
-
-    // 插入新标签
     for tag in tags {
+      // 删除该 key 既有记录（避免同一 key 存在多个值）
+      sqlx::query(
+        r#"
+              DELETE FROM agent_tags WHERE agent_id = ? AND tag_key = ?
+              "#,
+      )
+      .bind(agent_id)
+      .bind(&tag.key)
+      .execute(&self.pool)
+      .await?;
+
+      // 插入该 key 的新值
       let tag_id = Uuid::new_v4().to_string();
       let now = Utc::now().timestamp();
 
