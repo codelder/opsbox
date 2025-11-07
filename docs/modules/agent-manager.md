@@ -26,7 +26,7 @@ backend/
 │       └── routes.rs       # API 路由
 ├── agent/                   # Agent 客户端（独立运行）
 ├── logseek/                 # LogSeek 模块
-└── api-gateway/             # API Gateway（引用 agent-manager）
+└── opsbox-server/           # OpsBox Server（引用 agent-manager）
 ```
 
 ---
@@ -60,7 +60,7 @@ Agent Manager 模块提供以下端点（前缀 `/api/v1/agents`）：
 ### 1. 启动 OpsBox Server
 
 ```bash
-cd PROJECT_ROOT/backend/api-gateway
+cd PROJECT_ROOT/backend/opsbox-server
 cargo run --release
 
 # 应该看到:
@@ -265,7 +265,7 @@ cd PROJECT_ROOT/backend/agent-manager
 cargo test
 
 # 运行集成测试
-cd PROJECT_ROOT/backend/api-gateway
+cd PROJECT_ROOT/backend/opsbox-server
 cargo test --release
 ```
 
@@ -292,7 +292,7 @@ cargo test --release
 ### 2. 测试 Agent 注册
 ```bash
 # 启动 Server
-./target/release/opsbox
+./target/release/opsbox-server
 
 # 启动 Agent
 cd ../agent

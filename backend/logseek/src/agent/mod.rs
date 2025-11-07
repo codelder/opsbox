@@ -4,6 +4,7 @@
 // Agent 模块：远程 Agent 搜索能力与统一搜索类型
 // 将原 storage 模块中的 Agent 客户端与搜索类型迁移至此
 
+use crate::utils::strings::truncate_utf8;
 use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
@@ -48,23 +49,6 @@ impl Default for SearchOptions {
   }
 }
 
-/// 搜索进度
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchProgress {
-  pub task_id: String,
-  pub processed_files: usize,
-  pub matched_files: usize,
-  pub total_files: Option<usize>,
-  pub status: SearchStatus,
-}
-
-/// 搜索状态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SearchStatus {
-  Running,
-  Completed,
-}
-
 /// 搜索结果流
 pub type SearchResultStream =
   Box<dyn Stream<Item = Result<crate::service::search::SearchResult, AgentClientError>> + Send + Unpin>;
@@ -106,12 +90,6 @@ pub trait SearchService: Send + Sync {
     options: SearchOptions,
   ) -> Result<SearchResultStream, AgentClientError>;
 
-  /// 获取搜索进度（可选）
-  async fn get_progress(&self, task_id: &str) -> Result<Option<SearchProgress>, AgentClientError> {
-    let _ = task_id;
-    Ok(None)
-  }
-
   /// 取消搜索（可选）
   async fn cancel(&self, task_id: &str) -> Result<(), AgentClientError> {
     let _ = task_id;
@@ -122,22 +100,6 @@ pub trait SearchService: Send + Sync {
 // =========================== Agent 客户端实现 ===============================
 use log::{debug, error, info, trace, warn};
 use std::time::Duration;
-
-/// 按 UTF-8 字符边界安全截断字符串，用于调试预览，避免跨多字节字符导致 panic
-///
-/// 参数:
-/// - s: 原始字符串
-/// - max: 允许的最大字节数
-fn truncate_utf8(s: &str, max: usize) -> &str {
-  if s.len() <= max {
-    return s;
-  }
-  let mut end = max;
-  while end > 0 && !s.is_char_boundary(end) {
-    end -= 1;
-  }
-  &s[..end]
-}
 
 // 复用 agent-manager 的数据模型
 pub use agent_manager::models::{AgentInfo, AgentStatus, AgentTag};
@@ -158,8 +120,6 @@ pub struct AgentSearchRequest {
 pub enum AgentMessage {
   /// 搜索结果
   Result(crate::service::search::SearchResult),
-  /// 进度更新
-  Progress(SearchProgress),
   /// 错误
   Error(String),
   /// 完成
@@ -422,17 +382,6 @@ impl SearchService for AgentClient {
                     result.lines.len()
                   );
                   Some(Ok(result))
-                }
-                Ok(AgentMessage::Progress(progress)) => {
-                  debug!(
-                    "Agent {} 进度: {}/{} 文件",
-                    agent_id, progress.processed_files, progress.matched_files
-                  );
-                  trace!(
-                    "[Wire] ← Progress: task_id={} status={:?}",
-                    progress.task_id, progress.status
-                  );
-                  None
                 }
                 Ok(AgentMessage::Error(err)) => {
                   trace!("[Wire] ← Error: {}", err);

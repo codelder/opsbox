@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 中文注释：NDJSON 流式检索一键压测脚本
 # 功能：
-# 1) 重启 opsbox 并按次设置 S3 IO 并发（--s3-max-concurrency）
+# 1) 重启 opsbox-server 并按次设置 S3 IO 并发（--s3-max-concurrency）
 # 2) 执行 LONG_SECS(默认120) 秒的并发=16 压测并（可选）导出日志为 CSV
 # 3) 对并发=8、12、16 分别执行 SHORT_SECS(默认30) 秒对比压测并打印吞吐汇总（Markdown 表）
 #
@@ -16,16 +16,16 @@
 #   CONC_SERIES    对比压测的并发列表（逗号分隔，默认：8,12,16）
 #   LONG_SECS      长测时长（默认：120）
 #   SHORT_SECS     短测时长（默认：30）
-#   BIN_PATH       opsbox 二进制路径（默认：backend/target/release/opsbox）
-#   LOG_PATH       日志文件路径（默认：~/.opsbox/opsbox.log）
+#   BIN_PATH       opsbox-server 二进制路径（默认：backend/target/release/opsbox-server）
+#   LOG_PATH       日志文件路径（默认：~/.opsbox/opsbox-server.log）
 #   JEMALLOC_AGGRESSIVE 若为 1/true/yes，则为进程设置更积极回收的 MALLOC_CONF
 #   MALLOC_CONF    如已事先设置，则优先使用该值（覆盖 aggressive 预设）
 
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
-BIN_DEFAULT="$ROOT_DIR/backend/target/release/opsbox"
-LOG_DEFAULT="$HOME/.opsbox/opsbox.log"
+BIN_DEFAULT="$ROOT_DIR/backend/target/release/opsbox-server"
+LOG_DEFAULT="$HOME/.opsbox/opsbox-server.log"
 
 BIN="${BIN_PATH:-$BIN_DEFAULT}"
 LOG="${LOG_PATH:-$LOG_DEFAULT}"
@@ -58,7 +58,7 @@ BASE_ARGS=(
   -v
 )
 
-# 中文注释：优雅重启 opsbox 并使用指定 S3 IO 并发
+# 中文注释：优雅重启 opsbox-server 并使用指定 S3 IO 并发
 restart_with_conc() {
   local conc="$1"
   local pids

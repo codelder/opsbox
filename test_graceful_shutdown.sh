@@ -15,8 +15,8 @@ echo -e "${BLUE}║   优雅关闭测试                         ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════╝${NC}"
 
 # 构建项目
-echo -e "\n${YELLOW}[1/3] 编译 API Gateway...${NC}"
-cd backend/api-gateway
+echo -e "\n${YELLOW}[1/3] 编译 opsbox-server...${NC}"
+cd backend/opsbox-server
 cargo build --release 2>&1 | tail -5
 cd ../..
 
@@ -27,10 +27,10 @@ echo -e "\n${YELLOW}[2/3] 测试 SIGINT (Ctrl-C) 信号...${NC}"
 echo -e "${BLUE}启动服务器（5秒后自动发送 SIGINT）${NC}"
 
 # 启动服务器（后台）
-./backend/target/release/opsbox \
+./backend/target/release/opsbox-server \
   --host 127.0.0.1 --port 18080 \
   --database-url /tmp/test_shutdown.db \
-  > /tmp/opsbox_test.log 2>&1 &
+  > /tmp/opsbox-server_test.log 2>&1 &
 
 SERVER_PID=$!
 echo -e "服务器 PID: ${GREEN}$SERVER_PID${NC}"
@@ -43,7 +43,7 @@ if ps -p $SERVER_PID > /dev/null; then
   echo -e "${GREEN}✓ 服务器已启动${NC}"
 else
   echo -e "${RED}✗ 服务器启动失败${NC}"
-  cat /tmp/opsbox_test.log
+  cat /tmp/opsbox-server_test.log
   exit 1
 fi
 
@@ -70,12 +70,12 @@ fi
 
 # 检查日志中的关闭信息
 echo -e "\n${BLUE}检查日志输出:${NC}"
-if grep -q "收到关闭信号 \[SIGINT" /tmp/opsbox_test.log; then
+if grep -q "收到关闭信号 \[SIGINT" /tmp/opsbox-server_test.log; then
   echo -e "${GREEN}✓ 发现 SIGINT 信号日志${NC}"
 else
   echo -e "${RED}✗ 未找到 SIGINT 信号日志${NC}"
   echo "日志内容:"
-  cat /tmp/opsbox_test.log
+  cat /tmp/opsbox-server_test.log
   exit 1
 fi
 
@@ -90,13 +90,13 @@ echo -e "\n${YELLOW}[3/3] 测试 SIGTERM 信号...${NC}"
 echo -e "${BLUE}启动服务器（5秒后自动发送 SIGTERM）${NC}"
 
 # 清空日志
-> /tmp/opsbox_test.log
+> /tmp/opsbox-server_test.log
 
 # 启动服务器（后台）
-./backend/target/release/opsbox \
+./backend/target/release/opsbox-server \
   --host 127.0.0.1 --port 18080 \
   --database-url /tmp/test_shutdown.db \
-  > /tmp/opsbox_test.log 2>&1 &
+  > /tmp/opsbox-server_test.log 2>&1 &
 
 SERVER_PID=$!
 echo -e "服务器 PID: ${GREEN}$SERVER_PID${NC}"
@@ -127,12 +127,12 @@ fi
 
 # 检查日志
 echo -e "\n${BLUE}检查日志输出:${NC}"
-if grep -q "收到关闭信号 \[SIGTERM" /tmp/opsbox_test.log; then
+if grep -q "收到关闭信号 \[SIGTERM" /tmp/opsbox-server_test.log; then
   echo -e "${GREEN}✓ 发现 SIGTERM 信号日志${NC}"
 else
   echo -e "${RED}✗ 未找到 SIGTERM 信号日志${NC}"
   echo "日志内容:"
-  cat /tmp/opsbox_test.log
+  cat /tmp/opsbox-server_test.log
   exit 1
 fi
 
@@ -149,4 +149,4 @@ echo -e "  ✓ SIGTERM - 优雅关闭正常"
 echo -e "  ✓ 日志输出正确"
 echo -e "  ✓ 资源清理完成"
 
-echo -e "\n${YELLOW}提示: 完整日志保存在 /tmp/opsbox_test.log${NC}"
+echo -e "\n${YELLOW}提示: 完整日志保存在 /tmp/opsbox-server_test.log${NC}"

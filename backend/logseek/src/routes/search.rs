@@ -5,7 +5,7 @@
 use crate::agent::{AgentClient, SearchOptions, SearchScope, SearchService};
 use crate::api::models::{AppError, SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
-use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
+use crate::service::entry_stream::EntryStreamFactory;
 use crate::service::search::SearchProcessor;
 use crate::utils::renderer::render_json_chunks;
 use axum::{
@@ -203,23 +203,39 @@ pub async fn stream_search(
         }
 
         // 从来源规划中读取 scope/path 过滤提示
-        // 默认 scope_root="logs"，path_filter 不设置
-        let (scope_root, path_glob) = match &config_clone {
+        // 如果规划脚本指定了 scope，则使用规划脚本的 scope；否则默认使用 Directory 搜索范围
+        let (search_scope, path_glob) = match &config_clone {
           crate::domain::config::SourceConfig::Agent {
+            scope,
             scope_root,
             path_filter_glob,
             ..
-          } => (
-            scope_root.clone().unwrap_or_else(|| "logs".to_string()),
-            path_filter_glob.clone(),
+          } => {
+            if let Some(s) = scope {
+              // 使用规划脚本指定的 scope
+              (s.clone(), path_filter_glob.clone())
+            } else {
+              // 回退到传统的 scope_root + 构造 Directory scope
+              let scope_root_val = scope_root.clone().unwrap_or_else(|| "logs".to_string());
+              (
+                SearchScope::Directory {
+                  path: scope_root_val,
+                  recursive: true,
+                },
+                path_filter_glob.clone(),
+              )
+            }
+          }
+          _ => (
+            SearchScope::Directory {
+              path: "logs".to_string(),
+              recursive: true,
+            },
+            None,
           ),
-          _ => ("logs".to_string(), None),
         };
         let search_options = SearchOptions {
-          scope: SearchScope::Directory {
-            path: scope_root,
-            recursive: true,
-          },
+          scope: search_scope,
           path_filter: path_glob,
           ..Default::default()
         };
@@ -297,7 +313,7 @@ pub async fn stream_search(
 
       // 基于 EntryStreamFactory 创建条目流
       let factory = EntryStreamFactory::new(pool_clone);
-      let mut estream = match factory.create_stream(config_clone.clone()).await {
+      let estream = match factory.create_stream(config_clone.clone()).await {
         Ok(s) => s,
         Err(e) => {
           log::error!("[Search] 创建条目流失败 source_idx={} err={}", idx, e);
@@ -305,99 +321,53 @@ pub async fn stream_search(
         }
       };
 
-      // 准备搜索处理器与条目流处理器
+      // 准备搜索处理器
       let search_proc = Arc::new(SearchProcessor::new(spec_clone, ctx));
-      let mut processor = EntryStreamProcessor::new(search_proc);
 
-      // 中转通道：SearchResult -> NDJSON 字节
-      let (sr_tx, mut sr_rx) = mpsc::channel::<crate::service::search::SearchResult>(32);
-
-      // 后台发送 NDJSON
+      // 直接使用通用条目流处理函数 + 回调发送 NDJSON
       let tx_bytes = tx_clone.clone();
       let highlights_s = highlights_clone.clone();
       let cfg_for_url = config_clone.clone();
       let sid_for_cache = sid_clone.clone();
-      let sender_task = tokio::spawn(async move {
-        use crate::domain::file_url::{FileUrl, TarCompression};
-        while let Some(res) = sr_rx.recv().await {
-          if tx_bytes.is_closed() {
-            break;
-          }
 
-          // 构造 FileUrl（S3 tar.gz、Local、Agent 区分）
-          let (file_url, file_id) = match &cfg_for_url {
-            crate::domain::config::SourceConfig::S3 {
-              profile, bucket, key, ..
-            } => {
-              let bucket_name = bucket.as_deref().unwrap_or("unknown");
-              let base = if let Some(k) = key {
-                FileUrl::s3_with_profile(profile, bucket_name, k)
-              } else {
-                FileUrl::s3_with_profile(profile, bucket_name, &res.path)
-              };
-              match FileUrl::tar_entry(TarCompression::Gzip, base, &res.path) {
-                Ok(url) => {
-                  let id = url.to_string();
-                  (url, id)
-                }
-                Err(e) => {
-                  log::warn!("profiling: [Search] 构造 FileUrl 失败: {}", e);
-                  continue;
-                }
-              }
-            }
-            crate::domain::config::SourceConfig::Local { path, .. } => {
-              // 使用 dir+file:///root:relative 的形式编码来源根目录与相对路径
-              let base = FileUrl::local(path);
-              match FileUrl::dir_entry(base, &res.path) {
-                Ok(url) => {
-                  let id = url.to_string();
-                  (url, id)
-                }
-                Err(_) => {
-                  // 回退：使用绝对路径
-                  let joined = std::path::Path::new(path).join(&res.path);
-                  let url = FileUrl::local(joined.to_string_lossy().to_string());
-                  let id = url.to_string();
-                  (url, id)
-                }
-              }
-            }
-            crate::domain::config::SourceConfig::Agent { agent_id, .. } => {
-              let url = FileUrl::agent(agent_id, &res.path);
-              let id = url.to_string();
-              (url, id)
+      let start_time = std::time::Instant::now();
+      let _ =
+        crate::service::entry_stream::process_entry_stream_with_callback(estream, search_proc, None, move |res| {
+          if tx_bytes.is_closed() {
+            return false;
+          }
+          // 构造 FileUrl（S3/Local/Agent）
+          let (file_url, file_id) = match crate::domain::file_url::build_file_url_for_result(&cfg_for_url, &res.path) {
+            Some(pair) => pair,
+            None => {
+              log::warn!("profiling: [Search] 构造 FileUrl 失败: source cfg不合法");
+              return true; // 跳过该结果
             }
           };
 
           // 缓存结果
-          simple_cache()
-            .put_lines(&sid_for_cache, &file_url, res.lines.clone())
-            .await;
+          let cache_fut = simple_cache().put_lines(&sid_for_cache, &file_url, res.lines.clone());
+          futures::executor::block_on(cache_fut);
 
           // 渲染 JSON 并发送
           let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
           match serde_json::to_vec(&json_obj) {
             Ok(mut v) => {
               v.push(b'\n');
-              if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
-                break;
+              let send_res = futures::executor::block_on(tx_bytes.send(Ok(bytes::Bytes::from(v))));
+              if send_res.is_err() {
+                return false;
               }
             }
             Err(e) => {
               log::warn!("profiling: [Search] 序列化失败: {}", e);
             }
           }
-        }
-      });
+          true
+        })
+        .await;
 
-      // 处理条目流
-      if let Err(e) = processor.process_stream(&mut *estream, sr_tx).await {
-        log::error!("[Search] 处理条目流失败 source_idx={} err={}", idx, e);
-      }
-
-      let total_time = task_start.elapsed();
-      let _ = sender_task.await; // 等待发送任务结束
+      let total_time = start_time.elapsed();
       log::info!(
         "profiling: [Search] 任务完成 source_idx={} name=EntryStream 总耗时={:.3}s, io_wait={:.3}s",
         idx,

@@ -3355,29 +3355,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "opsbox"
-version = "0.1.0"
-dependencies = [
- "agent-manager",
- "axum",
- "clap",
- "daemonize",
- "env_logger",
- "log",
- "logseek",
- "mimalloc",
- "mime_guess",
- "nix 0.30.1",
- "num_cpus",
- "openssl",
- "opsbox-core",
- "rust-embed",
- "serde",
- "tokio",
- "tower-http 0.6.6",
-]
-
-[[package]]
 name = "opsbox-agent"
 version = "0.1.0"
 dependencies = [
@@ -3423,6 +3400,29 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tower",
+ "tower-http 0.6.6",
+]
+
+[[package]]
+name = "opsbox-server"
+version = "0.1.0"
+dependencies = [
+ "agent-manager",
+ "axum",
+ "clap",
+ "daemonize",
+ "env_logger",
+ "log",
+ "logseek",
+ "mimalloc",
+ "mime_guess",
+ "nix 0.30.1",
+ "num_cpus",
+ "openssl",
+ "opsbox-core",
+ "rust-embed",
+ "serde",
+ "tokio",
  "tower-http 0.6.6",
 ]
 

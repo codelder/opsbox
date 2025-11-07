@@ -198,6 +198,52 @@ impl fmt::Display for FileUrl {
   }
 }
 
+/// 根据来源配置和相对路径构造 FileUrl 及其字符串 ID
+pub fn build_file_url_for_result(
+  source: &crate::domain::config::SourceConfig,
+  rel_path: &str,
+) -> Option<(FileUrl, String)> {
+  match source {
+    crate::domain::config::SourceConfig::S3 {
+      profile, bucket, key, ..
+    } => {
+      let bucket_name = bucket.as_deref().unwrap_or("unknown");
+      let base = if let Some(k) = key {
+        FileUrl::s3_with_profile(profile, bucket_name, k)
+      } else {
+        FileUrl::s3_with_profile(profile, bucket_name, rel_path)
+      };
+      match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => None,
+      }
+    }
+    crate::domain::config::SourceConfig::Local { path, .. } => {
+      let base = FileUrl::local(path);
+      match FileUrl::dir_entry(base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => {
+          let joined = std::path::Path::new(path).join(rel_path);
+          let url = FileUrl::local(joined.to_string_lossy().to_string());
+          let id = url.to_string();
+          Some((url, id))
+        }
+      }
+    }
+    crate::domain::config::SourceConfig::Agent { agent_id, .. } => {
+      let url = FileUrl::agent(agent_id, rel_path);
+      let id = url.to_string();
+      Some((url, id))
+    }
+  }
+}
+
 impl FromStr for FileUrl {
   type Err = FileUrlError;
 

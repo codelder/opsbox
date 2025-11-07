@@ -28,14 +28,14 @@ export interface PlannerTestResponse {
 }
 
 export async function listPlanners(): Promise<PlannerMeta[]> {
-  const res = await fetch(`${getApiBase()}/settings/planners`, { headers: { Accept: 'application/json' } });
+  const res = await fetch(`${getApiBase()}/settings/planners/scripts`, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`加载失败：HTTP ${res.status}`);
   const data = await res.json();
   return (data?.items ?? []) as PlannerMeta[];
 }
 
 export async function getPlanner(app: string): Promise<PlannerGet> {
-  const res = await fetch(`${getApiBase()}/settings/planners/${encodeURIComponent(app)}`, {
+  const res = await fetch(`${getApiBase()}/settings/planners/scripts/${encodeURIComponent(app)}`, {
     headers: { Accept: 'application/json' }
   });
   if (!res.ok) throw new Error(`加载失败：HTTP ${res.status}`);
@@ -43,7 +43,7 @@ export async function getPlanner(app: string): Promise<PlannerGet> {
 }
 
 export async function savePlanner(body: PlannerUpsert): Promise<void> {
-  const res = await fetch(`${getApiBase()}/settings/planners`, {
+  const res = await fetch(`${getApiBase()}/settings/planners/scripts`, {
     method: 'POST',
     headers: commonHeaders,
     body: JSON.stringify(body)
@@ -61,7 +61,7 @@ export async function savePlanner(body: PlannerUpsert): Promise<void> {
 }
 
 export async function deletePlanner(app: string): Promise<void> {
-  const res = await fetch(`${getApiBase()}/settings/planners/${encodeURIComponent(app)}`, { method: 'DELETE' });
+  const res = await fetch(`${getApiBase()}/settings/planners/scripts/${encodeURIComponent(app)}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`删除失败：HTTP ${res.status}`);
 }
 

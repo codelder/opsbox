@@ -152,6 +152,7 @@ impl SourcePlanner for BbipPlanner {
             agent_id: agent_id.clone(),
             scope_root: Some("logs".to_string()),
             path_filter_glob: Some(today_glob),
+            scope: None,
           });
           log::debug!("添加 Agent 存储源: agent_id={}", agent_id);
         }

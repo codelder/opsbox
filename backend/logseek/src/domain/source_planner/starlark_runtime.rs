@@ -360,21 +360,24 @@ fn log_script_source(idx: usize, cfg: &SourceConfig) {
       agent_id,
       scope_root,
       path_filter_glob,
+      scope,
     } => {
       log::info!(
-        "[Planner] 来源[{}] type=agent id={} scope_root={} path_glob={}",
+        "[Planner] 来源[{}] type=agent id={} scope_root={} path_glob={} scope={}",
         idx,
         agent_id,
         scope_root.as_deref().unwrap_or("logs"),
-        path_filter_glob.as_deref().unwrap_or("<none>")
+        path_filter_glob.as_deref().unwrap_or("<none>"),
+        if scope.is_some() { "是" } else { "否" }
       );
     }
-    SourceConfig::Local { path, recursive } => {
+    SourceConfig::Local { path, recursive, scope } => {
       log::info!(
-        "[Planner] 来源[{}] type=local path={} recursive={}",
+        "[Planner] 来源[{}] type=local path={} recursive={} scope={}",
         idx,
         path,
-        recursive
+        recursive,
+        if scope.is_some() { "yes" } else { "no" }
       );
     }
   }

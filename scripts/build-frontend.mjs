@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 跨平台前端构建脚本，会在 web 下执行 `pnpm build`，产物输出到 backend/api-gateway/static。
+// 跨平台前端构建脚本，会在 web 下执行 `pnpm build`，产物输出到 backend/opsbox-server/static。
 // Windows 下无需 bash，直接：`node scripts/build-frontend.mjs`
 
 import { spawn } from 'node:child_process';

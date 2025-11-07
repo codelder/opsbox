@@ -61,7 +61,7 @@ jobs:
           # 然后构建 release 版本（利用测试阶段的编译缓存）
           cargo build \
             --manifest-path backend/Cargo.toml \
-            -p opsbox -p opsbox-agent \
+            -p opsbox-server -p opsbox-agent \
             --target ${{ matrix.target.rust_target }} \
             --release \
             --locked
@@ -111,7 +111,7 @@ jobs:
             # 然后构建 release 版本（利用测试阶段的编译缓存）
             cargo build \
               --manifest-path backend/Cargo.toml \
-              -p opsbox -p opsbox-agent \
+              -p opsbox-server -p opsbox-agent \
               --target ${{ matrix.target.rust_target }} \
               --release \
               --locked
@@ -130,7 +130,7 @@ jobs:
         if: ${{ matrix.target.name == 'gnu' }}
         run: |
           set -euo pipefail
-          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-server"
           AGENT_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-agent"
           
           for BIN in "$OPSBOX_BIN" "$AGENT_BIN"; do
@@ -153,11 +153,11 @@ jobs:
             fi
           done
 
-      - name: Package opsbox artifact (${{ matrix.target.name }})
+      - name: Package opsbox-server artifact (${{ matrix.target.name }})
         run: |
           set -eux
-          OPSBOX_DIR="dist/opsbox-linux-x86_64-${{ matrix.target.name }}"
-          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox"
+          OPSBOX_DIR="dist/opsbox-server-linux-x86_64-${{ matrix.target.name }}"
+          OPSBOX_BIN="backend/target-${{ matrix.target.name }}/${{ matrix.target.rust_target }}/release/opsbox-server"
           mkdir -p "$OPSBOX_DIR"
           cp "$OPSBOX_BIN" "$OPSBOX_DIR/"
           
@@ -165,7 +165,7 @@ jobs:
           echo "${{ github.sha }}" > "$OPSBOX_DIR/VERSION"
           echo "Target: ${{ matrix.target.rust_target }}" >> "$OPSBOX_DIR/VERSION"
           echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OPSBOX_DIR/VERSION"
-          echo "Binary: opsbox" >> "$OPSBOX_DIR/VERSION"
+          echo "Binary: opsbox-server" >> "$OPSBOX_DIR/VERSION"
 
       - name: Package opsbox-agent artifact (${{ matrix.target.name }})
         run: |
@@ -181,11 +181,11 @@ jobs:
           echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$AGENT_DIR/VERSION"
           echo "Binary: opsbox-agent" >> "$AGENT_DIR/VERSION"
 
-      - name: Upload opsbox artifact (${{ matrix.target.name }})
+      - name: Upload opsbox-server artifact (${{ matrix.target.name }})
         uses: actions/upload-artifact@v4
         with:
-          name: opsbox-linux-x86_64-${{ matrix.target.name }}
-          path: dist/opsbox-linux-x86_64-${{ matrix.target.name }}
+          name: opsbox-server-linux-x86_64-${{ matrix.target.name }}
+          path: dist/opsbox-server-linux-x86_64-${{ matrix.target.name }}
 
       - name: Upload opsbox-agent artifact (${{ matrix.target.name }})
         uses: actions/upload-artifact@v4

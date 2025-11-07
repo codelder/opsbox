@@ -52,15 +52,16 @@ pub fn router(db_pool: SqlitePool) -> Router {
       axum::routing::get(profiles::list_profiles).post(profiles::save_profile),
     )
     .route("/profiles/{name}", axum::routing::delete(profiles::delete_profile))
-    // Planner 脚本管理
+    // Planner 脚本管理（将 CRUD 端点放到 scripts 命名空间，避免与 test/readme 冲突）
     .route(
-      "/settings/planners",
+      "/settings/planners/scripts",
       axum::routing::get(planners::list_scripts).post(planners::save_script),
     )
     .route(
-      "/settings/planners/{app}",
+      "/settings/planners/scripts/{app}",
       axum::routing::get(planners::get_script).delete(planners::delete_script),
     )
+    // 其他动作/文档端点保持不变
     .route("/settings/planners/test", axum::routing::post(planners::test_script))
     .route(
       "/settings/planners/readme",

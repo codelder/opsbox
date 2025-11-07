@@ -1,4 +1,5 @@
 // 源配置：用于描述 /search 路由要处理的来源
+use crate::agent::SearchScope;
 use serde::{Deserialize, Serialize};
 
 /// 存储源配置
@@ -14,6 +15,10 @@ pub enum SourceConfig {
     /// 是否递归搜索
     #[serde(default = "default_true")]
     recursive: bool,
+    /// 搜索范围（可选），例如 {"TarGz": {"path": "archive.tar.gz"}}
+    /// 如果未指定，则根据 path 是否是 .tar.gz 自动判断
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<SearchScope>,
   },
 
   /// S3 配置(使用 profile 名称)
@@ -44,6 +49,9 @@ pub enum SourceConfig {
     /// 额外路径过滤（glob，可选），例如 "**/2025-10-19/**"
     #[serde(skip_serializing_if = "Option::is_none")]
     path_filter_glob: Option<String>,
+    /// 搜索范围（可选），例如 {"TarGz": {"path": "archive.tar.gz"}}
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<SearchScope>,
   },
 }
 

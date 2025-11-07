@@ -8,7 +8,7 @@
 
 **Monorepo 结构，包含三个 crate：**
 
-- **opsbox** (主程序，输出二进制名 `opsbox`)
+- **opsbox-server** (主程序，输出二进制名 `opsbox-server`)
   - 模块化结构：config、logging、daemon、server
   - 内嵌前端静态资源
   - SQLite 数据库管理
@@ -56,7 +56,7 @@ pnpm --dir web install
 
 ```bash
 # 后端（终端1）
-cargo run --manifest-path backend/Cargo.toml -p opsbox
+cargo run --manifest-path backend/Cargo.toml -p opsbox-server
 
 # 前端（终端2）
 pnpm --dir web dev
@@ -67,11 +67,11 @@ pnpm --dir web dev
 ### 生产构建
 
 ```bash
-# 构建前端（输出到 backend/api-gateway/static，构建前会清空该目录）
+# 构建前端（输出到 backend/opsbox-server/static，构建前会清空该目录）
 pnpm --dir web build
 
 # 构建后端（会将静态资源嵌入二进制）
-cargo build --manifest-path backend/Cargo.toml -p opsbox --release
+cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 ```
 
 ## 主要功能
@@ -113,10 +113,10 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 
 ```bash
 # 启动守护进程
-cargo run -p opsbox -- start --daemon
+cargo run -p opsbox-server -- start --daemon
 
 # 停止守护进程
-cargo run -p opsbox -- stop
+cargo run -p opsbox-server -- stop
 ```
 
 ## 📚 开发文档

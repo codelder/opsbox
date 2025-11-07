@@ -200,13 +200,7 @@ curl -X POST http://localhost:4001/api/v1/search \
   -d '{...}'
 ```
 
-### 5. 进度查询
-```bash
-curl http://localhost:4001/api/v1/progress/{task_id}
-# 返回搜索进度
-```
-
-### 6. 取消搜索
+### 5. 取消搜索
 ```bash
 curl -X POST http://localhost:4001/api/v1/cancel/{task_id}
 # 取消指定的搜索任务
@@ -232,7 +226,6 @@ curl -X POST http://localhost:4001/api/v1/cancel/{task_id}
 ### 4. 错误处理
 - 先查询可用路径再搜索
 - 处理路径不存在的错误
-- 监控搜索进度和状态
 
 ## 总结
 

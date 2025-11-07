@@ -7,6 +7,15 @@ use log::{debug, warn};
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
+// 统一读取并发度：使用 ENTRY_CONCURRENCY（范围 1-64，默认 8）
+fn entry_concurrency() -> usize {
+  std::env::var("ENTRY_CONCURRENCY")
+    .ok()
+    .and_then(|s| s.parse::<usize>().ok())
+    .unwrap_or(8)
+    .clamp(1, 64)
+}
+
 use super::search::{SearchProcessor, SearchResult};
 use opsbox_core::SqlitePool;
 
@@ -105,6 +114,44 @@ impl EntryStream for FsEntryStream {
   }
 }
 
+/// 单文件条目流（只产出一次）
+pub struct SingleFileEntryStream {
+  path: PathBuf,
+  yielded: bool,
+}
+
+impl SingleFileEntryStream {
+  /// 创建单文件条目流
+  pub fn new(path: PathBuf) -> Self {
+    Self { path, yielded: false }
+  }
+}
+
+#[async_trait]
+impl EntryStream for SingleFileEntryStream {
+  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    if self.yielded {
+      return Ok(None);
+    }
+    // 打开单个文件并产生一次条目
+    let file = tokio::fs::File::open(&self.path).await?;
+    let reader = BufReader::new(file);
+    let name = self
+      .path
+      .file_name()
+      .and_then(|s| s.to_str())
+      .map(|s| s.to_string())
+      .unwrap_or_else(|| self.path.to_string_lossy().to_string());
+    let meta = EntryMeta {
+      path: name,
+      size: None,
+      is_compressed: false,
+    };
+    self.yielded = true;
+    Ok(Some((meta, Box::new(reader))))
+  }
+}
+
 /// tar.gz 条目流（基于 AsyncRead 输入）
 pub struct TarEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<R>>>>,
@@ -173,7 +220,7 @@ impl EntryStreamProcessor {
     self
   }
 
-  /// 并发处理条目（有界并发，默认并发度 8，可通过 AGENT_ENTRY_CONCURRENCY 环境变量调整，范围 1-64）
+  /// 并发处理条目（有界并发，默认并发度 8，可通过 ENTRY_CONCURRENCY 环境变量调整，范围 1-64）
   pub async fn process_stream(
     &mut self,
     entries: &mut dyn EntryStream,
@@ -182,11 +229,7 @@ impl EntryStreamProcessor {
     let processor = self.processor.clone();
     let content_timeout = self.content_timeout;
     let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
-    let max_conc = std::env::var("AGENT_ENTRY_CONCURRENCY")
-      .ok()
-      .and_then(|s| s.parse::<usize>().ok())
-      .unwrap_or(8)
-      .clamp(1, 64);
+    let max_conc = entry_concurrency();
 
     loop {
       // 如果并发达到上限，先等待一个任务完成
@@ -268,19 +311,59 @@ impl EntryStreamFactory {
     Self { db_pool }
   }
 
+  /// 构建本地来源条目流（单文件/目录/tar.gz，支持 scope=TarGz 相对路径）
+  pub async fn build_local_entry_stream(
+    &self,
+    root_or_file: &str,
+    scope: Option<crate::agent::SearchScope>,
+  ) -> Result<Box<dyn EntryStream>, String> {
+    use crate::agent::SearchScope;
+    if let Some(SearchScope::TarGz { path: rel }) = scope {
+      let targz_path = PathBuf::from(root_or_file).join(rel);
+      let file = tokio::fs::File::open(&targz_path)
+        .await
+        .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
+      let stream = TarEntryStream::new(file)
+        .await
+        .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
+      return Ok(Box::new(stream));
+    }
+
+    let lower = root_or_file.to_lowercase();
+    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+      let file = tokio::fs::File::open(root_or_file)
+        .await
+        .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", root_or_file, e))?;
+      let stream = TarEntryStream::new(file)
+        .await
+        .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", root_or_file, e))?;
+      return Ok(Box::new(stream));
+    }
+
+    match tokio::fs::metadata(root_or_file).await {
+      Ok(meta) if meta.is_file() => Ok(Box::new(SingleFileEntryStream::new(PathBuf::from(root_or_file)))),
+      Ok(meta) if meta.is_dir() => {
+        let stream = FsEntryStream::new(PathBuf::from(root_or_file))
+          .await
+          .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
+        Ok(Box::new(stream))
+      }
+      Ok(_) => Err(format!("不支持的文件类型: {}", root_or_file)),
+      Err(e) => Err(format!("无法访问路径 {}: {}", root_or_file, e)),
+    }
+  }
+
   /// 从存储源配置创建条目流
   ///
-  /// - Local: 返回 FsEntryStream（DFS 遍历）
+  /// - Local: 返回 FsEntryStream/SingleFileEntryStream/TarEntryStream
   /// - S3(key): 读取指定对象并按 tar.gz 展开为条目流
   pub async fn create_stream(
     &self,
     source: crate::domain::config::SourceConfig,
   ) -> Result<Box<dyn EntryStream>, String> {
     match source {
-      crate::domain::config::SourceConfig::Local { path, .. } => {
-        let root = PathBuf::from(path);
-        let stream = FsEntryStream::new(root).await.map_err(|e| e.to_string())?;
-        Ok(Box::new(stream))
+      crate::domain::config::SourceConfig::Local { path, scope, .. } => {
+        crate::service::entry_stream::build_local_entry_stream(&path, scope).await
       }
       crate::domain::config::SourceConfig::S3 {
         profile,
@@ -329,4 +412,101 @@ impl EntryStreamFactory {
       }
     }
   }
+}
+
+/// 构建本地来源条目流（单文件/目录/tar.gz，支持 scope=TarGz 相对路径）
+pub async fn build_local_entry_stream(
+  root_or_file: &str,
+  scope: Option<crate::agent::SearchScope>,
+) -> Result<Box<dyn EntryStream>, String> {
+  use crate::agent::SearchScope;
+  if let Some(SearchScope::TarGz { path: rel }) = scope {
+    let targz_path = PathBuf::from(root_or_file).join(rel);
+    let file = tokio::fs::File::open(&targz_path)
+      .await
+      .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
+    let stream = TarEntryStream::new(file)
+      .await
+      .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
+    return Ok(Box::new(stream));
+  }
+
+  let lower = root_or_file.to_lowercase();
+  if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+    let file = tokio::fs::File::open(root_or_file)
+      .await
+      .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", root_or_file, e))?;
+    let stream = TarEntryStream::new(file)
+      .await
+      .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", root_or_file, e))?;
+    return Ok(Box::new(stream));
+  }
+
+  match tokio::fs::metadata(root_or_file).await {
+    Ok(meta) if meta.is_file() => Ok(Box::new(SingleFileEntryStream::new(PathBuf::from(root_or_file)))),
+    Ok(meta) if meta.is_dir() => {
+      let stream = FsEntryStream::new(PathBuf::from(root_or_file))
+        .await
+        .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
+      Ok(Box::new(stream))
+    }
+    Ok(_) => Err(format!("不支持的文件类型: {}", root_or_file)),
+    Err(e) => Err(format!("无法访问路径 {}: {}", root_or_file, e)),
+  }
+}
+
+/// 通用条目流处理函数（支持基于回调的结果处理）
+///
+/// 提供统一的条目流处理方式，可被 Server 和 Agent 复用，避免重复实现核心处理逻辑。
+/// 结果通过回调函数返回，调用方可灵活处理（发送到 channel、生成消息等）。
+///
+/// # 参数
+/// - stream: 条目流
+/// - processor: 搜索处理器
+/// - extra_path_filter: 额外路径过滤器（与用户查询的 path: 规则做 AND）
+/// - result_callback: 结果回调函数，返回 true 继续处理，返回 false 停止处理
+///
+/// # 返回
+/// 返回 (处理文件数, 匹配文件数)
+pub async fn process_entry_stream_with_callback<F>(
+  stream: Box<dyn EntryStream>,
+  processor: Arc<crate::service::search::SearchProcessor>,
+  extra_path_filter: Option<crate::query::PathFilter>,
+  mut result_callback: F,
+) -> Result<(usize, usize), String>
+where
+  F: FnMut(crate::service::search::SearchResult) -> bool + Send,
+{
+  // 创建条目流处理器
+  let mut stream_processor = EntryStreamProcessor::new(processor);
+  if let Some(filter) = extra_path_filter {
+    stream_processor = stream_processor.with_extra_path_filter(filter);
+  }
+
+  // 创建结果通道
+  let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+
+  // 后台条目流处理任务
+  let handle = tokio::spawn(async move {
+    let mut stream = stream;
+    let _ = stream_processor.process_stream(&mut *stream, tx).await;
+  });
+
+  let mut processed_count = 0;
+  let mut matched_count = 0;
+
+  // 收集结果并调用回调
+  while let Some(result) = rx.recv().await {
+    processed_count += 1;
+
+    // 回调返回 false 则停止处理
+    if !result_callback(result) {
+      break;
+    }
+
+    matched_count += 1;
+  }
+
+  let _ = handle.await;
+  Ok((processed_count, matched_count))
 }

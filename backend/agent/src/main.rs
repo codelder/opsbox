@@ -18,13 +18,11 @@ use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use log::{debug, error, info, warn};
+use logseek::utils::strings::truncate_utf8;
 use logseek::{
-  agent::{AgentInfo, AgentMessage, AgentSearchRequest, AgentStatus, SearchProgress, SearchScope, SearchStatus},
+  agent::{AgentInfo, AgentMessage, AgentSearchRequest, AgentStatus, SearchScope},
   query::Query,
-  service::{
-    entry_stream::{EntryStreamProcessor, FsEntryStream},
-    search::SearchProcessor,
-  },
+  service::search::SearchProcessor,
 };
 use std::{
   net::SocketAddr,
@@ -32,7 +30,7 @@ use std::{
   sync::Arc,
   time::Duration,
 };
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 /// 是否启用与 Server 通讯的“线级”调试日志（打印请求/响应、NDJSON 行等）
@@ -180,20 +178,14 @@ async fn async_main(config: Arc<AgentConfig>) -> Result<(), Box<dyn std::error::
   }
 
   // 创建任务管理器
-  let task_manager = Arc::new(TaskManager::new());
-
   // 构建路由
   let app = Router::new()
     .route("/health", get(health))
     .route("/api/v1/info", get(get_info))
     .route("/api/v1/paths", get(list_available_paths))
     .route("/api/v1/search", post(handle_search))
-    .route("/api/v1/progress/{task_id}", get(handle_progress))
     .route("/api/v1/cancel/{task_id}", post(handle_cancel))
-    .with_state(AppState {
-      config: config.clone(),
-      task_manager,
-    });
+    .with_state(AppState { config: config.clone() });
 
   // 启动 HTTP 服务器
   let addr = SocketAddr::from(([0, 0, 0, 0], config.listen_port));
@@ -440,85 +432,11 @@ fn find_matching_files(dir: &StdPath, glob_set: &GlobSet, results: &mut Vec<Path
 #[derive(Clone)]
 struct AppState {
   config: Arc<AgentConfig>,
-  task_manager: Arc<TaskManager>,
-}
-
-/// 任务管理器
-struct TaskManager {
-  tasks: RwLock<std::collections::HashMap<String, TaskInfo>>,
-}
-
-struct TaskInfo {
-  task_id: String,
-  status: SearchStatus,
-  processed: usize,
-  matched: usize,
-}
-
-impl TaskManager {
-  fn new() -> Self {
-    Self {
-      tasks: RwLock::new(std::collections::HashMap::new()),
-    }
-  }
-
-  async fn add_task(&self, task_id: String) {
-    self.tasks.write().await.insert(
-      task_id.clone(),
-      TaskInfo {
-        task_id,
-        status: SearchStatus::Running,
-        processed: 0,
-        matched: 0,
-      },
-    );
-  }
-
-  async fn update_progress(&self, task_id: &str, processed: usize, matched: usize) {
-    if let Some(task) = self.tasks.write().await.get_mut(task_id) {
-      task.processed = processed;
-      task.matched = matched;
-    }
-  }
-
-  async fn complete_task(&self, task_id: &str) {
-    if let Some(task) = self.tasks.write().await.get_mut(task_id) {
-      task.status = SearchStatus::Completed;
-    }
-  }
-
-  async fn get_progress(&self, task_id: &str) -> Option<SearchProgress> {
-    self.tasks.read().await.get(task_id).map(|task| SearchProgress {
-      task_id: task.task_id.clone(),
-      processed_files: task.processed,
-      matched_files: task.matched,
-      total_files: None,
-      status: task.status.clone(),
-    })
-  }
 }
 
 // ============================================================================
 // 工具函数
 // ============================================================================
-
-/// 按 UTF-8 字符边界安全截断字符串，避免跨多字节字符导致的切片 panic
-///
-/// 参数:
-/// - s: 原始字符串
-/// - max: 允许的最大字节数（非字符数）
-///
-/// 返回：不超过 max 字节且落在字符边界上的 &str 视图
-fn truncate_utf8(s: &str, max: usize) -> &str {
-  if s.len() <= max {
-    return s;
-  }
-  let mut end = max;
-  while end > 0 && !s.is_char_boundary(end) {
-    end -= 1;
-  }
-  &s[..end]
-}
 
 // ============================================================================
 // 路由处理器
@@ -556,19 +474,11 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
     );
   }
 
-  // 添加任务
-  state.task_manager.add_task(request.task_id.clone()).await;
-
   // 创建结果 channel
   let (tx, rx) = mpsc::channel(128);
 
   // 在后台执行搜索
-  tokio::spawn(execute_search(
-    state.config.clone(),
-    state.task_manager.clone(),
-    request,
-    tx,
-  ));
+  tokio::spawn(execute_search(state.config.clone(), request, tx));
 
   // 将 channel 转换为 NDJSON 流
   let stream = ReceiverStream::new(rx).map(|msg| {
@@ -591,11 +501,6 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
     .unwrap()
 }
 
-/// 获取搜索进度
-async fn handle_progress(State(state): State<AppState>, Path(task_id): Path<String>) -> Json<Option<SearchProgress>> {
-  Json(state.task_manager.get_progress(&task_id).await)
-}
-
 /// 取消搜索任务
 async fn handle_cancel(State(_state): State<AppState>, Path(task_id): Path<String>) -> StatusCode {
   warn!("收到取消请求: task_id={} (暂未实现)", task_id);
@@ -607,12 +512,7 @@ async fn handle_cancel(State(_state): State<AppState>, Path(task_id): Path<Strin
 // ============================================================================
 
 /// 执行搜索
-async fn execute_search(
-  config: Arc<AgentConfig>,
-  task_manager: Arc<TaskManager>,
-  request: AgentSearchRequest,
-  tx: mpsc::Sender<AgentMessage>,
-) {
+async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, tx: mpsc::Sender<AgentMessage>) {
   let task_id = request.task_id.clone();
 
   // 1. 解析查询（第三层过滤：query 中的 path: 指令）
@@ -649,9 +549,8 @@ async fn execute_search(
 
   // 4. 额外路径过滤：将 path_filter 转为仅含 path: 的 Query，提取 PathFilter 作为“硬性 AND 限定”
   let extra_path_filter: Option<logseek::query::PathFilter> = if let Some(filter) = &request.path_filter {
-    let path_query = format!("path:{}", filter);
-    match Query::parse_github_like(&path_query) {
-      Ok(q) => Some(q.path_filter),
+    match logseek::query::path_glob_to_filter(filter) {
+      Ok(f) => Some(f),
       Err(e) => {
         error!("路径过滤器解析失败: {}", e);
         let _ = tx.send(AgentMessage::Error(format!("路径过滤器解析失败: {}", e))).await;
@@ -677,72 +576,36 @@ async fn execute_search(
   for search_path in filtered_paths {
     info!("开始搜索路径: {}", search_path.display());
 
-    // 修正：依据路径实际类型选择搜索策略，避免将“文件路径”误按“目录”处理
-    // - 如果是文件：根据扩展名选择普通文件或 tar.gz 搜索
-    // - 如果是目录：按原有逻辑（Directory/All -> 目录搜索；递归默认 true）
-    if search_path.is_file() {
-      // 判断是否为 .tar.gz（扩展名链较难准确判断，采用字符串后缀更稳妥）
-      let path_s = search_path.to_string_lossy().to_lowercase();
-      let is_targz = path_s.ends_with(".tar.gz");
-
-      if is_targz {
-        if let Err(e) = search_targz(
-          &search_path,
-          processor.clone(),
-          &task_id,
-          &tx,
-          &task_manager,
-          &mut all_processed,
-          &mut all_matched,
-          extra_path_filter.clone(),
-        )
-        .await
-        {
-          warn!("搜索压缩包失败 {}: {}", search_path.display(), e);
-        }
-      } else if let Err(e) = search_files(
-        &search_path,
-        processor.clone(),
-        &task_id,
-        &tx,
-        &task_manager,
-        &mut all_processed,
-        &mut all_matched,
-        extra_path_filter.clone(),
-      )
-      .await
-      {
-        warn!("搜索文件失败 {}: {}", search_path.display(), e);
+    // 统一由 logseek 提供的构造器创建本地来源条目流
+    let path_str = search_path.to_string_lossy().to_string();
+    let scope_hint = match &request.scope {
+      SearchScope::TarGz { .. } => Some(request.scope.clone()),
+      _ => None,
+    };
+    let estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, scope_hint).await {
+      Ok(s) => s,
+      Err(e) => {
+        warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
+        continue;
       }
-    } else {
-      // 目录路径：按请求的 Scope 决定是否递归；All/Directory 统一目录搜索
-      let recursive = match &request.scope {
-        SearchScope::Directory { recursive, .. } => *recursive,
-        _ => true, // All 或其它场景默认递归
-      };
+    };
 
-      if let Err(e) = search_directory(
-        &search_path,
-        recursive,
-        processor.clone(),
-        &task_id,
-        &tx,
-        &task_manager,
-        &mut all_processed,
-        &mut all_matched,
-        extra_path_filter.clone(),
-      )
-      .await
-      {
-        warn!("搜索目录失败 {}: {}", search_path.display(), e);
-      }
+    if let Err(e) = search_with_entry_stream(
+      estream,
+      processor.clone(),
+      &task_id,
+      &tx,
+      &mut all_processed,
+      &mut all_matched,
+      extra_path_filter.clone(),
+    )
+    .await
+    {
+      warn!("处理条目流失败 {}: {}", search_path.display(), e);
     }
   }
 
-  // 6. 标记任务完成
-  task_manager.complete_task(&task_id).await;
-
-  // 7. 发送完成消息
+  // 发送完成消息
   let _ = tx.send(AgentMessage::Complete).await;
 
   info!(
@@ -751,156 +614,42 @@ async fn execute_search(
   );
 }
 
-/// 搜索目录
-#[allow(clippy::too_many_arguments, clippy::manual_is_multiple_of)]
-async fn search_directory(
-  path: &StdPath,
-  _recursive: bool, // TODO: 实现递归控制
+/// 通用条目流搜索辅助函数
+/// 使用通用处理函数并自动处理消息发送
+async fn search_with_entry_stream(
+  stream: Box<dyn logseek::service::entry_stream::EntryStream>,
   processor: Arc<SearchProcessor>,
-  task_id: &str,
+  _task_id: &str,
   tx: &mpsc::Sender<AgentMessage>,
-  task_manager: &TaskManager,
   all_processed: &mut usize,
   all_matched: &mut usize,
   extra_path_filter: Option<logseek::query::PathFilter>,
 ) -> Result<(), String> {
-  let mut stream = FsEntryStream::new(path.to_path_buf())
-    .await
-    .map_err(|e| format!("无法读取目录 {}: {}", path.display(), e))?;
+  // 使用通用条目流处理函数
+  let tx_clone = tx.clone();
 
-  let mut proc_stream = EntryStreamProcessor::new(processor);
-  if let Some(f) = extra_path_filter {
-    // 将额外路径过滤器注入处理器（与用户 path: 规则做 AND）
-    proc_stream = proc_stream.with_extra_path_filter(f);
-  }
-  let (sr_tx, mut sr_rx) = mpsc::channel::<logseek::service::search::SearchResult>(128);
-
-  // 后台处理条目流
-  let handle = tokio::spawn(async move {
-    let _ = proc_stream.process_stream(&mut stream, sr_tx).await;
-  });
-
-  while let Some(result) = sr_rx.recv().await {
-    *all_processed += 1;
-    if tx.send(AgentMessage::Result(result)).await.is_err() {
-      debug!("接收端已关闭");
-      return Ok(());
-    }
-    *all_matched += 1;
-
-    if *all_processed % 100 == 0 {
-      task_manager
-        .update_progress(task_id, *all_processed, *all_matched)
-        .await;
-      let _ = tx
-        .send(AgentMessage::Progress(SearchProgress {
-          task_id: task_id.to_string(),
-          processed_files: *all_processed,
-          matched_files: *all_matched,
-          total_files: None,
-          status: SearchStatus::Running,
-        }))
-        .await;
-    }
-  }
-
-  let _ = handle.await;
-  Ok(())
-}
-
-/// 搜索单个文件
-#[allow(clippy::too_many_arguments, clippy::manual_is_multiple_of)]
-async fn search_files(
-  path: &StdPath,
-  processor: Arc<SearchProcessor>,
-  task_id: &str,
-  tx: &mpsc::Sender<AgentMessage>,
-  task_manager: &TaskManager,
-  all_processed: &mut usize,
-  all_matched: &mut usize,
-  extra_path_filter: Option<logseek::query::PathFilter>,
-) -> Result<(), String> {
-  if !path.is_file() {
-    return Err(format!("路径不是文件: {}", path.display()));
-  }
-
-  // 创建单文件流
-  let mut stream = FsEntryStream::new(path.to_path_buf())
-    .await
-    .map_err(|e| format!("无法读取文件 {}: {}", path.display(), e))?;
-
-  let mut proc_stream = EntryStreamProcessor::new(processor);
-  if let Some(f) = extra_path_filter {
-    // 将额外路径过滤器注入处理器（与用户 path: 规则做 AND）
-    proc_stream = proc_stream.with_extra_path_filter(f);
-  }
-  let (sr_tx, mut sr_rx) = mpsc::channel::<logseek::service::search::SearchResult>(128);
-
-  // 后台处理条目流
-  let handle = tokio::spawn(async move {
-    let _ = proc_stream.process_stream(&mut stream, sr_tx).await;
-  });
-
-  while let Some(result) = sr_rx.recv().await {
-    *all_processed += 1;
-    if tx.send(AgentMessage::Result(result)).await.is_err() {
-      debug!("接收端已关闭");
-      return Ok(());
-    }
-    *all_matched += 1;
-
-    if *all_processed % 100 == 0 {
-      task_manager
-        .update_progress(task_id, *all_processed, *all_matched)
-        .await;
-      let _ = tx
-        .send(AgentMessage::Progress(SearchProgress {
-          task_id: task_id.to_string(),
-          processed_files: *all_processed,
-          matched_files: *all_matched,
-          total_files: None,
-          status: SearchStatus::Running,
-        }))
-        .await;
-    }
-  }
-
-  let _ = handle.await;
-  Ok(())
-}
-
-/// 搜索 tar.gz 文件
-#[allow(clippy::too_many_arguments)]
-async fn search_targz(
-  path: &StdPath,
-  processor: Arc<SearchProcessor>,
-  task_id: &str,
-  tx: &mpsc::Sender<AgentMessage>,
-  task_manager: &TaskManager,
-  all_processed: &mut usize,
-  all_matched: &mut usize,
-  extra_path_filter: Option<logseek::query::PathFilter>,
-) -> Result<(), String> {
-  if !path.is_file() {
-    return Err(format!("路径不是文件: {}", path.display()));
-  }
-
-  // TODO: 实现 tar.gz 文件的搜索
-  // 这里需要实现解压缩和流式读取 tar.gz 文件的功能
-  warn!("TarGz 搜索功能尚未实现: {}", path.display());
-
-  // 临时实现：将 tar.gz 文件当作普通文件处理
-  search_files(
-    path,
+  let (processed, matched) = logseek::service::entry_stream::process_entry_stream_with_callback(
+    stream,
     processor,
-    task_id,
-    tx,
-    task_manager,
-    all_processed,
-    all_matched,
     extra_path_filter,
+    move |result| {
+      // 发送结果到 channel
+      let tx_ref = &tx_clone;
+      match futures::executor::block_on(async { tx_ref.send(AgentMessage::Result(result)).await }) {
+        Ok(_) => true, // 继续处理
+        Err(_) => {
+          debug!("接收端已关闭");
+          false // 停止处理
+        }
+      }
+    },
   )
-  .await
+  .await?;
+
+  *all_processed += processed;
+  *all_matched += matched;
+
+  Ok(())
 }
 
 // ============================================================================

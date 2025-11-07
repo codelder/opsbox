@@ -165,3 +165,17 @@ fn eval_expr(expr: &Expr, f: &dyn Fn(usize) -> bool) -> bool {
     Expr::Or(v) => v.iter().any(|e| eval_expr(e, f)),
   }
 }
+
+/// 将 glob 表达式转换为 PathFilter（仅包含 include 规则）
+pub fn path_glob_to_filter(glob: &str) -> Result<PathFilter, String> {
+  let glob = globset::Glob::new(glob).map_err(|e| format!("无效路径模式: {}", e))?;
+  let mut builder = globset::GlobSetBuilder::new();
+  builder.add(glob);
+  let set = builder.build().map_err(|e| format!("构建路径过滤器失败: {}", e))?;
+  Ok(PathFilter {
+    include: Some(set),
+    exclude: None,
+    include_contains: Vec::new(),
+    exclude_contains: Vec::new(),
+  })
+}

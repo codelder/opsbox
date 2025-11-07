@@ -1,4 +1,7 @@
-use axum::http::{StatusCode, header::ACCEPT, header::CONTENT_TYPE};
+use axum::http::{
+  StatusCode,
+  header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+};
 use axum::{Router, http, response::Response, routing::get};
 use opsbox_core::{Module, SqlitePool};
 use rust_embed::RustEmbed;
@@ -7,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
-// 将 server/api-gateway/static 目录在编译期打包进二进制
+// 将 backend/opsbox-server/static 目录在编译期打包进二进制
 #[derive(RustEmbed)]
 #[folder = "static"]
 struct Assets;
@@ -159,8 +162,15 @@ fn build_router(db_pool: SqlitePool, modules: &[Arc<dyn Module>]) -> Router {
 fn configure_cors() -> CorsLayer {
   CorsLayer::new()
     .allow_origin(Any)
-    .allow_methods([http::Method::GET, http::Method::POST, http::Method::OPTIONS])
-    .allow_headers([CONTENT_TYPE, ACCEPT])
+    .allow_methods([
+      http::Method::GET,
+      http::Method::POST,
+      http::Method::DELETE,
+      http::Method::PUT,
+      http::Method::PATCH,
+      http::Method::OPTIONS,
+    ])
+    .allow_headers([CONTENT_TYPE, ACCEPT, AUTHORIZATION])
     .expose_headers([http::header::HeaderName::from_static("x-logseek-sid")])
 }
 
