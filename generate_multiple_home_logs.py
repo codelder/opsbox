@@ -289,31 +289,34 @@ def create_tar_gz(base_dir, output_file):
 def main():
     print("开始生成测试日志文件...")
     
-    # 执行4遍，每遍生成10个文件
-    for batch in range(2):
+    # 执行指定批次：20、21、22、23
+    for batch in [20, 21, 22, 23]:
         print(f"\n{'='*50}")
-        print(f"第 {batch+1} 轮生成开始")
+        print(f"批次 {batch} 生成开始")
         print(f"{'='*50}")
         
-        # 生成10个文件，日期从2025-08-19开始
-        start_date = datetime.date(2025, 10, 21)
+        # 生成 2025-11-06 当天及之前 10 天（共 11 天）的日志
+        end_date = datetime.date(2025, 11, 6)
+        start_date = end_date - datetime.timedelta(days=10)
         
-        for i in range(17):
+        for i in range(11):
             current_date = start_date + datetime.timedelta(days=i)
             date_str = current_date.strftime("%Y-%m-%d")
+            # 文件名中的日期与内部日期保持一致
+            file_date_str = current_date.strftime("%Y-%m-%d")
             
-            print(f"\n=== 第 {batch+1} 轮，第 {i+1} 个文件，日期: {date_str} ===")
+            print(f"\n=== 批次 {batch}，第 {i+1} 个文件，日期: {date_str} ===")
             
             # 创建目录结构
-            base_dir = Path(f"home_batch{batch+1}_{i+1}")
+            base_dir = Path(f"home_batch{batch}_{i+1}")
             create_directory_structure(base_dir, date_str)
             print(f"创建目录结构: {base_dir}")
             
             # 生成文件
             generate_files(base_dir, date_str)
             
-            # 创建tar.gz文件，添加批次标识
-            output_file = f"home_logs_batch{batch+1}_{date_str}.tar.gz"
+            # 创建tar.gz文件，命名为 BBIP_{批次}_APPLOG_{YYYY-MM-DD}.tar.gz（日期与内部日期一致）
+            output_file = f"BBIP_{batch}_APPLOG_{file_date_str}.tar.gz"
             create_tar_gz(base_dir, output_file)
             
             # 清理临时目录
@@ -323,7 +326,7 @@ def main():
             print(f"完成！生成的文件: {output_file}")
             print(f"文件大小: {os.path.getsize(output_file) / 1024:.1f} KB")
         
-        print(f"\n第 {batch+1} 轮生成完成！")
+        print(f"\n批次 {batch} 生成完成！")
     
     print(f"\n{'='*50}")
     print("所有批次生成完成！")
