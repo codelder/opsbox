@@ -146,34 +146,29 @@ CREATE TABLE IF NOT EXISTS logseek_settings (
 
 **注意：** `default` profile 是系统保留配置，不能删除
 
-## FILE_URL 格式支持
+## FILE_URL 格式支持（当前实现）
 
-Profile 功能已集成到 FILE_URL 系统中。**每个 Profile 现在包含完整的访问配置（Endpoint + Bucket + Credentials）**，使用更简洁：
+Profile 功能已集成到 FILE_URL 系统中；当前实现的 S3 URL 规则与代码一致：
 
 ### 格式说明
 
-- **使用指定 Profile**: `s3://profile_name/path/to/object`
+- 使用默认配置：`s3://<bucket>/<key>`
+- 使用指定 Profile 与 Bucket：`s3://<profile>:<bucket>/<key>`
 
 ### 示例
 
 ```
-# 使用 production-logs profile（已包含 endpoint + bucket）
-s3://production-logs/2025/01/app.log
+# 使用默认配置（从默认 S3 设置读取 endpoint/凭证）
+s3://app-logs/2025/01/app.log
 
-# 使用 staging-backups profile
-s3://staging-backups/2025/01/backup.tar.gz
+# 使用 production-logs Profile 指定的 endpoint/凭证 + 指定 bucket
+s3://production-logs:app-logs/2025/01/app.log
 
-# Tar 包内文件（使用 production-logs profile）
-tar.gz+s3://production-logs/archive.tar.gz:logs/app.log
+# Tar 包内文件（默认配置）
+tar.gz+s3://app-logs/archive.tar.gz:logs/app.log
 ```
 
-### 设计优势
-
-✅ **更符合实际场景**：一个 Profile = 一个具体的业务场景（如 production-logs, staging-backups）  
-✅ **URL 更简洁**：不需要同时指定 profile 和 bucket  
-✅ **权限隔离更清晰**：每个 Profile 对应不同的访问权限  
-✅ **使用更方便**：选择 Profile = 同时确定了所有访问信息
-
+说明：目前 FileUrl 解析器要求在使用 Profile 时显式提供 bucket 名（`s3://<profile>:<bucket>/<key>`）。
 ## 未来计划
 
 ### 跨 Profile 搜索
@@ -235,30 +230,30 @@ tar.gz+s3://production-logs/archive.tar.gz:logs/app.log
 
 - **语言**: Rust
 - **数据库**: SQLite
-- **模块**: `server/logseek/src/repository/settings.rs`
-- **API 路由**: `server/logseek/src/routes.rs`
+- **模块**: `backend/logseek/src/repository/settings.rs`
+- **API 路由**: `backend/logseek/src/routes/mod.rs`
 
 ### 前端实现
 
 - **框架**: SvelteKit 5 (Runes API)
 - **状态管理**: `useProfiles` composable
-- **API 客户端**: `ui/src/lib/modules/logseek/api/profiles.ts`
-- **UI 组件**: `ui/src/routes/settings/ProfileManagement.svelte`
+- **API 客户端**: `web/src/lib/modules/logseek/api/profiles.ts`
+- **UI 组件**: `web/src/routes/settings/ProfileManagement.svelte`
 
 ### 核心文件
 
 #### 后端
-- `server/logseek/src/repository/settings.rs` - Profile CRUD 操作
-- `server/logseek/src/api/models.rs` - API 数据模型
-- `server/logseek/src/routes.rs` - HTTP 路由处理
-- `server/logseek/src/domain/file_url.rs` - FILE_URL 格式支持
+- `backend/logseek/src/repository/settings.rs` - Profile CRUD 操作
+- `backend/logseek/src/api/models.rs` - API 数据模型
+- `backend/logseek/src/routes/mod.rs` - HTTP 路由处理
+- `backend/logseek/src/domain/file_url.rs` - FILE_URL 格式支持
 
 #### 前端
-- `ui/src/lib/modules/logseek/composables/useProfiles.svelte.ts` - 状态管理
-- `ui/src/lib/modules/logseek/api/profiles.ts` - API 客户端
-- `ui/src/lib/modules/logseek/types/index.ts` - TypeScript 类型定义
-- `ui/src/routes/settings/ProfileManagement.svelte` - Profile 管理 UI
-- `ui/src/routes/settings/+page.svelte` - 设置页面（集成 Profile 管理）
+- `web/src/lib/modules/logseek/composables/useProfiles.svelte.ts` - 状态管理
+- `web/src/lib/modules/logseek/api/profiles.ts` - API 客户端
+- `web/src/lib/modules/logseek/types/index.ts` - TypeScript 类型定义
+- `web/src/routes/settings/ProfileManagement.svelte` - Profile 管理 UI
+- `web/src/routes/settings/+page.svelte` - 设置页面（集成 Profile 管理）
 
 ## 贡献
 

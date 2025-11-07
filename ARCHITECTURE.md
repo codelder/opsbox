@@ -342,7 +342,7 @@ let io_concurrency = load_setting(&pool, "search.s3.max_concurrency")
 
 #### 1.3 完善前端 FileUrl 支持
 ```typescript
-// ui/src/lib/modules/logseek/utils/fileUrl.ts
+// web/src/lib/modules/logseek/utils/fileUrl.ts
 
 export function parseFileUrl(url: string): FileUrlInfo {
     // ✅ 已实现 S3 解析

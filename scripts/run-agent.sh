@@ -8,7 +8,7 @@ set -e
 # 默认配置
 export AGENT_ID=${AGENT_ID:-"agent-$(hostname)"}
 export AGENT_NAME=${AGENT_NAME:-"Agent @ $(hostname)"}
-export SERVER_ENDPOINT=${SERVER_ENDPOINT:-"http://localhost:8080"}
+export SERVER_ENDPOINT=${SERVER_ENDPOINT:-"http://localhost:4000"}
 export SEARCH_ROOTS=${SEARCH_ROOTS:-"/var/log"}
 export AGENT_PORT=${AGENT_PORT:-8090}
 export ENABLE_HEARTBEAT=${ENABLE_HEARTBEAT:-true}

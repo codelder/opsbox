@@ -1,11 +1,11 @@
 # 前端开发指南
 
-本文档介绍如何使用 OpsBoard 前端的模块化架构进行开发。
+本文档介绍如何使用 OpsBox 前端的模块化架构进行开发。
 
 ## 📁 目录结构
 
 ```
-ui/src/lib/modules/logseek/
+web/src/lib/modules/logseek/
 ├── types/           # TypeScript 类型定义
 │   └── index.ts
 ├── api/             # API 客户端层
@@ -71,11 +71,11 @@ API 客户端提供类型安全的后端调用。
 #### 示例：获取和保存 MinIO 设置
 
 ```typescript
-import { fetchMinioSettings, saveMinioSettings } from '$lib/modules/logseek';
+import { fetchS3Settings, saveS3Settings } from '$lib/modules/logseek';
 
 // 获取设置
 try {
-  const settings = await fetchMinioSettings();
+  const settings = await fetchS3Settings();
   console.log(settings.endpoint, settings.bucket);
 } catch (error) {
   console.error('加载设置失败：', error);
@@ -83,7 +83,7 @@ try {
 
 // 保存设置
 try {
-  await saveMinioSettings({
+  await saveS3Settings({
     endpoint: 'http://localhost:9000',
     bucket: 'logs',
     access_key: 'minioadmin',
@@ -91,17 +91,17 @@ try {
   });
   console.log('保存成功');
 } catch (error) {
-  console.error('保存失败：', error.message);
+  console.error('保存失败：', (error as Error).message);
 }
 ```
 
 #### 示例：开始搜索
 
 ```typescript
-import { startSearch, extractSessionId } from '$lib/modules/logseek';
+import { startUnifiedSearch, extractSessionId } from '$lib/modules/logseek';
 
 try {
-  const response = await startSearch('error AND timeout');
+  const response = await startUnifiedSearch('error AND timeout');
   const sessionId = extractSessionId(response);
   const reader = response.body?.getReader();
   
@@ -392,7 +392,7 @@ export function formatTimestamp(timestamp: string): string {
 
 ```javascript
 // 检查 API 响应
-fetch('/api/v1/logseek/settings/minio')
+fetch('/api/v1/logseek/settings/s3')
   .then(r => r.json())
   .then(console.log);
 ```
@@ -421,12 +421,11 @@ fetch('/api/v1/logseek/settings/minio')
 运行类型检查命令：
 
 ```bash
-pnpm --dir ui run check
+pnpm --dir web check
 ```
 
 ## 🚀 下一步
 
-- 查看 `docs/PHASE4_SUMMARY.md` 了解重构详情
-- 查看具体页面代码了解实际使用示例
-- 尝试创建自己的 API 客户端或 composable
-- 为模块编写单元测试
+- 查看 `web/README.md` 获取前端开发与构建说明
+- 查看 `web/src/lib/modules/logseek/` 的实际代码用法
+- 尝试创建自己的 API 客户端或 composable，并为其编写单元测试

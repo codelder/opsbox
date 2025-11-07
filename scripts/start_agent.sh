@@ -1,6 +1,6 @@
 #!/bin/bash
 
-cd /Users/wangyue/workspace/codelder/opsboard/backend/agent
+cd /Users/wangyue/workspace/codelder/opsbox/backend/agent
 
 # 配置环境变量
 export SERVER_ENDPOINT="http://localhost:4000"

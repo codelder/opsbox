@@ -155,10 +155,10 @@ GET /api/v1/agents/?tags=env=production,team=frontend&online_only=true
 
 ```bash
 # 1. 查看所有 Agent
-curl -X GET "http://localhost:8080/api/v1/agents/"
+curl -X GET "http://localhost:4000/api/v1/agents/"
 
 # 2. 为特定 Agent 设置标签
-curl -X POST "http://localhost:8080/api/v1/agents/agent-prod-web-01/tags" \
+curl -X POST "http://localhost:4000/api/v1/agents/agent-prod-web-01/tags" \
   -H "Content-Type: application/json" \
   -d '{
     "tags": [
@@ -170,37 +170,37 @@ curl -X POST "http://localhost:8080/api/v1/agents/agent-prod-web-01/tags" \
   }'
 
 # 3. 验证标签设置
-curl -X GET "http://localhost:8080/api/v1/agents/agent-prod-web-01/tags"
+curl -X GET "http://localhost:4000/api/v1/agents/agent-prod-web-01/tags"
 ```
 
 ### **场景 2：按标签筛选 Agent**
 
 ```bash
 # 只获取生产环境的前端 Agent
-curl -X GET "http://localhost:8080/api/v1/agents/?tags=env=production,team=frontend&online_only=true"
+curl -X GET "http://localhost:4000/api/v1/agents/?tags=env=production,team=frontend&online_only=true"
 
 # 只获取 nginx 服务器的 Agent
-curl -X GET "http://localhost:8080/api/v1/agents/?tags=server=nginx&online_only=true"
+curl -X GET "http://localhost:4000/api/v1/agents/?tags=server=nginx&online_only=true"
 
 # 获取所有高优先级的 Agent
-curl -X GET "http://localhost:8080/api/v1/agents/?tags=priority=high&online_only=true"
+curl -X GET "http://localhost:4000/api/v1/agents/?tags=priority=high&online_only=true"
 ```
 
 ### **场景 3：动态标签管理**
 
 ```bash
 # 添加新标签
-curl -X POST "http://localhost:8080/api/v1/agents/agent-prod-web-01/tags/add" \
+curl -X POST "http://localhost:4000/api/v1/agents/agent-prod-web-01/tags/add" \
   -H "Content-Type: application/json" \
   -d '{"key": "maintenance", "value": "scheduled"}'
 
 # 移除标签
-curl -X DELETE "http://localhost:8080/api/v1/agents/agent-prod-web-01/tags/remove" \
+curl -X DELETE "http://localhost:4000/api/v1/agents/agent-prod-web-01/tags/remove" \
   -H "Content-Type: application/json" \
   -d '{"key": "maintenance", "value": "scheduled"}'
 
 # 清空所有标签
-curl -X DELETE "http://localhost:8080/api/v1/agents/agent-prod-web-01/tags/clear"
+curl -X DELETE "http://localhost:4000/api/v1/agents/agent-prod-web-01/tags/clear"
 ```
 
 ## 🎯 **最佳实践**

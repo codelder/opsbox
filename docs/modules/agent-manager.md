@@ -47,11 +47,11 @@ Agent Manager 模块提供以下端点（前缀 `/api/v1/agents`）：
 
 由于模块前缀是 `/api/v1/agents`，完整路径为：
 
-- `POST http://localhost:8080/api/v1/agents/register`
-- `GET http://localhost:8080/api/v1/agents`
-- `GET http://localhost:8080/api/v1/agents/{agent_id}`
-- `DELETE http://localhost:8080/api/v1/agents/{agent_id}`
-- `POST http://localhost:8080/api/v1/agents/{agent_id}/heartbeat`
+- `POST http://localhost:4000/api/v1/agents/register`
+- `GET http://localhost:4000/api/v1/agents`
+- `GET http://localhost:4000/api/v1/agents/{agent_id}`
+- `DELETE http://localhost:4000/api/v1/agents/{agent_id}`
+- `POST http://localhost:4000/api/v1/agents/{agent_id}/heartbeat`
 
 ---
 
@@ -60,7 +60,7 @@ Agent Manager 模块提供以下端点（前缀 `/api/v1/agents`）：
 ### 1. 启动 OpsBox Server
 
 ```bash
-cd /Users/wangyue/workspace/codelder/opsboard/backend/api-gateway
+cd /Users/wangyue/workspace/codelder/opsbox/backend/api-gateway
 cargo run --release
 
 # 应该看到:
@@ -73,16 +73,16 @@ cargo run --release
 # [INFO] Agent Manager: 暂不需要数据库表
 # [INFO] 注册路由: LogSeek -> /api/v1/logseek
 # [INFO] 注册路由: AgentManager -> /api/v1/agents
-# [INFO] OpsBox 服务启动成功，访问地址: http://127.0.0.1:8080
+# [INFO] OpsBox 服务启动成功，访问地址: http://127.0.0.1:4000
 ```
 
 ### 2. 启动 Agent
 
 ```bash
-cd /Users/wangyue/workspace/codelder/opsboard/backend/agent
+cd /Users/wangyue/workspace/codelder/opsbox/backend/agent
 
 # 配置环境变量（注意：路径不再包含 /logseek）
-export SERVER_ENDPOINT="http://localhost:8080"
+export SERVER_ENDPOINT="http://localhost:4000"
 export AGENT_ID="agent-$(hostname)"
 export AGENT_NAME="Test Agent"
 export SEARCH_ROOTS="/var/log"
@@ -102,7 +102,7 @@ cargo run --release
 
 ```bash
 # 列出所有 Agent
-curl http://localhost:8080/api/v1/agents
+curl http://localhost:4000/api/v1/agents
 
 # 应该返回:
 # {
@@ -117,7 +117,7 @@ curl http://localhost:8080/api/v1/agents
 # }
 
 # 获取特定 Agent
-curl http://localhost:8080/api/v1/agents/agent-hostname
+curl http://localhost:4000/api/v1/agents/agent-hostname
 ```
 
 ---
@@ -134,8 +134,8 @@ POST http://localhost:8080/api/v1/logseek/agents/{id}/heartbeat
 
 ### 新路径（独立模块）✅
 ```
-POST http://localhost:8080/api/v1/agents/register
-POST http://localhost:8080/api/v1/agents/{id}/heartbeat
+POST http://localhost:4000/api/v1/agents/register
+POST http://localhost:4000/api/v1/agents/{id}/heartbeat
 ```
 
 ### Agent 代码需要修改
@@ -261,11 +261,11 @@ LogSeek 可以通过以下方式使用 Agent：
 
 ```bash
 # 运行 Agent Manager 单元测试
-cd /Users/wangyue/workspace/codelder/opsboard/backend/agent-manager
+cd /Users/wangyue/workspace/codelder/opsbox/backend/agent-manager
 cargo test
 
 # 运行集成测试
-cd /Users/wangyue/workspace/codelder/opsboard/backend/api-gateway
+cd /Users/wangyue/workspace/codelder/opsbox/backend/api-gateway
 cargo test --release
 ```
 
@@ -296,17 +296,17 @@ cargo test --release
 
 # 启动 Agent
 cd ../agent
-export SERVER_ENDPOINT="http://localhost:8080"
+export SERVER_ENDPOINT="http://localhost:4000"
 cargo run --release
 ```
 
 ### 3. 验证功能
 ```bash
 # 列出 Agent
-curl http://localhost:8080/api/v1/agents
+curl http://localhost:4000/api/v1/agents
 
 # 查看特定 Agent
-curl http://localhost:8080/api/v1/agents/agent-hostname
+curl http://localhost:4000/api/v1/agents/agent-hostname
 ```
 
 ---

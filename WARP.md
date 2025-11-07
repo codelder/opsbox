@@ -5,10 +5,11 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 Project overview
 - Monorepo with a Rust backend and a SvelteKit (Vite) frontend.
 - Backend (backend/): Cargo workspace with crates:
-  - api-gateway: Main binary (named opsbox) serving as the HTTP server entry point. Dynamically composes modules discovered via opsbox-core's Module inventory (e.g., logseek, agent-manager).
+  - opsbox (dir: api-gateway): Main binary serving as the HTTP server entry point. Dynamically composes modules discovered via opsbox-core's Module inventory (e.g., logseek, agent-manager).
   - opsbox-core: Shared library providing unified error handling (AppError), database management (SQLite pool), standard response formats, a pluggable Module system (inventory-based), and LLM abstraction (Ollama/OpenAI).
-  - logseek: Module library exposing router() and init_schema() for log search over local agents and S3-compatible object stores, settings persistence (S3 profiles, LLM backends), and NL→Q using the unified LLM client.
-  - agent: Standalone agent binary for live/local log access used by LogSeek (optional in deployments).
+  - logseek: Module library exposing router() and init_schema() for log search over local agents and S3-compatible object stores, settings persistence (S3 profiles, LLM backends), planners, and NL→Q using the unified LLM client.
+  - agent-manager: Module library for agent registry/health/tags (API prefix /api/v1/agents); auto-registered via inventory.
+  - opsbox-agent (dir: agent): Standalone agent binary for live/local log access used by LogSeek (optional in deployments).
 - Frontend (web/): SvelteKit app compiled to static assets directly into backend/api-gateway/static using adapter-static with SPA fallback.
 
 Toolchains and prerequisites
@@ -23,7 +24,7 @@ Common commands
   - corepack enable; corepack prepare pnpm@10.17.1 --activate
   - pnpm --dir $ROOT/web install
 - Run backend (dev)
-  - cargo run --manifest-path $ROOT/backend/Cargo.toml -p api-gateway --
+  - cargo run --manifest-path $ROOT/backend/Cargo.toml -p opsbox --
   - Options (api-gateway):
     - --host/-H (default 127.0.0.1), --port/-P (default 4000), or --addr/-a HOST:PORT
     - --log-level error|warn|info|debug|trace or -v/-vv for verbosity
@@ -36,8 +37,8 @@ Common commands
   - pnpm --dir $ROOT/web build
   - Note: This will clear $ROOT/backend/api-gateway/static before building
 - Build backend (release)
-  - cargo build --manifest-path $ROOT/backend/Cargo.toml -p api-gateway --release  # bin: opsbox
-  - cargo build --manifest-path $ROOT/backend/Cargo.toml -p agent --release       # bin: opsbox-agent
+  - cargo build --manifest-path $ROOT/backend/Cargo.toml -p opsbox --release         # bin: opsbox
+  - cargo build --manifest-path $ROOT/backend/Cargo.toml -p opsbox-agent --release   # bin: opsbox-agent
 - Lint and format
   - Rust format (check): cargo fmt --manifest-path $ROOT/backend/Cargo.toml --all -- --check
   - Rust format (write): cargo fmt --manifest-path $ROOT/backend/Cargo.toml --all
@@ -72,6 +73,7 @@ Key runtime configuration
     - For OpenAI: OPENAI_API_KEY (required), OPENAI_MODEL (default gpt-4o-mini), OPENAI_BASE_URL (optional)
   - LLM backend settings endpoints (under /api/v1/logseek):
     - GET/POST /settings/llm/backends, DELETE /settings/llm/backends/{name}
+    - GET /settings/llm/backends/{name}/models, POST /settings/llm/models
     - GET/POST /settings/llm/default
 
 Architecture (modular design)
@@ -103,9 +105,13 @@ Architecture (modular design)
     - /view.cache.json: cached line ranges retrieval
     - /settings/s3 (GET/POST): S3 settings with optional verify
     - /profiles (GET/POST), /profiles/{name} (DELETE)
-    - /settings/llm/*: LLM backend management
+    - /settings/llm/backends (GET/POST), /settings/llm/backends/{name} (DELETE)
+    - /settings/llm/backends/{name}/models (GET), /settings/llm/models (POST)
+    - /settings/llm/default (GET/POST)
+    - /settings/planners (GET/POST), /settings/planners/{app} (GET/DELETE)
+    - /settings/planners/test (POST), /settings/planners/readme (GET)
     - /nl2q: natural language → query
-  - repository/: persistence for settings, LLM backends, and in-memory cache
+  - repository/: persistence for settings, LLM backends, planners, and in-memory cache
   - utils/: renderer, storage (S3), tuning (concurrency/timeouts)
   - query/: GitHub-like query language parser
 
@@ -148,3 +154,4 @@ Performance benchmarking (NDJSON)
   - CSV: ~/adaptive_120s_cpu16.csv (columns: time_iso,target,effective,err_rate_percent,tp_per_s)
   - Markdown table printed to terminal summarizing lines/duration/avg throughput
 - For local debugging of API without embedding UI, run frontend dev server with proxy and run api-gateway in dev.
+- Updated: The streaming API path is /api/v1/logseek/search.ndjson. The opsbox CLI flags are --s3-max-concurrency, --s3-timeout-sec, and --s3-max-retries. The bench script has been updated accordingly.

@@ -86,7 +86,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: backend/target-gnu
-          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
             target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
             target-gnu-${{ runner.os }}-
@@ -184,7 +184,7 @@ jobs:
             cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
 
             # 修正构建产物权限，避免宿主权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target-gnu" || true
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/backend/target-gnu" || true
           '
           ls -l backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
 

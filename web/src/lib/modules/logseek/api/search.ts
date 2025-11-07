@@ -12,10 +12,11 @@ import { getApiBase, commonHeaders } from './config';
  * @returns Response 对象，包含 NDJSON 流和会话 ID（响应头 X-Logseek-SID）
  */
 export async function startSearch(query: string): Promise<Response> {
+  // 兼容旧名，已统一走 /search.ndjson
   const API_BASE = getApiBase();
   const body: SearchBody = { q: query };
 
-  const response = await fetch(`${API_BASE}/stream.ndjson`, {
+  const response = await fetch(`${API_BASE}/search.ndjson`, {
     method: 'POST',
     headers: commonHeaders,
     body: JSON.stringify(body)

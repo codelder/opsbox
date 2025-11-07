@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 # 中文注释：NDJSON 流式检索一键压测脚本
 # 功能：
-# 1) 重启 opsbox 并设置 CPU 并发上限
-# 2) 执行 LONG_SECS(默认120) 秒的 CPU=16 压测并导出自适应护栏日志为 CSV
-# 3) 对 CPU=8、12、16 分别执行 SHORT_SECS(默认30) 秒对比压测并打印吞吐汇总（Markdown 表）
+# 1) 重启 opsbox 并按次设置 S3 IO 并发（--s3-max-concurrency）
+# 2) 执行 LONG_SECS(默认120) 秒的并发=16 压测并（可选）导出日志为 CSV
+# 3) 对并发=8、12、16 分别执行 SHORT_SECS(默认30) 秒对比压测并打印吞吐汇总（Markdown 表）
 #
 # 使用：
 #   bash scripts/bench-ndjson.sh
 # 可选环境变量：
 #   QUERY_JSON     NDJSON 查询 JSON 字符串（默认：{"q":"error fdt:20250816 tdt:20250819"}）
 #   ADDR           服务地址（默认：127.0.0.1:4000）
-#   WORKER_THREADS Tokio 工作线程数（默认：16）
-#   S3_MAX_CONC    S3/MinIO IO 并发（默认：12）
-#   STREAM_CH_CAP  输出通道容量（默认：256）
-#   MINIO_TIMEOUT  MinIO 超时秒数（默认：60）
-#   MINIO_RETRIES  MinIO 最大重试次数（默认：5）
-#   CPU_SERIES     对比压测的 CPU 并发列表（逗号分隔，默认：8,12,16）
+#   S3_MAX_CONC    启动时默认的 S3 IO 并发（默认：12）
+#   S3_TIMEOUT     S3 操作超时秒数（默认：60）
+#   S3_RETRIES     S3 最大重试次数（默认：5）
+#   CONC_SERIES    对比压测的并发列表（逗号分隔，默认：8,12,16）
 #   LONG_SECS      长测时长（默认：120）
 #   SHORT_SECS     短测时长（默认：30）
 #   BIN_PATH       opsbox 二进制路径（默认：backend/target/release/opsbox）
@@ -32,12 +30,10 @@ LOG_DEFAULT="$HOME/.opsbox/opsbox.log"
 BIN="${BIN_PATH:-$BIN_DEFAULT}"
 LOG="${LOG_PATH:-$LOG_DEFAULT}"
 ADDR="${ADDR:-127.0.0.1:4000}"
-WORKER_THREADS="${WORKER_THREADS:-16}"
 S3_MAX_CONC="${S3_MAX_CONC:-12}"
-STREAM_CH_CAP="${STREAM_CH_CAP:-256}"
-MINIO_TIMEOUT="${MINIO_TIMEOUT:-60}"
-MINIO_RETRIES="${MINIO_RETRIES:-5}"
-CPU_SERIES="${CPU_SERIES:-8,12,16}"
+S3_TIMEOUT="${S3_TIMEOUT:-60}"
+S3_RETRIES="${S3_RETRIES:-5}"
+CONC_SERIES="${CONC_SERIES:-8,12,16}"
 LONG_SECS="${LONG_SECS:-120}"
 SHORT_SECS="${SHORT_SECS:-30}"
 QUERY_JSON_DEFAULT='{"q":"error fdt:20250816 tdt:20250822"}'
@@ -57,17 +53,14 @@ fi
 
 BASE_ARGS=(
   --addr "$ADDR"
-  --worker-threads "$WORKER_THREADS"
-  --s3-max-concurrency "$S3_MAX_CONC"
-  --stream-ch-cap "$STREAM_CH_CAP"
-  --minio-timeout-sec "$MINIO_TIMEOUT"
-  --minio-max-attempts "$MINIO_RETRIES"
-  -V
+  --s3-timeout-sec "$S3_TIMEOUT"
+  --s3-max-retries "$S3_RETRIES"
+  -v
 )
 
-# 中文注释：优雅重启 opsbox 并使用指定 CPU 并发
-restart_with_cpu() {
-  local cpu="$1"
+# 中文注释：优雅重启 opsbox 并使用指定 S3 IO 并发
+restart_with_conc() {
+  local conc="$1"
   local pids
   pids=$(pgrep -f "$BIN" || true)
   if [ -n "$pids" ]; then
@@ -80,7 +73,7 @@ restart_with_cpu() {
     alive=$(ps -o pid= -p $pids 2>/dev/null | tr -d " " || true)
     [ -n "$alive" ] && kill -KILL $alive || true
   fi
-  nohup "$BIN" "${BASE_ARGS[@]}" --cpu-concurrency "$cpu" >> "$LOG" 2>&1 &
+  nohup "$BIN" "${BASE_ARGS[@]}" --s3-max-concurrency "$conc" >> "$LOG" 2>&1 &
   local newpid=$!
   for i in {1..50}; do
     sleep 0.2
@@ -89,12 +82,12 @@ restart_with_cpu() {
       break
     fi
   done
-  echo "restarted pid=$newpid cpu=$cpu"
+  echo "restarted pid=$newpid conc=$conc"
 }
 
 # 中文注释：执行流式检索压测
 run_stream_test() {
-  local seconds="$1"; local label="$2"; local cpu="$3"
+  local seconds="$1"; local label="$2"; local conc="$3"
   local tmp
   tmp=$(mktemp) && printf "%s" "$QUERY_JSON" > "$tmp"
   local before_lines t0 t1 lines dur
@@ -103,44 +96,43 @@ run_stream_test() {
   # 中文注释：在 set -euo pipefail 下，允许 curl 因 --max-time 返回非零但仍统计已有输出
   lines=$(( $( (curl -sS -N --max-time "$seconds" \
     -H "Accept: application/x-ndjson" -H "Content-Type: application/json" \
-    --data-binary @"$tmp" "http://$ADDR/api/v1/logseek/stream.s3.ndjson" || true) | wc -l | tr -d " ") ))
+    --data-binary @"$tmp" "http://$ADDR/api/v1/logseek/search.ndjson" || true) | wc -l | tr -d " ") ))
   t1=$(date +%s); dur=$((t1 - t0)); rm -f "$tmp"
 
-  # 中文注释：导出自适应护栏日志（仅 label 包含 csv 的情况）
+  # 中文注释：导出日志（仅 label 包含 csv 的情况）；若无匹配行则仅包含表头
   if [[ "$label" == *csv* ]]; then
-    local out="$HOME/adaptive_${seconds}s_cpu${cpu}.csv"
-    # 中文注释：先写表头，再追加匹配到的 adaptive 行；若无匹配，不影响生成
+    local out="$HOME/adaptive_${seconds}s_conc${conc}.csv"
     printf "%s\n" "time_iso,target,effective,err_rate_percent,tp_per_s" > "$out"
     tail -n +$((before_lines+1)) "$LOG" | \
-      grep -E "adaptive: cpu target=" | \
-      sed -E 's/^\[([^]]+)\].*cpu target=([0-9]+) effective=([0-9]+) err_rate=([0-9.]+)% tp=([0-9.]+)\/s.*/\1,\2,\3,\4,\5/' >> "$out" || true
+      grep -E "adaptive: .*target=" | \
+      sed -E 's/^\[([^]]+)\].*target=([0-9]+).*effective=([0-9]+).*err_rate=([0-9.]+)%.*tp=([0-9.]+)\/s.*/\1,\2,\3,\4,\5/' >> "$out" || true
     echo "csv=$out"
   fi
 
   # 输出单行结果，供汇总
-  awk -v L=$lines -v D=$dur -v C=$cpu -v LBL=$label \
-    'BEGIN{tp=(D>0?L/D:0); printf "__RESULT__ label=%s cpu=%d lines=%d duration_s=%d avg_tput=%.2f\n", LBL, C, L, D, tp}'
+  awk -v L=$lines -v D=$dur -v C=$conc -v LBL=$label \
+    'BEGIN{tp=(D>0?L/D:0); printf "__RESULT__ label=%s conc=%d lines=%d duration_s=%d avg_tput=%.2f\n", LBL, C, L, D, tp}'
 }
 
 main() {
   local results=""
 
-  # 1) CPU=16，长测并导出 CSV
-  restart_with_cpu 16
+  # 1) 并发=16，长测并导出 CSV
+  restart_with_conc 16
   local r1; r1=$(run_stream_test "$LONG_SECS" csv 16); echo "$r1"; results+=$'\n'; results+="$r1"
 
-  # 2) CPU 系列短测（默认：8、12、16）
-  IFS=',' read -r -a CPUS <<< "$CPU_SERIES"
-  for c in "${CPUS[@]}"; do
-    restart_with_cpu "$c"
+  # 2) 并发系列短测（默认：8、12、16）
+  IFS=',' read -r -a CONCS <<< "$CONC_SERIES"
+  for c in "${CONCS[@]}"; do
+    restart_with_conc "$c"
     local rr; rr=$(run_stream_test "$SHORT_SECS" short "$c"); echo "$rr"; results+=$'\n'; results+="$rr"
   done
 
   # 打印 Markdown 汇总表
   echo
   echo "Summary (Markdown)"
-  echo "| label | cpu | duration_s | lines | avg_tput (/s) |"
-  echo "|-------|-----|------------|-------|----------------|"
+  echo "| label | conc | duration_s | lines | avg_tput (/s) |"
+  echo "|-------|------|------------|-------|----------------|"
   printf "%s\n" "$results" | awk -F'[ =]' '/^__RESULT__/ { printf "| %s | %s | %s | %s | %s |\n", $3, $5, $9, $7, $11 }'
 }
 

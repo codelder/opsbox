@@ -118,7 +118,7 @@ inventory = "0.3"  # 必需
 
 ### 步骤 2：在 api-gateway 添加 optional 依赖
 
-**`server/api-gateway/Cargo.toml`**:
+**`backend/api-gateway/Cargo.toml`**:
 ```toml
 [dependencies]
 logseek = { path = "../logseek", optional = true }

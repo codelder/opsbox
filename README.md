@@ -40,7 +40,7 @@
 ### 环境要求
 
 - **Rust**: 1.90.0 (通过 rust-toolchain.toml 固定)
-- **Node.js**: 20 (使用 nvm: `nvm use 20`)
+- **Node.js**: 22 (使用 nvm: `nvm use 22`)
 - **pnpm**: 通过 corepack 启用
 
 ### 安装依赖
@@ -48,7 +48,7 @@
 ```bash
 # 前端依赖
 corepack enable
-corepack prepare pnpm@latest --activate
+corepack prepare pnpm@10.17.1 --activate
 pnpm --dir web install
 ```
 
@@ -67,10 +67,10 @@ pnpm --dir web dev
 ### 生产构建
 
 ```bash
-# 构建前端（输出到 backend/api-gateway/static）
-node scripts/build-frontend.mjs
+# 构建前端（输出到 backend/api-gateway/static，构建前会清空该目录）
+pnpm --dir web build
 
-# 构建后端
+# 构建后端（会将静态资源嵌入二进制）
 cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 ```
 
@@ -83,11 +83,11 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 - NDJSON 流式结果返回
 - 上下文窗口和关键词高亮
 
-### MinIO 设置
+### 对象存储设置（S3 Profiles）
 
-- 通过 Web UI 配置 MinIO 连接
-- 设置持久化到 SQLite 数据库
-- 连接验证和错误提示
+- 通过 Web UI 管理多个 S3 Profile（endpoint/bucket/credentials）
+- 首次启动会自动迁移旧的单一 S3 设置到 `default` profile
+- 保留 `/settings/s3` 端点以兼容旧前端，推荐使用 Profiles 管理
 
 ### AI 查询生成
 
@@ -100,8 +100,8 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 
 ### 数据库
 
-- 默认：`./opsbox.db`
-- 覆盖：`--database-url` 或 `DATABASE_URL` 环境变量
+- 默认：`~/.opsbox/opsbox.db`
+- 覆盖：`--database-url` 或 `OPSBOX_DATABASE_URL`/`DATABASE_URL` 环境变量
 
 ### 日志级别
 
@@ -136,11 +136,7 @@ cargo run -p opsbox -- stop
 
 ### 使用指南
 - **查询语法**: [docs/guides/query-syntax.md](docs/guides/query-syntax.md) - 搜索查询语法
-- **存储层使用**: [docs/guides/storage-usage.md](docs/guides/storage-usage.md) - 存储抽象层示例
 - **前端开发**: [docs/FRONTEND_DEVELOPMENT.md](docs/FRONTEND_DEVELOPMENT.md) - 前端模块化架构
-
-### 测试报告
-- **Agent Manager 测试**: [tests/agent-manager-test-report.md](tests/agent-manager-test-report.md) - 集成测试报告
 
 ### 脚本工具
 - **启动 Server**: [scripts/start_server.sh](scripts/start_server.sh)
