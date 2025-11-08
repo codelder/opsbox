@@ -48,7 +48,7 @@ if oss != None:
                 )
                 SOURCES.append({
                     "endpoint": {"kind": "s3", "profile": oss["profile_name"], "bucket": oss["bucket"]},
-                    "target": {"type": "targz", "path": key},
+                    "target": {"type": "archive", "path": key},
                 })
 
 # 可选：覆写 CLEANED_QUERY，例如追加路径限定

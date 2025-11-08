@@ -35,8 +35,8 @@ pub enum Target {
   },
   /// 文件清单
   Files { paths: Vec<String> },
-  /// tar.gz 归档
-  TarGz { path: String },
+  /// 归档（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
+  Archive { path: String },
   /// 全部（主要用于 Agent；若 endpoint.root != "."，服务端可解释为该 root 下的递归目录）
   All,
 }

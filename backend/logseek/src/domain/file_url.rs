@@ -202,7 +202,7 @@ impl fmt::Display for FileUrl {
 pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_path: &str) -> Option<(FileUrl, String)> {
   use crate::domain::config::{Endpoint, Target};
   match (&source.endpoint, &source.target) {
-    (Endpoint::S3 { profile, bucket }, Target::TarGz { .. }) => {
+    (Endpoint::S3 { profile, bucket }, Target::Archive { .. }) => {
       // S3 tar.gz 内部条目
       let base = FileUrl::s3_with_profile(profile, bucket, "<object>");
       match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
@@ -229,7 +229,7 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Local { root }, Target::TarGz { .. }) => {
+    (Endpoint::Local { root }, Target::Archive { .. }) => {
       // tar.gz 条目不走 dir_entry
       let base = FileUrl::local(root);
       match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {

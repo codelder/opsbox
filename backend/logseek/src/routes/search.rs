@@ -230,13 +230,9 @@ pub async fn stream_search(
               .collect();
             SearchScope::Files { paths: ps }
           }
-          (Endpoint::Agent { root, .. }, Target::TarGz { path }) => {
-            let p = if path.starts_with('/') {
-              path.clone()
-            } else {
-              format!("{}/{}", root, path)
-            };
-            SearchScope::TarGz { path: p }
+          (Endpoint::Agent { .. }, Target::Archive { .. }) => {
+            log::warn!("[Search] Agent + archive 目前不支持，跳过 source_idx={}", idx);
+            SearchScope::All
           }
           (Endpoint::Agent { root, .. }, Target::All) => SearchScope::Directory {
             path: Some(root.clone()),

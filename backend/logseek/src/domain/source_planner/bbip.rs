@@ -207,7 +207,7 @@ impl SourcePlanner for BbipPlanner {
                 profile: profile.profile_name.clone(),
                 bucket: profile.bucket.clone(),
               },
-              target: Target::TarGz { path: key.clone() },
+              target: Target::Archive { path: key.clone() },
               filter_glob: None,
               display_name: None,
             });

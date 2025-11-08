@@ -34,7 +34,7 @@ if len(AGENTS) > 0:
                         
                         SOURCES.append({
                             "endpoint": { "kind": "agent", "agent_id": agent["id"], "root": "logs" },
-                            "target":   { "type": "targz", "path": tar_filename },
+                            "target":   { "type": "archive", "path": tar_filename },
                             "filter_glob": "**/*.log",
                         })
 
@@ -52,7 +52,7 @@ if len(AGENTS) > 0:
 #         # 示例2: 搜索特定 tar.gz 文件
 #         SOURCES.append({
 #             "endpoint": { "kind": "agent", "agent_id": agent["id"], "root": "." },
-#             "target":   { "type": "targz", "path": "backup/web_2025-01-15.tar.gz" },
+#             "target":   { "type": "archive", "path": "backup/web_2025-01-15.tar.gz" },
 #             "filter_glob": "**/*.log",
 #         })
 #         

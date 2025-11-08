@@ -18,10 +18,10 @@ SOURCES.append({
     "target":   { "type": "dir", "path": ".", "recursive": True },
 })
 
-# Example 2: Search local tar.gz archive
+# Example 2: Search local archive (tar/tar.gz/gz auto-detected)
 SOURCES.append({
     "endpoint": { "kind": "local", "root": "/archive" },
-    "target":   { "type": "targz", "path": "logs_2025-01-15.tar.gz" },
+    "target":   { "type": "archive", "path": "logs_2025-01-15.tar.gz" },
     "filter_glob": "**/*.log",
 })
 
@@ -31,10 +31,10 @@ SOURCES.append({
     "target":   { "type": "dir", "path": "nginx", "recursive": True },
 })
 
-# Example 4: Explicit tar.gz under root
+# Example 4: Explicit archive under root
 SOURCES.append({
     "endpoint": { "kind": "local", "root": "/backup" },
-    "target":   { "type": "targz", "path": "app_logs_2025-01-15.tar.gz" },
+    "target":   { "type": "archive", "path": "app_logs_2025-01-15.tar.gz" },
     "filter_glob": "**/*.log",
 })
 
@@ -53,7 +53,7 @@ for d in DATES:
         archive_name = "logs_archive_{}.tar.gz".format(d["iso"])
         SOURCES.append({
             "endpoint": { "kind": "local", "root": "/archive" },
-            "target":   { "type": "targz", "path": archive_name },
+    "target":   { "type": "archive", "path": archive_name },
             "filter_glob": "**/*.log",
         })
 

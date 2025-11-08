@@ -35,7 +35,7 @@ for a in AGENTS:
 # 最小化示例：S3 单个 tar.gz 对象
 SOURCES = [{
     'endpoint': { 'kind': 's3', 'profile': 'oss', 'bucket': 'logs-bucket' },
-    'target':   { 'type': 'targz', 'path': 'archive/app_2025-01-15.tar.gz' },  # path 为对象 Key（相对 bucket）
+    'target':   { 'type': 'archive', 'path': 'archive/app_2025-01-15.tar.gz' },  # path 为对象 Key（相对 bucket）
     'filter_glob': '**/*.log',  # 可选
 }]
 ```
@@ -49,7 +49,7 @@ SOURCES = [{
 - Target（查什么；所有 path 相对 endpoint.root）
   - 目录：`{ type: 'dir', path: '.', recursive: True }`
   - 文件清单：`{ type: 'files', paths: ['a.log','b.log'] }`
-  - 单个 tar.gz：`{ type: 'targz', path: 'backup_2025-01-15.tar.gz' }`（S3 场景下 `path` 为对象 Key，相对 `bucket`，不要写成 `s3://...`）
+  - 归档（tar/tar.gz/gz）：`{ type: 'archive', path: 'backup_2025-01-15.tar.gz' }`（S3 场景下 `path` 为对象 Key，相对 `bucket`，不要写 `s3://...`；zip 暂不支持）
   - 全量：`{ type: 'all' }`
 - 其它字段（可选）
   - `filter_glob?: string` 额外路径过滤（与查询中的 path: 规则做 AND）
@@ -58,7 +58,7 @@ SOURCES = [{
 提示：
 - Local 的 `root` 必须是服务器上的绝对路径。
 - Agent 的所有相对路径都以 `root` 为基准拼接。
-- S3：`path` 填对象 Key（相对 `bucket`），当前仅支持 `target='targz'` 组合（目录/文件清单形态可按后续能力扩展）。
+- S3：`path` 填对象 Key（相对 `bucket`），当前仅支持 `target='archive'`（tar/tar.gz/gz；zip 暂不支持）。
 
 ## 运行时注入变量（只读）
 
@@ -98,12 +98,12 @@ SOURCES = [{
 }]
 ```
 
-2) 本地 tar.gz 归档内搜索
+2) 本地归档内搜索（tar/tar.gz/gz）
 
 ```python
 SOURCES = [{
     'endpoint': { 'kind': 'local', 'root': '/archive' },
-    'target':   { 'type': 'targz', 'path': 'logs_2025-01-15.tar.gz' },
+    'target':   { 'type': 'archive', 'path': 'logs_2025-01-15.tar.gz' },
     'filter_glob': '**/*.log',
 }]
 ```
@@ -120,12 +120,12 @@ for root in ['/var/log/app', '/var/log/system', '/opt/logs/service']:
     })
 ```
 
-4) S3：单个 tar.gz 对象
+4) S3：单个归档对象（tar/tar.gz/gz）
 
 ```python
 SOURCES = [{
     'endpoint': { 'kind': 's3', 'profile': 'oss', 'bucket': 'logs-bucket' },
-    'target':   { 'type': 'targz', 'path': 'archive/app_2025-01-15.tar.gz' },  # path 是对象 Key，相对 bucket
+    'target':   { 'type': 'archive', 'path': 'archive/app_2025-01-15.tar.gz' },  # path 是对象 Key，相对 bucket
     'filter_glob': '**/*.log',
 }]
 ```
@@ -154,7 +154,7 @@ if oss != None:
                 key = 'bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz'.format(y, yyyymm, yyyymmdd, b, file)
                 SOURCES.append({
                     'endpoint': { 'kind': 's3', 'profile': oss['profile_name'], 'bucket': oss['bucket'] },
-                    'target':   { 'type': 'targz', 'path': key },
+'target':   { 'type': 'archive', 'path': key },
                     'filter_glob': '**/*.log',
                 })
 ```
@@ -177,7 +177,7 @@ for agent in AGENTS:
                     tar_name = '{}_{}_{:02d}.tar.gz'.format(tar_prefix, date_iso, hour)
                     SOURCES.append({
                         'endpoint': { 'kind': 'agent', 'agent_id': agent['id'], 'root': 'logs' },
-                        'target':   { 'type': 'targz', 'path': tar_name },
+            'target':   { 'type': 'archive', 'path': tar_name },
                         'filter_glob': '**/*.log',
                     })
 ```
@@ -218,7 +218,7 @@ for d in DATES:
     if d['iso'] < TODAY:
         SOURCES.append({
             'endpoint': { 'kind': 'local', 'root': '/archive' },
-            'target':   { 'type': 'targz', 'path': 'logs_{}.tar.gz'.format(d['iso']) },
+'target':   { 'type': 'archive', 'path': 'logs_{}.tar.gz'.format(d['iso']) },
             'filter_glob': '**/*.log',
         })
 
@@ -234,7 +234,7 @@ if oss != None:
             key = 'archive/logs_{}.tar.gz'.format(d['iso'])
             SOURCES.append({
                 'endpoint': { 'kind': 's3', 'profile': oss['profile_name'], 'bucket': oss['bucket'] },
-                'target':   { 'type': 'targz', 'path': key },
+'target':   { 'type': 'archive', 'path': key },
                 'filter_glob': '**/*.log',
             })
 
@@ -268,17 +268,17 @@ CLEANED_QUERY = CLEANED_QUERY + ' path:**/*.log'
 - 未导出 `SOURCES`：后端会提示“未导出 SOURCES”。
 - 字段拼写错误或大小写不一致：
   - Endpoint 用 `kind`，取值 `'local'|'agent'|'s3'`
-  - Target 用 `type`，取值 `'dir'|'files'|'targz'|'all'`
+  - Target 用 `type`，取值 `'dir'|'files'|'archive'|'all'`
 - 路径语义：
-  - 所有 Target 路径（含 files/targz）均相对 `endpoint.root`。
+  - 所有 Target 路径（含 files/archive）均相对 `endpoint.root`。
   - Agent 的 `root='.'` 表示不限根（由后端解释为服务端默认根）。
-  - S3 的 `target.targz.path` 必须是对象 Key，相对 `bucket`，不要写成 `s3://bucket/key`。
+  - S3 的 `target.archive.path` 必须是对象 Key，相对 `bucket`，不要写成 `s3://bucket/key`。
 - Profile/存储配置：
   - `profile` 名称未配置或拼写错误会导致后端取对象失败（查看问题详情/服务端日志）。
 - 规模控制：
   - 生成对象数量过多（长日期区间 × 多桶）会显著增加 IO；先缩小范围或分批执行。
 - 能力边界：
-  - 目前 S3 仅支持 `target='targz'` 组合；如需前缀列举并进行“目录式”搜索，请反馈需求。
+  - 目前 S3 仅支持 `target='archive'`（tar/tar.gz/gz；zip 暂不支持）；如需前缀列举并进行“目录式”搜索，请反馈需求。
 - 诊断日志：
   - 规划阶段后端会记录每个 Source 的 RAW JSON 与解析结果，便于定位字段问题。
 
@@ -292,7 +292,7 @@ CLEANED_QUERY = CLEANED_QUERY + ' path:**/*.log'
 - S3 建议：
   - 控制单次生成的对象数量（尽量按日/小时打包成较大粒度归档）。
   - 显式指定 `profile` 与 `bucket`，避免环境切换时混淆。
-  - `target.targz.path` 仅写对象 Key，配合 `filter_glob` 在归档内进一步约束匹配。
+  - `target.archive.path` 仅写对象 Key，配合 `filter_glob` 在归档内进一步约束匹配。
 
 ## 脚本骨架模板
 
@@ -325,7 +325,7 @@ for p in S3_PROFILES:
 if oss != None:
     SOURCES.append({
         'endpoint': { 'kind': 's3', 'profile': oss['profile_name'], 'bucket': oss['bucket'] },
-        'target':   { 'type': 'targz', 'path': 'archive/app_2025-01-15.tar.gz' },
+'target':   { 'type': 'archive', 'path': 'archive/app_2025-01-15.tar.gz' },
         'filter_glob': '**/*.log',
     })
 

@@ -355,8 +355,8 @@ impl EntryStreamFactory {
 
   /// 从来源配置创建条目流（不含 Agent）
   ///
-  /// - Local: Dir/Files/TarGz
-  /// - S3: 仅支持 TarGz（单对象）
+  /// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
+  /// - S3: Archive（自动探测；zip 暂不支持）
   pub async fn create_stream(&self, source: crate::domain::config::Source) -> Result<Box<dyn EntryStream>, String> {
     use crate::domain::config::{Endpoint, Target};
     match (&source.endpoint, &source.target) {
@@ -381,16 +381,18 @@ impl EntryStreamFactory {
           .collect();
         Ok(Box::new(MultiFileEntryStream::new(files)))
       }
-      (Endpoint::Local { root }, Target::TarGz { path }) => {
-        let joined_root = root.clone();
-        // 使用 scope=TarGz 的方式在 root 下打开归档
-        crate::service::entry_stream::build_local_entry_stream(
-          &joined_root,
-          Some(crate::agent::SearchScope::TarGz { path: path.clone() }),
-        )
-        .await
+      (Endpoint::Local { root }, Target::Archive { path }) => {
+        let full = if path.starts_with('/') {
+          path.clone()
+        } else {
+          format!("{}/{}", root, path)
+        };
+        let file = tokio::fs::File::open(&full)
+          .await
+          .map_err(|e| format!("无法打开归档文件 {}: {}", full, e))?;
+        create_archive_stream_from_reader(file, Some(&full)).await
       }
-      (Endpoint::S3 { profile, bucket }, Target::TarGz { path }) => {
+      (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
         // 加载 Profile
         let profile_row = crate::repository::settings::load_s3_profile(&self.db_pool, profile)
           .await
@@ -421,13 +423,12 @@ impl EntryStreamFactory {
             .await
             .map_err(|e| format!("打开 S3 对象失败: {:?}", e))?
         };
-        let stream = TarEntryStream::new(reader).await.map_err(|e| e.to_string())?;
-        Ok(Box::new(stream))
+        create_archive_stream_from_reader(reader, Some(path)).await
       }
       (Endpoint::Local { root }, Target::All) => {
         crate::service::entry_stream::build_local_entry_stream(root, None).await
       }
-      (Endpoint::S3 { .. }, _) => Err("S3 仅支持 targz 目标".to_string()),
+      (Endpoint::S3 { .. }, _) => Err("S3 仅支持 archive 目标".to_string()),
       (Endpoint::Agent { .. }, _) => Err("Agent 来源请通过远程 SearchService 处理".to_string()),
     }
   }
@@ -469,7 +470,7 @@ impl EntryStream for MultiFileEntryStream {
   }
 }
 
-/// 构建本地来源条目流（单文件/目录/tar.gz，支持 scope=TarGz 相对路径）
+/// 构建本地来源条目流（单文件/目录/归档，支持 scope=TarGz 相对路径）
 pub async fn build_local_entry_stream(
   root_or_file: &str,
   scope: Option<crate::agent::SearchScope>,
@@ -486,15 +487,18 @@ pub async fn build_local_entry_stream(
     return Ok(Box::new(stream));
   }
 
+  // 自动基于魔数识别归档类型
   let lower = root_or_file.to_lowercase();
-  if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+  if lower.ends_with(".tar")
+    || lower.ends_with(".tar.gz")
+    || lower.ends_with(".tgz")
+    || lower.ends_with(".gz")
+    || lower.ends_with(".zip")
+  {
     let file = tokio::fs::File::open(root_or_file)
       .await
-      .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", root_or_file, e))?;
-    let stream = TarEntryStream::new(file)
-      .await
-      .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", root_or_file, e))?;
-    return Ok(Box::new(stream));
+      .map_err(|e| format!("无法打开归档文件 {}: {}", root_or_file, e))?;
+    return create_archive_stream_from_reader(file, Some(root_or_file)).await;
   }
 
   match tokio::fs::metadata(root_or_file).await {
@@ -507,6 +511,177 @@ pub async fn build_local_entry_stream(
     }
     Ok(_) => Err(format!("不支持的文件类型: {}", root_or_file)),
     Err(e) => Err(format!("无法访问路径 {}: {}", root_or_file, e)),
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveKind {
+  Tar,
+  Gzip,
+  Zip,
+  Unknown,
+}
+
+async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static>(
+  mut reader: R,
+  hint_name: Option<&str>,
+) -> Result<Box<dyn EntryStream>, String> {
+  use tokio::io::AsyncReadExt;
+  let mut head = vec![0u8; 560];
+  let n = reader
+    .read(&mut head)
+    .await
+    .map_err(|e| format!("读取头部失败: {}", e))?;
+  head.truncate(n);
+  let kind = sniff_archive_kind(&head);
+  let prefixed = PrefixedReader::new(head, reader);
+  match kind {
+    ArchiveKind::Tar => {
+      let stream = TarPlainEntryStream::new(prefixed)
+        .await
+        .map_err(|e| format!("读取 tar 失败: {}", e))?;
+      Ok(Box::new(stream))
+    }
+    ArchiveKind::Gzip => {
+      // gzip: 仅凭魔数无法区分 tar.gz 与单文件 .gz；优先使用文件名后缀作为提示
+      let is_targz = hint_name
+        .map(|s| s.ends_with(".tar.gz") || s.ends_with(".tgz"))
+        .unwrap_or(false);
+      if is_targz {
+        let stream = TarEntryStream::new(prefixed)
+          .await
+          .map_err(|e| format!("读取 tar.gz 失败: {}", e))?;
+        Ok(Box::new(stream))
+      } else {
+        let name = hint_name
+          .map(|s| {
+            std::path::Path::new(s)
+              .file_stem()
+              .and_then(|x| x.to_str())
+              .unwrap_or("<gzip>")
+          })
+          .unwrap_or("<gzip>")
+          .to_string();
+        let stream = GzipSingleEntryStream::new(prefixed, name);
+        Ok(Box::new(stream))
+      }
+    }
+    ArchiveKind::Zip => Err("ZIP 归档暂不支持".to_string()),
+    ArchiveKind::Unknown => Err("未知归档格式或不支持的归档".to_string()),
+  }
+}
+
+fn sniff_archive_kind(head: &[u8]) -> ArchiveKind {
+  if head.len() >= 4 {
+    let sig = &head[..4];
+    if sig == [0x50, 0x4B, 0x03, 0x04] || sig == [0x50, 0x4B, 0x05, 0x06] || sig == [0x50, 0x4B, 0x07, 0x08] {
+      return ArchiveKind::Zip;
+    }
+  }
+  if head.len() >= 2 && head[0] == 0x1F && head[1] == 0x8B {
+    return ArchiveKind::Gzip;
+  }
+  if head.len() >= 512 && &head[257..257 + 5] == b"ustar" {
+    return ArchiveKind::Tar;
+  }
+  ArchiveKind::Unknown
+}
+
+struct PrefixedReader<R> {
+  prefix: std::io::Cursor<Vec<u8>>,
+  inner: R,
+}
+
+impl<R> PrefixedReader<R> {
+  fn new(prefix: Vec<u8>, inner: R) -> Self {
+    Self {
+      prefix: std::io::Cursor::new(prefix),
+      inner,
+    }
+  }
+}
+
+impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
+  fn poll_read(
+    self: std::pin::Pin<&mut Self>,
+    cx: &mut std::task::Context<'_>,
+    buf: &mut tokio::io::ReadBuf<'_>,
+  ) -> std::task::Poll<std::io::Result<()>> {
+    let me = self.get_mut();
+    if (me.prefix.position() as usize) < me.prefix.get_ref().len() {
+      let mut tmp = vec![0u8; buf.remaining()];
+      let read = std::io::Read::read(&mut me.prefix, &mut tmp).unwrap_or(0);
+      if read > 0 {
+        buf.put_slice(&tmp[..read]);
+        return std::task::Poll::Ready(Ok(()));
+      }
+    }
+    std::pin::Pin::new(&mut me.inner).poll_read(cx, buf)
+  }
+}
+
+pub struct TarPlainEntryStream<R: AsyncRead + Send + Unpin + 'static> {
+  entries: async_tar::Entries<tokio_util::compat::Compat<BufReader<R>>>,
+}
+
+impl<R: AsyncRead + Send + Unpin + 'static> TarPlainEntryStream<R> {
+  pub async fn new(reader: R) -> io::Result<Self> {
+    let br = BufReader::new(reader);
+    let archive = async_tar::Archive::new(br.compat());
+    let entries = archive.entries()?;
+    Ok(Self { entries })
+  }
+}
+
+#[async_trait]
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarPlainEntryStream<R> {
+  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    match self.entries.next().await {
+      Some(Ok(entry)) => {
+        let path = entry
+          .path()
+          .ok()
+          .map(|p| p.to_string_lossy().to_string())
+          .unwrap_or_else(|| "<unknown>".into());
+        let reader = entry.compat();
+        let meta = EntryMeta {
+          path,
+          size: None,
+          is_compressed: true,
+        };
+        Ok(Some((meta, Box::new(reader))))
+      }
+      Some(Err(e)) => Err(e),
+      None => Ok(None),
+    }
+  }
+}
+
+pub struct GzipSingleEntryStream<R: AsyncRead + Send + Unpin + 'static> {
+  reader: Option<GzipDecoder<BufReader<R>>>,
+  name: String,
+}
+
+impl<R: AsyncRead + Send + Unpin + 'static> GzipSingleEntryStream<R> {
+  pub fn new(reader: R, name: String) -> Self {
+    let gz = GzipDecoder::new(BufReader::new(reader));
+    Self { reader: Some(gz), name }
+  }
+}
+
+#[async_trait]
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipSingleEntryStream<R> {
+  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    if let Some(rd) = self.reader.take() {
+      let meta = EntryMeta {
+        path: self.name.clone(),
+        size: None,
+        is_compressed: false,
+      };
+      Ok(Some((meta, Box::new(rd))))
+    } else {
+      Ok(None)
+    }
   }
 }
 

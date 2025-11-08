@@ -304,9 +304,9 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
 fn log_script_source(idx: usize, src: &Source) {
   use crate::domain::config::{Endpoint, Target};
   match (&src.endpoint, &src.target) {
-    (Endpoint::S3 { profile, bucket }, Target::TarGz { path }) => {
+    (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
       log::info!(
-        "[Planner] 来源[{}] s3 profile={} bucket={} targz={}",
+        "[Planner] 来源[{}] s3 profile={} bucket={} archive={}",
         idx,
         profile,
         bucket,
@@ -317,7 +317,7 @@ fn log_script_source(idx: usize, src: &Source) {
       let scope = match tgt {
         Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
         Target::Files { paths } => format!("Files count={}", paths.len()),
-        Target::TarGz { path } => format!("TarGz path={}", path),
+        Target::Archive { path } => format!("Archive path={}", path),
         Target::All => "All".to_string(),
       };
       log::info!(
@@ -333,7 +333,7 @@ fn log_script_source(idx: usize, src: &Source) {
       let scope = match tgt {
         Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
         Target::Files { paths } => format!("Files count={}", paths.len()),
-        Target::TarGz { path } => format!("TarGz path={}", path),
+        Target::Archive { path } => format!("Archive path={}", path),
         Target::All => "All".to_string(),
       };
       log::info!(
@@ -345,7 +345,7 @@ fn log_script_source(idx: usize, src: &Source) {
       );
     }
     (Endpoint::S3 { .. }, _) => {
-      log::warn!("[Planner] S3 目前仅支持 target=targz 组合");
+      log::warn!("[Planner] S3 目前仅支持 target=archive（tar/tar.gz/gz；zip 暂不支持）");
     }
   }
 }
