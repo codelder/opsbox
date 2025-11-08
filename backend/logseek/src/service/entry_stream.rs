@@ -537,7 +537,7 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
   let prefixed = PrefixedReader::new(head, reader);
   match kind {
     ArchiveKind::Tar => {
-      let stream = TarPlainEntryStream::new(prefixed)
+let stream = TarEntryStream::new(prefixed)
         .await
         .map_err(|e| format!("读取 tar 失败: {}", e))?;
       Ok(Box::new(stream))
@@ -553,7 +553,7 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
       let is_tar = is_tar_header(&inner_head);
       let gz_prefixed = PrefixedReader::new(inner_head, gz);
       if is_tar {
-        let stream = TarPlainEntryStream::new(gz_prefixed)
+let stream = TarEntryStream::new(gz_prefixed)
           .await
           .map_err(|e| format!("读取 tar(解压后) 失败: {}", e))?;
         Ok(Box::new(stream))
@@ -567,7 +567,7 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
           })
           .unwrap_or("<gzip>")
           .to_string();
-        let stream = SingleReaderEntryStream::new(gz_prefixed, name, false);
+let stream = GzipEntryStream::new(gz_prefixed, name, false);
         Ok(Box::new(stream))
       }
     }
@@ -629,11 +629,11 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
   }
 }
 
-pub struct TarPlainEntryStream<R: AsyncRead + Send + Unpin + 'static> {
+pub struct TarEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<BufReader<R>>>,
 }
 
-impl<R: AsyncRead + Send + Unpin + 'static> TarPlainEntryStream<R> {
+impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
   pub async fn new(reader: R) -> io::Result<Self> {
     let br = BufReader::new(reader);
     let archive = async_tar::Archive::new(br.compat());
@@ -643,7 +643,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarPlainEntryStream<R> {
 }
 
 #[async_trait]
-impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarPlainEntryStream<R> {
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     match self.entries.next().await {
       Some(Ok(entry)) => {
@@ -666,13 +666,13 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarPlainEntryStream<
   }
 }
 
-pub struct SingleReaderEntryStream<R: AsyncRead + Send + Unpin + 'static> {
+pub struct GzipEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   reader: Option<R>,
   name: String,
   is_compressed: bool,
 }
 
-impl<R: AsyncRead + Send + Unpin + 'static> SingleReaderEntryStream<R> {
+impl<R: AsyncRead + Send + Unpin + 'static> GzipEntryStream<R> {
   pub fn new(reader: R, name: String, is_compressed: bool) -> Self {
     Self {
       reader: Some(reader),
@@ -683,7 +683,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> SingleReaderEntryStream<R> {
 }
 
 #[async_trait]
-impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for SingleReaderEntryStream<R> {
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     if let Some(rd) = self.reader.take() {
       let meta = EntryMeta {
