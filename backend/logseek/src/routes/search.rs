@@ -5,7 +5,7 @@
 use crate::agent::{AgentClient, SearchOptions, SearchScope, SearchService};
 use crate::api::models::{AppError, SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
-use crate::service::entry_stream::EntryStreamFactory;
+use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
 use crate::service::search::SearchProcessor;
 use crate::utils::renderer::render_json_chunks;
 use axum::{
@@ -207,24 +207,42 @@ pub async fn stream_search(
         let path_glob = config_clone.filter_glob.clone();
         let search_scope = match (&config_clone.endpoint, &config_clone.target) {
           (Endpoint::Agent { root, .. }, Target::Dir { path, recursive }) => {
-            let joined = if path == "." { root.clone() } else { format!("{}/{}", root, path) };
-            SearchScope::Directory { path: Some(joined), recursive: *recursive }
+            let joined = if path == "." {
+              root.clone()
+            } else {
+              format!("{}/{}", root, path)
+            };
+            SearchScope::Directory {
+              path: Some(joined),
+              recursive: *recursive,
+            }
           }
           (Endpoint::Agent { root, .. }, Target::Files { paths }) => {
-            let ps = paths.iter().map(|p| if p.starts_with('/') { p.clone() } else { format!("{}/{}", root, p) }).collect();
+            let ps = paths
+              .iter()
+              .map(|p| {
+                if p.starts_with('/') {
+                  p.clone()
+                } else {
+                  format!("{}/{}", root, p)
+                }
+              })
+              .collect();
             SearchScope::Files { paths: ps }
           }
           (Endpoint::Agent { root, .. }, Target::TarGz { path }) => {
-            let p = if path.starts_with('/') { path.clone() } else { format!("{}/{}", root, path) };
+            let p = if path.starts_with('/') {
+              path.clone()
+            } else {
+              format!("{}/{}", root, path)
+            };
             SearchScope::TarGz { path: p }
           }
-          (Endpoint::Agent { root, .. }, Target::All) => {
-            SearchScope::Directory { path: Some(root.clone()), recursive: true }
-          }
-          _ => {
-            // 不会到这里
-            SearchScope::All
-          }
+          (Endpoint::Agent { root, .. }, Target::All) => SearchScope::Directory {
+            path: Some(root.clone()),
+            recursive: true,
+          },
+          _ => SearchScope::All,
         };
         let search_options = SearchOptions {
           scope: search_scope,
@@ -305,7 +323,7 @@ pub async fn stream_search(
 
       // 基于 EntryStreamFactory 创建条目流
       let factory = EntryStreamFactory::new(pool_clone);
-      let estream = match factory.create_stream(config_clone.clone()).await {
+      let mut estream = match factory.create_stream(config_clone.clone()).await {
         Ok(s) => s,
         Err(e) => {
           log::error!("[Search] 创建条目流失败 source_idx={} err={}", idx, e);
@@ -313,53 +331,62 @@ pub async fn stream_search(
         }
       };
 
-      // 准备搜索处理器
+      // 准备搜索处理器与条目流处理器
       let search_proc = Arc::new(SearchProcessor::new(spec_clone, ctx));
+      let mut processor = EntryStreamProcessor::new(search_proc);
 
-      // 直接使用通用条目流处理函数 + 回调发送 NDJSON
+      // 中转通道：SearchResult -> NDJSON 字节
+      let (sr_tx, mut sr_rx) = mpsc::channel::<crate::service::search::SearchResult>(32);
+
+      // 后台发送 NDJSON
       let tx_bytes = tx_clone.clone();
       let highlights_s = highlights_clone.clone();
       let cfg_for_url = config_clone.clone();
       let sid_for_cache = sid_clone.clone();
-
-      let start_time = std::time::Instant::now();
-      let _ =
-        crate::service::entry_stream::process_entry_stream_with_callback(estream, search_proc, None, move |res| {
+      let sender_task = tokio::spawn(async move {
+        use crate::domain::file_url::build_file_url_for_result;
+        while let Some(res) = sr_rx.recv().await {
           if tx_bytes.is_closed() {
-            return false;
+            break;
           }
-          // 构造 FileUrl（S3/Local/Agent）
-          let (file_url, file_id) = match crate::domain::file_url::build_file_url_for_result(&cfg_for_url, &res.path) {
-            Some(pair) => pair,
+
+          // 构造 FileUrl（基于来源+相对路径）
+          let (file_url, file_id) = match build_file_url_for_result(&cfg_for_url, &res.path) {
+            Some((url, id)) => (url, id),
             None => {
-              log::warn!("profiling: [Search] 构造 FileUrl 失败: source cfg不合法");
-              return true; // 跳过该结果
+              log::warn!("profiling: [Search] 无法构造 FileUrl, path={}", res.path);
+              continue;
             }
           };
 
           // 缓存结果
-          let cache_fut = simple_cache().put_lines(&sid_for_cache, &file_url, res.lines.clone());
-          futures::executor::block_on(cache_fut);
+          simple_cache()
+            .put_lines(&sid_for_cache, &file_url, res.lines.clone())
+            .await;
 
           // 渲染 JSON 并发送
           let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
           match serde_json::to_vec(&json_obj) {
             Ok(mut v) => {
               v.push(b'\n');
-              let send_res = futures::executor::block_on(tx_bytes.send(Ok(bytes::Bytes::from(v))));
-              if send_res.is_err() {
-                return false;
+              if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
+                break;
               }
             }
             Err(e) => {
               log::warn!("profiling: [Search] 序列化失败: {}", e);
             }
           }
-          true
-        })
-        .await;
+        }
+      });
 
-      let total_time = start_time.elapsed();
+      // 处理条目流
+      if let Err(e) = processor.process_stream(&mut *estream, sr_tx).await {
+        log::error!("[Search] 处理条目流失败 source_idx={} err={}", idx, e);
+      }
+
+      let total_time = task_start.elapsed();
+      let _ = sender_task.await; // 等待发送任务结束
       log::info!(
         "profiling: [Search] 任务完成 source_idx={} name=EntryStream 总耗时={:.3}s, io_wait={:.3}s",
         idx,

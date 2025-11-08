@@ -28,7 +28,11 @@ pub enum Endpoint {
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Target {
   /// 目录
-  Dir { path: String, #[serde(default = "default_true")] recursive: bool },
+  Dir {
+    path: String,
+    #[serde(default = "default_true")]
+    recursive: bool,
+  },
   /// 文件清单
   Files { paths: Vec<String> },
   /// tar.gz 归档
@@ -37,4 +41,6 @@ pub enum Target {
   All,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+  true
+}

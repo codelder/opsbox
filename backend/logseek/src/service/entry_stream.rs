@@ -357,20 +357,27 @@ impl EntryStreamFactory {
   ///
   /// - Local: Dir/Files/TarGz
   /// - S3: 仅支持 TarGz（单对象）
-  pub async fn create_stream(
-    &self,
-    source: crate::domain::config::Source,
-  ) -> Result<Box<dyn EntryStream>, String> {
+  pub async fn create_stream(&self, source: crate::domain::config::Source) -> Result<Box<dyn EntryStream>, String> {
     use crate::domain::config::{Endpoint, Target};
     match (&source.endpoint, &source.target) {
       (Endpoint::Local { root }, Target::Dir { path, .. }) => {
-        let joined = if path == "." { root.clone() } else { format!("{}/{}", root, path) };
+        let joined = if path == "." {
+          root.clone()
+        } else {
+          format!("{}/{}", root, path)
+        };
         crate::service::entry_stream::build_local_entry_stream(&joined, None).await
       }
       (Endpoint::Local { root }, Target::Files { paths }) => {
         let files: Vec<String> = paths
           .iter()
-          .map(|p| if p.starts_with('/') { p.clone() } else { format!("{}/{}", root, p) })
+          .map(|p| {
+            if p.starts_with('/') {
+              p.clone()
+            } else {
+              format!("{}/{}", root, p)
+            }
+          })
           .collect();
         Ok(Box::new(MultiFileEntryStream::new(files)))
       }
@@ -390,14 +397,18 @@ impl EntryStreamFactory {
           .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
           .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
         if &profile_row.bucket != bucket {
-          log::warn!("S3 配置中的桶与脚本提供不一致：db='{}' script='{}'，以脚本为准", profile_row.bucket, bucket);
+          log::warn!(
+            "S3 配置中的桶与脚本提供不一致：db='{}' script='{}'，以脚本为准",
+            profile_row.bucket,
+            bucket
+          );
         }
         // 构造读取器
         let reader = {
           use crate::utils::storage::{ReaderProvider as _, S3ReaderProvider, get_or_create_s3_client};
           let _ = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
             .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
-        
+
           let provider = S3ReaderProvider::new(
             &profile_row.endpoint,
             &profile_row.access_key,
@@ -429,7 +440,9 @@ pub struct MultiFileEntryStream {
 }
 
 impl MultiFileEntryStream {
-  pub fn new(files: Vec<String>) -> Self { Self { files, idx: 0 } }
+  pub fn new(files: Vec<String>) -> Self {
+    Self { files, idx: 0 }
+  }
 }
 
 #[async_trait]
@@ -447,7 +460,11 @@ impl EntryStream for MultiFileEntryStream {
       .and_then(|s| s.to_str())
       .map(|s| s.to_string())
       .unwrap_or_else(|| path.clone());
-    let meta = EntryMeta { path: name, size: None, is_compressed: false };
+    let meta = EntryMeta {
+      path: name,
+      size: None,
+      is_compressed: false,
+    };
     Ok(Some((meta, Box::new(reader))))
   }
 }

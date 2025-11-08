@@ -20,7 +20,7 @@ use crate::{
 ///   - AGENTS: list[dict]，每项 {"id": str, "tags": dict[str,str]}
 ///   - S3_PROFILES: list[dict]（非敏感字段），每项 {"profile_name": str, "endpoint": str, "bucket": str}
 /// - 脚本需导出：
-///   - SOURCES: list[dict]  每项为 SourceConfig 形状的字典（type: "s3"|"agent"|"local"）
+///   - SOURCES: list[dict]  每项为 Source 形状的字典（endpoint+target 新结构）
 ///   - 可选 CLEANED_QUERY: str 若未覆盖，则沿用全局 CLEANED_QUERY
 pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &str) -> Result<PlanResult, AppError> {
   use chrono::Utc;
@@ -141,10 +141,11 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
       continue;
     };
     let j = starlark_to_json(*v).map_err(|e| AppError::Settings(opsbox_core::AppError::internal(e)))?;
-    let cfg: Source = serde_json::from_value(j).map_err(|e| {
+    log::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
+    let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
       AppError::Settings(opsbox_core::AppError::internal(format!(
-        "解析 Source 失败: {}",
-        e
+        "解析 Source 失败: {}; JSON={}",
+        e, j
       )))
     })?;
     log_script_source(i, &cfg);
@@ -263,7 +264,7 @@ fn esc_single(s: &str) -> String {
 
 /// 将 Starlark 值转为 serde_json::Value（仅支持脚本生成的字面量结构）
 fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, String> {
-  use starlark::values::{ValueLike, dict::DictRef, list::ListRef, none::NoneType, string::StarlarkStr};
+  use starlark::values::{ValueLike, dict::DictRef, list::ListRef, none::NoneType};
 
   if let Some(b) = v.unpack_bool() {
     return Ok(serde_json::Value::Bool(b));
@@ -271,8 +272,9 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
   if let Some(i) = v.unpack_i32() {
     return Ok(serde_json::Value::Number(i.into()));
   }
-  if let Some(s) = v.downcast_ref::<StarlarkStr>() {
-    return Ok(serde_json::Value::String(s.to_string()));
+  // 使用 unpack_str 获取原始字符串，避免多余引号
+  if let Some(s) = v.unpack_str() {
+    return Ok(serde_json::Value::String(s.to_owned()));
   }
   if v.downcast_ref::<NoneType>().is_some() {
     return Ok(serde_json::Value::Null);
@@ -298,7 +300,6 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
   Err(format!("不支持的 Starlark 值类型: {:?}", v))
 }
 
-
 /// 日志输出用户脚本返回的来源（新结构）
 fn log_script_source(idx: usize, src: &Source) {
   use crate::domain::config::{Endpoint, Target};
@@ -306,7 +307,10 @@ fn log_script_source(idx: usize, src: &Source) {
     (Endpoint::S3 { profile, bucket }, Target::TarGz { path }) => {
       log::info!(
         "[Planner] 来源[{}] s3 profile={} bucket={} targz={}",
-        idx, profile, bucket, path
+        idx,
+        profile,
+        bucket,
+        path
       );
     }
     (Endpoint::Agent { agent_id, root }, tgt) => {

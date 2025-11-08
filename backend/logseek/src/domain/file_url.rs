@@ -199,10 +199,7 @@ impl fmt::Display for FileUrl {
 }
 
 /// 根据来源配置和相对路径构造 FileUrl 及其字符串 ID
-pub fn build_file_url_for_result(
-  source: &crate::domain::config::Source,
-  rel_path: &str,
-) -> Option<(FileUrl, String)> {
+pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_path: &str) -> Option<(FileUrl, String)> {
   use crate::domain::config::{Endpoint, Target};
   match (&source.endpoint, &source.target) {
     (Endpoint::S3 { profile, bucket }, Target::TarGz { .. }) => {
@@ -218,7 +215,11 @@ pub fn build_file_url_for_result(
     }
     (Endpoint::Local { root }, Target::Dir { path, .. }) => {
       // 以实际扫描根作为 base：root/path
-      let real_base = if path == "." { root.clone() } else { format!("{}/{}", root, path) };
+      let real_base = if path == "." {
+        root.clone()
+      } else {
+        format!("{}/{}", root, path)
+      };
       let base = FileUrl::local(real_base);
       match FileUrl::dir_entry(base, rel_path) {
         Ok(url) => {

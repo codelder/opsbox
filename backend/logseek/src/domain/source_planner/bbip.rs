@@ -1,5 +1,8 @@
 use super::{DateRange, PlanResult, SourcePlanner};
-use crate::{api::models::AppError, domain::config::{Source, Endpoint, Target}};
+use crate::{
+  api::models::AppError,
+  domain::config::{Endpoint, Source, Target},
+};
 use async_trait::async_trait;
 use opsbox_core::SqlitePool;
 
@@ -149,8 +152,14 @@ impl SourcePlanner for BbipPlanner {
           // - path_filter_glob: 仅检索“今天”的目录（北京时区）
           let today_glob = format!("**/{}/**", today.format("%Y-%m-%d"));
           configs.push(Source {
-            endpoint: Endpoint::Agent { agent_id: agent_id.clone(), root: "logs".to_string() },
-            target: Target::Dir { path: ".".to_string(), recursive: true },
+            endpoint: Endpoint::Agent {
+              agent_id: agent_id.clone(),
+              root: "logs".to_string(),
+            },
+            target: Target::Dir {
+              path: ".".to_string(),
+              recursive: true,
+            },
             filter_glob: Some(today_glob),
             display_name: None,
           });
@@ -194,7 +203,10 @@ impl SourcePlanner for BbipPlanner {
             );
 
             configs.push(Source {
-              endpoint: Endpoint::S3 { profile: profile.profile_name.clone(), bucket: profile.bucket.clone() },
+              endpoint: Endpoint::S3 {
+                profile: profile.profile_name.clone(),
+                bucket: profile.bucket.clone(),
+              },
               target: Target::TarGz { path: key.clone() },
               filter_glob: None,
               display_name: None,
