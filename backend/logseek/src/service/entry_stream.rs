@@ -172,11 +172,12 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> 
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     match self.entries.next().await {
       Some(Ok(entry)) => {
-        let path = entry
+        let raw = entry
           .path()
           .ok()
           .map(|p| p.to_string_lossy().to_string())
           .unwrap_or_else(|| "<unknown>".into());
+        let path = normalize_archive_entry_path(&raw);
         let reader = entry.compat(); // 转为 tokio AsyncRead
         let meta = EntryMeta {
           path,
@@ -601,6 +602,23 @@ struct PrefixedReader<R> {
   inner: R,
 }
 
+fn normalize_archive_entry_path(s: &str) -> String {
+  let mut t = s;
+  // 去掉前导的 '/' 或 './'
+  loop {
+    if t.starts_with("./") {
+      t = &t[2..];
+      continue;
+    }
+    if t.starts_with('/') {
+      t = &t[1..];
+      continue;
+    }
+    break;
+  }
+  t.to_string()
+}
+
 impl<R> PrefixedReader<R> {
   fn new(prefix: Vec<u8>, inner: R) -> Self {
     Self {
@@ -647,11 +665,12 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     match self.entries.next().await {
       Some(Ok(entry)) => {
-        let path = entry
+        let raw = entry
           .path()
           .ok()
           .map(|p| p.to_string_lossy().to_string())
           .unwrap_or_else(|| "<unknown>".into());
+        let path = normalize_archive_entry_path(&raw);
         let reader = entry.compat();
         let meta = EntryMeta {
           path,
