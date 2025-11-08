@@ -464,7 +464,7 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
           # 中文注释：统一目标目录（musl 专用），与非 tag 流程保持一致，便于缓存
           export CARGO_TARGET_DIR="$PWD/backend/target-musl"
-cargo build --manifest-path backend/Cargo.toml -p opsbox-server --target x86_64-unknown-linux-musl --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --target x86_64-unknown-linux-musl --release --locked
 
       - name: Ensure manylinux2014 image present
         if: runner.os == 'Linux'
