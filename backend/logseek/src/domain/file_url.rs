@@ -198,6 +198,21 @@ impl fmt::Display for FileUrl {
   }
 }
 
+/// 拼接本地 root 与相对路径，避免出现多余的 '/'
+fn join_root_path(root: &str, rel: &str) -> String {
+  if rel.is_empty() {
+    return root.to_string();
+  }
+  if rel.starts_with('/') {
+    return rel.to_string();
+  }
+  if root.ends_with('/') {
+    format!("{}{}", root, rel)
+  } else {
+    format!("{}/{}", root, rel)
+  }
+}
+
 /// 根据来源配置和相对路径构造 FileUrl 及其字符串 ID
 pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_path: &str) -> Option<(FileUrl, String)> {
   use crate::domain::config::{Endpoint, Target};
@@ -216,11 +231,7 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
     }
     (Endpoint::Local { root }, Target::Dir { path, .. }) => {
       // 以实际扫描根作为 base：root/path
-      let real_base = if path == "." {
-        root.clone()
-      } else {
-        format!("{}/{}", root, path)
-      };
+      let real_base = if path == "." { root.clone() } else { join_root_path(root, path) };
       let base = FileUrl::local(real_base);
       match FileUrl::dir_entry(base, rel_path) {
         Ok(url) => {
@@ -232,7 +243,7 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
     }
     (Endpoint::Local { root }, Target::Archive { path }) => {
       // 本地归档：以真实归档文件路径作为 base；内部统一按归档视图暴露
-      let full = if path.starts_with('/') { path.clone() } else { format!("{}/{}", root, path) };
+      let full = join_root_path(root, path);
       let base = FileUrl::local(full);
       // 内部压缩类型对显示无关紧要（前端以 archive+ 展示），保持兼容用 Gzip
       match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
