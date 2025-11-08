@@ -113,7 +113,7 @@
     if (!parsed) return { title: full };
     if (parsed.type === 'tar-entry') {
       const title = parsed.entryPath || parsed.displayName || full;
-      const source = `source ${parsed.compression}+${parsed.baseUrl}`;
+      const source = `source archive+${parsed.baseUrl}`;
       return { title, source };
     }
     if (parsed.type === 'dir-entry') {

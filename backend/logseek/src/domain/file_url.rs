@@ -202,9 +202,10 @@ impl fmt::Display for FileUrl {
 pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_path: &str) -> Option<(FileUrl, String)> {
   use crate::domain::config::{Endpoint, Target};
   match (&source.endpoint, &source.target) {
-    (Endpoint::S3 { profile, bucket }, Target::Archive { .. }) => {
-      // S3 tar.gz 内部条目
-      let base = FileUrl::s3_with_profile(profile, bucket, "<object>");
+    (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
+      // S3 归档：以真实对象 key 作为 base；内部统一按归档视图暴露
+      let base = FileUrl::s3_with_profile(profile, bucket, path);
+      // 内部压缩类型对显示无关紧要（前端以 archive+ 展示），保持兼容用 Gzip
       match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
         Ok(url) => {
           let id = url.to_string();
@@ -229,9 +230,11 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Local { root }, Target::Archive { .. }) => {
-      // tar.gz 条目不走 dir_entry
-      let base = FileUrl::local(root);
+    (Endpoint::Local { root }, Target::Archive { path }) => {
+      // 本地归档：以真实归档文件路径作为 base；内部统一按归档视图暴露
+      let full = if path.starts_with('/') { path.clone() } else { format!("{}/{}", root, path) };
+      let base = FileUrl::local(full);
+      // 内部压缩类型对显示无关紧要（前端以 archive+ 展示），保持兼容用 Gzip
       match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
         Ok(url) => {
           let id = url.to_string();
