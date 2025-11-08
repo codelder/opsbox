@@ -543,14 +543,19 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
       Ok(Box::new(stream))
     }
     ArchiveKind::Gzip => {
-      // gzip: 仅凭魔数无法区分 tar.gz 与单文件 .gz；优先使用文件名后缀作为提示
-      let is_targz = hint_name
-        .map(|s| s.ends_with(".tar.gz") || s.ends_with(".tgz"))
-        .unwrap_or(false);
-      if is_targz {
-        let stream = TarEntryStream::new(prefixed)
+      // 二次嗅探：先解压一段头部，判断是否为 tar 归档，再决定走 tar.gz 还是单文件 .gz
+      let mut gz = GzipDecoder::new(BufReader::new(prefixed));
+      let mut inner_head = vec![0u8; 560];
+      let n = tokio::io::AsyncReadExt::read(&mut gz, &mut inner_head)
+        .await
+        .map_err(|e| format!("读取 gzip 内容头部失败: {}", e))?;
+      inner_head.truncate(n);
+      let is_tar = is_tar_header(&inner_head);
+      let gz_prefixed = PrefixedReader::new(inner_head, gz);
+      if is_tar {
+        let stream = TarPlainEntryStream::new(gz_prefixed)
           .await
-          .map_err(|e| format!("读取 tar.gz 失败: {}", e))?;
+          .map_err(|e| format!("读取 tar(解压后) 失败: {}", e))?;
         Ok(Box::new(stream))
       } else {
         let name = hint_name
@@ -562,7 +567,7 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
           })
           .unwrap_or("<gzip>")
           .to_string();
-        let stream = GzipSingleEntryStream::new(prefixed, name);
+        let stream = SingleReaderEntryStream::new(gz_prefixed, name, false);
         Ok(Box::new(stream))
       }
     }
@@ -585,6 +590,10 @@ fn sniff_archive_kind(head: &[u8]) -> ArchiveKind {
     return ArchiveKind::Tar;
   }
   ArchiveKind::Unknown
+}
+
+fn is_tar_header(head: &[u8]) -> bool {
+  head.len() >= 512 && &head[257..257 + 5] == b"ustar"
 }
 
 struct PrefixedReader<R> {
@@ -657,26 +666,30 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarPlainEntryStream<
   }
 }
 
-pub struct GzipSingleEntryStream<R: AsyncRead + Send + Unpin + 'static> {
-  reader: Option<GzipDecoder<BufReader<R>>>,
+pub struct SingleReaderEntryStream<R: AsyncRead + Send + Unpin + 'static> {
+  reader: Option<R>,
   name: String,
+  is_compressed: bool,
 }
 
-impl<R: AsyncRead + Send + Unpin + 'static> GzipSingleEntryStream<R> {
-  pub fn new(reader: R, name: String) -> Self {
-    let gz = GzipDecoder::new(BufReader::new(reader));
-    Self { reader: Some(gz), name }
+impl<R: AsyncRead + Send + Unpin + 'static> SingleReaderEntryStream<R> {
+  pub fn new(reader: R, name: String, is_compressed: bool) -> Self {
+    Self {
+      reader: Some(reader),
+      name,
+      is_compressed,
+    }
   }
 }
 
 #[async_trait]
-impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipSingleEntryStream<R> {
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for SingleReaderEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     if let Some(rd) = self.reader.take() {
       let meta = EntryMeta {
         path: self.name.clone(),
         size: None,
-        is_compressed: false,
+        is_compressed: self.is_compressed,
       };
       Ok(Some((meta, Box::new(rd))))
     } else {
