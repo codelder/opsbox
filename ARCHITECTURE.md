@@ -109,7 +109,7 @@ view_file("tar.gz+s3://prod:logs/archive.tar.gz:app.log", 1, 100)
 ### 4. 来源配置与工厂（调整后）
 
 - 现状：StorageFactory 与 storage 模块已移除，仅保留来源配置枚举 SourceConfig（位于 domain/config.rs），用于 routes/search.rs 与 EntryStreamFactory.
-- Local/S3：通过 EntryStreamFactory 直接构造 FsEntryStream/TarEntryStream；S3 仅支持指定 key 的 tar.gz 对象展开。
+- Local/S3：通过 EntryStreamFactory 直接构造 FsEntryStream/TarGzEntryStream；S3 仅支持指定 key 的 tar.gz 对象展开。
 - Agent：在路由层直接构造 agent::AgentClient 并调用其 SearchService，实现远程搜索。
 
 ---

@@ -153,11 +153,11 @@ impl EntryStream for SingleFileEntryStream {
 }
 
 /// tar.gz 条目流（基于 AsyncRead 输入）
-pub struct TarEntryStream<R: AsyncRead + Send + Unpin + 'static> {
+pub struct TarGzEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<R>>>>,
 }
 
-impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
+impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
   pub async fn new(reader: R) -> io::Result<Self> {
     // gzip 解压 + 适配为 futures::io::AsyncRead
     let gz = GzipDecoder::new(BufReader::new(reader));
@@ -168,7 +168,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
 }
 
 #[async_trait]
-impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     match self.entries.next().await {
       Some(Ok(entry)) => {
@@ -323,7 +323,7 @@ impl EntryStreamFactory {
       let file = tokio::fs::File::open(&targz_path)
         .await
         .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-      let stream = TarEntryStream::new(file)
+let stream = TarGzEntryStream::new(file)
         .await
         .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
       return Ok(Box::new(stream));
@@ -334,7 +334,7 @@ impl EntryStreamFactory {
       let file = tokio::fs::File::open(root_or_file)
         .await
         .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", root_or_file, e))?;
-      let stream = TarEntryStream::new(file)
+let stream = TarGzEntryStream::new(file)
         .await
         .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", root_or_file, e))?;
       return Ok(Box::new(stream));
@@ -481,7 +481,7 @@ pub async fn build_local_entry_stream(
     let file = tokio::fs::File::open(&targz_path)
       .await
       .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-    let stream = TarEntryStream::new(file)
+let stream = TarGzEntryStream::new(file)
       .await
       .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
     return Ok(Box::new(stream));

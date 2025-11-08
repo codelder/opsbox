@@ -925,7 +925,7 @@ foo lower
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let cursor = Cursor::new(tar_gz).compat();
-    let mut stream = crate::service::entry_stream::TarEntryStream::new(cursor).await.unwrap();
+let mut stream = crate::service::entry_stream::TarGzEntryStream::new(cursor).await.unwrap();
     let proc = Arc::new(SearchProcessor::new(Arc::new(spec.clone()), ctx));
     let mut esp = crate::service::entry_stream::EntryStreamProcessor::new(proc);
     let (tx, mut rx) = mpsc::channel::<SearchResult>(64);
