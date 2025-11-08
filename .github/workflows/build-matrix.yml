@@ -603,7 +603,7 @@ jobs:
       - name: Build backend (Windows, MSVC)
         if: runner.os == 'Windows'
         run: |
-cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
 
       # 保存 target（Windows 主机）
       - name: Save target cache (Windows host)
