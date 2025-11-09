@@ -154,10 +154,11 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   }
 
   if sample.len() >= 3
-    && let [0xEF, 0xBB, 0xBF] = &sample[0..3] {
-      debug!("检测到 UTF-8 BOM");
-      return Some(UTF_8);
-    }
+    && let [0xEF, 0xBB, 0xBF] = &sample[0..3]
+  {
+    debug!("检测到 UTF-8 BOM");
+    return Some(UTF_8);
+  }
 
   // 使用 chardetng 进行编码检测
   let mut detector = EncodingDetector::new();
@@ -344,54 +345,41 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
   if sample.is_empty() {
     return true;
   }
+  // 包含 null 字节的文件通常不是文本文件
   if sample.contains(&0) {
     return false;
   }
+
+  // 先检查 UTF-8，因为 UTF-8 可能包含多字节字符（如 emoji），可打印字符比例可能较低
+  if std::str::from_utf8(sample).is_ok() {
+    return true;
+  }
+
+  // 计算可打印字符比例
   let printable = sample
     .iter()
     .filter(|b| matches!(**b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
     .count();
   let ratio = printable as f32 / sample.len() as f32;
+
+  // 如果可打印字符比例 >= 95%，肯定是文本
   if ratio >= 0.95 {
     return true;
   }
-  // 先检查 UTF-8，因为 UTF-8 可能包含多字节字符（如 emoji），可打印字符比例可能较低
-  if std::str::from_utf8(sample).is_ok() {
-    return true;
-  }
+
   // 如果可打印字符比例太低（< 50%），不太可能是文本文件
   if ratio < 0.5 {
     return false;
   }
-  // 尝试多种编码解码
-  ({
-    let (decoded, _, had_errors) = GBK.decode(sample);
-    !had_errors && !decoded.is_empty()
-  })
-    || {
-      let (decoded, _, had_errors) = BIG5.decode(sample);
-      !had_errors && !decoded.is_empty()
-    }
-    || {
-      let (decoded, _, had_errors) = SHIFT_JIS.decode(sample);
-      !had_errors && !decoded.is_empty()
-    }
-    || {
-      let (decoded, _, had_errors) = EUC_KR.decode(sample);
-      !had_errors && !decoded.is_empty()
-    }
-    || {
-      let (decoded, _, had_errors) = WINDOWS_1252.decode(sample);
-      !had_errors && !decoded.is_empty()
-    }
-    || {
-      if let Some(iso_8859_1) = Encoding::for_label(b"ISO-8859-1") {
-        let (decoded, _, had_errors) = iso_8859_1.decode(sample);
-        !had_errors && !decoded.is_empty()
-      } else {
-        false
-      }
-    }
+
+  // 使用 chardetng 检测编码
+  // chardetng 可以检测多种编码，如果置信度高，通常是文本文件
+  let mut detector = EncodingDetector::new();
+  detector.feed(sample, true);
+  let (_, confidence) = detector.guess_assess(None, true);
+
+  // 如果置信度高，认为是文本文件
+  confidence
 }
 
 pub async fn grep_context<R: AsyncRead + Unpin>(
