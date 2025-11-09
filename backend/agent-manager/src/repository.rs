@@ -96,9 +96,17 @@ impl AgentRepository {
 
     sqlx::query(
       r#"
-            INSERT OR REPLACE INTO agents 
+            INSERT INTO agents 
             (id, name, version, hostname, search_roots, last_heartbeat, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              version = excluded.version,
+              hostname = excluded.hostname,
+              search_roots = excluded.search_roots,
+              last_heartbeat = excluded.last_heartbeat,
+              status = excluded.status,
+              updated_at = excluded.updated_at
             "#,
     )
     .bind(&info.id)
@@ -451,6 +459,22 @@ impl AgentRepository {
       .collect();
 
     Ok(tags)
+  }
+
+  /// 删除指定的 Agent 标签
+  pub async fn delete_agent_tag(&self, agent_id: &str, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+      r#"
+            DELETE FROM agent_tags WHERE agent_id = ? AND tag_key = ? AND tag_value = ?
+            "#,
+    )
+    .bind(agent_id)
+    .bind(key)
+    .bind(value)
+    .execute(&self.pool)
+    .await?;
+
+    Ok(())
   }
 
   /// 获取所有标签

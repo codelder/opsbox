@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use opsbox_core::SqlitePool;
 
-use crate::{api::models::AppError, domain::config::Source};
+use crate::domain::config::Source;
 
 // 子模块：通用类型与具体存储源规划器实现
 mod bbip;
@@ -26,7 +26,7 @@ pub trait SourcePlanner: Send + Sync {
   /// 应用标识（如 "bbip"）
   fn app_id(&self) -> &'static str;
   /// 基于查询与数据库，生成来源配置（可含日期分割、路径模板展开等）
-  async fn plan(&self, pool: &SqlitePool, query: &str) -> Result<PlanResult, AppError>;
+  async fn plan(&self, pool: &SqlitePool, query: &str) -> Result<PlanResult, crate::api::LogSeekApiError>;
 }
 
 /// 规划器工厂（供 inventory 收集）

@@ -1,4 +1,6 @@
-use opsbox_core::{AppError, Result, SqlitePool, run_migration};
+use super::RepositoryError;
+use super::error::Result;
+use opsbox_core::{SqlitePool, run_migration};
 use serde::{Deserialize, Serialize};
 
 /// Planner 脚本记录
@@ -25,7 +27,9 @@ pub async fn init_schema(db: &SqlitePool) -> Result<()> {
       updated_at INTEGER NOT NULL
     );
   "#;
-  run_migration(db, ddl, "logseek_planners").await?;
+  run_migration(db, ddl, "logseek_planners")
+    .await
+    .map_err(|e| RepositoryError::Database(e.to_string()))?;
   Ok(())
 }
 
@@ -44,7 +48,7 @@ pub async fn upsert_script(db: &SqlitePool, app: &str, script: &str) -> Result<(
   .bind(now)
   .execute(db)
   .await
-  .map_err(|e| AppError::internal(format!("保存脚本失败: {}", e)))?;
+  .map_err(|e| RepositoryError::QueryFailed(format!("保存脚本失败: {}", e)))?;
   Ok(())
 }
 
@@ -55,7 +59,7 @@ pub async fn load_script(db: &SqlitePool, app: &str) -> Result<Option<PlannerScr
       .bind(app)
       .fetch_optional(db)
       .await
-      .map_err(|e| AppError::internal(format!("查询脚本失败: {}", e)))?;
+      .map_err(|e| RepositoryError::QueryFailed(format!("查询脚本失败: {}", e)))?;
   Ok(row.map(|(app, script, updated_at)| PlannerScript {
     app,
     script,
@@ -69,7 +73,7 @@ pub async fn load_script_text(db: &SqlitePool, app: &str) -> Result<Option<Strin
     .bind(app)
     .fetch_optional(db)
     .await
-    .map_err(|e| AppError::internal(format!("查询脚本文本失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("查询脚本文本失败: {}", e)))?;
   Ok(row.map(|(s,)| s))
 }
 
@@ -78,7 +82,7 @@ pub async fn list_scripts(db: &SqlitePool) -> Result<Vec<PlannerScriptMeta>> {
   let rows = sqlx::query_as::<_, (String, i64)>("SELECT app, updated_at FROM planner_scripts ORDER BY app")
     .fetch_all(db)
     .await
-    .map_err(|e| AppError::internal(format!("查询脚本列表失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("查询脚本列表失败: {}", e)))?;
   Ok(
     rows
       .into_iter()
@@ -93,6 +97,6 @@ pub async fn delete_script(db: &SqlitePool, app: &str) -> Result<()> {
     .bind(app)
     .execute(db)
     .await
-    .map_err(|e| AppError::internal(format!("删除脚本失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("删除脚本失败: {}", e)))?;
   Ok(())
 }

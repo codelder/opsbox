@@ -3,7 +3,7 @@
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
 use crate::agent::{AgentClient, SearchOptions, SearchScope, SearchService};
-use crate::api::models::{AppError, SearchBody};
+use crate::api::{LogSeekApiError, models::SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
 use crate::service::search::SearchProcessor;
@@ -16,7 +16,6 @@ use axum::{
 use futures::StreamExt;
 use log::debug;
 use opsbox_core::SqlitePool;
-use problemdetails::Problem;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -50,7 +49,7 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
-) -> Result<(Vec<crate::domain::config::Source>, String), AppError> {
+) -> Result<(Vec<crate::domain::config::Source>, String), LogSeekApiError> {
   // 从查询字符串中提取 app 限定词（形如 app:bbip / app:bbos），未指定则默认为 bbip
   // 同时移除该限定词以得到传入规划器的“清理前”查询（随后规划器还会继续清理日期指令等）
   let mut app: Option<String> = None;
@@ -75,25 +74,23 @@ pub async fn get_storage_source_configs(
 fn respond_empty_stream(
   tx: mpsc::Sender<Result<bytes::Bytes, std::io::Error>>,
   rx: mpsc::Receiver<Result<bytes::Bytes, std::io::Error>>,
-) -> Result<HttpResponse<Body>, Problem> {
+) -> Result<HttpResponse<Body>, LogSeekApiError> {
   drop(tx);
   let body = Body::from_stream(ReceiverStream::new(rx));
-  Ok(
-    HttpResponse::builder()
-      .status(200)
-      .header(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-      )
-      .body(body)
-      .unwrap(),
-  )
+  HttpResponse::builder()
+    .status(200)
+    .header(
+      CONTENT_TYPE,
+      HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+    )
+    .body(body)
+    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建 HTTP 响应失败: {}", e))))
 }
 
 pub async fn stream_search(
   State(pool): State<SqlitePool>,
   Json(body): Json<SearchBody>,
-) -> Result<HttpResponse<Body>, Problem> {
+) -> Result<HttpResponse<Body>, LogSeekApiError> {
   log::info!("[Search] 开始搜索: q={}", body.q);
 
   let cap = stream_channel_capacity();
@@ -125,8 +122,13 @@ pub async fn stream_search(
   // 3. 解析查询并准备搜索参数
   let ctx = body.context.unwrap_or(3);
   let parse_start = std::time::Instant::now();
-  let spec =
-    crate::query::Query::parse_github_like(&cleaned_query).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
+  let spec = match crate::query::Query::parse_github_like(&cleaned_query) {
+    Ok(s) => s,
+    Err(e) => {
+      log::error!("[Search] 查询解析失败: {:?}", e);
+      return Err(LogSeekApiError::QueryParse(e));
+    }
+  };
   let parse_dur = parse_start.elapsed();
   let highlights = spec.highlights.clone();
   let sid = new_sid();
@@ -230,9 +232,14 @@ pub async fn stream_search(
               .collect();
             SearchScope::Files { paths: ps }
           }
-          (Endpoint::Agent { .. }, Target::Archive { .. }) => {
-            log::warn!("[Search] Agent + archive 目前不支持，跳过 source_idx={}", idx);
-            SearchScope::All
+          (Endpoint::Agent { root, .. }, Target::Archive { path }) => {
+            // Agent 归档：拼接 root 与归档相对路径，并由 Agent 端展开 tar.gz
+            let joined = if path.starts_with('/') {
+              path.clone()
+            } else {
+              format!("{}/{}", root, path)
+            };
+            SearchScope::TarGz { path: joined }
           }
           (Endpoint::Agent { root, .. }, Target::All) => SearchScope::Directory {
             path: Some(root.clone()),
@@ -260,13 +267,15 @@ pub async fn stream_search(
           }
         };
 
-        // 直接消费结果流并发送 NDJSON
+        // 直接消费结果流并发送 SearchEvent 格式
         let tx_bytes = tx_clone.clone();
-        let highlights_s = highlights_clone.clone();
         let sid_for_cache = sid_clone.clone();
         let agent_id_clone = agent_id.clone();
+        let highlights_s = highlights_clone.clone();
+        let cfg_for_url = config_clone.clone();
         let service_task = tokio::spawn(async move {
-          use crate::domain::file_url::FileUrl;
+          use crate::domain::file_url::build_file_url_for_result;
+          let start_time = std::time::Instant::now();
           while let Some(item) = stream.next().await {
             let Ok(res) = item else {
               log::warn!("profiling: [Search] Agent 返回错误条目，已跳过");
@@ -275,9 +284,15 @@ pub async fn stream_search(
             if tx_bytes.is_closed() {
               break;
             }
-            // 构造 agent://<agent_id>/<path>
-            let file_url = FileUrl::agent(agent_id_clone.clone(), &res.path);
-            let file_id = file_url.to_string();
+
+            // 基于来源配置构造 FileUrl（支持 agent 归档）
+            let (file_url, file_id) = match build_file_url_for_result(&cfg_for_url, &res.path) {
+              Some((url, id)) => (url, id),
+              None => {
+                log::warn!("profiling: [Search] 无法构造 Agent FileUrl, path={}", res.path);
+                continue;
+              }
+            };
 
             // 缓存结果
             debug!(
@@ -290,9 +305,14 @@ pub async fn stream_search(
               .put_lines(&sid_for_cache, &file_url, res.lines.clone())
               .await;
 
-            // 渲染 JSON 并发送
+            // 渲染为 SearchJsonResult，会自动去掉 lines，只保留 chunks、keywords、path
             let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
-            match serde_json::to_vec(&json_obj) {
+            // 包装成 SearchEvent
+            let success_event = serde_json::json!({
+              "type": "result",
+              "data": json_obj
+            });
+            match serde_json::to_vec(&success_event) {
               Ok(mut v) => {
                 v.push(b'\n');
                 if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
@@ -300,9 +320,20 @@ pub async fn stream_search(
                 }
               }
               Err(e) => {
-                log::warn!("profiling: [Search] 序列化失败: {}", e);
+                log::warn!("profiling: [Search] Agent 序列化结果失败: {}", e);
               }
             }
+          }
+          // 发送 Complete 事件
+          let elapsed = start_time.elapsed();
+          let complete_event = crate::service::search::SearchEvent::Complete {
+            source: format!("agent:{}", agent_id_clone),
+            elapsed_ms: elapsed.as_millis() as u64,
+          };
+          if let Ok(bytes) = serde_json::to_vec(&complete_event) {
+            let mut v = bytes;
+            v.push(b'\n');
+            let _ = tx_bytes.send(Ok(bytes::Bytes::from(v))).await;
           }
         });
 
@@ -331,8 +362,26 @@ pub async fn stream_search(
       let search_proc = Arc::new(SearchProcessor::new(spec_clone, ctx));
       let mut processor = EntryStreamProcessor::new(search_proc);
 
-      // 中转通道：SearchResult -> NDJSON 字节
-      let (sr_tx, mut sr_rx) = mpsc::channel::<crate::service::search::SearchResult>(32);
+      // 设置规划脚本的 filter_glob（与用户查询的 path: 限定词做 AND）
+      if let Some(glob) = &config_clone.filter_glob {
+        match crate::query::path_glob_to_filter(glob) {
+          Ok(filter) => {
+            log::debug!("[Search] 为 source_idx={} 设置 filter_glob: {}", idx, glob);
+            processor = processor.with_extra_path_filter(filter);
+          }
+          Err(e) => {
+            log::warn!(
+              "[Search] 解析 filter_glob 失败 source_idx={} glob={} error={}",
+              idx,
+              glob,
+              e
+            );
+          }
+        }
+      }
+
+      // 中转通道：SearchEvent -> NDJSON 字节
+      let (sr_tx, mut sr_rx) = mpsc::channel::<crate::service::search::SearchEvent>(32);
 
       // 后台发送 NDJSON
       let tx_bytes = tx_clone.clone();
@@ -341,36 +390,79 @@ pub async fn stream_search(
       let sid_for_cache = sid_clone.clone();
       let sender_task = tokio::spawn(async move {
         use crate::domain::file_url::build_file_url_for_result;
-        while let Some(res) = sr_rx.recv().await {
+        while let Some(event) = sr_rx.recv().await {
           if tx_bytes.is_closed() {
             break;
           }
 
-          // 构造 FileUrl（基于来源+相对路径）
-          let (file_url, file_id) = match build_file_url_for_result(&cfg_for_url, &res.path) {
-            Some((url, id)) => (url, id),
-            None => {
-              log::warn!("profiling: [Search] 无法构造 FileUrl, path={}", res.path);
-              continue;
-            }
-          };
+          match event {
+            crate::service::search::SearchEvent::Success(res) => {
+              // 构造 FileUrl（基于来源+相对路径）
+              let (file_url, file_id) = match build_file_url_for_result(&cfg_for_url, &res.path) {
+                Some((url, id)) => (url, id),
+                None => {
+                  log::warn!("profiling: [Search] 无法构造 FileUrl, path={}", res.path);
+                  continue;
+                }
+              };
 
-          // 缓存结果
-          simple_cache()
-            .put_lines(&sid_for_cache, &file_url, res.lines.clone())
-            .await;
+              // 缓存结果（lines 不发送给前端）
+              simple_cache()
+                .put_lines(&sid_for_cache, &file_url, res.lines.clone())
+                .await;
 
-          // 渲染 JSON 并发送
-          let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
-          match serde_json::to_vec(&json_obj) {
-            Ok(mut v) => {
-              v.push(b'\n');
-              if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
-                break;
+              // 渲染为 SearchJsonResult，会自动去掉 lines，只保留 chunks、keywords、path
+              let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
+              // 包装成 SearchEvent
+              let success_event = serde_json::json!({
+                "type": "result",
+                "data": json_obj
+              });
+              match serde_json::to_vec(&success_event) {
+                Ok(mut v) => {
+                  v.push(b'\n');
+                  if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
+                    break;
+                  }
+                }
+                Err(e) => {
+                  log::warn!("profiling: [Search] 序列化结果失败: {}", e);
+                }
               }
             }
-            Err(e) => {
-              log::warn!("profiling: [Search] 序列化失败: {}", e);
+            crate::service::search::SearchEvent::Error {
+              source,
+              message,
+              recoverable,
+            } => {
+              // 发送错误事件
+              let error_event = crate::service::search::SearchEvent::Error {
+                source,
+                message,
+                recoverable,
+              };
+              match serde_json::to_vec(&error_event) {
+                Ok(mut v) => {
+                  v.push(b'\n');
+                  let _ = tx_bytes.send(Ok(bytes::Bytes::from(v))).await;
+                }
+                Err(e) => {
+                  log::warn!("profiling: [Search] 序列化错误事件失败: {}", e);
+                }
+              }
+            }
+            crate::service::search::SearchEvent::Complete { source, elapsed_ms } => {
+              // 发送完成事件
+              let complete_event = crate::service::search::SearchEvent::Complete { source, elapsed_ms };
+              match serde_json::to_vec(&complete_event) {
+                Ok(mut v) => {
+                  v.push(b'\n');
+                  let _ = tx_bytes.send(Ok(bytes::Bytes::from(v))).await;
+                }
+                Err(e) => {
+                  log::warn!("profiling: [Search] 序列化完成事件失败: {}", e);
+                }
+              }
             }
           }
         }
@@ -398,20 +490,16 @@ pub async fn stream_search(
   drop(tx);
 
   let body = Body::from_stream(ReceiverStream::new(rx));
-  Ok(
-    HttpResponse::builder()
-      .status(200)
-      .header(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-      )
-      .header(
-        "X-Logseek-SID",
-        HeaderValue::from_str(&sid).unwrap_or(HeaderValue::from_static("")),
-      )
-      .body(body)
-      .unwrap(),
-  )
+  let sid_header = HeaderValue::from_str(&sid).unwrap_or_else(|_| HeaderValue::from_static(""));
+  HttpResponse::builder()
+    .status(200)
+    .header(
+      CONTENT_TYPE,
+      HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+    )
+    .header("X-Logseek-SID", sid_header)
+    .body(body)
+    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建 HTTP 响应失败: {}", e))))
 }
 
 /// 根据今天分割日期范围

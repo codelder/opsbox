@@ -114,18 +114,6 @@ pub struct AgentSearchRequest {
   pub scope: SearchScope,
 }
 
-/// Agent 消息格式（NDJSON 流式传输）
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "lowercase")]
-pub enum AgentMessage {
-  /// 搜索结果
-  Result(crate::service::search::SearchResult),
-  /// 错误
-  Error(String),
-  /// 完成
-  Complete,
-}
-
 /// Agent 客户端（实现 SearchService）
 pub struct AgentClient {
   /// Agent ID
@@ -365,7 +353,7 @@ impl SearchService for AgentClient {
       }
     };
 
-    // 将完整行解析为 AgentMessage，再提取结果
+    // 将完整行解析为 SearchEvent，提取结果
     let result_stream = Box::pin(
       line_stream
         .filter_map({
@@ -373,27 +361,30 @@ impl SearchService for AgentClient {
           move |line| {
             let agent_id = agent_id_for_parse.clone();
             async move {
-              debug!("🔍 Server尝试解析AgentMessage: {}", line);
-              match serde_json::from_str::<AgentMessage>(&line) {
-                Ok(AgentMessage::Result(result)) => {
+              debug!("🔍 Server尝试解析SearchEvent: {}", line);
+              match serde_json::from_str::<crate::service::search::SearchEvent>(&line) {
+                Ok(crate::service::search::SearchEvent::Success(result)) => {
                   debug!(
-                    "✅ Server收到Result消息: path={}, lines_count={}",
+                    "✅ Server接收到Success消息: path={}, lines_count={}",
                     result.path,
                     result.lines.len()
                   );
                   Some(Ok(result))
                 }
-                Ok(AgentMessage::Error(err)) => {
-                  trace!("[Wire] ← Error: {}", err);
-                  Some(Err(AgentClientError::Other(format!("Agent 错误: {}", err))))
+                Ok(crate::service::search::SearchEvent::Error { source, message, .. }) => {
+                  trace!("[Wire] ← Error: source={}, message={}", source, message);
+                  Some(Err(AgentClientError::Other(format!("Agent 错误: {}", message))))
                 }
-                Ok(AgentMessage::Complete) => {
-                  debug!("Agent {} 搜索完成", agent_id);
+                Ok(crate::service::search::SearchEvent::Complete { source, elapsed_ms }) => {
+                  debug!(
+                    "Agent {} 搜索完成 (source={}, elapsed={}ms)",
+                    agent_id, source, elapsed_ms
+                  );
                   trace!("[Wire] ← Complete");
                   None
                 }
                 Err(e) => {
-                  warn!("解析 Agent 消息失败: {} (line: {})", e, line);
+                  warn!("解析 SearchEvent 失败: {} (line: {})", e, line);
                   None
                 }
               }

@@ -4,16 +4,26 @@ use std::{
 };
 
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
-use log::{debug, info, warn};
+use log::{debug, warn};
 use thiserror::Error;
 use tokio::io::{AsyncRead, BufReader};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
-  #[error("IO错误: {0}")]
-  Io(#[from] io::Error),
-  #[error("Channel 已关闭")]
+  #[error("IO错误: path={path}, error={error}")]
+  Io { path: String, error: String },
+  #[error("Channel 已关闭: 接收端已断开连接")]
   ChannelClosed,
+}
+
+// 为 io::Error 提供自动转换（需要提供路径上下文）
+impl From<io::Error> for SearchError {
+  fn from(err: io::Error) -> Self {
+    SearchError::Io {
+      path: "unknown".to_string(), // 如果没有路径信息，使用默认值
+      error: err.to_string(),
+    }
+  }
 }
 
 use crate::query::Query;
@@ -218,7 +228,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     return Ok(None);
   }
 
-  info!("找到{}行匹配结果，开始生成上下文区间", matched_lines.len());
+  debug!("找到{}行匹配结果，开始生成上下文区间", matched_lines.len());
 
   let mut ranges: Vec<(usize, usize)> = Vec::new();
   for idx in matched_lines.into_iter() {
@@ -255,6 +265,40 @@ impl SearchResult {
   fn new(path: String, lines: Vec<String>, merged: Vec<(usize, usize)>) -> Self {
     Self { path, lines, merged }
   }
+}
+
+/// 流式搜索事件
+///
+/// 用于在 NDJSON 流中表示不同类型的事件：
+/// - Success: 搜索结果成功
+/// - Error: 搜索过程中发生错误（错误不会立即终止搜索）
+/// - Complete: 单个来源搜索完成
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum SearchEvent {
+  /// 搜索成功的结果
+  #[serde(rename = "result")]
+  Success(SearchResult),
+
+  /// 搜索过程中的错误
+  #[serde(rename = "error")]
+  Error {
+    /// 错误来源（如源索引、Agent ID 等）
+    source: String,
+    /// 错误信息
+    message: String,
+    /// 是否继续搜索其他源（true 表示错误非致命）
+    recoverable: bool,
+  },
+
+  /// 来源搜索完成
+  #[serde(rename = "complete")]
+  Complete {
+    /// 来源索引或标识
+    source: String,
+    /// 搜索的总耗时（毫秒）
+    elapsed_ms: u64,
+  },
 }
 
 // 旧的 Tar* 处理器与错误跟踪器已移除（改用 EntryStream 抽象）
@@ -925,18 +969,22 @@ foo lower
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let cursor = Cursor::new(tar_gz).compat();
-let mut stream = crate::service::entry_stream::TarGzEntryStream::new(cursor).await.unwrap();
+    let mut stream = crate::service::entry_stream::TarGzEntryStream::new(cursor)
+      .await
+      .unwrap();
     let proc = Arc::new(SearchProcessor::new(Arc::new(spec.clone()), ctx));
     let mut esp = crate::service::entry_stream::EntryStreamProcessor::new(proc);
-    let (tx, mut rx) = mpsc::channel::<SearchResult>(64);
+    let (tx, mut rx) = mpsc::channel::<SearchEvent>(64);
 
     let handle = tokio::spawn(async move {
       let _ = esp.process_stream(&mut stream, tx).await;
     });
 
     let mut results = Vec::new();
-    while let Some(r) = rx.recv().await {
-      results.push(r);
+    while let Some(event) = rx.recv().await {
+      if let SearchEvent::Success(result) = event {
+        results.push(result);
+      }
     }
     let _ = handle.await;
     results

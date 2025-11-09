@@ -3,7 +3,6 @@ use std::{fs, path::PathBuf};
 use opsbox_core::SqlitePool;
 
 use crate::{
-  api::models::AppError,
   domain::config::Source,
   domain::source_planner::{DateRange, PlanResult},
 };
@@ -22,7 +21,11 @@ use crate::{
 /// - 脚本需导出：
 ///   - SOURCES: list[dict]  每项为 Source 形状的字典（endpoint+target 新结构）
 ///   - 可选 CLEANED_QUERY: str 若未覆盖，则沿用全局 CLEANED_QUERY
-pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &str) -> Result<PlanResult, AppError> {
+pub async fn plan_with_starlark(
+  pool: &SqlitePool,
+  app: Option<&str>,
+  query: &str,
+) -> Result<PlanResult, crate::api::LogSeekApiError> {
   use chrono::Utc;
   use chrono_tz::Asia::Shanghai;
 
@@ -39,9 +42,7 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
   } else {
     vec![]
   };
-  let s3_profiles = crate::repository::settings::list_s3_profiles(pool)
-    .await
-    .map_err(AppError::Settings)?;
+  let s3_profiles = crate::repository::settings::list_s3_profiles(pool).await?;
 
   // 3) 生成 Starlark 运行时前缀（全局变量定义）
   let mut prefix = String::new();
@@ -115,13 +116,15 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
   // 5) 运行 Starlark
   let module = starlark::environment::Module::new();
   let ast = starlark::syntax::AstModule::parse(&format!("{}.star", app), script, &starlark::syntax::Dialect::Extended)
-    .map_err(|e| AppError::Settings(opsbox_core::AppError::internal(format!("Starlark 脚本解析失败: {}", e))))?;
+    .map_err(|e| {
+      crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本解析失败: {}", e)))
+    })?;
 
   let globals = starlark::environment::GlobalsBuilder::standard().build();
   let mut eval = starlark::eval::Evaluator::new(&module);
-  eval
-    .eval_module(ast, &globals)
-    .map_err(|e| AppError::Settings(opsbox_core::AppError::internal(format!("Starlark 脚本执行失败: {}", e))))?;
+  eval.eval_module(ast, &globals).map_err(|e| {
+    crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本执行失败: {}", e)))
+  })?;
 
   // 6) 读取输出变量
   let cleaned_val = module.get("CLEANED_QUERY");
@@ -129,21 +132,22 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
 
   let sources_val = module
     .get("SOURCES")
-    .ok_or_else(|| AppError::Settings(opsbox_core::AppError::internal("Starlark 未导出 SOURCES")))?;
+    .ok_or_else(|| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal("Starlark 未导出 SOURCES")))?;
 
   // 转为 JSON，再转为 Source
   let list = starlark::values::list::ListRef::from_value(sources_val)
-    .ok_or_else(|| AppError::Settings(opsbox_core::AppError::internal("SOURCES 不是列表类型")))?;
+    .ok_or_else(|| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal("SOURCES 不是列表类型")))?;
 
   let mut sources: Vec<Source> = Vec::new();
   for i in 0..list.len() {
     let Some(v) = list.get(i) else {
       continue;
     };
-    let j = starlark_to_json(*v).map_err(|e| AppError::Settings(opsbox_core::AppError::internal(e)))?;
+    let j =
+      starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(e)))?;
     log::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
     let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
-      AppError::Settings(opsbox_core::AppError::internal(format!(
+      crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!(
         "解析 Source 失败: {}; JSON={}",
         e, j
       )))

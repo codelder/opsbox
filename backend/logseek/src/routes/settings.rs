@@ -2,14 +2,14 @@
 //!
 //! 处理 /settings/s3 端点，管理 S3 存储配置
 
-use crate::api::models::{AppError, S3SettingsPayload};
+use crate::api::LogSeekApiError;
+use crate::api::models::S3SettingsPayload;
 use crate::repository::settings;
 use axum::{
   extract::{Json, Query, State},
   http::StatusCode,
 };
 use opsbox_core::SqlitePool;
-use problemdetails::Problem;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -22,8 +22,8 @@ pub struct S3Query {
 pub async fn get_s3_settings(
   State(pool): State<SqlitePool>,
   Query(q): Query<S3Query>,
-) -> Result<Json<S3SettingsPayload>, Problem> {
-  let settings_opt = settings::load_s3_settings(&pool).await.map_err(AppError::Settings)?;
+) -> Result<Json<S3SettingsPayload>, LogSeekApiError> {
+  let settings_opt = settings::load_s3_settings(&pool).await?;
 
   // 基础负载：仅反映“是否已配置”而非“是否连通”
   let mut payload = settings_opt.clone().map_or_else(S3SettingsPayload::default, Into::into);
@@ -42,10 +42,8 @@ pub async fn get_s3_settings(
 pub async fn save_s3_settings(
   State(pool): State<SqlitePool>,
   Json(payload): Json<S3SettingsPayload>,
-) -> Result<StatusCode, Problem> {
+) -> Result<StatusCode, LogSeekApiError> {
   let settings: settings::S3Settings = payload.into();
-  settings::save_s3_settings(&pool, &settings)
-    .await
-    .map_err(AppError::Settings)?;
+  settings::save_s3_settings(&pool, &settings).await?;
   Ok(StatusCode::NO_CONTENT)
 }

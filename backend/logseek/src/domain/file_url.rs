@@ -231,7 +231,11 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
     }
     (Endpoint::Local { root }, Target::Dir { path, .. }) => {
       // 以实际扫描根作为 base：root/path
-      let real_base = if path == "." { root.clone() } else { join_root_path(root, path) };
+      let real_base = if path == "." {
+        root.clone()
+      } else {
+        join_root_path(root, path)
+      };
       let base = FileUrl::local(real_base);
       match FileUrl::dir_entry(base, rel_path) {
         Ok(url) => {
@@ -275,10 +279,55 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Agent { agent_id, .. }, _) => {
-      let url = FileUrl::agent(agent_id, rel_path);
-      let id = url.to_string();
-      Some((url, id))
+    (Endpoint::Agent { agent_id, root }, Target::Archive { path }) => {
+      // Agent 归档：以 agent://<id>/<root/path> 作为 base；内部统一按归档视图暴露
+      let full = join_root_path(root, path);
+      let base = FileUrl::agent(agent_id, full);
+      match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => None,
+      }
+    }
+    (Endpoint::Agent { agent_id, root }, Target::Dir { path, .. }) => {
+      // Agent 目录：以 agent://<id>/<root/path or root> 作为 base，再附加 entry 相对路径
+      let real_base = if path == "." {
+        root.clone()
+      } else {
+        join_root_path(root, path)
+      };
+      let base = FileUrl::agent(agent_id, real_base);
+      match FileUrl::dir_entry(base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => None,
+      }
+    }
+    (Endpoint::Agent { agent_id, root }, Target::Files { .. }) => {
+      // 单文件集合：以 agent://<id>/<root> 作为 base，entry 为相对路径
+      let base = FileUrl::agent(agent_id, root);
+      match FileUrl::dir_entry(base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => None,
+      }
+    }
+    (Endpoint::Agent { agent_id, root }, Target::All) => {
+      // 全部：以 agent://<id>/<root> 作为 base，entry 为相对路径
+      let base = FileUrl::agent(agent_id, root);
+      match FileUrl::dir_entry(base, rel_path) {
+        Ok(url) => {
+          let id = url.to_string();
+          Some((url, id))
+        }
+        Err(_) => None,
+      }
     }
     _ => None,
   }
@@ -444,6 +493,16 @@ mod tests {
   }
 
   #[test]
+  fn test_tar_gz_agent() {
+    let base = FileUrl::agent("agent-localhost", "/backup/archive.tar.gz");
+    let url = FileUrl::tar_entry(TarCompression::Gzip, base, "logs/app.log").unwrap();
+    assert_eq!(
+      url.to_string(),
+      "tar.gz+agent://agent-localhost/backup/archive.tar.gz:logs/app.log"
+    );
+  }
+
+  #[test]
   fn test_agent_file() {
     let url = FileUrl::agent("prod-server-01", "/var/log/app.log");
     assert_eq!(url.to_string(), "agent://prod-server-01/var/log/app.log");
@@ -481,6 +540,38 @@ mod tests {
         assert_eq!(path, "logs/app.log");
       }
       _ => panic!("Expected Agent URL"),
+    }
+  }
+
+  #[test]
+  fn test_build_file_url_for_agent_dir() {
+    use crate::domain::config::{Endpoint, Source, Target};
+    let source = Source {
+      endpoint: Endpoint::Agent {
+        agent_id: "agent-a".into(),
+        root: "/data".into(),
+      },
+      target: Target::Dir {
+        path: "apps".into(),
+        recursive: true,
+      },
+      filter_glob: None,
+      display_name: None,
+    };
+    let (url, id) = build_file_url_for_result(&source, "logs/app.log").unwrap();
+    assert_eq!(id, "dir+agent://agent-a/data/apps:logs/app.log");
+    match url {
+      FileUrl::DirEntry { base, entry_path } => {
+        assert_eq!(entry_path, "logs/app.log");
+        match *base {
+          FileUrl::Agent { agent_id, path } => {
+            assert_eq!(agent_id, "agent-a");
+            assert_eq!(path, "/data/apps");
+          }
+          _ => panic!("expected agent base"),
+        }
+      }
+      _ => panic!("expected dir-entry"),
     }
   }
 
@@ -572,6 +663,7 @@ mod tests {
       "s3://my-bucket/logs/app.log",
       "tar.gz+s3://bucket/archive.tar.gz:home/logs/app.log",
       "agent://server-01/var/log/app.log",
+      "tar.gz+agent://agent-localhost/backup/archive.tar.gz:logs/app.log",
     ];
 
     for url_str in urls {

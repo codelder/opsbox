@@ -1,8 +1,5 @@
 use super::{DateRange, PlanResult, SourcePlanner};
-use crate::{
-  api::models::AppError,
-  domain::config::{Endpoint, Source, Target},
-};
+use crate::domain::config::{Endpoint, Source, Target};
 use async_trait::async_trait;
 use opsbox_core::SqlitePool;
 
@@ -91,7 +88,7 @@ impl SourcePlanner for BbipPlanner {
     "bbip"
   }
 
-  async fn plan(&self, pool: &SqlitePool, query: &str) -> Result<PlanResult, AppError> {
+  async fn plan(&self, pool: &SqlitePool, query: &str) -> Result<PlanResult, crate::api::LogSeekApiError> {
     use chrono::{Datelike, Utc};
     use chrono_tz::Asia::Shanghai;
 

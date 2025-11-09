@@ -16,22 +16,36 @@ use tokio::time;
 
 #[derive(Debug, Error)]
 pub enum S3Error {
-  #[error("url:{0}不可用")]
-  InvalidBaseUrl(String),
-  #[error("创建 S3 客户端失败")]
-  S3Build,
-  #[error("S3 获取对象错误：{0}")]
-  S3GetObject(String),
-  #[error("S3 to_stream 错误：{0}")]
-  S3ToStream(String),
-  #[error("S3 列举对象错误：{0}")]
-  S3ListObjects(String),
-  #[error("无效正则：{0}")]
-  Regex(String),
-  #[error("IO错误: {0}")]
-  Io(#[from] io::Error),
-  #[error("连接超时")]
-  ConnectionTimeout,
+  #[error("S3 URL 不可用: {url}")]
+  InvalidBaseUrl { url: String },
+  #[error("创建 S3 客户端失败: {reason}")]
+  S3Build { reason: String },
+  #[error("S3 获取对象失败: bucket={bucket}, key={key}, error={error}")]
+  S3GetObject { bucket: String, key: String, error: String },
+  #[error("S3 流转换失败: bucket={bucket}, key={key}, error={error}")]
+  S3ToStream { bucket: String, key: String, error: String },
+  #[error("S3 列举对象失败: bucket={bucket}, prefix={prefix}, error={error}")]
+  S3ListObjects {
+    bucket: String,
+    prefix: String,
+    error: String,
+  },
+  #[error("无效正则表达式: {pattern}, error={error}")]
+  Regex { pattern: String, error: String },
+  #[error("IO错误: {path}, error={error}")]
+  Io { path: String, error: String },
+  #[error("S3 连接超时: bucket={bucket}, operation={operation}")]
+  ConnectionTimeout { bucket: String, operation: String },
+}
+
+// 为 io::Error 提供自动转换（需要提供路径上下文）
+impl From<io::Error> for S3Error {
+  fn from(err: io::Error) -> Self {
+    S3Error::Io {
+      path: "unknown".to_string(), // 如果没有路径信息，使用默认值
+      error: err.to_string(),
+    }
+  }
 }
 
 // 全局 S3 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
@@ -160,7 +174,11 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
           .await
           .map_err(|e| {
             error!("获取S3对象失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
-            S3Error::S3GetObject(e.to_string())
+            S3Error::S3GetObject {
+              bucket: self.bucket.to_string(),
+              key: self.key.to_string(),
+              error: e.to_string(),
+            }
           })?;
 
         // AWS SDK 返回 ByteStream，可以直接转换为兼容的流
@@ -189,7 +207,10 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
           attempt += 1;
           if attempt >= max_attempts {
             error!("获取S3对象超时(重试到达上限): bucket={}, key={}", self.bucket, self.key);
-            return Err(S3Error::ConnectionTimeout);
+            return Err(S3Error::ConnectionTimeout {
+              bucket: self.bucket.to_string(),
+              operation: "get_object".to_string(),
+            });
           }
           let base_ms = 100u64.saturating_mul(1u64 << attempt.min(6));
           let delay = Duration::from_millis(base_ms);
@@ -225,7 +246,10 @@ impl<'a> S3ReaderProvider<'a> {
       debug!("编译正则表达式: {}", pat);
       Some(Regex::new(pat).map_err(|e| {
         error!("正则表达式编译失败: {}, error: {}", pat, e);
-        S3Error::Regex(e.to_string())
+        S3Error::Regex {
+          pattern: pat.to_string(),
+          error: e.to_string(),
+        }
       })?)
     } else {
       None
@@ -255,7 +279,11 @@ impl<'a> S3ReaderProvider<'a> {
 
         let response = request.send().await.map_err(|e| {
           error!("列举S3对象失败: error={:?}", e);
-          S3Error::S3ListObjects(e.to_string())
+          S3Error::S3ListObjects {
+            bucket: self.bucket.to_string(),
+            prefix: prefix.to_string(),
+            error: e.to_string(),
+          }
         })?;
 
         // 处理返回的对象
@@ -287,7 +315,10 @@ impl<'a> S3ReaderProvider<'a> {
     .await
     .map_err(|_| {
       error!("S3对象列举超时: bucket={}, prefix={}", self.bucket, prefix);
-      S3Error::ConnectionTimeout
+      S3Error::ConnectionTimeout {
+        bucket: self.bucket.to_string(),
+        operation: "list_objects_v2".to_string(),
+      }
     })??;
 
     let (keys, processed_count) = list_result;
@@ -320,7 +351,11 @@ pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, b
       .await
       .map_err(|e| {
         error!("S3 连接测试失败: {:?}", e);
-        S3Error::S3ListObjects(e.to_string())
+        S3Error::S3ListObjects {
+          bucket: bucket.to_string(),
+          prefix: "".to_string(),
+          error: e.to_string(),
+        }
       })?;
 
     // 无论是否有对象，只要请求成功就说明连接正常
@@ -331,7 +366,10 @@ pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, b
   .await
   .map_err(|_| {
     error!("S3 连接测试超时: bucket={}", bucket);
-    S3Error::ConnectionTimeout
+    S3Error::ConnectionTimeout {
+      bucket: bucket.to_string(),
+      operation: "test_connection".to_string(),
+    }
   })??;
 
   info!("S3 连接测试成功");

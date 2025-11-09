@@ -4,10 +4,9 @@ use axum::{
   extract::{Path, State},
 };
 use opsbox_core::SqlitePool;
-use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
 
-use crate::api::models::AppError;
+use crate::api::LogSeekApiError;
 use crate::domain::config::Source;
 use crate::repository::planners;
 
@@ -52,10 +51,9 @@ pub struct PlannerTestResponse {
 }
 
 /// 列出所有脚本（仅元信息）
-pub async fn list_scripts(State(pool): State<SqlitePool>) -> Result<Json<PlannerListResponse>, Problem> {
+pub async fn list_scripts(State(pool): State<SqlitePool>) -> Result<Json<PlannerListResponse>, LogSeekApiError> {
   let list = planners::list_scripts(&pool)
-    .await
-    .map_err(|e| Problem::from(AppError::Settings(e)))?
+    .await?
     .into_iter()
     .map(|m| PlannerItemMeta {
       app: m.app,
@@ -69,21 +67,17 @@ pub async fn list_scripts(State(pool): State<SqlitePool>) -> Result<Json<Planner
 pub async fn get_script(
   State(pool): State<SqlitePool>,
   Path(app): Path<String>,
-) -> Result<Json<PlannerGetResponse>, Problem> {
-  match planners::load_script(&pool, &app)
-    .await
-    .map_err(|e| Problem::from(AppError::Settings(e)))?
-  {
+) -> Result<Json<PlannerGetResponse>, LogSeekApiError> {
+  match planners::load_script(&pool, &app).await? {
     Some(s) => Ok(Json(PlannerGetResponse {
       app: s.app,
       script: s.script,
       updated_at: s.updated_at,
     })),
-    None => Err(
-      problemdetails::new(axum::http::StatusCode::NOT_FOUND)
-        .with_title("未找到脚本")
-        .with_detail(format!("业务 {} 未配置脚本", app)),
-    ),
+    None => Err(LogSeekApiError::Internal(opsbox_core::AppError::not_found(format!(
+      "业务 {} 未配置脚本",
+      app
+    )))),
   }
 }
 
@@ -91,30 +85,24 @@ pub async fn get_script(
 pub async fn save_script(
   State(pool): State<SqlitePool>,
   Json(body): Json<PlannerUpsertPayload>,
-) -> Result<(), Problem> {
+) -> Result<(), LogSeekApiError> {
   if body.app.trim().is_empty() {
-    return Err(
-      problemdetails::new(axum::http::StatusCode::BAD_REQUEST)
-        .with_title("无效参数")
-        .with_detail("app 不能为空"),
-    );
+    return Err(LogSeekApiError::Internal(opsbox_core::AppError::bad_request(
+      "app 不能为空",
+    )));
   }
-  planners::upsert_script(&pool, &body.app, &body.script)
-    .await
-    .map_err(|e| Problem::from(AppError::Settings(e)))?;
+  planners::upsert_script(&pool, &body.app, &body.script).await?;
   Ok(())
 }
 
 /// 删除脚本
-pub async fn delete_script(State(pool): State<SqlitePool>, Path(app): Path<String>) -> Result<(), Problem> {
-  planners::delete_script(&pool, &app)
-    .await
-    .map_err(|e| Problem::from(AppError::Settings(e)))?;
+pub async fn delete_script(State(pool): State<SqlitePool>, Path(app): Path<String>) -> Result<(), LogSeekApiError> {
+  planners::delete_script(&pool, &app).await?;
   Ok(())
 }
 
 /// 获取渲染后的 README（HTML）
-pub async fn get_readme_html() -> Result<Html<String>, Problem> {
+pub async fn get_readme_html() -> Result<Html<String>, LogSeekApiError> {
   // 编译期内嵌 README 内容
   let md = include_str!("../planners/README.md");
   let html = comrak::markdown_to_html(md, &comrak::ComrakOptions::default());
@@ -125,18 +113,14 @@ pub async fn get_readme_html() -> Result<Html<String>, Problem> {
 pub async fn test_script(
   State(pool): State<SqlitePool>,
   Json(body): Json<PlannerTestPayload>,
-) -> Result<Json<PlannerTestResponse>, Problem> {
+) -> Result<Json<PlannerTestResponse>, LogSeekApiError> {
   if body.app.trim().is_empty() {
-    return Err(
-      problemdetails::new(axum::http::StatusCode::BAD_REQUEST)
-        .with_title("无效参数")
-        .with_detail("app 不能为空"),
-    );
+    return Err(LogSeekApiError::Internal(opsbox_core::AppError::bad_request(
+      "app 不能为空",
+    )));
   }
-  // 直接复用 Starlark 规划器（仅做规划，不执行搜索）
-  let plan = crate::domain::source_planner::plan_with_starlark(&pool, Some(&body.app), &body.q)
-    .await
-    .map_err(Problem::from)?;
+  // 直接备用 Starlark 规划器（仅做规划，不执行搜索）
+  let plan = crate::domain::source_planner::plan_with_starlark(&pool, Some(&body.app), &body.q).await?;
   Ok(Json(PlannerTestResponse {
     cleaned_query: plan.cleaned_query,
     sources: plan.sources,

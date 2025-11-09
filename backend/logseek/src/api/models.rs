@@ -1,59 +1,6 @@
 // API 层数据模型
 use crate::repository::settings;
-use crate::service::search::SearchError;
-use crate::utils::storage::S3Error;
-use axum::extract::rejection::JsonRejection;
-use axum::http::StatusCode;
-use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-/// API 层错误类型
-#[derive(Debug, Error)]
-pub enum AppError {
-  #[error("存储错误")]
-  S3Error(S3Error),
-  #[error("检索错误")]
-  SearchError(SearchError),
-  #[error(transparent)]
-  BadJson(#[from] JsonRejection),
-  #[error("查询语法错误")]
-  QueryParse(#[from] crate::query::ParseError),
-  #[error("设置存储错误")]
-  Settings(#[from] opsbox_core::AppError),
-}
-
-impl From<AppError> for Problem {
-  fn from(error: AppError) -> Self {
-    match error {
-      AppError::S3Error(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("存储错误")
-        .with_detail(e.to_string()),
-      AppError::SearchError(e) => problemdetails::new(StatusCode::INTERNAL_SERVER_ERROR)
-        .with_title("检索错误")
-        .with_detail(e.to_string()),
-      AppError::BadJson(e) => problemdetails::new(StatusCode::BAD_REQUEST)
-        .with_title("JSON请求错误")
-        .with_detail(e.to_string()),
-      AppError::QueryParse(e) => problemdetails::new(StatusCode::BAD_REQUEST)
-        .with_title("查询语法错误")
-        .with_detail(e.to_string()),
-      AppError::Settings(e) => {
-        let status = match e {
-          opsbox_core::AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
-          opsbox_core::AppError::NotFound(_) => StatusCode::NOT_FOUND,
-          opsbox_core::AppError::ExternalService(_) => StatusCode::BAD_GATEWAY,
-        };
-        problemdetails::new(status)
-          .with_title(e.to_string())
-          .with_detail(e.to_string())
-      }
-    }
-  }
-}
 
 /// 搜索请求体
 #[derive(Debug, Clone, Deserialize)]
@@ -163,6 +110,8 @@ pub struct S3ProfileListResponse {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::api::LogSeekApiError;
+  use axum::http::StatusCode;
 
   #[test]
   fn test_search_body_deserialization() {
@@ -299,23 +248,24 @@ mod tests {
   }
 
   #[test]
-  fn test_app_error_display() {
+  fn test_logseek_api_error_display() {
     use crate::query;
-    let error = AppError::QueryParse(query::ParseError::UnexpectedToken { span: (0, 1) });
+    let error = LogSeekApiError::QueryParse(query::ParseError::UnexpectedToken { span: (0, 1) });
 
     let error_string = error.to_string();
     assert!(error_string.contains("查询语法错误"));
   }
 
   #[test]
-  fn test_app_error_to_problem() {
+  fn test_logseek_api_error_to_response() {
     use crate::query;
-    let error = AppError::QueryParse(query::ParseError::InvalidRegex {
+    use axum::response::IntoResponse;
+    let error = LogSeekApiError::QueryParse(query::ParseError::InvalidRegex {
       message: "invalid syntax".to_string(),
       span: (0, 5),
     });
 
-    let problem: Problem = error.into();
-    assert_eq!(problem.status_code, StatusCode::BAD_REQUEST);
+    let response = error.into_response();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
   }
 }

@@ -16,7 +16,7 @@ fn entry_concurrency() -> usize {
     .clamp(1, 64)
 }
 
-use super::search::{SearchProcessor, SearchResult};
+use super::search::{SearchEvent, SearchProcessor};
 use opsbox_core::SqlitePool;
 
 /// 条目元数据（目录相对路径或归档内路径）
@@ -37,23 +37,26 @@ pub trait EntryStream: Send {
 pub struct FsEntryStream {
   stack: Vec<tokio::fs::ReadDir>,
   root: Option<PathBuf>,
+  recursive: bool,
 }
 
 impl FsEntryStream {
   /// 从根目录创建条目流
-  pub async fn new(root: PathBuf) -> io::Result<Self> {
+  pub async fn new(root: PathBuf, recursive: bool) -> io::Result<Self> {
     let rd = tokio::fs::read_dir(&root).await?;
     Ok(Self {
       stack: vec![rd],
       root: Some(root),
+      recursive,
     })
   }
 
   /// 直接从已存在的 ReadDir 创建（无根路径信息）
-  pub fn from_read_dir(rd: tokio::fs::ReadDir) -> Self {
+  pub fn from_read_dir(rd: tokio::fs::ReadDir, recursive: bool) -> Self {
     Self {
       stack: vec![rd],
       root: None,
+      recursive,
     }
   }
 }
@@ -75,7 +78,9 @@ impl EntryStream for FsEntryStream {
             continue;
           }
           if ft.is_dir() {
-            if let Ok(sub) = tokio::fs::read_dir(entry.path()).await {
+            if self.recursive
+              && let Ok(sub) = tokio::fs::read_dir(entry.path()).await
+            {
               self.stack.push(sub);
             }
             continue;
@@ -221,11 +226,11 @@ impl EntryStreamProcessor {
     self
   }
 
-  /// 并发处理条目（有界并发，默认并发度 8，可通过 ENTRY_CONCURRENCY 环境变量调整，范围 1-64）
+  /// 並发处理条目（有畊并发，默认并发度 8，可通过 ENTRY_CONCURRENCY 环境变量调整，范围 1-64）
   pub async fn process_stream(
     &mut self,
     entries: &mut dyn EntryStream,
-    tx: tokio::sync::mpsc::Sender<SearchResult>,
+    tx: tokio::sync::mpsc::Sender<SearchEvent>,
   ) -> Result<(), String> {
     let processor = self.processor.clone();
     let content_timeout = self.content_timeout;
@@ -264,13 +269,23 @@ impl EntryStreamProcessor {
         .await
         {
           Ok(Ok(Some(result))) => {
-            if processor.send_result(result, &tx).await.is_err() {
+            if tx.send(SearchEvent::Success(result)).await.is_err() {
               warn!("下游接收已关闭，终止条目流处理");
               break;
             }
           }
           Ok(Ok(None)) => {}
-          Ok(Err(e)) => warn!("处理条目内容失败: {}", e),
+          Ok(Err(e)) => {
+            warn!("处理条目内容失败: {}", e);
+            let error_msg = format!("内容处理失败: {}", e);
+            let _ = tx
+              .send(SearchEvent::Error {
+                source: "条目流#1".to_string(),
+                message: error_msg,
+                recoverable: true,
+              })
+              .await;
+          }
           Err(_) => warn!("处理条目超时: {}", meta.path),
         }
       } else {
@@ -281,11 +296,19 @@ impl EntryStreamProcessor {
         in_flight.push(async move {
           match tokio::time::timeout(content_timeout, proc_clone.process_content(path.clone(), &mut reader)).await {
             Ok(Ok(Some(result))) => {
-              let _ = proc_clone.send_result(result, &tx_clone).await;
+              let _ = tx_clone.send(SearchEvent::Success(result)).await;
             }
             Ok(Ok(None)) => {}
             Ok(Err(e)) => {
               warn!("处理条目内容失败: {}", e);
+              let error_msg = format!("内容处理失败: {}", e);
+              let _ = tx_clone
+                .send(SearchEvent::Error {
+                  source: "条目流#2".to_string(),
+                  message: error_msg,
+                  recoverable: true,
+                })
+                .await;
             }
             Err(_) => {
               warn!("处理条目超时: {}", path);
@@ -324,7 +347,7 @@ impl EntryStreamFactory {
       let file = tokio::fs::File::open(&targz_path)
         .await
         .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-let stream = TarGzEntryStream::new(file)
+      let stream = TarGzEntryStream::new(file)
         .await
         .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
       return Ok(Box::new(stream));
@@ -335,7 +358,7 @@ let stream = TarGzEntryStream::new(file)
       let file = tokio::fs::File::open(root_or_file)
         .await
         .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", root_or_file, e))?;
-let stream = TarGzEntryStream::new(file)
+      let stream = TarGzEntryStream::new(file)
         .await
         .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", root_or_file, e))?;
       return Ok(Box::new(stream));
@@ -344,7 +367,7 @@ let stream = TarGzEntryStream::new(file)
     match tokio::fs::metadata(root_or_file).await {
       Ok(meta) if meta.is_file() => Ok(Box::new(SingleFileEntryStream::new(PathBuf::from(root_or_file)))),
       Ok(meta) if meta.is_dir() => {
-        let stream = FsEntryStream::new(PathBuf::from(root_or_file))
+        let stream = FsEntryStream::new(PathBuf::from(root_or_file), true)
           .await
           .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
         Ok(Box::new(stream))
@@ -361,13 +384,17 @@ let stream = TarGzEntryStream::new(file)
   pub async fn create_stream(&self, source: crate::domain::config::Source) -> Result<Box<dyn EntryStream>, String> {
     use crate::domain::config::{Endpoint, Target};
     match (&source.endpoint, &source.target) {
-      (Endpoint::Local { root }, Target::Dir { path, .. }) => {
+      (Endpoint::Local { root }, Target::Dir { path, recursive }) => {
         let joined = if path == "." {
           root.clone()
         } else {
           format!("{}/{}", root, path)
         };
-        crate::service::entry_stream::build_local_entry_stream(&joined, None).await
+        // 使用 FsEntryStream 并尊重 recursive 标志
+        let stream = FsEntryStream::new(PathBuf::from(joined), *recursive)
+          .await
+          .map_err(|e| format!("无法读取目录: {}", e))?;
+        Ok(Box::new(stream))
       }
       (Endpoint::Local { root }, Target::Files { paths }) => {
         let files: Vec<String> = paths
@@ -482,7 +509,7 @@ pub async fn build_local_entry_stream(
     let file = tokio::fs::File::open(&targz_path)
       .await
       .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-let stream = TarGzEntryStream::new(file)
+    let stream = TarGzEntryStream::new(file)
       .await
       .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
     return Ok(Box::new(stream));
@@ -505,7 +532,13 @@ let stream = TarGzEntryStream::new(file)
   match tokio::fs::metadata(root_or_file).await {
     Ok(meta) if meta.is_file() => Ok(Box::new(SingleFileEntryStream::new(PathBuf::from(root_or_file)))),
     Ok(meta) if meta.is_dir() => {
-      let stream = FsEntryStream::new(PathBuf::from(root_or_file))
+      // 若 scope 提供 Directory，读取其 recursive；否则默认递归
+      let recursive = if let Some(SearchScope::Directory { recursive, .. }) = scope {
+        recursive
+      } else {
+        true
+      };
+      let stream = FsEntryStream::new(PathBuf::from(root_or_file), recursive)
         .await
         .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
       Ok(Box::new(stream))
@@ -538,7 +571,7 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
   let prefixed = PrefixedReader::new(head, reader);
   match kind {
     ArchiveKind::Tar => {
-let stream = TarEntryStream::new(prefixed)
+      let stream = TarEntryStream::new(prefixed)
         .await
         .map_err(|e| format!("读取 tar 失败: {}", e))?;
       Ok(Box::new(stream))
@@ -554,7 +587,7 @@ let stream = TarEntryStream::new(prefixed)
       let is_tar = is_tar_header(&inner_head);
       let gz_prefixed = PrefixedReader::new(inner_head, gz);
       if is_tar {
-let stream = TarEntryStream::new(gz_prefixed)
+        let stream = TarEntryStream::new(gz_prefixed)
           .await
           .map_err(|e| format!("读取 tar(解压后) 失败: {}", e))?;
         Ok(Box::new(stream))
@@ -568,7 +601,7 @@ let stream = TarEntryStream::new(gz_prefixed)
           })
           .unwrap_or("<gzip>")
           .to_string();
-let stream = GzipEntryStream::new(gz_prefixed, name, false);
+        let stream = GzipEntryStream::new(gz_prefixed, name, false);
         Ok(Box::new(stream))
       }
     }
@@ -720,13 +753,13 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipEntryStream<R> {
 /// 通用条目流处理函数（支持基于回调的结果处理）
 ///
 /// 提供统一的条目流处理方式，可被 Server 和 Agent 复用，避免重复实现核心处理逻辑。
-/// 结果通过回调函数返回，调用方可灵活处理（发送到 channel、生成消息等）。
+/// 事件通过回调函数返回，调用方可灵活处理（发送到 channel、生成消息等）。
 ///
-/// # 参数
+/// # 參数
 /// - stream: 条目流
 /// - processor: 搜索处理器
 /// - extra_path_filter: 额外路径过滤器（与用户查询的 path: 规则做 AND）
-/// - result_callback: 结果回调函数，返回 true 继续处理，返回 false 停止处理
+/// - result_callback: 事件回调函数，返回 true 继续处理，返回 false 停止处理
 ///
 /// # 返回
 /// 返回 (处理文件数, 匹配文件数)
@@ -737,7 +770,7 @@ pub async fn process_entry_stream_with_callback<F>(
   mut result_callback: F,
 ) -> Result<(usize, usize), String>
 where
-  F: FnMut(crate::service::search::SearchResult) -> bool + Send,
+  F: FnMut(crate::service::search::SearchEvent) -> bool + Send,
 {
   // 创建条目流处理器
   let mut stream_processor = EntryStreamProcessor::new(processor);

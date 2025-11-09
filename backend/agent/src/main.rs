@@ -20,9 +20,9 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use log::{debug, error, info, warn};
 use logseek::utils::strings::truncate_utf8;
 use logseek::{
-  agent::{AgentInfo, AgentMessage, AgentSearchRequest, AgentStatus, SearchScope},
+  agent::{AgentInfo, AgentSearchRequest, AgentStatus, SearchScope},
   query::Query,
-  service::search::SearchProcessor,
+  service::search::{SearchEvent, SearchProcessor},
 };
 use std::{
   net::SocketAddr,
@@ -30,7 +30,7 @@ use std::{
   sync::Arc,
   time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 
 /// 是否启用与 Server 通讯的“线级”调试日志（打印请求/响应、NDJSON 行等）
@@ -172,9 +172,23 @@ async fn async_main(config: Arc<AgentConfig>) -> Result<(), Box<dyn std::error::
     error!("Agent 将以离线模式运行，仅提供 HTTP 接口");
   }
 
-  // 启动心跳任务
+  // 构建全局关闭通知器（供优雅关闭时停止后台任务）
+  let shutdown_notify = Arc::new(Notify::new());
+
+  // 启动 OS 信号监听任务，收到 SIGINT/SIGTERM 后唤醒所有等待者
+  {
+    let sn = shutdown_notify.clone();
+    tokio::spawn(async move {
+      shutdown_signal().await;
+      info!("收到关闭信号，开始优雅关闭……");
+      sn.notify_waiters();
+    });
+  }
+
+  // 启动心跳任务（可被关闭通知打断）
   if config.enable_heartbeat {
-    tokio::spawn(heartbeat_loop(config.clone()));
+    let sn = shutdown_notify.clone();
+    tokio::spawn(heartbeat_loop(config.clone(), sn));
   }
 
   // 创建任务管理器
@@ -196,7 +210,12 @@ async fn async_main(config: Arc<AgentConfig>) -> Result<(), Box<dyn std::error::
 
   // 支持优雅关闭
   axum::serve(listener, app)
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown({
+      let sn = shutdown_notify.clone();
+      async move {
+        sn.notified().await;
+      }
+    })
     .await?;
 
   info!("Agent 已关闭");
@@ -289,23 +308,45 @@ impl AgentConfig {
     }
   }
 
-  /// 解析目录路径
+  /// 解析目录路径（强制白名单校验，禁止越权）
   fn resolve_directory_path(&self, relative_path: &str) -> Result<Vec<PathBuf>, String> {
     let mut resolved_paths = Vec::new();
+    let canon_roots = canonicalize_roots(&self.search_roots);
 
-    for root in &self.search_roots {
-      let full_path = PathBuf::from(root).join(relative_path);
-
-      if full_path.exists() && full_path.is_dir() {
-        resolved_paths.push(full_path);
-      } else {
-        // 尝试查找匹配的子目录
+    let rel_as_path = PathBuf::from(relative_path);
+    // 绝对路径：必须位于某个白名单根目录下
+    if rel_as_path.is_absolute() {
+      if rel_as_path.exists() && rel_as_path.is_dir() {
+        let cand_c = canonicalize_existing(&rel_as_path)?;
+        if !is_under_any_root(&cand_c, &canon_roots) {
+          return Err(format!("目录不在白名单中: {}", cand_c.display()));
+        }
+        resolved_paths.push(cand_c);
+      }
+    } else {
+      // 相对路径：对每个白名单根进行拼接，并校验规范化后仍在该根下
+      for root in &self.search_roots {
+        let root_path = PathBuf::from(root);
+        let full_path = root_path.join(relative_path);
+        if full_path.exists() && full_path.is_dir() {
+          let cand_c = canonicalize_existing(&full_path)?;
+          let root_c = canonicalize_existing(&root_path)?;
+          if cand_c.starts_with(&root_c) {
+            resolved_paths.push(cand_c);
+            continue;
+          }
+        }
+        // 尝试在一级子目录下拼接（兼容原先的“模糊子目录”逻辑）
         if let Ok(entries) = std::fs::read_dir(root) {
           for entry in entries.flatten() {
             if entry.path().is_dir() {
               let sub_path = entry.path().join(relative_path);
-              if sub_path.exists() {
-                resolved_paths.push(sub_path);
+              if sub_path.exists() && sub_path.is_dir() {
+                let cand_c = canonicalize_existing(&sub_path)?;
+                let root_c = canonicalize_existing(&root_path)?;
+                if cand_c.starts_with(&root_c) {
+                  resolved_paths.push(cand_c);
+                }
               }
             }
           }
@@ -320,15 +361,35 @@ impl AgentConfig {
     }
   }
 
-  /// 解析文件路径
+  /// 解析文件路径（强制白名单校验，禁止越权）
   fn resolve_file_paths(&self, relative_paths: &[String]) -> Result<Vec<PathBuf>, String> {
     let mut resolved_paths = Vec::new();
+    let canon_roots = canonicalize_roots(&self.search_roots);
 
-    for relative_path in relative_paths {
+    for p in relative_paths {
+      let candidate = PathBuf::from(p);
+      if candidate.is_absolute() {
+        if candidate.exists() && candidate.is_file() {
+          let cand_c = canonicalize_existing(&candidate)?;
+          if !is_under_any_root(&cand_c, &canon_roots) {
+            return Err(format!("文件路径不在白名单中: {}", cand_c.display()));
+          }
+          resolved_paths.push(cand_c);
+        }
+        continue;
+      }
+
+      // 相对路径：逐个根尝试
       for root in &self.search_roots {
-        let full_path = PathBuf::from(root).join(relative_path);
+        let root_path = PathBuf::from(root);
+        let full_path = root_path.join(p);
         if full_path.exists() && full_path.is_file() {
-          resolved_paths.push(full_path);
+          let cand_c = canonicalize_existing(&full_path)?;
+          let root_c = canonicalize_existing(&root_path)?;
+          if !cand_c.starts_with(&root_c) {
+            return Err(format!("文件路径不在白名单中: {}", cand_c.display()));
+          }
+          resolved_paths.push(cand_c);
           break; // 找到第一个匹配的文件就停止
         }
       }
@@ -337,20 +398,45 @@ impl AgentConfig {
     Ok(resolved_paths)
   }
 
-  /// 解析 tar.gz 路径
+  /// 解析归档文件路径（支持 .tar、.tar.gz、.tgz、.gz；强制白名单校验）
   fn resolve_targz_path(&self, relative_path: &str) -> Result<Vec<PathBuf>, String> {
-    let mut resolved_paths = Vec::new();
+    fn is_supported_archive(p: &StdPath) -> bool {
+      let lower = p.to_string_lossy().to_lowercase();
+      lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".gz")
+    }
 
-    for root in &self.search_roots {
-      let full_path = PathBuf::from(root).join(relative_path);
-      if full_path.exists() && full_path.extension().and_then(|s| s.to_str()) == Some("gz") {
-        resolved_paths.push(full_path);
-        break;
+    let mut resolved_paths = Vec::new();
+    let canon_roots = canonicalize_roots(&self.search_roots);
+
+    // 若传入的是绝对路径，直接检查
+    let rel_as_path = PathBuf::from(relative_path);
+    if rel_as_path.is_absolute() {
+      if rel_as_path.exists() && is_supported_archive(&rel_as_path) {
+        let cand_c = canonicalize_existing(&rel_as_path)?;
+        if !is_under_any_root(&cand_c, &canon_roots) {
+          return Err(format!("归档文件路径不在白名单中: {}", cand_c.display()));
+        }
+        resolved_paths.push(cand_c);
+      }
+    } else {
+      // 否则在 search_roots 下拼接查找
+      for root in &self.search_roots {
+        let root_path = PathBuf::from(root);
+        let full_path = root_path.join(relative_path);
+        if full_path.exists() && is_supported_archive(&full_path) {
+          let cand_c = canonicalize_existing(&full_path)?;
+          let root_c = canonicalize_existing(&root_path)?;
+          if !cand_c.starts_with(&root_c) {
+            return Err(format!("归档文件路径不在白名单中: {}", cand_c.display()));
+          }
+          resolved_paths.push(cand_c);
+          break;
+        }
       }
     }
 
     if resolved_paths.is_empty() {
-      Err(format!("未找到 tar.gz 文件: {}", relative_path))
+      Err(format!("未找到归档文件: {}", relative_path))
     } else {
       Ok(resolved_paths)
     }
@@ -441,6 +527,27 @@ struct AppState {
 // 工具函数
 // ============================================================================
 
+/// 规范化（canonicalize）已有路径，返回去除符号链接与 .. 的绝对路径
+fn canonicalize_existing(path: &StdPath) -> Result<PathBuf, String> {
+  std::fs::canonicalize(path).map_err(|e| format!("路径规范化失败: {}: {}", path.display(), e))
+}
+
+/// 将配置中的 search_roots 规范化（忽略不存在的根）
+fn canonicalize_roots(roots: &[String]) -> Vec<PathBuf> {
+  let mut out = Vec::new();
+  for r in roots {
+    if let Ok(c) = std::fs::canonicalize(r) {
+      out.push(c);
+    }
+  }
+  out
+}
+
+/// 判断规范化后的 path 是否位于任一规范化后的根目录之下
+fn is_under_any_root(path: &StdPath, canon_roots: &[PathBuf]) -> bool {
+  canon_roots.iter().any(|root| path.starts_with(root))
+}
+
 // ============================================================================
 // 路由处理器
 // ============================================================================
@@ -515,15 +622,22 @@ async fn handle_cancel(State(_state): State<AppState>, Path(task_id): Path<Strin
 // ============================================================================
 
 /// 执行搜索
-async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, tx: mpsc::Sender<AgentMessage>) {
+async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, tx: mpsc::Sender<SearchEvent>) {
   let task_id = request.task_id.clone();
+  let started_at = std::time::Instant::now();
 
   // 1. 解析查询（第三层过滤：query 中的 path: 指令）
   let spec = match Query::parse_github_like(&request.query) {
     Ok(s) => Arc::new(s),
     Err(e) => {
       error!("查询解析失败: {}", e);
-      let _ = tx.send(AgentMessage::Error(format!("查询解析失败: {}", e))).await;
+      let _ = tx
+        .send(SearchEvent::Error {
+          source: "agent-query-parse".to_string(),
+          message: format!("查询解析失败: {}", e),
+          recoverable: false,
+        })
+        .await;
       return;
     }
   };
@@ -545,7 +659,13 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
       } else {
         format!("SearchScope 解析失败: {}。可用的子目录: {:?}", e, available_dirs)
       };
-      let _ = tx.send(AgentMessage::Error(error_msg)).await;
+      let _ = tx
+        .send(SearchEvent::Error {
+          source: "agent-scope".to_string(),
+          message: error_msg,
+          recoverable: false,
+        })
+        .await;
       return;
     }
   };
@@ -556,7 +676,13 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
       Ok(f) => Some(f),
       Err(e) => {
         error!("路径过滤器解析失败: {}", e);
-        let _ = tx.send(AgentMessage::Error(format!("路径过滤器解析失败: {}", e))).await;
+        let _ = tx
+          .send(SearchEvent::Error {
+            source: "agent-path-filter".to_string(),
+            message: format!("路径过滤器解析失败: {}", e),
+            recoverable: true,
+          })
+          .await;
         return;
       }
     }
@@ -568,7 +694,13 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
 
   if filtered_paths.is_empty() {
     warn!("没有找到匹配的搜索路径");
-    let _ = tx.send(AgentMessage::Error("没有找到匹配的搜索路径".to_string())).await;
+    let _ = tx
+      .send(SearchEvent::Error {
+        source: "agent-path".to_string(),
+        message: "没有找到匹配的搜索路径".to_string(),
+        recoverable: true,
+      })
+      .await;
     return;
   }
 
@@ -581,8 +713,12 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
 
     // 统一由 logseek 提供的构造器创建本地来源条目流
     let path_str = search_path.to_string_lossy().to_string();
+    // 仅当为 Directory 场景时传递 recursive 标志；TarGz 仍由自动探测
     let scope_hint = match &request.scope {
-      SearchScope::TarGz { .. } => Some(request.scope.clone()),
+      SearchScope::Directory { recursive, .. } => Some(SearchScope::Directory {
+        path: None,
+        recursive: *recursive,
+      }),
       _ => None,
     };
     let estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, scope_hint).await {
@@ -608,8 +744,14 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
     }
   }
 
-  // 发送完成消息
-  let _ = tx.send(AgentMessage::Complete).await;
+  // 发送完成事件
+  let elapsed_ms = started_at.elapsed().as_millis() as u64;
+  let _ = tx
+    .send(SearchEvent::Complete {
+      source: "agent:complete".to_string(),
+      elapsed_ms,
+    })
+    .await;
 
   info!(
     "搜索完成: task_id={}, processed={}, matched={}",
@@ -623,7 +765,7 @@ async fn search_with_entry_stream(
   stream: Box<dyn logseek::service::entry_stream::EntryStream>,
   processor: Arc<SearchProcessor>,
   _task_id: &str,
-  tx: &mpsc::Sender<AgentMessage>,
+  tx: &mpsc::Sender<SearchEvent>,
   all_processed: &mut usize,
   all_matched: &mut usize,
   extra_path_filter: Option<logseek::query::PathFilter>,
@@ -638,7 +780,7 @@ async fn search_with_entry_stream(
     move |result| {
       // 发送结果到 channel
       let tx_ref = &tx_clone;
-      match futures::executor::block_on(async { tx_ref.send(AgentMessage::Result(result)).await }) {
+      match futures::executor::block_on(async { tx_ref.send(result).await }) {
         Ok(_) => true, // 继续处理
         Err(_) => {
           debug!("接收端已关闭");
@@ -719,7 +861,7 @@ async fn register_to_server(config: &AgentConfig) -> Result<(), Box<dyn std::err
 }
 
 /// 心跳循环
-async fn heartbeat_loop(config: Arc<AgentConfig>) {
+async fn heartbeat_loop(config: Arc<AgentConfig>, shutdown: Arc<Notify>) {
   let client = reqwest::Client::builder()
     .timeout(Duration::from_secs(5))
     .build()
@@ -728,21 +870,26 @@ async fn heartbeat_loop(config: Arc<AgentConfig>) {
   let mut interval = tokio::time::interval(Duration::from_secs(config.heartbeat_interval_secs));
 
   loop {
-    interval.tick().await;
-
-    let url = format!("{}/api/v1/agents/{}/heartbeat", config.server_endpoint, config.agent_id);
-
-    match client.post(&url).send().await {
-      Ok(response) if response.status().is_success() => {
-        debug!("心跳发送成功");
+    tokio::select! {
+      _ = interval.tick() => {
+        let url = format!("{}/api/v1/agents/{}/heartbeat", config.server_endpoint, config.agent_id);
+        match client.post(&url).send().await {
+          Ok(response) if response.status().is_success() => {
+            debug!("心跳发送成功");
+          }
+          Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            warn!("心跳失败: {} - {}", status, body);
+          }
+          Err(e) => {
+            warn!("心跳发送出错: {}", e);
+          }
+        }
       }
-      Ok(response) => {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        warn!("心跳失败: {} - {}", status, body);
-      }
-      Err(e) => {
-        warn!("心跳发送出错: {}", e);
+      _ = shutdown.notified() => {
+        info!("收到关闭通知，停止心跳任务");
+        break;
       }
     }
   }
@@ -831,16 +978,37 @@ fn stop_daemon(pid_path: PathBuf, force: bool) -> io::Result<()> {
 
   // 等待最多 5 秒确认进程退出
   let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+  let mut exited = false;
   while std::time::Instant::now() < deadline {
     if !check_process_alive(pid) {
       println!("进程 {} 已退出", pid_num);
+      exited = true;
       break;
     }
     std::thread::sleep(std::time::Duration::from_millis(100));
   }
 
-  // 移除 PID 文件
-  let _ = fs::remove_file(&pid_path);
+  // 如未退出且非强制，尝试升级为 SIGKILL 再等 2 秒
+  if !exited && !force {
+    println!("进程 {} 未在超时时间内退出，升级为 SIGKILL", pid_num);
+    send_signal_to_process(pid, Signal::SIGKILL)?;
+    let deadline2 = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline2 {
+      if !check_process_alive(pid) {
+        println!("进程 {} 已被 SIGKILL 终止", pid_num);
+        exited = true;
+        break;
+      }
+      std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+  }
+
+  // 仅在确认退出时移除 PID 文件
+  if exited {
+    let _ = fs::remove_file(&pid_path);
+  } else {
+    eprintln!("警告：进程 {} 仍在运行，未移除 PID 文件", pid_num);
+  }
   Ok(())
 }
 
@@ -1022,7 +1190,7 @@ mod tests {
     // 测试不存在的 tar.gz 文件
     let result = config.resolve_targz_path("nonexistent.tar.gz");
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("未找到 tar.gz 文件"));
+    assert!(result.unwrap_err().contains("未找到归档文件"));
   }
 
   #[test]

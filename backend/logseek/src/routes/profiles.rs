@@ -2,18 +2,18 @@
 //!
 //! 处理 /profiles 端点，管理多个 S3 配置
 
-use crate::api::models::{AppError, S3ProfileListResponse, S3ProfilePayload};
+use crate::api::LogSeekApiError;
+use crate::api::models::{S3ProfileListResponse, S3ProfilePayload};
 use crate::repository::settings;
 use axum::{
   extract::{Json, Path, State},
   http::StatusCode,
 };
 use opsbox_core::SqlitePool;
-use problemdetails::Problem;
 
 /// 列出所有 S3 Profiles
-pub async fn list_profiles(State(pool): State<SqlitePool>) -> Result<Json<S3ProfileListResponse>, Problem> {
-  let profiles = settings::list_s3_profiles(&pool).await.map_err(AppError::Settings)?;
+pub async fn list_profiles(State(pool): State<SqlitePool>) -> Result<Json<S3ProfileListResponse>, LogSeekApiError> {
+  let profiles = settings::list_s3_profiles(&pool).await?;
 
   let payload_list: Vec<S3ProfilePayload> = profiles.into_iter().map(Into::into).collect();
 
@@ -24,7 +24,7 @@ pub async fn list_profiles(State(pool): State<SqlitePool>) -> Result<Json<S3Prof
 pub async fn save_profile(
   State(pool): State<SqlitePool>,
   Json(payload): Json<S3ProfilePayload>,
-) -> Result<StatusCode, Problem> {
+) -> Result<StatusCode, LogSeekApiError> {
   // 将前端负载转换为内部 Profile 结构
   let profile: settings::S3Profile = payload.into();
 
@@ -36,22 +36,19 @@ pub async fn save_profile(
     access_key: profile.access_key.clone(),
     secret_key: profile.secret_key.clone(),
   };
-  settings::verify_s3_settings(&verify_target)
-    .await
-    .map_err(AppError::Settings)?;
+  settings::verify_s3_settings(&verify_target).await?;
 
   // 验证通过后再保存/更新 Profile
-  settings::save_s3_profile(&pool, &profile)
-    .await
-    .map_err(AppError::Settings)?;
+  settings::save_s3_profile(&pool, &profile).await?;
 
   Ok(StatusCode::NO_CONTENT)
 }
 
 /// 删除 S3 Profile
-pub async fn delete_profile(State(pool): State<SqlitePool>, Path(name): Path<String>) -> Result<StatusCode, Problem> {
-  settings::delete_s3_profile(&pool, &name)
-    .await
-    .map_err(AppError::Settings)?;
+pub async fn delete_profile(
+  State(pool): State<SqlitePool>,
+  Path(name): Path<String>,
+) -> Result<StatusCode, LogSeekApiError> {
+  settings::delete_s3_profile(&pool, &name).await?;
   Ok(StatusCode::NO_CONTENT)
 }

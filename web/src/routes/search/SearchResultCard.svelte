@@ -123,7 +123,15 @@
     }
     if (parsed.type === 'agent') {
       const title = parsed.path || parsed.displayName || full;
-      const source = `source agent://${parsed.agentId}`;
+      // 构造目录路径（不包含文件名）
+      let dir = '/';
+      if (parsed.path) {
+        const idx = parsed.path.lastIndexOf('/');
+        if (idx > 0) {
+          dir = parsed.path.substring(0, idx);
+        }
+      }
+      const source = `source agent://${parsed.agentId}${dir}`;
       return { title, source };
     }
     return { title: full };
