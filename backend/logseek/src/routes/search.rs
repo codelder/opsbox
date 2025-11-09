@@ -49,10 +49,11 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
-) -> Result<(Vec<crate::domain::config::Source>, String), LogSeekApiError> {
-  // 从查询字符串中提取 app 限定词（形如 app:myapp），未指定时使用默认规划脚本
-  // 同时移除该限定词以得到传入规划器的"清理前"查询（随后规划器还会继续清理日期指令等）
+) -> Result<(Vec<crate::domain::config::Source>, String, Option<String>), LogSeekApiError> {
+  // 从查询字符串中提取 app 和 encoding 限定词
+  // 同时移除这些限定词以得到传入规划器的"清理前"查询（随后规划器还会继续清理日期指令等）
   let mut app: Option<String> = None;
+  let mut encoding: Option<String> = None;
   let mut tokens: Vec<&str> = Vec::new();
   for t in query.split_whitespace() {
     if let Some(rest) = t.strip_prefix("app:")
@@ -61,13 +62,19 @@ pub async fn get_storage_source_configs(
       app = Some(rest.to_string());
       continue; // 跳过该限定词，不纳入后续查询
     }
+    if let Some(rest) = t.strip_prefix("encoding:")
+      && !rest.is_empty()
+    {
+      encoding = Some(rest.to_string());
+      continue; // 跳过该限定词，不纳入后续查询
+    }
     tokens.push(t);
   }
   let cleaned_before_plan = tokens.join(" ");
 
   // 通过 Starlark 调度：使用 app 对应的脚本，未指定 app 时使用默认规划脚本，未找到时返回错误
   let plan = crate::domain::source_planner::plan_with_starlark(pool, app.as_deref(), &cleaned_before_plan).await?;
-  Ok((plan.sources, plan.cleaned_query))
+  Ok((plan.sources, plan.cleaned_query, encoding))
 }
 
 /// 搜索处理函数（多存储源并行搜索）
@@ -104,8 +111,8 @@ pub async fn stream_search(
 
   let overall_start = std::time::Instant::now();
 
-  // 1. 获取存储源配置列表（同时获取清理后的查询）
-  let (source_configs, cleaned_query) = get_storage_source_configs(&pool, &body.q).await?;
+  // 1. 获取存储源配置列表（同时获取清理后的查询和编码限定词）
+  let (source_configs, cleaned_query, encoding_qualifier) = get_storage_source_configs(&pool, &body.q).await?;
   log::info!("[Search] 获取到 {} 个存储源配置", source_configs.len());
 
   if source_configs.is_empty() {
@@ -140,6 +147,7 @@ pub async fn stream_search(
 
   // 4. 为每个存储源启动搜索任务（带并发控制，基于 EntryStreamFactory；Agent 走 SearchService）
   let spec = Arc::new(spec);
+  let encoding_qualifier_clone = encoding_qualifier.clone();
   for (idx, config) in source_configs.iter().enumerate() {
     let tx_clone = tx.clone();
     let spec_clone = spec.clone();
@@ -149,6 +157,7 @@ pub async fn stream_search(
     let pool_clone = pool.clone();
     let config_clone = config.clone();
     let cleaned_query_clone = cleaned_query.clone();
+    let encoding_qualifier_clone = encoding_qualifier_clone.clone();
 
     tokio::spawn(async move {
       let task_start = std::time::Instant::now();
@@ -300,7 +309,14 @@ pub async fn stream_search(
               .await;
 
             // 渲染为 SearchJsonResult，会自动去掉 lines，只保留 chunks、keywords、path
-            let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
+            // Agent 端可能已经处理了编码，这里传递 None（Agent 结果通常已经是 UTF-8）
+            let json_obj = render_json_chunks(
+              &file_id,
+              res.merged.clone(),
+              res.lines.clone(),
+              &highlights_s,
+              res.encoding.clone(),
+            );
             // 包装成 SearchEvent
             let success_event = serde_json::json!({
               "type": "result",
@@ -353,7 +369,11 @@ pub async fn stream_search(
       };
 
       // 准备搜索处理器与条目流处理器
-      let search_proc = Arc::new(SearchProcessor::new(spec_clone, ctx));
+      let search_proc = Arc::new(SearchProcessor::new_with_encoding(
+        spec_clone,
+        ctx,
+        encoding_qualifier_clone.clone(),
+      ));
       let mut processor = EntryStreamProcessor::new(search_proc);
 
       // 设置规划脚本的 filter_glob（与用户查询的 path: 限定词做 AND）
@@ -406,7 +426,13 @@ pub async fn stream_search(
                 .await;
 
               // 渲染为 SearchJsonResult，会自动去掉 lines，只保留 chunks、keywords、path
-              let json_obj = render_json_chunks(&file_id, res.merged.clone(), res.lines.clone(), &highlights_s);
+              let json_obj = render_json_chunks(
+                &file_id,
+                res.merged.clone(),
+                res.lines.clone(),
+                &highlights_s,
+                res.encoding.clone(),
+              );
               // 包装成 SearchEvent
               let success_event = serde_json::json!({
                 "type": "result",

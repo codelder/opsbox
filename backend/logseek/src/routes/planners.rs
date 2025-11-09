@@ -119,13 +119,11 @@ pub async fn delete_script(State(pool): State<SqlitePool>, Path(app): Path<Strin
 pub async fn get_readme_md() -> Result<Response<Body>, LogSeekApiError> {
   // 编译期内嵌 README 内容
   let md = include_str!("../planners/README.md");
-  Ok(
-    Response::builder()
-      .status(StatusCode::OK)
-      .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-      .body(Body::from(md))
-      .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建响应失败: {}", e))))?,
-  )
+  Response::builder()
+    .status(StatusCode::OK)
+    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+    .body(Body::from(md))
+    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建响应失败: {}", e))))
 }
 
 /// 测试脚本：输入完整 q，返回清理后的查询与来源列表

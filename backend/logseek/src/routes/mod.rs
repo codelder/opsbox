@@ -63,10 +63,7 @@ pub fn router(db_pool: SqlitePool) -> Router {
     )
     // 其他动作/文档端点保持不变
     .route("/settings/planners/test", axum::routing::post(planners::test_script))
-    .route(
-      "/settings/planners/readme",
-      axum::routing::get(planners::get_readme_md),
-    )
+    .route("/settings/planners/readme", axum::routing::get(planners::get_readme_md))
     .route(
       "/settings/planners/default",
       axum::routing::get(planners::get_default).post(planners::set_default),

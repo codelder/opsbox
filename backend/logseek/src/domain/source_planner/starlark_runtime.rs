@@ -151,7 +151,7 @@ pub async fn plan_with_starlark_with_script(
     } else {
       // 找不到脚本，返回错误
       return Err(crate::api::LogSeekApiError::Internal(
-        opsbox_core::AppError::bad_request(&format!(
+        opsbox_core::AppError::bad_request(format!(
           "未找到应用 '{}' 的规划脚本。请在系统设置中为该应用配置规划脚本。",
           app
         )),

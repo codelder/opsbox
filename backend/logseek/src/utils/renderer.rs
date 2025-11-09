@@ -99,6 +99,8 @@ pub struct SearchJsonResult {
   pub path: String,
   pub keywords: Vec<String>,
   pub chunks: Vec<JsonChunk>,
+  /// 文件编码名称（如 "UTF-8"、"GBK"）
+  pub encoding: Option<String>,
 }
 
 pub fn render_json_chunks(
@@ -106,6 +108,7 @@ pub fn render_json_chunks(
   ranges: Vec<(usize, usize)>,
   all_lines: Vec<String>,
   keywords: &[String],
+  encoding: Option<String>,
 ) -> SearchJsonResult {
   let mut chunks: Vec<JsonChunk> = Vec::with_capacity(ranges.len());
   for (s, e) in ranges.into_iter() {
@@ -127,6 +130,7 @@ pub fn render_json_chunks(
     path: path.to_string(),
     keywords: keywords.to_vec(),
     chunks,
+    encoding,
   }
 }
 
@@ -223,7 +227,7 @@ mod tests {
   #[test]
   fn test_render_json_chunks_basic() {
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
-    let result = render_json_chunks("test.log", vec![(0, 1)], lines, &["test".to_string()]);
+    let result = render_json_chunks("test.log", vec![(0, 1)], lines, &["test".to_string()], None);
 
     assert_eq!(result.path, "test.log");
     assert_eq!(result.keywords, vec!["test".to_string()]);
@@ -242,7 +246,7 @@ mod tests {
       "line 3".to_string(),
       "line 4".to_string(),
     ];
-    let result = render_json_chunks("test.log", vec![(0, 1), (2, 3)], lines, &["line".to_string()]);
+    let result = render_json_chunks("test.log", vec![(0, 1), (2, 3)], lines, &["line".to_string()], None);
 
     assert_eq!(result.chunks.len(), 2);
     assert_eq!(result.chunks[0].range, (1, 2));
@@ -252,7 +256,7 @@ mod tests {
   #[test]
   fn test_render_json_chunks_empty_ranges() {
     let lines = vec!["line 1".to_string()];
-    let result = render_json_chunks("test.log", vec![], lines, &[]);
+    let result = render_json_chunks("test.log", vec![], lines, &[], None);
 
     assert_eq!(result.chunks.len(), 0);
   }

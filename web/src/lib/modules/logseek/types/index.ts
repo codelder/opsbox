@@ -38,6 +38,10 @@ export interface SearchJsonResult {
   path: string;
   keywords: string[];
   chunks: JsonChunk[];
+  /**
+   * 文件编码名称（如 "UTF-8"、"GBK"）
+   */
+  encoding?: string;
 }
 
 /**

@@ -4,9 +4,11 @@ use std::{
 };
 
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
+use chardetng::EncodingDetector;
+use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use log::{debug, warn};
 use thiserror::Error;
-use tokio::io::{AsyncRead, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -46,12 +48,26 @@ use crate::query::Query;
 pub struct SearchProcessor {
   pub spec: Arc<Query>,
   pub context_lines: usize,
+  pub encoding: Option<String>, // 指定的编码名称（如 "GBK", "UTF-8" 等）
 }
 
 impl SearchProcessor {
   /// 创建新的搜索处理器
   pub fn new(spec: Arc<Query>, context_lines: usize) -> Self {
-    Self { spec, context_lines }
+    Self {
+      spec,
+      context_lines,
+      encoding: None,
+    }
+  }
+
+  /// 创建新的搜索处理器（带编码指定）
+  pub fn new_with_encoding(spec: Arc<Query>, context_lines: usize, encoding: Option<String>) -> Self {
+    Self {
+      spec,
+      context_lines,
+      encoding,
+    }
   }
 
   /// 检查路径是否应该被处理（纯函数，易于测试）
@@ -94,10 +110,10 @@ impl SearchProcessor {
     path: String,
     reader: &mut R,
   ) -> Result<Option<SearchResult>, SearchError> {
-    match grep_context(reader, &self.spec, self.context_lines).await? {
-      Some((lines, merged)) => {
+    match grep_context(reader, &self.spec, self.context_lines, self.encoding.as_deref()).await? {
+      Some((lines, merged, encoding)) => {
         debug!("找到匹配: {} ({} 行)", path, merged.len());
-        Ok(Some(SearchResult::new(path, lines, merged)))
+        Ok(Some(SearchResult::new(path, lines, merged, encoding)))
       }
       None => Ok(None),
     }
@@ -118,6 +134,212 @@ impl SearchProcessor {
   }
 }
 
+/// 返回检测到的编码，如果无法确定则返回 None
+fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
+  // 检查 BOM（字节顺序标记）- 最可靠的检测方式
+  if sample.len() >= 2 {
+    match &sample[0..2] {
+      [0xFF, 0xFE] => {
+        // UTF-16 LE BOM
+        debug!("检测到 UTF-16 LE BOM");
+        return Some(UTF_16LE);
+      }
+      [0xFE, 0xFF] => {
+        // UTF-16 BE BOM
+        debug!("检测到 UTF-16 BE BOM");
+        return Some(UTF_16BE);
+      }
+      _ => {}
+    }
+  }
+
+  if sample.len() >= 3
+    && let [0xEF, 0xBB, 0xBF] = &sample[0..3] {
+      debug!("检测到 UTF-8 BOM");
+      return Some(UTF_8);
+    }
+
+  // 使用 chardetng 进行编码检测
+  let mut detector = EncodingDetector::new();
+  detector.feed(sample, true); // last=true 表示这是最后一块数据
+  let detected_encoding = detector.guess(None, true); // tld=None, allow_utf8=true
+
+  debug!(
+    "chardetng 检测到编码: {} ({})",
+    detected_encoding.name(),
+    detected_encoding.name()
+  );
+  Some(detected_encoding)
+}
+
+/// 读取 UTF-8 编码的文件行
+async fn read_lines_utf8<R: AsyncRead + Unpin>(
+  buf_reader: &mut BufReader<R>,
+  sample: Vec<u8>,
+) -> Result<Vec<String>, SearchError> {
+  use tokio::io::AsyncBufReadExt as _;
+  let mut lines: Vec<String> = Vec::new();
+
+  // 将样本转换为字符串并处理其中的行
+  let sample_str = match String::from_utf8(sample) {
+    Ok(s) => s,
+    Err(e) => {
+      // 如果样本不是有效的 UTF-8，使用 lossy 转换
+      warn!("样本包含无效 UTF-8，使用 lossy 转换");
+      String::from_utf8_lossy(&e.into_bytes()).into_owned()
+    }
+  };
+
+  // 处理样本中的完整行
+  let mut sample_lines: Vec<&str> = sample_str.lines().collect();
+  let last_line_incomplete = !sample_str.ends_with('\n') && !sample_str.ends_with('\r');
+
+  // 如果样本最后一行不完整，需要与后续读取的内容合并
+  let mut incomplete_line = if last_line_incomplete {
+    sample_lines.pop().map(|s| s.to_string())
+  } else {
+    None
+  };
+
+  // 添加样本中的完整行
+  for line in sample_lines {
+    lines.push(line.to_string());
+  }
+
+  // 继续读取剩余行
+  let mut line = incomplete_line.take().unwrap_or_default();
+  loop {
+    let mut temp_line = String::new();
+    let n = buf_reader.read_line(&mut temp_line).await?;
+    if n == 0 {
+      if !line.is_empty() {
+        lines.push(line.trim_end_matches(['\r', '\n']).to_string());
+      }
+      break;
+    }
+    line.push_str(&temp_line);
+    let trimmed = line.trim_end_matches(['\r', '\n']);
+    if trimmed != line {
+      // 找到完整行
+      lines.push(trimmed.to_string());
+      line.clear();
+    }
+  }
+
+  Ok(lines)
+}
+
+/// 读取 UTF-16 编码的文件行（LE 或 BE）
+async fn read_lines_utf16<R: AsyncRead + Unpin>(
+  buf_reader: &mut BufReader<R>,
+  encoding: &'static Encoding,
+  sample: Vec<u8>,
+) -> Result<Vec<String>, SearchError> {
+  let mut lines: Vec<String> = Vec::new();
+  let mut buffer = Vec::new();
+
+  // 处理样本（跳过 BOM，如果存在）
+  let sample_start = if sample.len() >= 2 && (sample[0..2] == [0xFF, 0xFE] || sample[0..2] == [0xFE, 0xFF]) {
+    2 // 跳过 BOM
+  } else {
+    0
+  };
+  buffer.extend_from_slice(&sample[sample_start..]);
+
+  // 读取剩余数据
+  let mut temp_buf = vec![0u8; 8192];
+  loop {
+    let n = buf_reader.read(&mut temp_buf).await?;
+    if n == 0 {
+      break;
+    }
+    buffer.extend_from_slice(&temp_buf[..n]);
+  }
+
+  // UTF-16 需要确保字节数是偶数（每个字符 2 字节）
+  if buffer.len() % 2 != 0 {
+    warn!("UTF-16 文件字节数不是偶数，可能不完整");
+    buffer.pop(); // 移除最后一个字节
+  }
+
+  // 解码整个缓冲区
+  let (decoded, _, had_errors) = encoding.decode(&buffer);
+
+  if had_errors {
+    warn!("UTF-16 解码过程中遇到错误，但继续处理");
+  }
+
+  // 按行分割
+  for line in decoded.lines() {
+    lines.push(line.to_string());
+  }
+
+  // 处理最后一行（可能没有换行符）
+  let decoded_str = decoded.as_ref();
+  if !decoded_str.ends_with('\n')
+    && !decoded_str.ends_with('\r')
+    && let Some(last_line) = decoded_str.lines().last()
+    && !last_line.is_empty()
+  {
+    // 如果最后一行已经在 lines 中，不需要重复添加
+    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
+      lines.push(last_line.to_string());
+    }
+  }
+
+  Ok(lines)
+}
+
+/// 读取非 UTF-8 编码的文件行（如 GBK）
+async fn read_lines_with_encoding<R: AsyncRead + Unpin>(
+  buf_reader: &mut BufReader<R>,
+  encoding: &'static Encoding,
+  sample: Vec<u8>,
+) -> Result<Vec<String>, SearchError> {
+  let mut lines: Vec<String> = Vec::new();
+  let mut buffer = Vec::new();
+
+  // 处理样本
+  buffer.extend_from_slice(&sample);
+
+  // 读取剩余数据
+  let mut temp_buf = vec![0u8; 8192];
+  loop {
+    let n = buf_reader.read(&mut temp_buf).await?;
+    if n == 0 {
+      break;
+    }
+    buffer.extend_from_slice(&temp_buf[..n]);
+  }
+
+  // 解码整个缓冲区
+  let (decoded, _, had_errors) = encoding.decode(&buffer);
+
+  if had_errors {
+    warn!("解码过程中遇到错误，但继续处理");
+  }
+
+  // 按行分割
+  for line in decoded.lines() {
+    lines.push(line.to_string());
+  }
+
+  // 处理最后一行（可能没有换行符）
+  let decoded_str = decoded.as_ref();
+  if !decoded_str.ends_with('\n')
+    && !decoded_str.ends_with('\r')
+    && let Some(last_line) = decoded_str.lines().last()
+    && !last_line.is_empty()
+  {
+    // 如果最后一行已经在 lines 中，不需要重复添加
+    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
+      lines.push(last_line.to_string());
+    }
+  }
+
+  Ok(lines)
+}
+
 fn is_probably_text_bytes(sample: &[u8]) -> bool {
   if sample.is_empty() {
     return true;
@@ -133,55 +355,151 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
   if ratio >= 0.95 {
     return true;
   }
-  std::str::from_utf8(sample).is_ok()
+  // 先检查 UTF-8，因为 UTF-8 可能包含多字节字符（如 emoji），可打印字符比例可能较低
+  if std::str::from_utf8(sample).is_ok() {
+    return true;
+  }
+  // 如果可打印字符比例太低（< 50%），不太可能是文本文件
+  if ratio < 0.5 {
+    return false;
+  }
+  // 尝试多种编码解码
+  ({
+    let (decoded, _, had_errors) = GBK.decode(sample);
+    !had_errors && !decoded.is_empty()
+  })
+    || {
+      let (decoded, _, had_errors) = BIG5.decode(sample);
+      !had_errors && !decoded.is_empty()
+    }
+    || {
+      let (decoded, _, had_errors) = SHIFT_JIS.decode(sample);
+      !had_errors && !decoded.is_empty()
+    }
+    || {
+      let (decoded, _, had_errors) = EUC_KR.decode(sample);
+      !had_errors && !decoded.is_empty()
+    }
+    || {
+      let (decoded, _, had_errors) = WINDOWS_1252.decode(sample);
+      !had_errors && !decoded.is_empty()
+    }
+    || {
+      if let Some(iso_8859_1) = Encoding::for_label(b"ISO-8859-1") {
+        let (decoded, _, had_errors) = iso_8859_1.decode(sample);
+        !had_errors && !decoded.is_empty()
+      } else {
+        false
+      }
+    }
 }
 
 pub async fn grep_context<R: AsyncRead + Unpin>(
   reader: &mut R,
   spec: &crate::query::Query,
   context_lines: usize,
-) -> Result<Option<(Vec<String>, Vec<(usize, usize)>)>, SearchError> {
+  encoding_qualifier: Option<&str>,
+) -> Result<Option<(Vec<String>, Vec<(usize, usize)>, Option<String>)>, SearchError> {
   debug!(
     "开始文本搜索，上下文行数: {}, 搜索条件数: {}",
     context_lines,
     spec.terms.len()
   );
 
-  // 逐行读取，边采样边判断是否文本，避免整文件读取
-  use tokio::io::AsyncBufReadExt as _;
+  // 第一步：读取样本进行编码检测
   let mut buf_reader = BufReader::new(reader);
-  let mut lines: Vec<String> = Vec::new();
-  let mut sample: Vec<u8> = Vec::with_capacity(4096);
-  let mut sample_checked = false;
-  let mut line = String::new();
-  loop {
-    line.clear();
-    let n = buf_reader.read_line(&mut line).await?;
+  let mut sample = Vec::with_capacity(4096);
+  let mut temp_buf = vec![0u8; 4096];
+  let mut total_read = 0;
+
+  // 读取前 4096 字节作为样本
+  while total_read < 4096 {
+    let n = buf_reader.read(&mut temp_buf[total_read..]).await?;
     if n == 0 {
       break;
     }
-    if sample.len() < 4096 {
-      let bytes = line.as_bytes();
-      let take = (4096 - sample.len()).min(bytes.len());
-      sample.extend_from_slice(&bytes[..take]);
+    let end = total_read + n;
+    sample.extend_from_slice(&temp_buf[total_read..end]);
+    total_read = end;
+  }
+
+  // 检查是否为文本文件
+  if !is_probably_text_bytes(&sample) {
+    debug!("文件不是文本格式，跳过搜索");
+    return Ok(None);
+  }
+
+  // 检测编码：如果指定了 encoding 限定词，使用指定的编码；否则自动检测
+  let (encoding, encoding_name) = if let Some(enc_name) = encoding_qualifier {
+    // 用户指定了编码，尝试查找对应的编码
+    let enc_opt = Encoding::for_label(enc_name.as_bytes()).or_else(|| {
+      // 尝试一些常见的别名
+      match enc_name.to_uppercase().as_str() {
+        "UTF8" | "UTF-8" => Some(UTF_8),
+        "GBK" => Some(GBK),
+        "BIG5" | "BIG-5" => Some(BIG5),
+        "SHIFT-JIS" | "SHIFT_JIS" | "SJIS" => Some(SHIFT_JIS),
+        "EUC-KR" | "EUC_KR" => Some(EUC_KR),
+        "WINDOWS-1252" | "WINDOWS_1252" | "CP1252" => Some(WINDOWS_1252),
+        "ISO-8859-1" | "ISO_8859_1" | "LATIN1" | "LATIN-1" => Encoding::for_label(b"ISO-8859-1"),
+        "UTF-16LE" | "UTF16LE" | "UTF-16-LE" => Some(UTF_16LE),
+        "UTF-16BE" | "UTF16BE" | "UTF-16-BE" => Some(UTF_16BE),
+        _ => None,
+      }
+    });
+    match enc_opt {
+      Some(enc) => {
+        debug!("使用指定的编码: {} ({})", enc_name, enc.name());
+        (enc, enc.name().to_string())
+      }
+      None => {
+        warn!("无法识别的编码名称: {}，回退到自动检测", enc_name);
+        // 回退到自动检测
+        match detect_encoding(&sample) {
+          Some(enc) => {
+            let name = enc.name().to_string();
+            debug!("自动检测到编码: {}", name);
+            (enc, name)
+          }
+          None => {
+            debug!("无法确定文件编码，跳过搜索");
+            return Ok(None);
+          }
+        }
+      }
     }
-    if !sample_checked && sample.len() >= 512 {
-      if !is_probably_text_bytes(&sample) {
-        debug!("文件不是文本格式，跳过搜索");
+  } else {
+    // 未指定编码，自动检测
+    match detect_encoding(&sample) {
+      Some(enc) => {
+        let name = enc.name().to_string();
+        debug!("自动检测到编码: {}", name);
+        (enc, name)
+      }
+      None => {
+        debug!("无法确定文件编码，跳过搜索");
         return Ok(None);
       }
-      debug!("文件确认为文本格式，继续搜索");
-      sample_checked = true;
     }
-    let trimmed = line.trim_end_matches(['\r', '\n']);
-    lines.push(trimmed.to_string());
-  }
-  if !sample_checked {
-    if !is_probably_text_bytes(&sample) {
-      debug!("最终样本检查：文件不是文本格式");
-      return Ok(None);
-    }
-    debug!("最终样本检查：确认为文本文件");
+  };
+
+  // 如果检测到非 UTF-8 编码，需要转换
+  let lines = if encoding == UTF_8 {
+    // UTF-8 编码，直接使用 read_line
+    read_lines_utf8(&mut buf_reader, sample).await?
+  } else if encoding == UTF_16LE || encoding == UTF_16BE {
+    // UTF-16 编码需要特殊处理（双字节编码）
+    read_lines_utf16(&mut buf_reader, encoding, sample).await?
+  } else {
+    // 其他非 UTF-8 编码，需要转换
+    read_lines_with_encoding(&mut buf_reader, encoding, sample).await?
+  };
+
+  // 始终返回编码名称
+  let detected_encoding = Some(encoding_name);
+
+  if lines.is_empty() {
+    return Ok(None);
   }
 
   debug!("读取完成，共{}'行，开始执行搜索逻辑", lines.len());
@@ -251,7 +569,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     merged.push((s, e));
   }
 
-  Ok(Some((lines, merged)))
+  Ok(Some((lines, merged, detected_encoding)))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -259,11 +577,18 @@ pub struct SearchResult {
   pub path: String,
   pub lines: Vec<String>,
   pub merged: Vec<(usize, usize)>,
+  /// 文件编码（如果不是 UTF-8，则包含编码名称，如 "GBK"）
+  pub encoding: Option<String>,
 }
 
 impl SearchResult {
-  fn new(path: String, lines: Vec<String>, merged: Vec<(usize, usize)>) -> Self {
-    Self { path, lines, merged }
+  fn new(path: String, lines: Vec<String>, merged: Vec<(usize, usize)>, encoding: Option<String>) -> Self {
+    Self {
+      path,
+      lines,
+      merged,
+      encoding,
+    }
   }
 }
 
@@ -341,7 +666,11 @@ mod tests {
   async fn grep_with_q(input: &str, q: &str, ctx: usize) -> Option<(Vec<String>, Vec<(usize, usize)>)> {
     let spec = Query::parse_github_like(q).expect("解析失败");
     let mut r = MemReader::new(input.as_bytes());
-    grep_context(&mut r, &spec, ctx).await.ok().flatten()
+    grep_context(&mut r, &spec, ctx, None)
+      .await
+      .ok()
+      .flatten()
+      .map(|(lines, merged, _)| (lines, merged))
   }
 
   #[tokio::test]
@@ -390,7 +719,7 @@ foo and baz
     let bytes = [0x66u8, 0x6Fu8, 0x00u8, 0x61u8]; // f o \\0 a
     let spec = Query::parse_github_like("foo").unwrap();
     let mut r = MemReader::new(bytes);
-    let res = grep_context(&mut r, &spec, 1).await.ok().flatten();
+    let res = grep_context(&mut r, &spec, 1, None).await.ok().flatten();
     assert!(res.is_none(), "binary-like content should be rejected");
   }
 
@@ -732,6 +1061,7 @@ foo lower
       "test.log".to_string(),
       vec!["line1".to_string(), "line2".to_string()],
       vec![(0, 1)],
+      None,
     );
     assert_eq!(result.path, "test.log");
     assert_eq!(result.lines.len(), 2);
@@ -1273,7 +1603,7 @@ foo lower
     let processor = SearchProcessor::new(spec, 0);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-    let result = SearchResult::new("test.log".to_string(), vec!["error".to_string()], vec![(0, 0)]);
+    let result = SearchResult::new("test.log".to_string(), vec!["error".to_string()], vec![(0, 0)], None);
 
     // 发送应该成功
     assert!(processor.send_result(result, &tx).await.is_ok());
@@ -1290,7 +1620,7 @@ foo lower
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     drop(rx); // 关闭接收端
 
-    let result = SearchResult::new("test.log".to_string(), vec!["error".to_string()], vec![(0, 0)]);
+    let result = SearchResult::new("test.log".to_string(), vec!["error".to_string()], vec![(0, 0)], None);
 
     // 发送应该失败
     let send_result = processor.send_result(result, &tx).await;
