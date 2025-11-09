@@ -59,8 +59,6 @@ async-stream = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 # Starlark runtime for scriptable source planning
 starlark = "0.13"
-# Markdown rendering for README → HTML
-comrak = "0.24"
 
 [dev-dependencies]
 tempfile = "3"

@@ -56,7 +56,21 @@ export async function startUnifiedSearch(query: string): Promise<Response> {
   });
 
   if (!response.ok) {
-    throw new Error(`搜索请求失败：HTTP ${response.status}`);
+    // 尝试解析错误详情（Problem Details 格式）
+    let errorMessage = `搜索请求失败：HTTP ${response.status}`;
+    try {
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/problem+json')) {
+        const problem = await response.json();
+        errorMessage = problem.detail || problem.title || errorMessage;
+      } else if (contentType && contentType.includes('application/json')) {
+        const json = await response.json();
+        errorMessage = json.detail || json.title || json.message || errorMessage;
+      }
+    } catch {
+      // 如果解析失败，使用默认错误消息
+    }
+    throw new Error(errorMessage);
   }
 
   return response;

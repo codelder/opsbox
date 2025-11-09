@@ -50,8 +50,8 @@ pub async fn get_storage_source_configs(
   pool: &SqlitePool,
   query: &str,
 ) -> Result<(Vec<crate::domain::config::Source>, String), LogSeekApiError> {
-  // 从查询字符串中提取 app 限定词（形如 app:bbip / app:bbos），未指定则默认为 bbip
-  // 同时移除该限定词以得到传入规划器的“清理前”查询（随后规划器还会继续清理日期指令等）
+  // 从查询字符串中提取 app 限定词（形如 app:myapp），未指定时使用默认规划脚本
+  // 同时移除该限定词以得到传入规划器的"清理前"查询（随后规划器还会继续清理日期指令等）
   let mut app: Option<String> = None;
   let mut tokens: Vec<&str> = Vec::new();
   for t in query.split_whitespace() {
@@ -65,7 +65,7 @@ pub async fn get_storage_source_configs(
   }
   let cleaned_before_plan = tokens.join(" ");
 
-  // 通过 Starlark 调度：优先使用 app 对应脚本，不存在时回退到内置 bbip.star
+  // 通过 Starlark 调度：使用 app 对应的脚本，未指定 app 时使用默认规划脚本，未找到时返回错误
   let plan = crate::domain::source_planner::plan_with_starlark(pool, app.as_deref(), &cleaned_before_plan).await?;
   Ok((plan.sources, plan.cleaned_query))
 }
@@ -105,13 +105,7 @@ pub async fn stream_search(
   let overall_start = std::time::Instant::now();
 
   // 1. 获取存储源配置列表（同时获取清理后的查询）
-  let (source_configs, cleaned_query) = match get_storage_source_configs(&pool, &body.q).await {
-    Ok((configs, cleaned)) => (configs, cleaned),
-    Err(e) => {
-      log::error!("[Search] 获取存储源配置失败: {:?}", e);
-      return respond_empty_stream(tx, rx);
-    }
-  };
+  let (source_configs, cleaned_query) = get_storage_source_configs(&pool, &body.q).await?;
   log::info!("[Search] 获取到 {} 个存储源配置", source_configs.len());
 
   if source_configs.is_empty() {
@@ -208,41 +202,41 @@ pub async fn stream_search(
         use crate::domain::config::{Endpoint, Target};
         let path_glob = config_clone.filter_glob.clone();
         let search_scope = match (&config_clone.endpoint, &config_clone.target) {
-          (Endpoint::Agent { root, .. }, Target::Dir { path, recursive }) => {
+          (Endpoint::Agent { subpath, .. }, Target::Dir { path, recursive }) => {
             let joined = if path == "." {
-              root.clone()
+              subpath.clone()
             } else {
-              format!("{}/{}", root, path)
+              format!("{}/{}", subpath, path)
             };
             SearchScope::Directory {
               path: Some(joined),
               recursive: *recursive,
             }
           }
-          (Endpoint::Agent { root, .. }, Target::Files { paths }) => {
+          (Endpoint::Agent { subpath, .. }, Target::Files { paths }) => {
             let ps = paths
               .iter()
               .map(|p| {
                 if p.starts_with('/') {
                   p.clone()
                 } else {
-                  format!("{}/{}", root, p)
+                  format!("{}/{}", subpath, p)
                 }
               })
               .collect();
             SearchScope::Files { paths: ps }
           }
-          (Endpoint::Agent { root, .. }, Target::Archive { path }) => {
-            // Agent 归档：拼接 root 与归档相对路径，并由 Agent 端展开 tar.gz
+          (Endpoint::Agent { subpath, .. }, Target::Archive { path }) => {
+            // Agent 归档：拼接 subpath 与归档相对路径，并由 Agent 端展开 tar.gz
             let joined = if path.starts_with('/') {
               path.clone()
             } else {
-              format!("{}/{}", root, path)
+              format!("{}/{}", subpath, path)
             };
             SearchScope::TarGz { path: joined }
           }
-          (Endpoint::Agent { root, .. }, Target::All) => SearchScope::Directory {
-            path: Some(root.clone()),
+          (Endpoint::Agent { subpath, .. }, Target::All) => SearchScope::Directory {
+            path: Some(subpath.clone()),
             recursive: true,
           },
           _ => SearchScope::All,

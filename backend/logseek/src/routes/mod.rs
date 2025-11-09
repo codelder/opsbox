@@ -65,7 +65,11 @@ pub fn router(db_pool: SqlitePool) -> Router {
     .route("/settings/planners/test", axum::routing::post(planners::test_script))
     .route(
       "/settings/planners/readme",
-      axum::routing::get(planners::get_readme_html),
+      axum::routing::get(planners::get_readme_md),
+    )
+    .route(
+      "/settings/planners/default",
+      axum::routing::get(planners::get_default).post(planners::set_default),
     )
     // 自然语言 → 查询字符串
     .route("/nl2q", axum::routing::post(nl2q::nl2q))

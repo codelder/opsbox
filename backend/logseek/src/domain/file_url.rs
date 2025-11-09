@@ -279,9 +279,9 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Agent { agent_id, root }, Target::Archive { path }) => {
-      // Agent 归档：以 agent://<id>/<root/path> 作为 base；内部统一按归档视图暴露
-      let full = join_root_path(root, path);
+    (Endpoint::Agent { agent_id, subpath }, Target::Archive { path }) => {
+      // Agent 归档：以 agent://<id>/<subpath/path> 作为 base；内部统一按归档视图暴露
+      let full = join_root_path(subpath, path);
       let base = FileUrl::agent(agent_id, full);
       match FileUrl::tar_entry(TarCompression::Gzip, base, rel_path) {
         Ok(url) => {
@@ -291,12 +291,12 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Agent { agent_id, root }, Target::Dir { path, .. }) => {
-      // Agent 目录：以 agent://<id>/<root/path or root> 作为 base，再附加 entry 相对路径
+    (Endpoint::Agent { agent_id, subpath }, Target::Dir { path, .. }) => {
+      // Agent 目录：以 agent://<id>/<subpath/path or subpath> 作为 base，再附加 entry 相对路径
       let real_base = if path == "." {
-        root.clone()
+        subpath.clone()
       } else {
-        join_root_path(root, path)
+        join_root_path(subpath, path)
       };
       let base = FileUrl::agent(agent_id, real_base);
       match FileUrl::dir_entry(base, rel_path) {
@@ -307,9 +307,9 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Agent { agent_id, root }, Target::Files { .. }) => {
-      // 单文件集合：以 agent://<id>/<root> 作为 base，entry 为相对路径
-      let base = FileUrl::agent(agent_id, root);
+    (Endpoint::Agent { agent_id, subpath }, Target::Files { .. }) => {
+      // 单文件集合：以 agent://<id>/<subpath> 作为 base，entry 为相对路径
+      let base = FileUrl::agent(agent_id, subpath);
       match FileUrl::dir_entry(base, rel_path) {
         Ok(url) => {
           let id = url.to_string();
@@ -318,9 +318,9 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Agent { agent_id, root }, Target::All) => {
-      // 全部：以 agent://<id>/<root> 作为 base，entry 为相对路径
-      let base = FileUrl::agent(agent_id, root);
+    (Endpoint::Agent { agent_id, subpath }, Target::All) => {
+      // 全部：以 agent://<id>/<subpath> 作为 base，entry 为相对路径
+      let base = FileUrl::agent(agent_id, subpath);
       match FileUrl::dir_entry(base, rel_path) {
         Ok(url) => {
           let id = url.to_string();
@@ -549,7 +549,7 @@ mod tests {
     let source = Source {
       endpoint: Endpoint::Agent {
         agent_id: "agent-a".into(),
-        root: "/data".into(),
+        subpath: "data".into(),
       },
       target: Target::Dir {
         path: "apps".into(),
@@ -566,7 +566,7 @@ mod tests {
         match *base {
           FileUrl::Agent { agent_id, path } => {
             assert_eq!(agent_id, "agent-a");
-            assert_eq!(path, "/data/apps");
+            assert_eq!(path, "data/apps");
           }
           _ => panic!("expected agent base"),
         }

@@ -1,6 +1,6 @@
 # Starlark 存储源规划脚本指南（Local/Agent/S3，统一 Source 模型）
 
-本文面向需要用 Starlark 编写“存储源规划脚本”的开发者，结合内置示例 `local_search_example.star` 与 `multi_tar_agent_example.star`，并补充 S3 场景，讲解如何构造统一 Source（Endpoint+Target）、如何组合 Local/Agent/S3/tar.gz 等来源，并给出可直接复制的脚本片段与最佳实践。
+本文面向需要用 Starlark 编写"存储源规划脚本"的开发者，讲解如何构造统一 Source（Endpoint+Target）、如何组合 Local/Agent/S3/tar.gz 等来源，并给出可直接复制的脚本片段与最佳实践。
 
 ## 快速上手：最小可行脚本（Local/Agent/S3）
 
@@ -16,7 +16,7 @@ SOURCES = [
 ]
 ```
 
-- 目标：按 Agent 标签选择在线 Agent，在其 root 下递归搜索。
+- 目标：按 Agent 标签选择在线 Agent，在其 subpath 下递归搜索。
 
 ```python
 # 最小化示例：按标签选择 Agent，递归目录
@@ -24,7 +24,7 @@ SOURCES = []
 for a in AGENTS:
     if a.get('tags', {}).get('env') == 'prod':
         SOURCES.append({
-            'endpoint': { 'kind': 'agent', 'agent_id': a['id'], 'root': 'logs' },
+            'endpoint': { 'kind': 'agent', 'agent_id': a['id'], 'subpath': 'logs' },
             'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
         })
 ```
@@ -43,35 +43,61 @@ SOURCES = [{
 ## 核心数据模型（统一 Source 模型）
 
 - Endpoint（在哪里）
-  - 本地：`{ kind: 'local', root: '/abs/path' }`
-  - Agent：`{ kind: 'agent', agent_id: '<id>', root: 'subdir' }`（`root='.'` 表示不限制）
+  - 本地：`{ kind: 'local', root: '/abs/path' }`（`root` 为服务器上的绝对路径）
+  - Agent：`{ kind: 'agent', agent_id: '<id>', subpath: 'subdir' }`（`subpath` 为相对该 Agent `search_roots` 的子路径；`subpath='.'` 表示不限制，使用所有 `search_roots`）
   - S3：`{ kind: 's3', profile: 'name', bucket: 'bucket' }`（通过 `profile` 选择已配置的对象存储，`bucket` 指定桶）
-- Target（查什么；所有 path 相对 endpoint.root）
+- Target（查什么；所有 path 相对 endpoint.root（Local）或 endpoint.subpath（Agent））
   - 目录：`{ type: 'dir', path: '.', recursive: True }`
   - 文件清单：`{ type: 'files', paths: ['a.log','b.log'] }`
   - 归档（tar/tar.gz/gz）：`{ type: 'archive', path: 'backup_2025-01-15.tar.gz' }`（S3 场景下 `path` 为对象 Key，相对 `bucket`，不要写 `s3://...`；zip 暂不支持）
   - 全量：`{ type: 'all' }`
 - 其它字段（可选）
   - `filter_glob?: string` 额外路径过滤（与查询中的 path: 规则做 AND）
+    - **适用于所有源类型**：Local、Agent、S3 都支持
+    - **AND 语义**：路径必须同时满足 `filter_glob` 和用户查询的 `path:` 限定词
+    - 示例：`filter_glob: "**/*.log"` + 用户查询 `path:error` → 只匹配包含 "error" 的 `.log` 文件
   - `display_name?: string` UI 友好展示名
+    - 用于在搜索结果中显示更友好的来源名称
+    - 示例：`display_name: "生产环境日志"`
 
 提示：
 - Local 的 `root` 必须是服务器上的绝对路径。
-- Agent 的所有相对路径都以 `root` 为基准拼接。
+- Agent 的 `subpath` 与 `search_roots` 的关系：
+  - Agent 启动时可配置多个 `search_roots`（逗号分隔的绝对路径列表，如 `"/var/log,/opt/logs"`）
+  - 脚本中的 `subpath` 是相对路径，相对于 Agent 的每个 `search_roots`
+  - Agent 会在每个 `search_roots` 下查找 `subpath` 指定的子路径
+  - 例如：`search_roots = ["/var/log", "/opt/logs"]`，`subpath = "logs"` → Agent 会在 `/var/log/logs` 和 `/opt/logs/logs` 下查找
+  - `subpath = "."` 表示不限制，使用所有 `search_roots` 下的内容
+  - 所有路径必须在某个 `search_roots` 下（白名单校验，保证安全性）
 - S3：`path` 填对象 Key（相对 `bucket`），当前仅支持 `target='archive'`（tar/tar.gz/gz；zip 暂不支持）。
 
 ## 运行时注入变量（只读）
 
-- CLEANED_QUERY: string（移除了 `app:`/`dt:`/`fdt:`/`tdt:` 指令）
-- DATE_RANGE: { start: "YYYY-MM-DD", end: "YYYY-MM-DD" }
-- TODAY: "YYYY-MM-DD"（北京时间）
-- DATES: list[dict]，按日期范围展开的每日对象：
-  - { iso, yyyymmdd, next_yyyymmdd }
-- AGENTS: list[dict]，在线 Agent 及标签：
-  - { id: string, tags: { key: value } }
-- S3_PROFILES: list[dict]（非敏感字段）：
-  - { profile_name, endpoint, bucket }
-  - 用途：在脚本中选择要使用的 `profile_name` 与对应 `bucket`，密钥不会暴露，后端会用数据库中的配置访问。
+- **CLEANED_QUERY**: string（移除了 `app:`/`dt:`/`fdt:`/`tdt:` 指令）
+  - 已清理的查询字符串，可直接用于搜索
+  - 脚本可以覆盖此变量以追加额外的限定词
+
+- **DATE_RANGE**: { start: "YYYY-MM-DD", end: "YYYY-MM-DD" }
+  - 根据查询中的日期指令解析出的日期范围
+
+- **TODAY**: "YYYY-MM-DD"（北京时间）
+  - 当前日期，用于判断是否为当日数据
+
+- **DATES**: list[dict]，按日期范围展开的每日对象：
+  - 每项包含：`{ iso: "YYYY-MM-DD", yyyymmdd: "YYYYMMDD", next_yyyymmdd: "YYYYMMDD" }`
+  - `iso`: ISO 格式日期（用于字符串比较和显示）
+  - `yyyymmdd`: 当前日期的 8 位数字格式
+  - `next_yyyymmdd`: 下一天的 8 位数字格式（用于生成文件名等）
+
+- **AGENTS**: list[dict]，在线 Agent 及标签：
+  - 每项包含：`{ id: string, tags: { key: value } }`
+  - 仅包含当前在线的 Agent
+  - 可通过标签筛选，例如：`agent.get('tags', {}).get('env') == 'prod'`
+
+- **S3_PROFILES**: list[dict]（非敏感字段）：
+  - 每项包含：`{ profile_name: str, endpoint: str, bucket: str }`
+  - **注意**：密钥等敏感信息不会暴露，后端会用数据库中的配置访问
+  - 用途：在脚本中选择要使用的 `profile_name` 与对应 `bucket`
   - 选择示例：
     ```python
     oss = None
@@ -81,6 +107,40 @@ SOURCES = [{
             break
     # 之后可用 oss['profile_name'] 和 oss['bucket']
     ```
+
+## 查询指令说明
+
+### app: 指令
+
+- **格式**：`app:<app_name>`
+- **作用**：选择要使用的规划脚本
+- **示例**：`app:bbip error` → 使用 bbip 脚本，查询为 "error"
+- **默认值**：未指定时使用 `app:bbip`
+- **注意**：该指令会被移除，不会传递给规划脚本
+
+### 日期指令（dt:/fdt:/tdt:）
+
+- **格式**：`dt:YYYYMMDD`、`fdt:YYYYMMDD`、`tdt:YYYYMMDD`
+  - 必须是 8 位数字（YYYYMMDD）
+  - 例如：`dt:20250115` 表示 2025-01-15
+
+- **指令说明**：
+  - `dt:YYYYMMDD`：指定单个日期（起始和结束都是该日期）
+  - `fdt:YYYYMMDD`：起始日期（from date）
+  - `tdt:YYYYMMDD`：结束日期（to date）
+
+- **组合逻辑**：
+  - 如果指定了 `dt:`，则忽略 `fdt:` 和 `tdt:`
+  - 如果只指定了 `fdt:`，则结束日期等于起始日期
+  - 如果只指定了 `tdt:`，则起始日期等于结束日期
+  - 如果都未指定，则默认为今天
+
+- **示例**：
+  - `dt:20250115 error` → 查询 2025-01-15 的 "error"
+  - `fdt:20250110 tdt:20250115 error` → 查询 2025-01-10 到 2025-01-15 的 "error"
+  - `fdt:20250110 error` → 查询 2025-01-10 的 "error"（单日）
+
+- **注意**：这些指令会被移除，不会传递给规划脚本，但会影响 `DATE_RANGE` 和 `DATES` 变量的值
 
 脚本需导出：
 - 必须：`SOURCES: list[Source]`
@@ -154,7 +214,7 @@ if oss != None:
                 key = 'bbip/{}/{}/{}/BBIP_{}_APPLOG_{}.tar.gz'.format(y, yyyymm, yyyymmdd, b, file)
                 SOURCES.append({
                     'endpoint': { 'kind': 's3', 'profile': oss['profile_name'], 'bucket': oss['bucket'] },
-'target':   { 'type': 'archive', 'path': key },
+                    'target':   { 'type': 'archive', 'path': key },
                     'filter_glob': '**/*.log',
                 })
 ```
@@ -176,8 +236,8 @@ for agent in AGENTS:
                 for hour in range(24):
                     tar_name = '{}_{}_{:02d}.tar.gz'.format(tar_prefix, date_iso, hour)
                     SOURCES.append({
-                        'endpoint': { 'kind': 'agent', 'agent_id': agent['id'], 'root': 'logs' },
-            'target':   { 'type': 'archive', 'path': tar_name },
+                        'endpoint': { 'kind': 'agent', 'agent_id': agent['id'], 'subpath': 'logs' },
+                        'target':   { 'type': 'archive', 'path': tar_name },
                         'filter_glob': '**/*.log',
                     })
 ```
@@ -189,20 +249,20 @@ SOURCES = []
 
 # 目录
 SOURCES.append({
-    'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'root': 'logs' },
+    'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'subpath': 'logs' },
     'target':   { 'type': 'dir', 'path': 'web', 'recursive': True },
     'filter_glob': '**/*error*.log',
 })
 
 # 文件清单
 SOURCES.append({
-    'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'root': '.' },
+    'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'subpath': '.' },
     'target':   { 'type': 'files', 'paths': ['logs/access.log', 'logs/error.log'] },
 })
 
 # 全量（谨慎使用）
 SOURCES.append({
-    'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'root': '.' },
+    'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'subpath': '.' },
     'target':   { 'type': 'all' },
     'filter_glob': '**/*.log',
 })
@@ -218,7 +278,7 @@ for d in DATES:
     if d['iso'] < TODAY:
         SOURCES.append({
             'endpoint': { 'kind': 'local', 'root': '/archive' },
-'target':   { 'type': 'archive', 'path': 'logs_{}.tar.gz'.format(d['iso']) },
+            'target':   { 'type': 'archive', 'path': 'logs_{}.tar.gz'.format(d['iso']) },
             'filter_glob': '**/*.log',
         })
 
@@ -234,7 +294,7 @@ if oss != None:
             key = 'archive/logs_{}.tar.gz'.format(d['iso'])
             SOURCES.append({
                 'endpoint': { 'kind': 's3', 'profile': oss['profile_name'], 'bucket': oss['bucket'] },
-'target':   { 'type': 'archive', 'path': key },
+                'target':   { 'type': 'archive', 'path': key },
                 'filter_glob': '**/*.log',
             })
 
@@ -242,7 +302,7 @@ if oss != None:
 for a in AGENTS:
     if a.get('tags', {}).get('type') == 'prod':
         SOURCES.append({
-            'endpoint': { 'kind': 'agent', 'agent_id': a['id'], 'root': 'logs' },
+            'endpoint': { 'kind': 'agent', 'agent_id': a['id'], 'subpath': 'logs' },
             'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
             'filter_glob': '**/{}/**'.format(TODAY),  # 仅当日
         })
@@ -259,9 +319,17 @@ CLEANED_QUERY = CLEANED_QUERY + ' path:**/*.log'
 
 ## 脚本放置与选择
 
-- 文件位置：`~/.opsbox/planners/<app>.star`
-- 选择脚本：在搜索框查询中加上 `app:<app>`；未指定时默认 `app:bbip`
-- 若用户脚本不存在，会回退到内置同名脚本
+### 脚本加载优先级（从高到低）
+
+1. **数据库存储**：通过 API 保存到数据库的脚本（优先级最高）
+2. **用户目录**：`~/.opsbox/planners/<app>.star`
+3. **内置脚本**：`backend/logseek/src/planners/<app>.star`（作为回退）
+
+### 选择脚本
+
+- 在搜索框查询中加上 `app:<app>` 来选择脚本；未指定时默认 `app:bbip`
+- 例如：`app:bbip error` 会使用 `bbip` 脚本
+- `app:` 限定词会被自动移除，不会传递给规划脚本
 
 ## 常见错误与排查
 
@@ -270,8 +338,8 @@ CLEANED_QUERY = CLEANED_QUERY + ' path:**/*.log'
   - Endpoint 用 `kind`，取值 `'local'|'agent'|'s3'`
   - Target 用 `type`，取值 `'dir'|'files'|'archive'|'all'`
 - 路径语义：
-  - 所有 Target 路径（含 files/archive）均相对 `endpoint.root`。
-  - Agent 的 `root='.'` 表示不限根（由后端解释为服务端默认根）。
+  - 所有 Target 路径（含 files/archive）均相对 `endpoint.root`（Local）或 `endpoint.subpath`（Agent）。
+  - Agent 的 `subpath='.'` 表示不限制，使用所有 `search_roots` 下的内容。
   - S3 的 `target.archive.path` 必须是对象 Key，相对 `bucket`，不要写成 `s3://bucket/key`。
 - Profile/存储配置：
   - `profile` 名称未配置或拼写错误会导致后端取对象失败（查看问题详情/服务端日志）。
@@ -312,7 +380,7 @@ SOURCES.append({
 for a in AGENTS:
     if a.get('tags', {}).get('env') == 'prod':
         SOURCES.append({
-            'endpoint': { 'kind': 'agent', 'agent_id': a['id'], 'root': 'logs' },
+            'endpoint': { 'kind': 'agent', 'agent_id': a['id'], 'subpath': 'logs' },
             'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
         })
 
@@ -325,8 +393,9 @@ for p in S3_PROFILES:
 if oss != None:
     SOURCES.append({
         'endpoint': { 'kind': 's3', 'profile': oss['profile_name'], 'bucket': oss['bucket'] },
-'target':   { 'type': 'archive', 'path': 'archive/app_2025-01-15.tar.gz' },
+        'target':   { 'type': 'archive', 'path': 'archive/app_2025-01-15.tar.gz' },
         'filter_glob': '**/*.log',
+        'display_name': 'OSS 归档日志',  # 可选：UI 友好名称
     })
 
 # 3) 可选：覆盖 CLEANED_QUERY（例如增加 path 约束）

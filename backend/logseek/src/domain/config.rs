@@ -17,13 +17,13 @@ pub struct Source {
 pub enum Endpoint {
   /// 本地：root为绝对路径
   Local { root: String },
-  /// Agent：root为相对该Agent search_roots的子路径；"." 表示不限制
-  Agent { agent_id: String, root: String },
+  /// Agent：subpath为相对该Agent search_roots的子路径；"." 表示不限制
+  Agent { agent_id: String, subpath: String },
   /// S3：选择配置与桶
   S3 { profile: String, bucket: String },
 }
 
-/// 目标集合（查什么），路径均相对 endpoint.root
+/// 目标集合（查什么），路径均相对 endpoint.root（Local）或 endpoint.subpath（Agent）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Target {
@@ -37,7 +37,7 @@ pub enum Target {
   Files { paths: Vec<String> },
   /// 归档（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
   Archive { path: String },
-  /// 全部（主要用于 Agent；若 endpoint.root != "."，服务端可解释为该 root 下的递归目录）
+  /// 全部（主要用于 Agent；若 endpoint.subpath != "."，服务端可解释为该 subpath 下的递归目录）
   All,
 }
 

@@ -168,7 +168,7 @@
       {/each}
 
       <!-- 空状态和错误状态 -->
-      {#if searchStore.error}
+      {#if searchStore.error && !searchStore.loading}
         <SearchEmptyState
           type="error"
           errorMessage={searchStore.error}
@@ -176,7 +176,7 @@
             if (q) searchStore.search(q);
           }}
         />
-      {:else if !searchStore.loading && searchStore.results.length === 0 && q && !searchStore.hasMore}
+      {:else if !searchStore.loading && searchStore.results.length === 0 && q && !searchStore.hasMore && !searchStore.error}
         <SearchEmptyState type="no-results" />
       {:else if !searchStore.loading && !searchStore.error && searchStore.results.length === 0 && !q}
         <SearchEmptyState type="initial" />

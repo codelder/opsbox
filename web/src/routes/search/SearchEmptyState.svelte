@@ -56,11 +56,10 @@
   {:else if type === 'no-results'}
     <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
       <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
-        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" stroke="currentColor">
+        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
-            stroke-width="2"
             d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
           />
         </svg>
@@ -71,11 +70,10 @@
   {:else if type === 'initial'}
     <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
       <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
-        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" stroke="currentColor">
+        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
-            stroke-width="2"
             d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
           />
         </svg>

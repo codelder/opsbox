@@ -16,10 +16,11 @@ export interface PlannerUpsert {
 export interface PlannerTestPayload {
   app: string;
   q: string;
+  script?: string; // 可选的脚本内容（用于测试未保存的脚本）
 }
 export type Endpoint =
   | { kind: 'local'; root: string }
-  | { kind: 'agent'; agent_id: string; root: string }
+  | { kind: 'agent'; agent_id: string; subpath: string }
   | { kind: 's3'; profile: string; bucket: string };
 
 export type Target =
@@ -38,13 +39,43 @@ export interface Source {
 export interface PlannerTestResponse {
   cleaned_query: string;
   sources: Source[];
+  debug_logs: string[]; // 调试日志（print 函数的输出）
 }
 
-export async function listPlanners(): Promise<PlannerMeta[]> {
+export interface PlannerListResponse {
+  items: PlannerMeta[];
+  default: string | null;
+}
+
+export async function listPlanners(): Promise<PlannerListResponse> {
   const res = await fetch(`${getApiBase()}/settings/planners/scripts`, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`加载失败：HTTP ${res.status}`);
-  const data = await res.json();
-  return (data?.items ?? []) as PlannerMeta[];
+  return (await res.json()) as PlannerListResponse;
+}
+
+export async function getDefaultPlanner(): Promise<string | null> {
+  const res = await fetch(`${getApiBase()}/settings/planners/default`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`获取默认规划脚本失败：HTTP ${res.status}`);
+  const name: string | null = await res.json();
+  return name ?? null;
+}
+
+export async function setDefaultPlanner(app: string): Promise<void> {
+  const res = await fetch(`${getApiBase()}/settings/planners/default`, {
+    method: 'POST',
+    headers: commonHeaders,
+    body: JSON.stringify({ app })
+  });
+  if (!res.ok) {
+    let msg = `设置默认规划脚本失败：HTTP ${res.status}`;
+    try {
+      const p = await res.json();
+      msg = p?.detail || p?.title || msg;
+    } catch {
+      /* ignore */ void 0;
+    }
+    throw new Error(msg);
+  }
 }
 
 export async function getPlanner(app: string): Promise<PlannerGet> {

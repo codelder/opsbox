@@ -6,12 +6,14 @@
     savePlanner,
     deletePlanner,
     testPlanner,
+    setDefaultPlanner,
     type PlannerMeta
   } from '$lib/modules/logseek';
 
   let loading = $state(false);
   let error = $state<string | null>(null);
   let items = $state<PlannerMeta[]>([]);
+  let defaultApp = $state<string | null>(null);
 
   let editing = $state(false);
   let editingApp = $state<string | null>(null);
@@ -26,7 +28,7 @@
   let testing = $state(false);
   let testError = $state<string | null>(null);
   import type { Source } from '$lib/modules/logseek';
-  let testResult: { cleaned_query: string; sources: Source[] } | null = $state(null);
+  let testResult: { cleaned_query: string; sources: Source[]; debug_logs: string[] } | null = $state(null);
 
   // 帮助文档
   let showHelp = $state(false);
@@ -44,9 +46,12 @@
     helpHtml = '';
     try {
       const API_BASE = (await import('$lib/modules/logseek/api/config')).getApiBase();
-      const res = await fetch(`${API_BASE}/settings/planners/readme`, { headers: { Accept: 'text/html' } });
+      const res = await fetch(`${API_BASE}/settings/planners/readme`, { headers: { Accept: 'text/plain' } });
       if (!res.ok) throw new Error(`加载失败：HTTP ${res.status}`);
-      helpHtml = await res.text();
+      const markdown = await res.text();
+      // 在前端渲染 Markdown 为 HTML
+      const { marked } = await import('marked');
+      helpHtml = marked.parse(markdown) as string;
       showHelp = true;
     } catch (e: unknown) {
       const err = e as { message?: string };
@@ -62,12 +67,25 @@
     error = null;
     saveSuccess = false;
     try {
-      items = await listPlanners();
+      const response = await listPlanners();
+      items = response.items;
+      defaultApp = response.default;
     } catch (e: unknown) {
       const err = e as { message?: string };
       error = err?.message || '加载失败';
     }
     loading = false;
+  }
+
+  async function handleSetDefault(app: string) {
+    try {
+      await setDefaultPlanner(app);
+      defaultApp = app;
+      await refresh();
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      error = err?.message || '设置默认规划脚本失败';
+    }
   }
   $effect(() => {
     if (!loading && items.length === 0 && !editing) refresh();
@@ -118,8 +136,13 @@
     }
     testing = true;
     try {
-      const r = await testPlanner({ app: app.trim(), q: testQ });
-      testResult = r as { cleaned_query: string; sources: Source[] };
+      // 传递当前编辑的脚本内容（如果存在），这样可以在保存前测试
+      const r = await testPlanner({ 
+        app: app.trim(), 
+        q: testQ,
+        script: script.trim() || undefined // 如果脚本不为空，传递脚本内容
+      });
+      testResult = r as { cleaned_query: string; sources: Source[]; debug_logs: string[] };
     } catch (e: unknown) {
       const err = e as { message?: string };
       testError = err?.message || '测试失败';
@@ -201,12 +224,31 @@
                 class="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50"
               >
                 <div class="flex-1">
-                  <h3 class="font-semibold text-slate-900 dark:text-slate-100">{it.app}</h3>
+                  <div class="flex items-center gap-2">
+                    <h3 class="font-semibold text-slate-900 dark:text-slate-100">{it.app}</h3>
+                    {#if defaultApp === it.app}
+                      <span
+                        class="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
+                        title="默认规划脚本"
+                      >
+                        默认
+                      </span>
+                    {/if}
+                  </div>
                   <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     更新于 {new Date(it.updated_at * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
                   </p>
                 </div>
                 <div class="flex items-center gap-2">
+                  {#if defaultApp !== it.app}
+                    <button
+                      class="rounded-lg px-3 py-1.5 text-sm text-indigo-600 hover:bg-indigo-100 dark:text-indigo-400 dark:hover:bg-indigo-900/30"
+                      onclick={() => handleSetDefault(it.app)}
+                      title="设为默认规划脚本"
+                    >
+                      设为默认
+                    </button>
+                  {/if}
                   <button
                     class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-700"
                     onclick={() => startEdit(it.app)}>编辑</button
@@ -302,9 +344,18 @@
               >{testResult.cleaned_query}</code
             >
           </div>
+          {#if testResult.debug_logs && testResult.debug_logs.length > 0}
+            <div class="mb-4">
+              <h4 class="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">调试日志（print 输出）：</h4>
+              <div class="test-output-box max-h-40 overflow-auto rounded border p-3 text-xs">
+                {#each testResult.debug_logs as log}
+                  <div class="mb-1 font-mono">{log}</div>
+                {/each}
+              </div>
+            </div>
+          {/if}
           <div class="overflow-auto">
-            <pre
-              class="max-h-80 rounded bg-white p-3 text-xs break-all whitespace-pre-wrap text-slate-800 dark:bg-slate-900 dark:text-slate-100">{JSON.stringify(
+            <pre class="test-output-box max-h-80 rounded border p-3 text-xs break-all whitespace-pre-wrap">{JSON.stringify(
                 testResult.sources,
                 null,
                 2

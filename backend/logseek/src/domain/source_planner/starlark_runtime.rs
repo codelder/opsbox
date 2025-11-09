@@ -26,10 +26,42 @@ pub async fn plan_with_starlark(
   app: Option<&str>,
   query: &str,
 ) -> Result<PlanResult, crate::api::LogSeekApiError> {
+  plan_with_starlark_with_script(pool, app, query, None).await
+}
+
+/// 支持传入可选的脚本内容进行规划（用于测试未保存的脚本）
+pub async fn plan_with_starlark_with_script(
+  pool: &SqlitePool,
+  app: Option<&str>,
+  query: &str,
+  script_content: Option<&str>,
+) -> Result<PlanResult, crate::api::LogSeekApiError> {
   use chrono::Utc;
   use chrono_tz::Asia::Shanghai;
 
-  let app = app.unwrap_or("bbip");
+  // 如果没有指定 app，尝试使用默认规划脚本
+  let app = if let Some(a) = app {
+    a.to_string()
+  } else {
+    // 尝试从数据库获取默认规划脚本
+    match crate::repository::planners::get_default(pool).await {
+      Ok(Some(default_app)) => default_app,
+      Ok(None) => {
+        return Err(crate::api::LogSeekApiError::Internal(
+          opsbox_core::AppError::bad_request(
+            "请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp），或在系统设置中配置默认规划脚本",
+          ),
+        ));
+      }
+      Err(e) => {
+        log::warn!("获取默认规划脚本失败: {:?}", e);
+        return Err(crate::api::LogSeekApiError::Internal(
+          opsbox_core::AppError::bad_request("请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp）"),
+        ));
+      }
+    }
+  };
+  let app = app.as_str();
 
   // 1) 解析日期并清理查询
   let today = Utc::now().with_timezone(&Shanghai).date_naive();
@@ -106,22 +138,68 @@ pub async fn plan_with_starlark(
   }
   prefix.push_str("]\n");
 
-  // 4) 读取 Starlark 脚本内容（优先 DB，其次用户目录，最后内置回退）
-  let script_body = match load_planner_script_from_db(pool, app).await {
-    Some(s) => s,
-    None => load_planner_script(app).unwrap_or_else(|| builtin_planner_script(app)),
+  // 4) 读取 Starlark 脚本内容（优先使用传入的脚本内容，其次 DB，最后用户目录）
+  let script_body = if let Some(content) = script_content {
+    content.to_string()
+  } else {
+    // 尝试从数据库加载
+    if let Some(s) = load_planner_script_from_db(pool, app).await {
+      s
+    } else if let Some(s) = load_planner_script(app) {
+      // 尝试从用户目录加载
+      s
+    } else {
+      // 找不到脚本，返回错误
+      return Err(crate::api::LogSeekApiError::Internal(
+        opsbox_core::AppError::bad_request(&format!(
+          "未找到应用 '{}' 的规划脚本。请在系统设置中为该应用配置规划脚本。",
+          app
+        )),
+      ));
+    }
   };
   let script = format!("{}\n{}", prefix, script_body);
 
   // 5) 运行 Starlark
   let module = starlark::environment::Module::new();
-  let ast = starlark::syntax::AstModule::parse(&format!("{}.star", app), script, &starlark::syntax::Dialect::Extended)
-    .map_err(|e| {
-      crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本解析失败: {}", e)))
-    })?;
+  // 配置 Dialect 启用 f-strings
+  let mut dialect = starlark::syntax::Dialect::Extended;
+  dialect.enable_f_strings = true;
+  let ast = starlark::syntax::AstModule::parse(&format!("{}.star", app), script, &dialect).map_err(|e| {
+    crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本解析失败: {}", e)))
+  })?;
 
-  let globals = starlark::environment::GlobalsBuilder::standard().build();
+  // 创建调试日志收集器
+  let debug_logs: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+    std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+  let debug_logs_clone = debug_logs.clone();
+
+  // 使用 Starlark 内置的 print 函数，通过 PrintHandler 捕获输出
+  struct DebugPrintHandler {
+    debug_logs: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+  }
+
+  impl starlark::PrintHandler for DebugPrintHandler {
+    fn println(&self, text: &str) -> starlark::Result<()> {
+      if let Ok(mut logs) = self.debug_logs.lock() {
+        logs.push(text.to_string());
+      }
+      Ok(())
+    }
+  }
+
+  // 创建 print_handler，确保它在整个 eval 生命周期内有效
+  let print_handler = DebugPrintHandler {
+    debug_logs: debug_logs_clone,
+  };
+
+  // 构建全局环境，添加 print 函数
+  // 使用 LibraryExtension::Print 来启用 print 函数
+  let globals =
+    starlark::environment::GlobalsBuilder::extended_by(&[starlark::environment::LibraryExtension::Print]).build();
   let mut eval = starlark::eval::Evaluator::new(&module);
+  // 设置自定义 print 处理器来捕获输出
+  eval.set_print_handler(&print_handler);
   eval.eval_module(ast, &globals).map_err(|e| {
     crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本执行失败: {}", e)))
   })?;
@@ -157,9 +235,14 @@ pub async fn plan_with_starlark(
   }
 
   log::info!("[Planner] 脚本生成来源总数: {}", sources.len());
+
+  // 提取调试日志
+  let debug_logs_vec = debug_logs.lock().unwrap().clone();
+
   Ok(PlanResult {
     sources,
     cleaned_query: cleaned,
+    debug_logs: debug_logs_vec,
   })
 }
 
@@ -248,18 +331,6 @@ async fn load_planner_script_from_db(pool: &SqlitePool, app: &str) -> Option<Str
   }
 }
 
-/// 内置脚本（作为回退）
-fn builtin_planner_script(app: &str) -> String {
-  match app {
-    // bbip 的等效脚本：基于 DATES/TODAY/BUCKETS 生成 Agent 与 S3 源，S3_PROFILES 由业务选择
-    "bbip" => include_str!("../../planners/bbip.star").to_string(),
-    _ => {
-      // 默认空实现：只透传 CLEANED_QUERY，SOURCES 为空
-      "# 默认空脚本\nSOURCES = []\n".to_string()
-    }
-  }
-}
-
 /// 字符串转义（单引号与反斜杠），用于内联到 Starlark 代码
 fn esc_single(s: &str) -> String {
   let s = s.replace('\\', "\\\\");
@@ -317,7 +388,7 @@ fn log_script_source(idx: usize, src: &Source) {
         path
       );
     }
-    (Endpoint::Agent { agent_id, root }, tgt) => {
+    (Endpoint::Agent { agent_id, subpath }, tgt) => {
       let scope = match tgt {
         Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
         Target::Files { paths } => format!("Files count={}", paths.len()),
@@ -325,10 +396,10 @@ fn log_script_source(idx: usize, src: &Source) {
         Target::All => "All".to_string(),
       };
       log::info!(
-        "[Planner] 来源[{}] agent id={} root={} scope={} filter_glob={}",
+        "[Planner] 来源[{}] agent id={} subpath={} scope={} filter_glob={}",
         idx,
         agent_id,
-        root,
+        subpath,
         scope,
         src.filter_glob.as_deref().unwrap_or("<none>")
       );
