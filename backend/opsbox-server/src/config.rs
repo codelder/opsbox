@@ -104,6 +104,31 @@ pub struct AppConfig {
   /// 管理子命令（start/stop）
   #[command(subcommand)]
   pub cmd: Option<Commands>,
+
+  /// 以 Windows 服务模式运行
+  #[cfg(windows)]
+  #[arg(long, help = "以 Windows 服务模式运行")]
+  pub service_mode: bool,
+
+  /// 安装 Windows 服务
+  #[cfg(windows)]
+  #[arg(long, help = "安装为 Windows 服务")]
+  pub install_service: bool,
+
+  /// 卸载 Windows 服务
+  #[cfg(windows)]
+  #[arg(long, help = "卸载 Windows 服务")]
+  pub uninstall_service: bool,
+
+  /// 启动 Windows 服务（通过 sc 命令）
+  #[cfg(windows)]
+  #[arg(long, help = "启动 Windows 服务")]
+  pub start_service: bool,
+
+  /// 停止 Windows 服务（通过 sc 命令）
+  #[cfg(windows)]
+  #[arg(long, help = "停止 Windows 服务")]
+  pub stop_service: bool,
 }
 
 impl AppConfig {

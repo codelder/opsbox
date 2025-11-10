@@ -48,3 +48,7 @@ default = ["logseek", "agent-manager"]
 daemonize = "0.5"
 # 用于 stop 子命令向进程发送信号 (使用安全的nix库替代直接libc调用)
 nix = { version = "0.30", features = ["signal"] }
+
+[target.'cfg(windows)'.dependencies]
+# Windows 服务支持
+windows-service = "0.5"

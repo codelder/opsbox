@@ -51,6 +51,10 @@ num_cpus = "1.0"
 futures = "0.3"
 async-stream = "0.3"
 
+[target.'cfg(windows)'.dependencies]
+# Windows 服务支持
+windows-service = "0.5"
+
 [package.metadata.generate-rpm]
 assets = [
   # 将已构建的二进制安装到 /usr/bin；把“你的二进制名”替换为实际二进制名
