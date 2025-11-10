@@ -393,7 +393,6 @@ fn log_script_source(idx: usize, src: &Source) {
         Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
         Target::Files { paths } => format!("Files count={}", paths.len()),
         Target::Archive { path } => format!("Archive path={}", path),
-        Target::All => "All".to_string(),
       };
       log::info!(
         "[Planner] 来源[{}] agent id={} subpath={} scope={} filter_glob={}",
@@ -409,7 +408,6 @@ fn log_script_source(idx: usize, src: &Source) {
         Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
         Target::Files { paths } => format!("Files count={}", paths.len()),
         Target::Archive { path } => format!("Archive path={}", path),
-        Target::All => "All".to_string(),
       };
       log::info!(
         "[Planner] 来源[{}] local root={} scope={} filter_glob={}",

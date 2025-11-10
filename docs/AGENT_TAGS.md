@@ -1,5 +1,8 @@
 # Agent Manager 标签功能
 
+**文档版本**: v1.0  
+**最后更新**: 2025-11-10
+
 ## 概述
 
 Agent Manager 现在支持为 Agent 添加标签，并通过标签进行筛选。标签采用 `key=value` 格式，这对于管理不同环境（如 production、development）或不同服务类型（如 web、api）的 Agent 非常有用。

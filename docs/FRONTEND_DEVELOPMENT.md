@@ -1,5 +1,8 @@
 # 前端开发指南
 
+**文档版本**: v1.0  
+**最后更新**: 2025-11-10
+
 本文档介绍如何使用 OpsBox 前端的模块化架构进行开发。
 
 ## 📁 目录结构
@@ -45,12 +48,15 @@ web/src/lib/modules/logseek/
 import { 
   // Types
   type SearchJsonResult,
-  type MinioSettingsPayload,
+  type S3SettingsPayload,
+  type S3ProfilePayload,
   
   // API Clients
-  fetchMinioSettings,
-  saveMinioSettings,
-  startSearch,
+  fetchS3Settings,
+  saveS3Settings,
+  fetchProfiles,
+  saveProfile,
+  startUnifiedSearch,
   
   // Utils
   highlight,
@@ -68,12 +74,12 @@ import {
 
 API 客户端提供类型安全的后端调用。
 
-#### 示例：获取和保存 MinIO 设置
+#### 示例：获取和保存 S3 设置（兼容旧 API）
 
 ```typescript
 import { fetchS3Settings, saveS3Settings } from '$lib/modules/logseek';
 
-// 获取设置
+// 获取默认 S3 设置（向后兼容）
 try {
   const settings = await fetchS3Settings();
   console.log(settings.endpoint, settings.bucket);
@@ -81,7 +87,7 @@ try {
   console.error('加载设置失败：', error);
 }
 
-// 保存设置
+// 保存默认 S3 设置（向后兼容）
 try {
   await saveS3Settings({
     endpoint: 'http://localhost:9000',
@@ -94,6 +100,8 @@ try {
   console.error('保存失败：', (error as Error).message);
 }
 ```
+
+**注意**：推荐使用 S3 Profile 管理 API（`fetchProfiles`, `saveProfile` 等），详见 [S3 Profile 管理功能](../features/s3-profiles.md)
 
 #### 示例：开始搜索
 

@@ -2,7 +2,7 @@
 //!
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
-use crate::agent::{AgentClient, SearchOptions, SearchScope, SearchService};
+use crate::agent::{AgentClient, SearchOptions, SearchService};
 use crate::api::{LogSeekApiError, models::SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
@@ -207,22 +207,26 @@ pub async fn stream_search(
           return;
         }
 
-        // 从来源规划中读取 endpoint/target/filter，并转换为 Agent 的 SearchScope
+        // 从来源规划中读取 endpoint/target/filter，直接使用 Target
         use crate::domain::config::{Endpoint, Target};
         let path_glob = config_clone.filter_glob.clone();
-        let search_scope = match (&config_clone.endpoint, &config_clone.target) {
+
+        // 对于 Agent endpoint，需要调整 Target 中的路径（拼接 subpath）
+        let adjusted_target = match (&config_clone.endpoint, &config_clone.target) {
           (Endpoint::Agent { subpath, .. }, Target::Dir { path, recursive }) => {
+            // 拼接 subpath 和 path
             let joined = if path == "." {
               subpath.clone()
             } else {
               format!("{}/{}", subpath, path)
             };
-            SearchScope::Directory {
-              path: Some(joined),
+            Target::Dir {
+              path: joined,
               recursive: *recursive,
             }
           }
           (Endpoint::Agent { subpath, .. }, Target::Files { paths }) => {
+            // 拼接 subpath 和每个文件路径
             let ps = paths
               .iter()
               .map(|p| {
@@ -233,25 +237,22 @@ pub async fn stream_search(
                 }
               })
               .collect();
-            SearchScope::Files { paths: ps }
+            Target::Files { paths: ps }
           }
           (Endpoint::Agent { subpath, .. }, Target::Archive { path }) => {
-            // Agent 归档：拼接 subpath 与归档相对路径，并由 Agent 端展开 tar.gz
+            // Agent 归档：拼接 subpath 与归档相对路径
             let joined = if path.starts_with('/') {
               path.clone()
             } else {
               format!("{}/{}", subpath, path)
             };
-            SearchScope::TarGz { path: joined }
+            Target::Archive { path: joined }
           }
-          (Endpoint::Agent { subpath, .. }, Target::All) => SearchScope::Directory {
-            path: Some(subpath.clone()),
-            recursive: true,
-          },
-          _ => SearchScope::All,
+          _ => config_clone.target.clone(), // 非 Agent endpoint，直接使用原 Target
         };
+
         let search_options = SearchOptions {
-          scope: search_scope,
+          target: adjusted_target,
           path_filter: path_glob,
           ..Default::default()
         };

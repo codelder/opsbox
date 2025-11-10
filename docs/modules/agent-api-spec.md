@@ -1,12 +1,13 @@
 # Agent HTTP API 规范
 
+**文档版本**: v1.0  
+**最后更新**: 2025-11-10
+
 ## 📝 概述
 
-**版本**: v1.0  
-**更新时间**: 2025-10-08  
-**状态**: 设计阶段
-
 Agent Server 是 LogSeek 分布式架构的重要组成部分，运行在远程主机上，提供本地日志文件的搜索和访问能力。通过 HTTP API 与 LogSeek Server 通信，支持多 Agent 并行搜索。
+
+**当前状态**: 核心功能已实现（MVP），详见 [实现路线图](#-实现路线图)
 
 ---
 
@@ -43,33 +44,11 @@ Host: agent.example.com:8090
 ```
 
 **响应** (200 OK):
-```json
-{
-  "status": "healthy",
-  "agent_id": "server-01",
-  "version": "1.0.0",
-  "uptime_secs": 86400,
-  "capabilities": {
-    "supports_cancellation": true,
-    "supports_streaming": true,
-    "max_concurrent_searches": 10
-  },
-  "stats": {
-    "active_searches": 2,
-    "total_searches": 1543,
-    "total_files_scanned": 123456,
-    "avg_search_time_ms": 250
-  }
-}
+```
+OK
 ```
 
-**字段说明**:
-- `status`: Agent 健康状态 (`healthy` | `degraded` | `unhealthy`)
-- `agent_id`: Agent 唯一标识符（主机名或配置的 ID）
-- `version`: Agent 版本号
-- `uptime_secs`: 运行时长（秒）
-- `capabilities`: Agent 能力声明
-- `stats`: 运行统计信息
+**说明**: 健康检查端点返回简单的 "OK" 字符串，表示 Agent 正在运行。
 
 ---
 
@@ -77,81 +56,93 @@ Host: agent.example.com:8090
 
 **用途**: 在 Agent 端执行搜索，流式返回匹配的文件路径和结果
 
-#### POST /search
+#### POST /api/v1/search
 
 **请求**:
 ```http
-POST /search HTTP/1.1
+POST /api/v1/search HTTP/1.1
 Host: agent.example.com:8090
 Content-Type: application/json
-Authorization: Bearer <token>
 
 {
+  "task_id": "task-abc123",
   "query": "ERROR",
-  "scope": {
-    "Directory": {
-      "path": "/var/log/app",
-      "recursive": true
-    }
-  },
-  "options": {
-    "path_filter": ".*\\.log$",
-    "max_results": 10000,
-    "timeout_secs": 300,
-    "context_lines": 3
+  "context_lines": 3,
+  "path_filter": "**/*.log",
+  "target": {
+    "type": "dir",
+    "path": "app",
+    "recursive": true
   }
 }
 ```
 
 **请求字段**:
-- `query`: 搜索查询字符串（LogSeek 查询语法或正则表达式）
-- `scope`: 搜索范围（详见 [SearchScope](#searchscope)）
-- `options`: 搜索选项（详见 [SearchOptions](#searchoptions)）
+- `task_id`: 任务唯一标识符（必需）
+- `query`: 搜索查询字符串（LogSeek 查询语法）
+- `context_lines`: 上下文行数（必需）
+- `path_filter`: 路径过滤（glob 模式，可选）
+- `target`: 搜索目标（详见 [Target](#target)，必需）
 
 **响应** (200 OK, NDJSON Stream):
 ```http
 HTTP/1.1 200 OK
-Content-Type: application/x-ndjson
+Content-Type: application/x-ndjson; charset=utf-8
 Transfer-Encoding: chunked
 ```
 
 ```ndjson
-{"type":"match","file":"/var/log/app/error.log","line":42,"content":"2025-01-01 12:34:56 ERROR Connection timeout","before":["line 40","line 41"],"after":["line 43","line 44"]}
-{"type":"match","file":"/var/log/app/app.log","line":105,"content":"2025-01-01 13:05:23 ERROR Database query failed"}
-{"type":"complete"}
+{"type":"result","data":{"path":"/var/log/app/error.log","lines":["2025-01-01 12:34:56 ERROR Connection timeout"],"merged":[[0,0]],"encoding":null}}
+{"type":"result","data":{"path":"/var/log/app/app.log","lines":["2025-01-01 13:05:23 ERROR Database query failed"],"merged":[[0,0]],"encoding":null}}
+{"type":"complete","data":{"source":"agent-target","elapsed_ms":1250}}
 ```
 
 **响应消息类型**:
 
-2. **match** - 匹配结果
+1. **result** - 搜索结果
    ```json
    {
-     "type": "match",
-     "file": "/var/log/app/error.log",
-     "line": 42,
-     "content": "ERROR Connection timeout",
-     "before": ["line 40", "line 41"],
-     "after": ["line 43", "line 44"],
-     "timestamp": "2025-01-01T12:34:56Z"
+     "type": "result",
+     "data": {
+       "path": "/var/log/app/error.log",
+       "lines": ["2025-01-01 12:34:56 ERROR Connection timeout"],
+       "merged": [[0, 0]],
+       "encoding": null
+     }
    }
    ```
+   - `path`: 文件路径
+   - `lines`: 匹配的行内容（已包含上下文行）
+   - `merged`: 匹配位置信息 `[(start, end), ...]`
+   - `encoding`: 文件编码（如果不是 UTF-8）
 
-3. **complete** - 搜索完成
-  ```json
-  {
-    "type": "complete"
-  }
-  ```
-
-4. **error** - 搜索错误
+2. **error** - 搜索错误
    ```json
    {
      "type": "error",
-     "task_id": "task-abc123",
-     "error": "Permission denied: /var/log/restricted.log",
-     "error_code": "PERMISSION_DENIED"
+     "data": {
+       "source": "agent-target",
+       "message": "Target 解析失败: 未找到目录: nonexistent。可用的子目录: [\"app\", \"nginx\", \"system\"]",
+       "recoverable": false
+     }
    }
    ```
+   - `source`: 错误来源标识
+   - `message`: 错误信息
+   - `recoverable`: 是否可恢复（true 表示错误非致命，可继续搜索其他源）
+
+3. **complete** - 搜索完成
+   ```json
+   {
+     "type": "complete",
+     "data": {
+       "source": "agent-target",
+       "elapsed_ms": 1250
+     }
+   }
+   ```
+   - `source`: 来源标识
+   - `elapsed_ms`: 搜索耗时（毫秒）
 
 **错误响应**:
 - 400 Bad Request - 查询语法错误或参数无效
@@ -162,360 +153,198 @@ Transfer-Encoding: chunked
 
 ---
 
-### 3. 取消搜索（可选）
+### 3. 取消搜索（暂未实现）
 
 **用途**: 取消正在执行的搜索任务
 
-#### DELETE /search/{task_id}
+#### POST /api/v1/cancel/{task_id}
 
 **请求**:
 ```http
-DELETE /search/task-abc123 HTTP/1.1
+POST /api/v1/cancel/task-abc123 HTTP/1.1
 Host: agent.example.com:8090
-Authorization: Bearer <token>
 ```
 
-**响应** (200 OK):
-```json
-{
-  "task_id": "task-abc123",
-  "status": "Cancelled",
-  "message": "Search task cancelled successfully"
-}
+**响应** (501 Not Implemented):
+```
 ```
 
-**错误响应**:
-- 404 Not Found - 任务不存在
-- 409 Conflict - 任务已完成，无法取消
+**说明**: 当前版本暂未实现任务取消功能，返回 501 状态码。
 
 ---
 
-### 5. 列出文件
+### 4. 获取 Agent 信息
 
-**用途**: 列出指定目录或范围内的文件
+**用途**: 获取 Agent 的详细信息和配置
 
-#### POST /files/list
+#### GET /api/v1/info
 
 **请求**:
 ```http
-POST /files/list HTTP/1.1
+GET /api/v1/info HTTP/1.1
 Host: agent.example.com:8090
-Content-Type: application/json
-Authorization: Bearer <token>
-
-{
-  "scope": {
-    "Directory": {
-      "path": "/var/log",
-      "recursive": false
-    }
-  },
-  "options": {
-    "path_filter": ".*\\.log$",
-    "max_results": 1000
-  }
-}
 ```
 
 **响应** (200 OK):
 ```json
 {
-  "files": [
-    {
-      "path": "/var/log/app.log",
-      "metadata": {
-        "size": 1048576,
-        "modified": 1704110400,
-        "content_type": "text/plain"
-      }
-    },
-    {
-      "path": "/var/log/error.log",
-      "metadata": {
-        "size": 524288,
-        "modified": 1704110300
-      }
-    }
-  ],
-  "total": 2,
-  "truncated": false
+  "id": "server-01",
+  "name": "Production Server 01",
+  "version": "0.1.0",
+  "hostname": "server-01.example.com",
+  "tags": [],
+  "search_roots": ["/var/log", "/opt/app/logs"],
+  "last_heartbeat": 1704110400,
+  "status": "Online"
 }
 ```
 
 **字段说明**:
-- `files`: 文件列表
-- `total`: 文件总数
-- `truncated`: 是否被截断（达到 max_results 限制）
+- `id`: Agent 唯一标识符
+- `name`: Agent 名称
+- `version`: Agent 版本号
+- `hostname`: 主机名
+- `tags`: 标签列表
+- `search_roots`: 搜索根目录列表
+- `last_heartbeat`: 最后心跳时间（Unix 时间戳）
+- `status`: Agent 状态 (`Online` | `Offline`)
 
----
+### 5. 列出可用路径
 
-### 6. 读取文件内容
+**用途**: 列出 Agent 可用的搜索子目录
 
-**用途**: 读取文件的完整内容或指定行范围
+#### GET /api/v1/paths
 
-#### GET /files/read
-
-**请求参数**:
-- `path`: 文件路径（必需）
-- `start_line`: 起始行号（可选，从 1 开始）
-- `end_line`: 结束行号（可选）
-- `max_bytes`: 最大字节数（可选，默认 10MB）
-
-**请求示例**:
+**请求**:
 ```http
-GET /files/read?path=/var/log/app.log&start_line=100&end_line=200 HTTP/1.1
+GET /api/v1/paths HTTP/1.1
 Host: agent.example.com:8090
-Authorization: Bearer <token>
-```
-
-**响应** (200 OK):
-```http
-HTTP/1.1 200 OK
-Content-Type: text/plain; charset=utf-8
-X-File-Size: 1048576
-X-File-Modified: 1704110400
-X-Lines-Returned: 101
-
-2025-01-01 12:00:00 INFO Application started
-2025-01-01 12:00:01 DEBUG Loading configuration
-...
-2025-01-01 12:05:00 ERROR Connection failed
-```
-
-**响应头**:
-- `Content-Type`: 文件内容类型
-- `X-File-Size`: 文件总大小（字节）
-- `X-File-Modified`: 修改时间（Unix 时间戳）
-- `X-Lines-Returned`: 返回的行数
-
-**错误响应**:
-- 403 Forbidden - 文件路径不在白名单中
-- 404 Not Found - 文件不存在
-- 413 Payload Too Large - 请求的内容超过限制
-- 500 Internal Server Error - 读取文件失败
-
----
-
-### 7. 获取文件元数据
-
-**用途**: 获取文件的元数据（不读取内容）
-
-#### GET /files/metadata
-
-**请求参数**:
-- `path`: 文件路径（必需）
-
-**请求示例**:
-```http
-GET /files/metadata?path=/var/log/app.log HTTP/1.1
-Host: agent.example.com:8090
-Authorization: Bearer <token>
 ```
 
 **响应** (200 OK):
 ```json
-{
-  "path": "/var/log/app.log",
-  "size": 1048576,
-  "modified": 1704110400,
-  "content_type": "text/plain",
-  "permissions": "rw-r--r--",
-  "is_symlink": false,
-  "line_count": 5000
-}
+["app", "nginx", "system", "web"]
 ```
 
----
-
-### 8. 获取指标
-
-**用途**: 导出 Prometheus 格式的指标
-
-#### GET /metrics
-
-**请求**:
-```http
-GET /metrics HTTP/1.1
-Host: agent.example.com:8090
-```
-
-**响应** (200 OK):
-```prometheus
-# HELP agent_searches_total Total number of searches
-# TYPE agent_searches_total counter
-agent_searches_total 1543
-
-# HELP agent_searches_active Current active searches
-# TYPE agent_searches_active gauge
-agent_searches_active 2
-
-# HELP agent_files_scanned_total Total files scanned
-# TYPE agent_files_scanned_total counter
-agent_files_scanned_total 123456
-
-# HELP agent_search_duration_seconds Search duration in seconds
-# TYPE agent_search_duration_seconds histogram
-agent_search_duration_seconds_bucket{le="0.1"} 100
-agent_search_duration_seconds_bucket{le="0.5"} 500
-agent_search_duration_seconds_bucket{le="1.0"} 1000
-agent_search_duration_seconds_bucket{le="+Inf"} 1543
-agent_search_duration_seconds_sum 386.5
-agent_search_duration_seconds_count 1543
-```
+**说明**: 返回在 `search_roots` 下找到的所有一级子目录列表，用于错误提示和路径选择。
 
 ---
 
 ## 📐 数据类型定义
 
-### SearchScope
+### Target
 
-搜索范围定义：
+搜索目标定义（与 Server 端配置统一）：
 
 ```rust
-pub enum SearchScope {
-  /// 搜索指定目录
-  Directory { 
-    path: String,      // 目录路径
-    recursive: bool    // 是否递归
+pub enum Target {
+  /// 目录
+  Dir {
+    path: String,      // 目录路径（相对 subpath）
+    recursive: bool    // 是否递归（默认 true）
   },
   
-  /// 搜索指定文件列表
+  /// 文件清单
   Files { 
-    paths: Vec<String> // 文件路径列表
+    paths: Vec<String> // 文件路径列表（相对 subpath）
   },
   
-  /// 搜索 tar.gz 文件（Agent 端解压并搜索）
-  TarGz { 
-    path: String       // tar.gz 文件路径
+  /// 归档（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
+  Archive { 
+    path: String       // 归档文件路径（相对 subpath）
   },
-  
-  /// 搜索所有（根据 Agent 配置的根目录）
-  All,
 }
 ```
 
 **JSON 示例**:
 ```json
 // 目录搜索
-{"Directory": {"path": "/var/log", "recursive": true}}
+{"type": "dir", "path": "app", "recursive": true}
 
 // 文件列表搜索
-{"Files": {"paths": ["/var/log/app.log", "/var/log/error.log"]}}
+{"type": "files", "paths": ["app/error.log", "nginx/access.log"]}
 
-// tar.gz 搜索
-{"TarGz": {"path": "/backup/logs-2025-01-01.tar.gz"}}
-
-// 搜索所有
-"All"
+// 归档搜索
+{"type": "archive", "path": "backup/logs-2025-01-01.tar.gz"}
 ```
+
+**注意**：
+- 所有路径均相对 `subpath`（Agent endpoint 的 subpath 字段）
+- `path: "."` 表示根目录（相对于 subpath）
+- 已移除 `All` 类型，使用 `Dir { path: ".", recursive: true }` 替代
 
 ---
 
-### SearchOptions
+### AgentSearchRequest
 
-搜索选项：
+Agent 搜索请求：
 
 ```rust
-pub struct SearchOptions {
-  /// 文件路径过滤（正则表达式）
+pub struct AgentSearchRequest {
+  pub task_id: String,
+  pub query: String,
+  pub context_lines: usize,
   pub path_filter: Option<String>,
-  
-  /// 最大结果数（达到后停止搜索）
-  pub max_results: Option<usize>,
-  
-  /// 超时时间（秒）
-  pub timeout_secs: Option<u64>,
-  
-  /// 上下文行数（匹配行前后各显示多少行）
-  pub context_lines: Option<usize>,
+  pub target: Target,
 }
 ```
 
-**默认值**:
-```rust
-SearchOptions {
-  path_filter: None,
-  max_results: None,           // 无限制
-  timeout_secs: Some(300),     // 5 分钟
-  context_lines: Some(0),      // 不显示上下文
-}
-```
+**字段说明**:
+- `task_id`: 任务唯一标识符（由调用方生成）
+- `query`: 搜索查询字符串（LogSeek 查询语法）
+- `context_lines`: 上下文行数（匹配行前后各显示多少行）
+- `path_filter`: 路径过滤（glob 模式，可选）
+- `target`: 搜索目标（详见 [Target](#target)）
 
 ---
 
-### FileMetadata
+### SearchResult
 
-文件元数据：
+搜索结果：
 
 ```rust
-pub struct FileMetadata {
-  /// 文件大小（字节）
-  pub size: Option<u64>,
-  
-  /// 修改时间（Unix 时间戳）
-  pub modified: Option<i64>,
-  
-  /// 内容类型（MIME type）
-  pub content_type: Option<String>,
+pub struct SearchResult {
+  pub path: String,
+  pub lines: Vec<String>,
+  pub merged: Vec<(usize, usize)>,
+  pub encoding: Option<String>,
 }
 ```
+
+**字段说明**:
+- `path`: 文件路径
+- `lines`: 匹配的行内容（已包含上下文行）
+- `merged`: 匹配位置信息，格式为 `[(start, end), ...]`，表示每个匹配在 `lines` 中的位置
+- `encoding`: 文件编码（如果不是 UTF-8，则包含编码名称，如 "GBK"）
 
 ---
 
 
 ## 🔐 安全与认证
 
-### Token 认证
+### 认证
 
-Agent 使用 Bearer Token 认证：
+**当前版本**: Agent API 暂未实现认证机制，所有端点均可直接访问。
 
-```http
-Authorization: Bearer <token>
-```
-
-**Token 管理**:
-1. Agent 启动时生成或从配置文件读取
-2. LogSeek Server 在添加 Agent 时获取并保存 token
-3. 所有 API 请求（除 `/health` 和 `/metrics`）都需要 token
-
-**Token 验证失败响应**:
-```http
-HTTP/1.1 401 Unauthorized
-Content-Type: application/json
-
-{
-  "error": "Unauthorized",
-  "message": "Invalid or missing authentication token"
-}
-```
+**未来计划**: 将支持 Token 认证和路径白名单验证。
 
 ---
 
 ### 路径白名单
 
-Agent 配置文件示例：
-```yaml
-agent:
-  id: "server-01"
-  port: 8090
-  token: "secret-token-12345"
-  
-  # 路径白名单
-  allowed_paths:
-    - "/var/log"
-    - "/opt/app/logs"
-    - "/home/user/logs"
-  
-  # 路径黑名单（高优先级）
-  denied_paths:
-    - "/var/log/secure"
-    - "/etc"
+Agent 通过 `--search-roots` 参数配置可搜索的根目录：
+
+```bash
+./opsbox-agent start \
+  --search-roots "/var/log,/opt/app/logs" \
+  --agent-id "server-01"
 ```
 
 **路径检查逻辑**:
-1. 首先检查黑名单，如果匹配则拒绝（403 Forbidden）
-2. 然后检查白名单，如果不匹配则拒绝（403 Forbidden）
-3. 支持通配符：`/var/log/*` 匹配所有子目录
+1. 所有搜索路径必须位于 `search_roots` 配置的根目录下
+2. 支持相对路径，Agent 会在所有 `search_roots` 下查找
+3. 绝对路径必须规范化后位于某个根目录下
+4. 如果路径不在白名单中，返回错误信息并提示可用的子目录
 
 ---
 
@@ -578,13 +407,17 @@ Retry-After: 30
 ### 1. 基本搜索
 ```bash
 # 搜索包含 ERROR 的日志
-curl -X POST http://localhost:8090/search \
+curl -X POST http://localhost:8090/api/v1/search \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer secret-token" \
   -d '{
+    "task_id": "task-001",
     "query": "ERROR",
-    "scope": {"Directory": {"path": "/var/log", "recursive": true}},
-    "options": {"context_lines": 3}
+    "context_lines": 3,
+    "target": {
+      "type": "dir",
+      "path": "app",
+      "recursive": true
+    }
   }'
 ```
 
@@ -592,25 +425,20 @@ curl -X POST http://localhost:8090/search \
 ```bash
 # 检查 Agent 健康状态
 curl http://localhost:8090/health
+# 返回: OK
 ```
 
-### 3. 列出文件
+### 3. 获取 Agent 信息
 ```bash
-# 列出目录下的日志文件
-curl -X POST http://localhost:8090/files/list \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer secret-token" \
-  -d '{
-    "scope": {"Directory": {"path": "/var/log", "recursive": false}},
-    "options": {"path_filter": ".*\\.log$"}
-  }'
+# 获取 Agent 详细信息
+curl http://localhost:8090/api/v1/info
 ```
 
-### 4. 读取文件
+### 4. 列出可用路径
 ```bash
-# 读取文件的 100-200 行
-curl "http://localhost:8090/files/read?path=/var/log/app.log&start_line=100&end_line=200" \
-  -H "Authorization: Bearer secret-token"
+# 列出可用的搜索子目录
+curl http://localhost:8090/api/v1/paths
+# 返回: ["app", "nginx", "system"]
 ```
 
 ---
@@ -623,27 +451,33 @@ curl "http://localhost:8090/files/read?path=/var/log/app.log&start_line=100&end_
 // Agent 客户端封装
 class AgentClient {
   constructor(
-    private baseUrl: string,
-    private token: string
+    private baseUrl: string
   ) {}
 
-  async health(): Promise<HealthResponse> {
+  async health(): Promise<string> {
     const res = await fetch(`${this.baseUrl}/health`);
-    return res.json();
+    return res.text();
   }
 
   async *search(
+    taskId: string,
     query: string,
-    scope: SearchScope,
-    options?: SearchOptions
-  ): AsyncGenerator<SearchMessage> {
-    const res = await fetch(`${this.baseUrl}/search`, {
+    contextLines: number,
+    target: Target,
+    pathFilter?: string
+  ): AsyncGenerator<SearchEvent> {
+    const res = await fetch(`${this.baseUrl}/api/v1/search`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.token}`,
       },
-      body: JSON.stringify({ query, scope, options }),
+      body: JSON.stringify({
+        task_id: taskId,
+        query,
+        context_lines: contextLines,
+        path_filter: pathFilter,
+        target,
+      }),
     });
 
     const reader = res.body!.getReader();
@@ -668,27 +502,29 @@ class AgentClient {
 }
 
 // 使用示例
-const agent = new AgentClient('http://localhost:8090', 'secret-token');
+const agent = new AgentClient('http://localhost:8090');
 
 // 检查健康状态
 const health = await agent.health();
-console.log('Agent:', health.agent_id, 'Status:', health.status);
+console.log('Agent health:', health); // 输出: OK
 
 // 流式搜索
-for await (const msg of agent.search(
+for await (const event of agent.search(
+  'task-001',
   'ERROR',
-  { Directory: { path: '/var/log', recursive: true } },
-  { context_lines: 3 }
+  3,
+  { type: 'dir', path: 'app', recursive: true },
+  '**/*.log'
 )) {
-  switch (msg.type) {
-    case 'match':
-      console.log(`Match: ${msg.file}:${msg.line} - ${msg.content}`);
+  switch (event.type) {
+    case 'result':
+      console.log(`Match: ${event.data.path} - ${event.data.lines.join('\n')}`);
       break;
     case 'complete':
-      console.log('Complete');
+      console.log(`Complete: ${event.data.source} (${event.data.elapsed_ms}ms)`);
       break;
     case 'error':
-      console.error(`Error: ${msg.error}`);
+      console.error(`Error: ${event.data.message}`);
       break;
   }
 }
@@ -740,22 +576,22 @@ sequenceDiagram
 
 ## 🚧 实现路线图
 
-### Phase 1: 核心功能 (MVP)
+### Phase 1: 核心功能 (MVP) ✅
 - [x] `/health` - 健康检查
-- [ ] `/search` - 基本搜索（流式 NDJSON）
-- [ ] `/files/read` - 文件读取
-- [ ] Token 认证
-- [ ] 路径白名单
+- [x] `/api/v1/search` - 基本搜索（流式 NDJSON）
+- [x] `/api/v1/info` - Agent 信息
+- [x] `/api/v1/paths` - 可用路径列表
+- [x] 路径白名单（通过 search_roots）
+- [x] Target 支持（Dir, Files, Archive）
 
 ### Phase 2: 完善功能
-- [ ] `/files/list` - 文件列表
-- [ ] `/files/metadata` - 文件元数据
+- [ ] `/api/v1/cancel/{task_id}` - 搜索取消（当前返回 501）
 - [ ] 并发控制和限流
-- [ ] 搜索取消 (`DELETE /search/{task_id}`)
+- [ ] Token 认证
+- [ ] 文件读取和元数据查询
 
 ### Phase 3: 高级功能
 - [ ] `/metrics` - Prometheus 指标
-- [ ] tar.gz 支持
 - [ ] 压缩传输（gzip, brotli）
 - [ ] 增量搜索和缓存
 - [ ] 配置热加载
@@ -774,34 +610,6 @@ sequenceDiagram
 - [LOCAL_FILESYSTEM_ENHANCEMENT.md](./LOCAL_FILESYSTEM_ENHANCEMENT.md) - 本地文件系统增强
 - [ROUTES_REFACTOR_SUMMARY.md](./ROUTES_REFACTOR_SUMMARY.md) - 路由模块化
 
----
-
-## 💡 未来优化
-
-### 1. WebSocket 支持
-使用 WebSocket 代替 HTTP 长连接，实现双向通信：
-- 服务端主动推送搜索任务
-- 更低的延迟和开销
-
-### 2. gRPC 支持
-使用 gRPC 提供高性能 RPC 接口：
-- Protocol Buffers 序列化
-- HTTP/2 多路复用
-- 更好的流控和背压
-
-### 3. 智能调度
-Server 端根据 Agent 负载智能分配任务：
-- 优先分配给空闲 Agent
-- 避免过载 Agent
-- 动态调整并发度
-
-### 4. 缓存策略
-Agent 端缓存常见查询结果：
-- 最近搜索结果缓存
-- 文件索引缓存
-- 减少重复扫描
-
----
 
 ## 🎯 总结
 
@@ -815,14 +623,7 @@ Agent HTTP API 设计遵循以下原则：
 6. ✅ **可观测** - 健康检查 + Prometheus 指标
 7. ✅ **高性能** - 并发控制 + 流控机制
 
-**下一步**:
-1. 实现 Agent Server 基本框架（Axum）
-2. 实现 `/health` 端点
-3. 实现 `/search` 端点（MVP）
-4. 与现有 Server 集成测试
+**当前进展**:
+- ✅ Phase 1 (MVP) 已完成：核心搜索功能已实现并投入使用
+- 🔄 Phase 2 进行中：完善功能和优化
 
----
-
-**文档版本**: v1.0  
-**作者**: LogSeek Team  
-**最后更新**: 2025-10-08

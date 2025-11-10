@@ -37,8 +37,6 @@ pub enum Target {
   Files { paths: Vec<String> },
   /// 归档（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
   Archive { path: String },
-  /// 全部（主要用于 Agent；若 endpoint.subpath != "."，服务端可解释为该 subpath 下的递归目录）
-  All,
 }
 
 fn default_true() -> bool {

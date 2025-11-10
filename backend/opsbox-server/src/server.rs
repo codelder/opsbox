@@ -1,7 +1,4 @@
-use axum::http::{
-  StatusCode,
-  header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
-};
+use axum::http::{StatusCode, header::CONTENT_TYPE};
 use axum::{Router, http, response::Response, routing::get};
 use opsbox_core::{Module, SqlitePool};
 use rust_embed::RustEmbed;
@@ -9,7 +6,6 @@ use std::borrow::Cow;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Notify;
-use tower_http::cors::{Any, CorsLayer};
 
 // 将 backend/opsbox-server/static 目录在编译期打包进二进制
 #[derive(RustEmbed)]
@@ -147,28 +143,12 @@ fn build_router(db_pool: SqlitePool, modules: &[Arc<dyn Module>]) -> Router {
   app
 }
 
-/// 配置 CORS
-fn configure_cors() -> CorsLayer {
-  CorsLayer::new()
-    .allow_origin(Any)
-    .allow_methods([
-      http::Method::GET,
-      http::Method::POST,
-      http::Method::DELETE,
-      http::Method::PUT,
-      http::Method::PATCH,
-      http::Method::OPTIONS,
-    ])
-    .allow_headers([CONTENT_TYPE, ACCEPT, AUTHORIZATION])
-    .expose_headers([http::header::HeaderName::from_static("x-logseek-sid")])
-}
-
 /// 运行HTTP服务器
 pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Module>>) {
   log::info!("启动 HTTP 服务器，监听地址: {}", addr);
 
   // 构建应用
-  let app = build_router(db_pool, &modules).layer(configure_cors());
+  let app = build_router(db_pool, &modules);
 
   // 绑定监听
   let listener = tokio::net::TcpListener::bind(addr).await.expect("监听地址绑定失败");

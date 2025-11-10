@@ -1,5 +1,8 @@
 # S3 Profile 管理功能
 
+**文档版本**: v1.0  
+**最后更新**: 2025-11-10
+
 ## 概述
 
 S3 Profile 管理功能允许您管理多个 S3 对象存储连接配置，每个 Profile 包含独立的 Endpoint、Access Key 和 Secret Key。
@@ -169,15 +172,28 @@ tar.gz+s3://app-logs/archive.tar.gz:logs/app.log
 ```
 
 说明：目前 FileUrl 解析器要求在使用 Profile 时显式提供 bucket 名（`s3://<profile>:<bucket>/<key>`）。
-## 未来计划
+## 搜索中的 Profile 使用
 
-### 跨 Profile 搜索
+### Starlark 规划脚本支持
 
-当前搜索功能仅支持使用默认配置（原有的单一 S3 配置）。未来版本将支持：
+搜索功能通过 Starlark 规划脚本配置存储源，**已支持多 Profile 搜索**：
 
-- 🔲 搜索时选择特定 Profile
-- 🔲 跨多个 Profile 并行搜索
-- 🔲 搜索结果显示数据来源 Profile
+- ✅ 在规划脚本中通过 `S3_PROFILES` 变量访问所有已配置的 Profile
+- ✅ 可以在脚本中选择特定 Profile 或跨多个 Profile 并行搜索
+- ✅ 每个 Source 配置可以指定不同的 Profile 和 Bucket
+
+**示例**（在 Starlark 规划脚本中）：
+```python
+# 使用所有 Profile 进行搜索
+SOURCES = []
+for profile in S3_PROFILES:
+    SOURCES.append({
+        'endpoint': { 'kind': 's3', 'profile': profile['profile_name'], 'bucket': profile['bucket'] },
+        'target': { 'type': 'archive', 'path': 'logs/app_2025-01-15.tar.gz' },
+    })
+```
+
+详见 [Starlark 规划脚本指南](../../backend/logseek/src/planners/README.md)
 
 ## 重要改进
 

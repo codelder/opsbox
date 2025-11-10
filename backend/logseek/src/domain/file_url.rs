@@ -269,16 +269,6 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
         Err(_) => None,
       }
     }
-    (Endpoint::Local { root }, Target::All) => {
-      let base = FileUrl::local(root);
-      match FileUrl::dir_entry(base, rel_path) {
-        Ok(url) => {
-          let id = url.to_string();
-          Some((url, id))
-        }
-        Err(_) => None,
-      }
-    }
     (Endpoint::Agent { agent_id, subpath }, Target::Archive { path }) => {
       // Agent 归档：以 agent://<id>/<subpath/path> 作为 base；内部统一按归档视图暴露
       let full = join_root_path(subpath, path);
@@ -309,17 +299,6 @@ pub fn build_file_url_for_result(source: &crate::domain::config::Source, rel_pat
     }
     (Endpoint::Agent { agent_id, subpath }, Target::Files { .. }) => {
       // 单文件集合：以 agent://<id>/<subpath> 作为 base，entry 为相对路径
-      let base = FileUrl::agent(agent_id, subpath);
-      match FileUrl::dir_entry(base, rel_path) {
-        Ok(url) => {
-          let id = url.to_string();
-          Some((url, id))
-        }
-        Err(_) => None,
-      }
-    }
-    (Endpoint::Agent { agent_id, subpath }, Target::All) => {
-      // 全部：以 agent://<id>/<subpath> 作为 base，entry 为相对路径
       let base = FileUrl::agent(agent_id, subpath);
       match FileUrl::dir_entry(base, rel_path) {
         Ok(url) => {

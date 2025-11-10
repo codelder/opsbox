@@ -20,7 +20,8 @@ use globset::{Glob, GlobSet, GlobSetBuilder};
 use log::{debug, error, info, warn};
 use logseek::utils::strings::truncate_utf8;
 use logseek::{
-  agent::{AgentInfo, AgentSearchRequest, AgentStatus, SearchScope},
+  agent::{AgentInfo, AgentSearchRequest, AgentStatus},
+  domain::config::Target as ConfigTarget,
   query::Query,
   service::search::{SearchEvent, SearchProcessor},
 };
@@ -295,16 +296,15 @@ impl AgentConfig {
     }
   }
 
-  /// 解析 SearchScope 到实际的文件系统路径
-  fn resolve_scope_paths(&self, scope: &SearchScope) -> Result<Vec<PathBuf>, String> {
-    match scope {
-      SearchScope::Directory { path, recursive: _ } => {
-        let rel = path.as_deref().unwrap_or(".");
-        self.resolve_directory_path(rel)
+  /// 解析 Target 到实际的文件系统路径
+  fn resolve_target_paths(&self, target: &ConfigTarget) -> Result<Vec<PathBuf>, String> {
+    match target {
+      ConfigTarget::Dir { path, recursive: _ } => {
+        // path 为 "." 表示根目录
+        self.resolve_directory_path(path)
       }
-      SearchScope::Files { paths } => self.resolve_file_paths(paths),
-      SearchScope::TarGz { path } => self.resolve_targz_path(path),
-      SearchScope::All => Ok(self.search_roots.iter().map(PathBuf::from).collect()),
+      ConfigTarget::Files { paths } => self.resolve_file_paths(paths),
+      ConfigTarget::Archive { path } => self.resolve_targz_path(path),
     }
   }
 
@@ -645,23 +645,23 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
   // 2. 创建搜索处理器
   let processor = Arc::new(SearchProcessor::new(spec.clone(), request.context_lines));
 
-  // 3. 第一层过滤：解析 SearchScope 到实际路径
-  let base_paths = match config.resolve_scope_paths(&request.scope) {
+  // 3. 第一层过滤：解析 Target 到实际路径
+  let base_paths = match config.resolve_target_paths(&request.target) {
     Ok(paths) => {
-      info!("SearchScope 解析成功: {:?}", paths);
+      info!("Target 解析成功: {:?}", paths);
       paths
     }
     Err(e) => {
-      error!("SearchScope 解析失败: {}", e);
+      error!("Target 解析失败: {}", e);
       let available_dirs = config.get_available_subdirs();
       let error_msg = if available_dirs.is_empty() {
-        format!("SearchScope 解析失败: {}。未找到可用的搜索目录。", e)
+        format!("Target 解析失败: {}。未找到可用的搜索目录。", e)
       } else {
-        format!("SearchScope 解析失败: {}。可用的子目录: {:?}", e, available_dirs)
+        format!("Target 解析失败: {}。可用的子目录: {:?}", e, available_dirs)
       };
       let _ = tx
         .send(SearchEvent::Error {
-          source: "agent-scope".to_string(),
+          source: "agent-target".to_string(),
           message: error_msg,
           recoverable: false,
         })
@@ -713,15 +713,28 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
 
     // 统一由 logseek 提供的构造器创建本地来源条目流
     let path_str = search_path.to_string_lossy().to_string();
-    // 仅当为 Directory 场景时传递 recursive 标志；TarGz 仍由自动探测
-    let scope_hint = match &request.scope {
-      SearchScope::Directory { recursive, .. } => Some(SearchScope::Directory {
-        path: None,
-        recursive: *recursive,
-      }),
-      _ => None,
+    // 根据 Target 类型传递完整信息，与 Server 端对齐
+    let target_hint = match &request.target {
+      ConfigTarget::Files { .. } => {
+        // Files 类型：传递单个文件路径（已解析为绝对路径）
+        // 注意：每个 search_path 已经是单个文件，所以传递单个路径
+        Some(ConfigTarget::Files {
+          paths: vec![path_str.clone()],
+        })
+      }
+      ConfigTarget::Dir { recursive, .. } => {
+        // Dir 类型：传递 recursive 标志，path 使用 "." 表示当前路径
+        Some(ConfigTarget::Dir {
+          path: ".".to_string(),
+          recursive: *recursive,
+        })
+      }
+      ConfigTarget::Archive { path } => {
+        // Archive 类型：传递相对路径
+        Some(ConfigTarget::Archive { path: path.clone() })
+      }
     };
-    let estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, scope_hint).await {
+    let estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, target_hint).await {
       Ok(s) => s,
       Err(e) => {
         warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
@@ -1194,7 +1207,7 @@ mod tests {
   }
 
   #[test]
-  fn test_resolve_scope_paths() {
+  fn test_resolve_target_paths() {
     let config = AgentConfig {
       agent_id: "test-agent".to_string(),
       agent_name: "Test Agent".to_string(),
@@ -1206,33 +1219,36 @@ mod tests {
       worker_threads: Some(4),
     };
 
-    // 测试 SearchScope::All
-    let scope = SearchScope::All;
-    let result = config.resolve_scope_paths(&scope);
+    // 测试 Target::Dir (替代 All)
+    let target = ConfigTarget::Dir {
+      path: ".".to_string(),
+      recursive: true,
+    };
+    let result = config.resolve_target_paths(&target);
     assert!(result.is_ok());
     assert_eq!(result.unwrap().len(), 1);
 
-    // 测试 SearchScope::Directory
-    let scope = SearchScope::Directory {
-      path: Some("nonexistent".to_string()),
+    // 测试 Target::Dir
+    let target = ConfigTarget::Dir {
+      path: "nonexistent".to_string(),
       recursive: true,
     };
-    let result = config.resolve_scope_paths(&scope);
+    let result = config.resolve_target_paths(&target);
     assert!(result.is_err());
 
-    // 测试 SearchScope::Files
-    let scope = SearchScope::Files {
+    // 测试 Target::Files
+    let target = ConfigTarget::Files {
       paths: vec!["nonexistent.txt".to_string()],
     };
-    let result = config.resolve_scope_paths(&scope);
+    let result = config.resolve_target_paths(&target);
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
 
-    // 测试 SearchScope::TarGz
-    let scope = SearchScope::TarGz {
+    // 测试 Target::Archive
+    let target = ConfigTarget::Archive {
       path: "nonexistent.tar.gz".to_string(),
     };
-    let result = config.resolve_scope_paths(&scope);
+    let result = config.resolve_target_paths(&target);
     assert!(result.is_err());
   }
 

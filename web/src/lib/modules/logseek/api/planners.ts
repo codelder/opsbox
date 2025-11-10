@@ -26,8 +26,7 @@ export type Endpoint =
 export type Target =
   | { type: 'dir'; path: string; recursive?: boolean }
   | { type: 'files'; paths: string[] }
-  | { type: 'archive'; path: string }
-  | { type: 'all' };
+  | { type: 'archive'; path: string };
 
 export interface Source {
   endpoint: Endpoint;

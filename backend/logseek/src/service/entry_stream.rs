@@ -119,44 +119,6 @@ impl EntryStream for FsEntryStream {
   }
 }
 
-/// 单文件条目流（只产出一次）
-pub struct SingleFileEntryStream {
-  path: PathBuf,
-  yielded: bool,
-}
-
-impl SingleFileEntryStream {
-  /// 创建单文件条目流
-  pub fn new(path: PathBuf) -> Self {
-    Self { path, yielded: false }
-  }
-}
-
-#[async_trait]
-impl EntryStream for SingleFileEntryStream {
-  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    if self.yielded {
-      return Ok(None);
-    }
-    // 打开单个文件并产生一次条目
-    let file = tokio::fs::File::open(&self.path).await?;
-    let reader = BufReader::new(file);
-    let name = self
-      .path
-      .file_name()
-      .and_then(|s| s.to_str())
-      .map(|s| s.to_string())
-      .unwrap_or_else(|| self.path.to_string_lossy().to_string());
-    let meta = EntryMeta {
-      path: name,
-      size: None,
-      is_compressed: false,
-    };
-    self.yielded = true;
-    Ok(Some((meta, Box::new(reader))))
-  }
-}
-
 /// tar.gz 条目流（基于 AsyncRead 输入）
 pub struct TarGzEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<R>>>>,
@@ -335,48 +297,6 @@ impl EntryStreamFactory {
     Self { db_pool }
   }
 
-  /// 构建本地来源条目流（单文件/目录/tar.gz，支持 scope=TarGz 相对路径）
-  pub async fn build_local_entry_stream(
-    &self,
-    root_or_file: &str,
-    scope: Option<crate::agent::SearchScope>,
-  ) -> Result<Box<dyn EntryStream>, String> {
-    use crate::agent::SearchScope;
-    if let Some(SearchScope::TarGz { path: rel }) = scope {
-      let targz_path = PathBuf::from(root_or_file).join(rel);
-      let file = tokio::fs::File::open(&targz_path)
-        .await
-        .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-      let stream = TarGzEntryStream::new(file)
-        .await
-        .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-      return Ok(Box::new(stream));
-    }
-
-    let lower = root_or_file.to_lowercase();
-    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-      let file = tokio::fs::File::open(root_or_file)
-        .await
-        .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", root_or_file, e))?;
-      let stream = TarGzEntryStream::new(file)
-        .await
-        .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", root_or_file, e))?;
-      return Ok(Box::new(stream));
-    }
-
-    match tokio::fs::metadata(root_or_file).await {
-      Ok(meta) if meta.is_file() => Ok(Box::new(SingleFileEntryStream::new(PathBuf::from(root_or_file)))),
-      Ok(meta) if meta.is_dir() => {
-        let stream = FsEntryStream::new(PathBuf::from(root_or_file), true)
-          .await
-          .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
-        Ok(Box::new(stream))
-      }
-      Ok(_) => Err(format!("不支持的文件类型: {}", root_or_file)),
-      Err(e) => Err(format!("无法访问路径 {}: {}", root_or_file, e)),
-    }
-  }
-
   /// 从来源配置创建条目流（不含 Agent）
   ///
   /// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
@@ -453,9 +373,6 @@ impl EntryStreamFactory {
         };
         create_archive_stream_from_reader(reader, Some(path)).await
       }
-      (Endpoint::Local { root }, Target::All) => {
-        crate::service::entry_stream::build_local_entry_stream(root, None).await
-      }
       (Endpoint::S3 { .. }, _) => Err("S3 仅支持 archive 目标".to_string()),
       (Endpoint::Agent { .. }, _) => Err("Agent 来源请通过远程 SearchService 处理".to_string()),
     }
@@ -498,24 +415,48 @@ impl EntryStream for MultiFileEntryStream {
   }
 }
 
-/// 构建本地来源条目流（单文件/目录/归档，支持 scope=TarGz 相对路径）
+/// 构建本地来源条目流（单文件/目录/归档，支持 target 提示）
+///
+/// 根据 target 类型优先使用明确处理，否则自动检测路径类型
 pub async fn build_local_entry_stream(
   root_or_file: &str,
-  scope: Option<crate::agent::SearchScope>,
+  target: Option<crate::domain::config::Target>,
 ) -> Result<Box<dyn EntryStream>, String> {
-  use crate::agent::SearchScope;
-  if let Some(SearchScope::TarGz { path: rel }) = scope {
-    let targz_path = PathBuf::from(root_or_file).join(rel);
-    let file = tokio::fs::File::open(&targz_path)
-      .await
-      .map_err(|e| format!("无法打开 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-    let stream = TarGzEntryStream::new(file)
-      .await
-      .map_err(|e| format!("无法读取 tar.gz 文件 {}: {}", targz_path.display(), e))?;
-    return Ok(Box::new(stream));
+  use crate::domain::config::Target;
+
+  // 根据 target 类型进行精确处理（与 Server 端对齐）
+  if let Some(target) = target {
+    match target {
+      Target::Files { paths } => {
+        // Files 类型：直接使用 MultiFileEntryStream，与 Server 端一致
+        return Ok(Box::new(MultiFileEntryStream::new(paths)));
+      }
+      Target::Dir { path, recursive } => {
+        // Dir 类型：直接使用 FsEntryStream，与 Server 端一致
+        // path 为 "." 时使用 root_or_file 作为根目录
+        let dir_path = if path == "." {
+          PathBuf::from(root_or_file)
+        } else {
+          PathBuf::from(root_or_file).join(path)
+        };
+        let stream = FsEntryStream::new(dir_path, recursive)
+          .await
+          .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
+        return Ok(Box::new(stream));
+      }
+      Target::Archive { path } => {
+        // Archive 类型：处理归档文件
+        let archive_path = PathBuf::from(root_or_file).join(path);
+        let file = tokio::fs::File::open(&archive_path)
+          .await
+          .map_err(|e| format!("无法打开归档文件 {}: {}", archive_path.display(), e))?;
+        return create_archive_stream_from_reader(file, Some(&archive_path.to_string_lossy())).await;
+      }
+    }
   }
 
-  // 自动基于魔数识别归档类型
+  // 自动检测路径类型（当 target 为 None 时）
+  // 先检查是否为归档文件（基于扩展名）
   let lower = root_or_file.to_lowercase();
   if lower.ends_with(".tar")
     || lower.ends_with(".tar.gz")
@@ -529,16 +470,12 @@ pub async fn build_local_entry_stream(
     return create_archive_stream_from_reader(file, Some(root_or_file)).await;
   }
 
+  // 通过 metadata 检测文件或目录
   match tokio::fs::metadata(root_or_file).await {
-    Ok(meta) if meta.is_file() => Ok(Box::new(SingleFileEntryStream::new(PathBuf::from(root_or_file)))),
+    Ok(meta) if meta.is_file() => Ok(Box::new(MultiFileEntryStream::new(vec![root_or_file.to_string()]))),
     Ok(meta) if meta.is_dir() => {
-      // 若 scope 提供 Directory，读取其 recursive；否则默认递归
-      let recursive = if let Some(SearchScope::Directory { recursive, .. }) = scope {
-        recursive
-      } else {
-        true
-      };
-      let stream = FsEntryStream::new(PathBuf::from(root_or_file), recursive)
+      // 默认递归（与 Server 端 Target::Dir 的默认行为一致）
+      let stream = FsEntryStream::new(PathBuf::from(root_or_file), true)
         .await
         .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
       Ok(Box::new(stream))

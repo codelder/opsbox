@@ -50,7 +50,6 @@ SOURCES = [{
   - 目录：`{ type: 'dir', path: '.', recursive: True }`
   - 文件清单：`{ type: 'files', paths: ['a.log','b.log'] }`
   - 归档（tar/tar.gz/gz）：`{ type: 'archive', path: 'backup_2025-01-15.tar.gz' }`（S3 场景下 `path` 为对象 Key，相对 `bucket`，不要写 `s3://...`；zip 暂不支持）
-  - 全量：`{ type: 'all' }`
 - 其它字段（可选）
   - `filter_glob?: string` 额外路径过滤（与查询中的 path: 规则做 AND）
     - **适用于所有源类型**：Local、Agent、S3 都支持
@@ -259,13 +258,6 @@ SOURCES.append({
     'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'subpath': '.' },
     'target':   { 'type': 'files', 'paths': ['logs/access.log', 'logs/error.log'] },
 })
-
-# 全量（谨慎使用）
-SOURCES.append({
-    'endpoint': { 'kind': 'agent', 'agent_id': 'server-01', 'subpath': '.' },
-    'target':   { 'type': 'all' },
-    'filter_glob': '**/*.log',
-})
 ```
 
 ## 组合示例：混合 Local/S3 + Agent
@@ -336,7 +328,7 @@ CLEANED_QUERY = CLEANED_QUERY + ' path:**/*.log'
 - 未导出 `SOURCES`：后端会提示“未导出 SOURCES”。
 - 字段拼写错误或大小写不一致：
   - Endpoint 用 `kind`，取值 `'local'|'agent'|'s3'`
-  - Target 用 `type`，取值 `'dir'|'files'|'archive'|'all'`
+  - Target 用 `type`，取值 `'dir'|'files'|'archive'`
 - 路径语义：
   - 所有 Target 路径（含 files/archive）均相对 `endpoint.root`（Local）或 `endpoint.subpath`（Agent）。
   - Agent 的 `subpath='.'` 表示不限制，使用所有 `search_roots` 下的内容。

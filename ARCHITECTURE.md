@@ -1,13 +1,13 @@
-# LogSeek 项目架构复盘分析（更新版）
+# LogSeek 项目架构复盘分析（最新版）
 
-> **重要更新**: Agent 和 Local 功能即将使用，原评估需要重新审视
+> **重要更新**: Agent 和 Local 功能已实现并使用 ✅
 
 ## 📊 项目规模统计
 
 ### 代码量
-- **总代码行数**: ~9,558 行 Rust 代码
-- **存储抽象层**: ~1,941 行 (20.3%)
-- **核心路由**: ~974 行（单文件）
+- **总代码行数**: ~10,000+ 行 Rust 代码
+- **存储抽象层**: ~2,000+ 行 (20%)
+- **核心路由**: 已拆分为 9 个模块文件（search.rs, view.rs, profiles.rs, settings.rs, nl2q.rs, llm.rs, planners.rs, helpers.rs, mod.rs）
 - **UI 前端**: 约 3000+ 行 TypeScript/Svelte
 
 ---
@@ -18,16 +18,22 @@
 
 #### 当前设计
 ```rust
-// 三层抽象
-pub trait DataSource      // Pull 模式（Server 端搜索）
-pub trait SearchService   // Push 模式（远程搜索）
-pub enum StorageSource    // 统一封装
+// 统一抽象：EntryStream trait
+pub trait EntryStream      // 统一条目流抽象（Local/S3/TarGz）
+pub trait SearchService   // Push 模式（远程 Agent 搜索）
 
-// 支持的存储类型
-- LocalFileSystem  ← 即将使用 ✅
-- S3Storage        ← 已使用 ✅
-- TarGzReader      ← 已使用 ✅
-- AgentClient      ← 即将使用 ✅
+// EntryStream 实现类型
+- FsEntryStream           ← 文件系统目录流（DFS遍历，支持递归）✅
+- MultiFileEntryStream    ← 文件列表流（支持单文件或多文件）✅
+- TarGzEntryStream        ← tar.gz 归档流 ✅
+- TarEntryStream          ← tar 归档流（未压缩）✅
+- GzipEntryStream         ← 单个 gzip 文件流 ✅
+
+// 存储源支持
+- Local (Server): 通过 FsEntryStream/MultiFileEntryStream/归档流 ✅
+- Local (Agent): 通过 build_local_entry_stream 自动检测，单文件使用 MultiFileEntryStream ✅
+- S3: 通过 S3ReaderProvider 提供读取器，创建归档流（Tar/TarGz/Gzip）✅
+- Agent: 通过 AgentClient（SearchService trait，非 EntryStream）✅
 ```
 
 #### 重新评估 ✅
@@ -41,10 +47,10 @@ pub enum StorageSource    // 统一封装
 4. **类型安全**: 编译时检查，避免运行时错误
 
 **实际价值**:
-- **S3**: ✅ 已实现并使用
-- **Local**: ⏳ 即将使用 - 本地日志文件快速搜索
-- **Agent**: ⏳ 即将使用 - 远程服务器日志搜索
-- **TarGz**: ✅ 已实现并使用
+- **Local**: ✅ 已实现并使用 - 本地日志文件快速搜索（支持目录、单文件、多文件、归档）
+- **S3**: ✅ 已实现并使用 - 对象存储归档文件搜索（支持 tar/tar.gz/gz）
+- **Agent**: ✅ 已实现并使用 - 远程服务器日志搜索（通过 SearchService）
+- **归档支持**: ✅ tar/tar.gz/gz 自动识别和解压
 
 **结论**: **这是优秀的架构设计，不是过度设计** ✅
 
@@ -52,13 +58,13 @@ pub enum StorageSource    // 统一封装
 
 ### 2. FileUrl 设计 ✅ **前瞻性强，设计优秀**
 
-#### 当前设计（401 行）
+#### 当前设计
 ```rust
 pub enum FileUrl {
-    Local { path: String },                  ← 即将使用 ✅
+    Local { path: String },                  ← 已使用 ✅
     S3 { profile, bucket, key },             ← 已使用 ✅
     TarEntry { compression, base, entry },   ← 已使用 ✅
-    Agent { agent_id, path },                ← 即将使用 ✅
+    Agent { agent_id, path },                ← 已使用 ✅
 }
 ```
 
@@ -106,38 +112,52 @@ view_file("tar.gz+s3://prod:logs/archive.tar.gz:app.log", 1, 100)
 
 ---
 
-### 4. 来源配置与工厂（调整后）
+### 4. 来源配置与工厂（当前实现）
 
-- 现状：StorageFactory 与 storage 模块已移除，仅保留来源配置枚举 SourceConfig（位于 domain/config.rs），用于 routes/search.rs 与 EntryStreamFactory.
-- Local/S3：通过 EntryStreamFactory 直接构造 FsEntryStream/TarGzEntryStream；S3 仅支持指定 key 的 tar.gz 对象展开。
-- Agent：在路由层直接构造 agent::AgentClient 并调用其 SearchService，实现远程搜索。
+- 现状：使用统一的 `Source` 模型（Endpoint + Target + Filter），位于 `domain/config.rs`
+- EntryStreamFactory：统一创建 Local/S3/TarGz 的 EntryStream
+  - Local：通过 `build_local_entry_stream()` 创建 `FsEntryStream`
+  - S3：支持 tar.gz 对象展开为 `TarGzEntryStream`
+  - TarGz：自动探测压缩格式并创建对应流
+- Agent：在 `routes/search.rs` 中直接构造 `AgentClient` 并调用其 `SearchService`，实现远程搜索
+- 规划器：通过 Starlark 脚本动态生成 Source 配置，支持 Local/Agent/S3 混合数据源
+
+---
+
+### 5. 前端静态资源服务（当前实现）
+
+- **静态文件路径**：`backend/opsbox-server/static/`
+- **构建输出**：前端构建产物直接输出到 `opsbox-server/static/`（通过 `web/svelte.config.js` 配置）
+- **服务方式**：使用 `rust-embed` 在编译期将静态文件打包进二进制
+- **SPA 支持**：所有未匹配路径回退到 `index.html`，支持前端路由
+- **CORS**：已移除 CORS 支持（开发模式使用 Vite 代理，生产模式同源服务，无需 CORS）
 
 ---
 
 ## 🎯 真正的优化点
 
-### 优化建议 1: routes.rs 拆分 ⚠️ **建议优化**
+### 优化建议 1: routes.rs 拆分 ✅ **已完成**
 
-**问题**: 974 行单文件，职责混杂
+**原问题**: 974 行单文件，职责混杂
 
-**建议**: 按功能模块拆分
+**已完成**: 按功能模块拆分
 ```
 routes/
-├── mod.rs           # 路由注册
-├── search.rs        # 搜索相关（~400 行）
-│   ├── stream_search()
-│   ├── get_storage_source_configs()
-│   └── search_data_source_with_concurrency()
-├── profiles.rs      # Profile 管理（~150 行）
-├── settings.rs      # 设置相关（~100 行）
-├── view.rs          # 文件查看（~100 行）
-└── nl2q.rs          # 自然语言转查询（~50 行）
+├── mod.rs           # 路由注册 ✅
+├── search.rs        # 搜索相关 ✅
+├── profiles.rs      # Profile 管理 ✅
+├── settings.rs      # 设置相关 ✅
+├── view.rs          # 文件查看 ✅
+├── nl2q.rs          # 自然语言转查询 ✅
+├── llm.rs           # LLM 后端管理 ✅
+├── planners.rs      # Planner 脚本管理 ✅
+└── helpers.rs       # 共享辅助函数 ✅
 ```
 
 **收益**:
-- 更好的代码组织
-- 更容易找到相关代码
-- 降低单文件复杂度
+- ✅ 更好的代码组织
+- ✅ 更容易找到相关代码
+- ✅ 降低单文件复杂度
 
 ---
 
@@ -289,52 +309,51 @@ let io_concurrency = load_setting(&pool, "search.s3.max_concurrency")
 | 条目流(EntryStream) | ⭐⭐⭐⭐⭐ | 统一目录/tar 处理，流式高效 |
 | FileUrl | ⭐⭐⭐⭐⭐ | 统一标识符系统，设计精良 |
 | 路由并发 | ⭐⭐⭐⭐ | 简洁可观测的任务编排 |
-| Agent | ⭐⭐⭐⭐ | 远程搜索，模块清晰 |
+| Agent | ⭐⭐⭐⭐⭐ | 远程搜索，已实现并使用 |
+| Local | ⭐⭐⭐⭐⭐ | 本地文件系统搜索，已实现并使用 |
 | Profile管理 | ⭐⭐⭐⭐⭐ | 解决实际问题 |
-| routes.rs | ⭐⭐⭐ | 需要拆分模块 |
+| 路由模块化 | ⭐⭐⭐⭐⭐ | 已拆分为 9 个模块，组织清晰 |
 
 ### 代码组织评分
 
 | 方面 | 评分 | 说明 |
 |-----|------|------|
-| 模块化 | ⭐⭐⭐⭐ | 清晰的分层 |
+| 模块化 | ⭐⭐⭐⭐⭐ | 清晰的分层，路由已拆分 |
 | 可扩展性 | ⭐⭐⭐⭐⭐ | 极易添加新存储源 |
 | 可测试性 | ⭐⭐⭐⭐ | trait 抽象便于测试 |
-| 可维护性 | ⭐⭐⭐⭐ | routes.rs 较大需要拆分 |
+| 可维护性 | ⭐⭐⭐⭐⭐ | 路由已拆分，代码组织清晰 |
 | 文档完整性 | ⭐⭐⭐⭐⭐ | 详细的设计文档 |
 
 ---
 
 ## 🎯 优先级调整后的行动计划
 
-### 第一优先级：完善即将使用的功能 🔥
+### 第一优先级：已实现的功能 ✅
 
-#### 1.1 完善本地目录条目流（FsEntryStream）
+#### 1.1 本地目录条目流（FsEntryStream）✅ **已完成**
 ```rust
-// 目标：在 FsEntryStream 上补齐这些能力
-// - 文件名正则过滤（pattern）
-// - 最大递归深度（max_depth）
-// - 每目录最大文件数（per-dir cap）
-// - 可选跟随符号链接 + inode 循环检测
+// 已实现：FsEntryStream 支持递归目录遍历
+// - ✅ 递归目录遍历（recursive）
+// - ✅ 通过 EntryStreamFactory 统一创建
+// - ✅ 支持 Local endpoint 配置
 ```
 
-**TODO**:
-- [ ] 添加文件名模式过滤
-- [ ] 优化大目录的遍历性能
-- [ ] 添加软链接策略与循环检测
+**状态**: ✅ 已实现并在生产使用
 
 ---
 
-#### 1.2 Agent 客户端
+#### 1.2 Agent 客户端 ✅ **已完成**
 ```rust
-// 现状：agent/mod.rs 已实现 AgentClient + SearchService，支持健康检查、NDJSON 流式结果。
-// 路由：在 /search 中直接构造 AgentClient 并消费结果流。
+// 已实现：agent/mod.rs 中的 AgentClient + SearchService
+// - ✅ Agent HTTP API 规范（NDJSON 流式响应）
+// - ✅ Agent Server 端（Rust 实现，独立进程）
+// - ✅ Agent Client 实现（健康检查、搜索调用）
+// - ✅ 在 routes/search.rs 中集成使用
 ```
 
-**TODO**:
-- [ ] 设计 Agent HTTP API 规范
-- [ ] 实现 Agent Server 端（Rust/Go/Python）
-- [ ] 实现 Agent Client（已有框架）
+**状态**: ✅ 已实现并在生产使用
+
+**可选增强**:
 - [ ] 添加认证和授权
 - [ ] 实现连接池和负载均衡
 
@@ -386,17 +405,19 @@ export function getFileSourceIcon(url: string): string {
 
 ### 第二优先级：代码组织优化 ⚙️
 
-#### 2.1 拆分 routes.rs
-**拆分计划**:
+#### 2.1 拆分 routes.rs ✅ **已完成**
+**已完成拆分**:
 ```
 routes/
-├── mod.rs              # 统一注册所有路由
-├── search.rs           # POST /search.ndjson
-├── view.rs             # GET /view.cache.json
-├── profiles.rs         # GET/POST/DELETE /profiles
-├── settings.rs         # GET/POST /settings/s3
-├── nl2q.rs             # POST /nl2q
-└── helpers.rs          # 共享辅助函数
+├── mod.rs              # 统一注册所有路由 ✅
+├── search.rs           # POST /search.ndjson ✅
+├── view.rs             # GET /view.cache.json ✅
+├── profiles.rs         # GET/POST/DELETE /profiles ✅
+├── settings.rs         # GET/POST /settings/s3 ✅
+├── nl2q.rs             # POST /nl2q ✅
+├── llm.rs              # LLM 后端管理 ✅
+├── planners.rs         # Planner 脚本管理 ✅
+└── helpers.rs          # 共享辅助函数 ✅
 ```
 
 ---
@@ -524,11 +545,12 @@ metrics.files_processed.inc_by(stats.processed as u64);
 
 ### 最终建议
 
-**保持当前架构** ✅，只做小幅优化：
+**当前架构状态** ✅：
 
-1. **必做**：拆分 routes.rs（改善可维护性）
-2. **建议**：搜索逻辑移到 service 层（改善复用性）
-3. **可选**：并发参数配置化（改善灵活性）
+1. **已完成**：拆分 routes.rs（改善可维护性）✅
+2. **建议**：搜索逻辑移到 service 层（改善复用性）- 可选优化
+3. **可选**：并发参数配置化（改善灵活性）- 当前通过环境变量控制
+4. **可选**：添加结构化日志和性能指标（改善可观测性）
 
 ### 记住
 
@@ -545,20 +567,24 @@ metrics.files_processed.inc_by(stats.processed as u64);
 ## 📝 附录：完整的实现检查清单
 
 ### Agent 功能实现清单
-- [ ] Agent Server API 规范设计
-- [ ] Agent Server 实现（独立进程）
-- [ ] Agent Client 健康检查实现
-- [ ] Agent Client 搜索调用实现
-- [ ] Agent 认证机制
-- [ ] Agent 管理界面（注册、状态监控）
-- [ ] Agent 故障转移策略
+- [x] Agent Server API 规范设计 ✅
+- [x] Agent Server 实现（独立进程）✅
+- [x] Agent Client 健康检查实现 ✅
+- [x] Agent Client 搜索调用实现 ✅
+- [x] 在搜索路由中集成使用 ✅
+- [ ] Agent 认证机制（可选）
+- [x] Agent 管理界面（注册、状态监控）✅ - 通过 agent-manager 模块
+- [ ] Agent 故障转移策略（可选）
 
 ### Local 功能实现清单
-- [ ] 文件名模式过滤
-- [ ] 大目录优化
-- [ ] 软链接处理
-- [ ] 权限检查
-- [ ] Local 源配置界面
+- [x] FsEntryStream 实现 ✅
+- [x] 递归目录遍历 ✅
+- [x] 通过 EntryStreamFactory 统一创建 ✅
+- [x] 在搜索路由中集成使用 ✅
+- [ ] 文件名模式过滤（可选增强）
+- [ ] 大目录优化（可选增强）
+- [ ] 软链接处理（可选增强）
+- [ ] Local 源配置界面（可选）
 
 ### 前端增强清单
 - [ ] FileUrl 完整解析

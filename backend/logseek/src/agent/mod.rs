@@ -12,26 +12,15 @@ use thiserror::Error;
 
 // 对外暴露的公共类型与 trait
 
-/// 搜索范围
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SearchScope {
-  /// 搜索指定目录
-  Directory { path: Option<String>, recursive: bool },
-  /// 搜索指定文件列表
-  Files { paths: Vec<String> },
-  /// 搜索 tar.gz 文件
-  TarGz { path: String },
-  /// 搜索所有（由服务自己决定）
-  All,
-}
+pub use crate::domain::config::Target;
 
 /// 搜索选项
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
   /// 路径过滤
   pub path_filter: Option<String>,
-  /// 搜索范围
-  pub scope: SearchScope,
+  /// 搜索目标
+  pub target: Target,
   /// 超时时间（秒）
   pub timeout_secs: Option<u64>,
   /// 最大结果数
@@ -42,7 +31,10 @@ impl Default for SearchOptions {
   fn default() -> Self {
     Self {
       path_filter: None,
-      scope: SearchScope::All,
+      target: Target::Dir {
+        path: ".".to_string(),
+        recursive: true,
+      },
       timeout_secs: Some(300),
       max_results: None,
     }
@@ -111,7 +103,7 @@ pub struct AgentSearchRequest {
   pub query: String,
   pub context_lines: usize,
   pub path_filter: Option<String>,
-  pub scope: SearchScope,
+  pub target: Target,
 }
 
 /// Agent 客户端（实现 SearchService）
@@ -237,7 +229,7 @@ impl SearchService for AgentClient {
       query: query.to_string(),
       context_lines,
       path_filter: options.path_filter,
-      scope: options.scope,
+      target: options.target,
     };
 
     // 中文调试：打印请求明细（仅在 debug 级别或显式开启“线级”调试时）
@@ -248,7 +240,7 @@ impl SearchService for AgentClient {
       }
     } else {
       debug!(
-        "Agent 搜索请求: endpoint={}, task_id={}, ctx={}, has_path_filter={}, scope=...",
+        "Agent 搜索请求: endpoint={}, task_id={}, ctx={}, has_path_filter={}, target=...",
         self.endpoint,
         request.task_id,
         request.context_lines,

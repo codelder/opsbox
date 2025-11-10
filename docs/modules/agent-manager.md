@@ -1,5 +1,8 @@
 # Agent Manager - OpsBox 独立模块
 
+**文档版本**: v1.0  
+**最后更新**: 2025-11-10
+
 ## ✅ 架构设计
 
 Agent Manager 现在是一个**独立的 OpsBox 模块**，而不是 LogSeek 的子模块。
@@ -276,18 +279,19 @@ cargo test --release
 - ✅ Agent Manager 模块已创建
 - ✅ 已注册到 OpsBox
 - ✅ 编译成功
-- ⚠️ Agent 客户端路径需要更新
+- ✅ Agent 客户端路径已正确配置
+- ✅ Agent 注册和心跳功能已实现
 - ⏳ 单元测试待运行
 - ⏳ 集成测试待运行
 
 ---
 
-## 📝 下一步
+## 📝 使用说明
 
-### 1. 更新 Agent 客户端路径
-修改 `backend/agent/src/main.rs`:
-- 注册路径: `/api/v1/agents/register`
-- 心跳路径: `/api/v1/agents/{id}/heartbeat`
+### 1. Agent 注册和心跳
+Agent 在启动时会自动向 Server 注册，并定期发送心跳：
+- 注册路径: `/api/v1/agents/register`（POST）
+- 心跳路径: `/api/v1/agents/{id}/heartbeat`（POST）
 
 ### 2. 测试 Agent 注册
 ```bash
@@ -309,7 +313,3 @@ curl http://localhost:4000/api/v1/agents
 curl http://localhost:4000/api/v1/agents/agent-hostname
 ```
 
----
-
-**创建时间**: 2025-10-08  
-**状态**: ✅ 模块创建完成，等待测试
