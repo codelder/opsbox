@@ -39,11 +39,13 @@ clap = { version = "4.0", features = ["derive"] }
 # 路径匹配
 globset = "0.4"
 
-# 守护进程支持
+# 守护进程支持（仅 Unix）
+[target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
 nix = { version = "0.28", features = ["signal", "process"] }
 
-# 系统信息
+# 系统信息（仅非 Windows 平台）
+[target.'cfg(not(windows))'.dependencies]
 hostname = "0.4"
 num_cpus = "1.0"
 
@@ -53,7 +55,7 @@ async-stream = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 # Windows 服务支持
-windows-service = "0.5"
+windows-service = "0.8"
 
 [package.metadata.generate-rpm]
 assets = [

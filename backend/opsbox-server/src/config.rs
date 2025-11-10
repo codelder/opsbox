@@ -143,6 +143,20 @@ impl AppConfig {
     }
   }
 
+  /// 获取用户主目录（跨平台）
+  fn get_user_home() -> String {
+    #[cfg(windows)]
+    {
+      std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| ".".into())
+    }
+    #[cfg(not(windows))]
+    {
+      std::env::var("HOME").unwrap_or_else(|_| ".".into())
+    }
+  }
+
   /// 获取数据库 URL（优先级：CLI > 环境变量 > 默认值）
   pub fn get_database_url(&self) -> String {
     self
@@ -151,7 +165,7 @@ impl AppConfig {
       .or_else(|| std::env::var("OPSBOX_DATABASE_URL").ok())
       .or_else(|| std::env::var("DATABASE_URL").ok())
       .unwrap_or_else(|| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+        let home = Self::get_user_home();
         let dir = std::path::PathBuf::from(home).join(".opsbox");
         let _ = std::fs::create_dir_all(&dir);
         dir.join("opsbox.db").to_string_lossy().to_string()

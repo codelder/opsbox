@@ -53,20 +53,28 @@ struct Args {
 
   /// Agent ID
   #[arg(global = true, long, default_value_t = {
+    #[cfg(not(windows))]
     let hostname = hostname::get()
       .unwrap_or_else(|_| std::ffi::OsString::from("unknown"))
       .to_string_lossy()
       .to_string();
+    #[cfg(windows)]
+    let hostname = std::env::var("COMPUTERNAME")
+      .unwrap_or_else(|_| "unknown".to_string());
     format!("agent-{}", hostname)
   })]
   agent_id: String,
 
   /// Agent 名称
   #[arg(global = true, long, default_value_t = {
+    #[cfg(not(windows))]
     let hostname = hostname::get()
       .unwrap_or_else(|_| std::ffi::OsString::from("unknown"))
       .to_string_lossy()
       .to_string();
+    #[cfg(windows)]
+    let hostname = std::env::var("COMPUTERNAME")
+      .unwrap_or_else(|_| "unknown".to_string());
     format!("Agent@{}", hostname)
   })]
   agent_name: String,
@@ -77,7 +85,13 @@ struct Args {
 
   /// 搜索根目录（逗号分隔）
   #[arg(global = true, long, default_value_t = {
-    std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string())
+    #[cfg(windows)]
+    let home = std::env::var("USERPROFILE")
+      .or_else(|_| std::env::var("HOME"))
+      .unwrap_or_else(|_| "C:\\Users\\User".to_string());
+    #[cfg(not(windows))]
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
+    home
   })]
   search_roots: String,
 
@@ -321,7 +335,10 @@ impl AgentConfig {
     self
       .worker_threads
       .unwrap_or_else(|| {
+        #[cfg(not(windows))]
         let cpu_count = num_cpus::get();
+        #[cfg(windows)]
+        let cpu_count = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         match cpu_count {
           1 => 1,
           2..=4 => 2,
@@ -333,14 +350,19 @@ impl AgentConfig {
   }
 
   fn to_agent_info(&self) -> AgentInfo {
+    #[cfg(not(windows))]
+    let hostname = hostname::get()
+      .unwrap_or_else(|_| std::ffi::OsString::from("unknown"))
+      .to_string_lossy()
+      .to_string();
+    #[cfg(windows)]
+    let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string());
+
     AgentInfo {
       id: self.agent_id.clone(),
       name: self.agent_name.clone(),
       version: env!("CARGO_PKG_VERSION").to_string(),
-      hostname: hostname::get()
-        .unwrap_or_else(|_| std::ffi::OsString::from("unknown"))
-        .to_string_lossy()
-        .to_string(),
+      hostname,
       tags: vec![], // Agent 不管理标签，完全由 Agent Manager 负责
       search_roots: self.search_roots.clone(),
       last_heartbeat: chrono::Utc::now().timestamp(),
@@ -973,7 +995,9 @@ async fn heartbeat_loop(config: Arc<AgentConfig>, shutdown: Arc<Notify>) {
 // 守护进程相关功能
 // ============================================================================
 
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::io;
 
 #[cfg(unix)]
@@ -981,23 +1005,32 @@ use nix::sys::signal::{self, Signal};
 #[cfg(unix)]
 use nix::unistd::Pid;
 
+/// 获取用户主目录（跨平台）
+#[cfg(unix)]
+fn get_user_home() -> String {
+  std::env::var("HOME").unwrap_or_else(|_| ".".into())
+}
+
 /// 默认 PID 文件路径
+#[cfg(unix)]
 fn default_pid_file() -> PathBuf {
-  let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+  let home = get_user_home();
   let dir = PathBuf::from(home).join(".opsbox-agent");
   let _ = fs::create_dir_all(&dir);
   dir.join("agent.pid")
 }
 
 /// 默认日志文件路径
+#[cfg(unix)]
 fn default_log_file() -> PathBuf {
-  let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+  let home = get_user_home();
   let dir = PathBuf::from(home).join(".opsbox-agent");
   let _ = fs::create_dir_all(&dir);
   dir.join("agent.log")
 }
 
 /// 确保父目录存在
+#[cfg(unix)]
 fn ensure_parent_dir(path: &std::path::Path) {
   if let Some(parent) = path.parent() {
     let _ = fs::create_dir_all(parent);
@@ -1005,11 +1038,12 @@ fn ensure_parent_dir(path: &std::path::Path) {
 }
 
 /// 解析 PID 文件路径（处理 ~ 前缀）
+#[cfg(unix)]
 fn resolve_pid_path(opt: &Option<PathBuf>) -> PathBuf {
   if let Some(p) = opt {
     let s = p.to_string_lossy();
     if let Some(stripped) = s.strip_prefix("~/") {
-      let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+      let home = get_user_home();
       return PathBuf::from(home).join(stripped);
     }
     p.clone()
@@ -1126,11 +1160,13 @@ fn handle_stop_command(pid_file: &Option<PathBuf>, force: bool) {
   }
   #[cfg(all(not(unix), not(windows)))]
   {
+    let _ = (pid_file, force); // 避免未使用变量警告
     eprintln!("停止命令仅在 Unix 系统上支持");
     std::process::exit(1);
   }
   #[cfg(windows)]
   {
+    let _ = (pid_file, force); // 避免未使用变量警告
     eprintln!("在 Windows 上，请使用 --stop-service 或 sc stop 命令停止服务");
     std::process::exit(1);
   }
@@ -1180,7 +1216,7 @@ fn handle_daemon_mode(args: &Args) {
 
 /// Windows 服务相关处理函数
 #[cfg(windows)]
-fn handle_install_service(args: &Args) {
+fn handle_install_service(_args: &Args) {
   use daemon_windows::install_service;
   use std::env;
 
@@ -1245,8 +1281,6 @@ fn handle_stop_service(_args: &Args) {
 #[cfg(windows)]
 fn run_as_windows_service(args: Args) -> Result<(), Box<dyn std::error::Error>> {
   use daemon_windows::run_as_service;
-  use std::sync::Arc;
-  use tokio::sync::Notify;
 
   let service_name = "OpsBoxAgent";
 

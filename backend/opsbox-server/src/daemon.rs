@@ -1,7 +1,10 @@
 //! Unix 守护进程相关功能
 
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
@@ -9,23 +12,32 @@ use nix::sys::signal::{self, Signal};
 #[cfg(unix)]
 use nix::unistd::Pid;
 
+/// 获取用户主目录（跨平台）
+#[cfg(unix)]
+fn get_user_home() -> String {
+  std::env::var("HOME").unwrap_or_else(|_| ".".into())
+}
+
 /// 默认 PID 文件路径
+#[cfg(unix)]
 pub fn default_pid_file() -> PathBuf {
-  let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+  let home = get_user_home();
   let dir = PathBuf::from(home).join(".opsbox");
   let _ = fs::create_dir_all(&dir);
   dir.join("opsbox.pid")
 }
 
 /// 默认日志文件路径
+#[cfg(unix)]
 pub fn default_log_file() -> PathBuf {
-  let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+  let home = get_user_home();
   let dir = PathBuf::from(home).join(".opsbox");
   let _ = fs::create_dir_all(&dir);
   dir.join("opsbox.log")
 }
 
 /// 确保父目录存在
+#[cfg(unix)]
 pub fn ensure_parent_dir(path: &Path) {
   if let Some(parent) = path.parent() {
     let _ = fs::create_dir_all(parent);
@@ -33,11 +45,12 @@ pub fn ensure_parent_dir(path: &Path) {
 }
 
 /// 解析 PID 文件路径（处理 ~ 前缀）
+#[cfg(unix)]
 pub fn resolve_pid_path(opt: &Option<PathBuf>) -> PathBuf {
   if let Some(p) = opt {
     let s = p.to_string_lossy();
     if let Some(stripped) = s.strip_prefix("~/") {
-      let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+      let home = get_user_home();
       return PathBuf::from(home).join(stripped);
     }
     p.clone()

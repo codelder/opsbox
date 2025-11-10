@@ -304,10 +304,22 @@ fn parse_date_directives_from_query(q_raw: &str, today: chrono::NaiveDate) -> (S
   (cleaned, range)
 }
 
+/// 获取用户主目录（跨平台）
+fn get_user_home() -> Option<String> {
+  #[cfg(windows)]
+  {
+    std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()
+  }
+  #[cfg(not(windows))]
+  {
+    std::env::var("HOME").ok()
+  }
+}
+
 /// 从用户目录或内置目录加载脚本
 fn load_planner_script(app: &str) -> Option<String> {
-  // 用户目录：$HOME/.opsbox/planners/<app>.star
-  if let Ok(home) = std::env::var("HOME") {
+  // 用户目录：$HOME/.opsbox/planners/<app>.star 或 %USERPROFILE%\.opsbox\planners\<app>.star
+  if let Some(home) = get_user_home() {
     let mut p = PathBuf::from(home);
     p.push(".opsbox/planners");
     p.push(format!("{}.star", app));
