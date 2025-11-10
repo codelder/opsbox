@@ -91,10 +91,10 @@ export SEARCH_ROOTS="/var/log,/opt/app/logs,/home/user/logs"
 
 ```bash
 # 使用默认保守策略
-./scripts/run-agent.sh
+./scripts/run/run-agent.sh
 
 # 自定义线程数
-AGENT_WORKER_THREADS=2 ./scripts/run-agent.sh
+AGENT_WORKER_THREADS=2 ./scripts/run/run-agent.sh
 ```
 
 ### **Docker部署**

@@ -606,9 +606,9 @@ sequenceDiagram
 
 ## 📚 相关文档
 
-- [ARCHITECTURE_REVIEW.md](./ARCHITECTURE_REVIEW.md) - 架构复盘
-- [LOCAL_FILESYSTEM_ENHANCEMENT.md](./LOCAL_FILESYSTEM_ENHANCEMENT.md) - 本地文件系统增强
-- [ROUTES_REFACTOR_SUMMARY.md](./ROUTES_REFACTOR_SUMMARY.md) - 路由模块化
+- [架构复盘分析](../architecture/architecture.md) - 项目架构详细分析
+- [模块化架构](../architecture/module-architecture.md) - 模块化架构设计
+- [错误处理架构](../architecture/error-handling-architecture.md) - 错误处理设计
 
 
 ## 🎯 总结

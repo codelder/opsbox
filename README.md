@@ -122,26 +122,41 @@ cargo run -p opsbox-server -- stop
 ## 📚 开发文档
 
 ### 项目文档
-- **架构说明**: [ARCHITECTURE.md](ARCHITECTURE.md) - 系统架构设计
+- **架构说明**: [docs/architecture/architecture.md](docs/architecture/architecture.md) - 系统架构设计
 - **项目指南**: [WARP.md](WARP.md) - WARP AI 开发指南
 
+### 架构文档
+- **架构复盘**: [docs/architecture/architecture.md](docs/architecture/architecture.md) - 项目架构详细分析
+- **模块架构**: [docs/architecture/module-architecture.md](docs/architecture/module-architecture.md) - 模块系统设计
+- **错误处理**: [docs/architecture/error-handling-architecture.md](docs/architecture/error-handling-architecture.md) - 错误处理架构
+
 ### 模块文档
-- **模块架构**: [docs/modules/module-architecture.md](docs/modules/module-architecture.md) - 模块系统设计
 - **Agent Manager**: [docs/modules/agent-manager.md](docs/modules/agent-manager.md) - Agent 管理模块
 - **Agent API**: [docs/modules/agent-api-spec.md](docs/modules/agent-api-spec.md) - Agent HTTP API 规范
 
 ### 功能文档
 - **FileUrl 设计**: [docs/features/file-url.md](docs/features/file-url.md) - 文件 URL 抽象层
 - **S3 Profiles**: [docs/features/s3-profiles.md](docs/features/s3-profiles.md) - S3 配置管理
+- **Agent 标签**: [docs/features/agent-tags.md](docs/features/agent-tags.md) - Agent 标签管理
 
 ### 使用指南
 - **查询语法**: [docs/guides/query-syntax.md](docs/guides/query-syntax.md) - 搜索查询语法
-- **前端开发**: [docs/FRONTEND_DEVELOPMENT.md](docs/FRONTEND_DEVELOPMENT.md) - 前端模块化架构
+- **前端开发**: [docs/guides/frontend-development.md](docs/guides/frontend-development.md) - 前端模块化架构
+- **CPU 资源控制**: [docs/guides/cpu-resource-control.md](docs/guides/cpu-resource-control.md) - Agent CPU 资源控制
 
 ### 脚本工具
-- **启动 Server**: [scripts/start_server.sh](scripts/start_server.sh)
-- **启动 Agent**: [scripts/start_agent.sh](scripts/start_agent.sh)
-- **API 测试**: [scripts/test_agent_api.sh](scripts/test_agent_api.sh)
+- **运行脚本** (`scripts/run/`):
+  - [start-server.sh](scripts/run/start-server.sh) - 启动 Server
+  - [start-agent.sh](scripts/run/start-agent.sh) - 启动 Agent
+  - [run-agent.sh](scripts/run/run-agent.sh) - 运行 Agent（完整配置）
+- **测试脚本** (`scripts/test/`):
+  - [test-agent-api.sh](scripts/test/test-agent-api.sh) - Agent API 测试
+  - [test-graceful-shutdown.sh](scripts/test/test-graceful-shutdown.sh) - 优雅关闭测试
+  - [bench-ndjson.sh](scripts/test/bench-ndjson.sh) - NDJSON 性能测试
+- **构建脚本** (`scripts/build/`):
+  - [build-frontend.sh](scripts/build/build-frontend.sh) - 构建前端
+- **数据生成脚本** (`scripts/generate/`):
+  - [generate-test-logs.py](scripts/generate/generate-test-logs.py) - 生成测试日志
 
 ## 代码规范
 

@@ -28,10 +28,14 @@ curl -s -X POST "$BASE_URL/api/v1/agents/register" \
     "name": "Manual Test Agent",
     "version": "1.0.0",
     "hostname": "localhost",
-    "tags": ["test", "manual"],
+    "tags": [
+      {"key": "env", "value": "test"},
+      {"key": "type", "value": "manual"}
+    ],
     "search_roots": ["/var/log", "/tmp"],
     "last_heartbeat": 0,
-    "status": {"type": "Online"}
+    "status": {"type": "Online"},
+    "listen_port": 8090
   }'
 echo ""
 echo ""

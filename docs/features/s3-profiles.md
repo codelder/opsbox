@@ -193,7 +193,7 @@ for profile in S3_PROFILES:
     })
 ```
 
-详见 [Starlark 规划脚本指南](../../backend/logseek/src/planners/README.md)
+详见 [Starlark 规划脚本指南](../../backend/logseek/src/planners/README.md) 和 [模块化架构](../architecture/module-architecture.md)
 
 ## 重要改进
 
