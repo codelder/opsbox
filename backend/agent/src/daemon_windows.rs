@@ -358,6 +358,25 @@ pub fn install_service(
     return Err(format!("安装服务失败: {}", error_msg).into());
   }
 
+  // 安装成功后，设置服务描述（非致命失败）
+  // 说明：使用 `sc description` 设置服务描述，便于在“服务”管理器中识别
+  let description = "OpsBox Agent：运维工具箱远程代理";
+  let desc_output = Command::new("sc")
+    .args(&["description", service_name, description])
+    .output();
+  match desc_output {
+    Ok(o) if o.status.success() => {
+      println!("已设置服务描述");
+    }
+    Ok(o) => {
+      let msg = String::from_utf8_lossy(&o.stderr);
+      println!("警告: 设置服务描述失败: {}", msg);
+    }
+    Err(e) => {
+      println!("警告: 设置服务描述时发生错误: {}", e);
+    }
+  }
+
   println!("Windows 服务 '{}' 安装成功", service_name);
   Ok(())
 }
