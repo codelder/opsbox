@@ -26,12 +26,6 @@ use config::{AppConfig, Commands};
 #[cfg(windows)]
 const SERVICE_NAME: &str = "OpsBoxServer";
 
-#[cfg(windows)]
-use std::sync::OnceLock;
-
-#[cfg(windows)]
-static SERVICE_CONFIG: OnceLock<AppConfig> = OnceLock::new();
-
 // 全局内存分配器：mimalloc
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -43,24 +37,29 @@ fn main() {
   // 处理 Windows 服务相关命令（优先处理）
   #[cfg(windows)]
   {
+    use daemon_windows::{
+      handle_install_service, handle_start_service, handle_stop_service, handle_uninstall_service,
+      run_windows_service_with_dispatcher,
+    };
+
     if config.install_service {
-      handle_install_service(&config);
+      handle_install_service(SERVICE_NAME, "OpsBox Server");
       return;
     }
     if config.uninstall_service {
-      handle_uninstall_service(&config);
+      handle_uninstall_service(SERVICE_NAME);
       return;
     }
     if config.start_service {
-      handle_start_service(&config);
+      handle_start_service(SERVICE_NAME);
       return;
     }
     if config.stop_service {
-      handle_stop_service(&config);
+      handle_stop_service(SERVICE_NAME);
       return;
     }
     if config.service_mode {
-      run_as_windows_service(config);
+      run_windows_service_with_dispatcher(SERVICE_NAME, config);
       return;
     }
   }
@@ -103,7 +102,7 @@ fn main() {
 }
 
 /// 异步主逻辑
-async fn async_main(addr: std::net::SocketAddr, db_url: String) {
+pub(crate) async fn async_main(addr: std::net::SocketAddr, db_url: String) {
   // 初始化数据库连接池
   let db_config = opsbox_core::DatabaseConfig::new(db_url, 10, 30);
 
@@ -210,7 +209,7 @@ fn handle_daemon_mode(config: &AppConfig) {
 /// 设置模块配置环境变量
 ///
 /// 将命令行参数转换为环境变量，供各模块在 configure() 中读取
-fn setup_module_env_vars(config: &AppConfig) {
+pub(crate) fn setup_module_env_vars(config: &AppConfig) {
   unsafe {
     // LogSeek 模块配置（仅保留 S3 相关参数）
     std::env::set_var(
@@ -222,135 +221,4 @@ fn setup_module_env_vars(config: &AppConfig) {
   }
 
   log::debug!("模块配置环境变量已设置");
-}
-
-/// Windows 服务相关处理函数
-#[cfg(windows)]
-fn handle_install_service(_config: &AppConfig) {
-  use daemon_windows::install_service;
-  use std::env;
-
-  let service_name = SERVICE_NAME;
-  let display_name = "OpsBox Server";
-
-  // 获取当前可执行文件路径
-  let exe_path = env::current_exe()
-    .expect("无法获取当前可执行文件路径")
-    .to_string_lossy()
-    .to_string();
-
-  if let Err(e) = install_service(service_name, display_name, &exe_path) {
-    eprintln!("安装 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-
-  println!("Windows 服务安装成功！");
-  println!("使用以下命令管理服务：");
-  println!("  启动服务: sc start {}", service_name);
-  println!("  停止服务: sc stop {}", service_name);
-  println!("  查看状态: sc query {}", service_name);
-}
-
-#[cfg(windows)]
-fn handle_uninstall_service(_config: &AppConfig) {
-  use daemon_windows::uninstall_service;
-
-  let service_name = SERVICE_NAME;
-
-  if let Err(e) = uninstall_service(service_name) {
-    eprintln!("卸载 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-}
-
-#[cfg(windows)]
-fn handle_start_service(_config: &AppConfig) {
-  use daemon_windows::start_service;
-
-  let service_name = SERVICE_NAME;
-
-  if let Err(e) = start_service(service_name) {
-    eprintln!("启动 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-}
-
-#[cfg(windows)]
-fn handle_stop_service(_config: &AppConfig) {
-  use daemon_windows::stop_service;
-
-  let service_name = SERVICE_NAME;
-
-  if let Err(e) = stop_service(service_name) {
-    eprintln!("停止 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-}
-
-/// 以 Windows 服务模式运行
-#[cfg(windows)]
-fn run_as_windows_service(config: AppConfig) {
-  use daemon_windows::run_as_service;
-  use windows_service::define_windows_service;
-  use windows_service::service_dispatcher;
-
-  // 将配置存入全局 OnceLock，供服务主入口读取
-  let _ = SERVICE_CONFIG.set(config.clone());
-
-  // 生成符合 SCM 要求的 FFI 入口，并委托到本地 service_main
-  define_windows_service!(ffi_service_main, service_main);
-
-  fn service_main(_: Vec<std::ffi::OsString>) {
-    // 从全局取出配置
-    let cfg = SERVICE_CONFIG.get().expect("服务配置未初始化").clone();
-
-    if let Err(e) = run_as_service(SERVICE_NAME, move |shutdown| {
-      // 初始化日志系统
-      logging::init(&cfg);
-
-      // 初始化网络环境
-      network::init_network_env();
-
-      log::info!("OpsBox Windows 服务启动中...");
-      log::debug!("配置: {:?}", cfg);
-
-      // 获取监听地址
-      let addr = cfg.get_addr().expect("无效的监听地址");
-
-      // 初始化数据库
-      let db_url = cfg.get_database_url();
-      log::info!("数据库路径: {}", db_url);
-
-      // 设置模块配置环境变量
-      setup_module_env_vars(&cfg);
-
-      // 创建 Tokio 运行时
-      let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("创建 Tokio 运行时失败");
-
-      // 在运行时中执行异步主逻辑
-      let shutdown_clone = shutdown.clone();
-      rt.block_on(async {
-        // 监听关闭信号
-        tokio::spawn(async move {
-          shutdown_clone.notified().await;
-          log::info!("收到停止信号，开始优雅关闭...");
-        });
-
-        async_main(addr, db_url).await;
-      });
-
-      Ok(())
-    }) {
-      eprintln!("Windows 服务运行失败: {}", e);
-    }
-  }
-
-  // 通过服务调度器启动，确保在 SCM 上下文中运行
-  if let Err(e) = service_dispatcher::start(SERVICE_NAME, ffi_service_main) {
-    eprintln!("启动 Windows 服务调度器失败: {}", e);
-    std::process::exit(1);
-  }
 }

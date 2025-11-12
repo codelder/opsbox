@@ -48,20 +48,20 @@ backend/opsbox-server/static
 .output/
 .netlify/
 .wrangler/
-ui/.svelte-kit/
-ui/.vite/
-ui/.output/
-ui/.vercel/
-ui/.netlify/
-ui/.wrangler/
-ui/build/
-ui/dist/
-ui/coverage/
-ui/playwright-report/
-ui/.playwright/
-ui/test-results/
-ui/vite.config.js.timestamp-*
-ui/vite.config.ts.timestamp-*
+web/.svelte-kit/
+web/.vite/
+web/.output/
+web/.vercel/
+web/.netlify/
+web/.wrangler/
+web/build/
+web/dist/
+web/coverage/
+web/playwright-report/
+web/.playwright/
+web/test-results/
+web/vite.config.js.timestamp-*
+web/vite.config.ts.timestamp-*
 
 # 本地开发数据库（不要提交）
 *.db

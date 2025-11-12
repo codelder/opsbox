@@ -43,7 +43,7 @@ fn wire_debug_enabled() -> bool {
 }
 
 /// LogSeek Agent - 远程搜索代理
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "opsbox-agent")]
 #[command(about = "Opsbox Agent - 运维工具箱远程代理")]
 #[command(version)]
@@ -174,24 +174,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   // 处理 Windows 服务相关命令（优先处理）
   #[cfg(windows)]
   {
+    use daemon_windows::{handle_install_service, handle_start_service, handle_stop_service, handle_uninstall_service};
+
     if args.install_service {
-      handle_install_service(&args);
+      handle_install_service("OpsBoxAgent", "OpsBox Agent");
       return Ok(());
     }
     if args.uninstall_service {
-      handle_uninstall_service(&args);
+      handle_uninstall_service("OpsBoxAgent");
       return Ok(());
     }
     if args.start_service {
-      handle_start_service(&args);
+      handle_start_service("OpsBoxAgent");
       return Ok(());
     }
     if args.stop_service {
-      handle_stop_service(&args);
+      handle_stop_service("OpsBoxAgent");
       return Ok(());
     }
     if args.service_mode {
-      return run_as_windows_service(args);
+      use daemon_windows::run_windows_service_with_dispatcher;
+      run_windows_service_with_dispatcher("OpsBoxAgent", args);
+      return Ok(());
     }
   }
 
@@ -223,7 +227,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   rt.block_on(async_main(config))
 }
 
-async fn async_main(config: Arc<AgentConfig>) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn async_main(config: Arc<AgentConfig>) -> Result<(), Box<dyn std::error::Error>> {
   info!("╔══════════════════════════════════════════╗");
   info!("║     Opsbox Agent 启动中...              ║");
   info!("╚══════════════════════════════════════════╝");
@@ -1212,119 +1216,6 @@ fn handle_daemon_mode(args: &Args) {
       }
     }
   }
-}
-
-/// Windows 服务相关处理函数
-#[cfg(windows)]
-fn handle_install_service(_args: &Args) {
-  use daemon_windows::install_service;
-  use std::env;
-
-  let service_name = "OpsBoxAgent";
-  let display_name = "OpsBox Agent";
-
-  // 获取当前可执行文件路径
-  let exe_path = env::current_exe()
-    .expect("无法获取当前可执行文件路径")
-    .to_string_lossy()
-    .to_string();
-
-  if let Err(e) = install_service(service_name, display_name, &exe_path) {
-    eprintln!("安装 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-
-  println!("Windows 服务安装成功！");
-  println!("使用以下命令管理服务：");
-  println!("  启动服务: sc start {}", service_name);
-  println!("  停止服务: sc stop {}", service_name);
-  println!("  查看状态: sc query {}", service_name);
-}
-
-#[cfg(windows)]
-fn handle_uninstall_service(_args: &Args) {
-  use daemon_windows::uninstall_service;
-
-  let service_name = "OpsBoxAgent";
-
-  if let Err(e) = uninstall_service(service_name) {
-    eprintln!("卸载 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-}
-
-#[cfg(windows)]
-fn handle_start_service(_args: &Args) {
-  use daemon_windows::start_service;
-
-  let service_name = "OpsBoxAgent";
-
-  if let Err(e) = start_service(service_name) {
-    eprintln!("启动 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-}
-
-#[cfg(windows)]
-fn handle_stop_service(_args: &Args) {
-  use daemon_windows::stop_service;
-
-  let service_name = "OpsBoxAgent";
-
-  if let Err(e) = stop_service(service_name) {
-    eprintln!("停止 Windows 服务失败: {}", e);
-    std::process::exit(1);
-  }
-}
-
-/// 以 Windows 服务模式运行
-#[cfg(windows)]
-fn run_as_windows_service(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-  use daemon_windows::run_as_service;
-
-  let service_name = "OpsBoxAgent";
-
-  run_as_service(service_name, move |shutdown| {
-    // 初始化日志
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
-    // 加载配置
-    let config = Arc::new(AgentConfig::from_args(args));
-
-    log::info!("OpsBox Agent Windows 服务启动中...");
-    log::info!("Agent ID: {}", config.agent_id);
-    log::info!("Agent Name: {}", config.agent_name);
-    log::info!("Server: {}", config.server_endpoint);
-    log::info!("Listen Port: {}", config.listen_port);
-
-    // 创建 Tokio 运行时
-    let worker_threads = config.get_worker_threads();
-    log::info!("使用 {} 个工作线程", worker_threads);
-
-    let rt = tokio::runtime::Builder::new_multi_thread()
-      .worker_threads(worker_threads)
-      .enable_all()
-      .build()
-      .expect("创建 Tokio 运行时失败");
-
-    // 在运行时中执行异步主逻辑
-    let shutdown_clone = shutdown.clone();
-    rt.block_on(async {
-      // 监听关闭信号
-      tokio::spawn(async move {
-        shutdown_clone.notified().await;
-        log::info!("收到停止信号，开始优雅关闭...");
-      });
-
-      if let Err(e) = async_main(config).await {
-        log::error!("Agent 运行错误: {}", e);
-      }
-    });
-
-    Ok(())
-  })?;
-
-  Ok(())
 }
 
 #[cfg(test)]
