@@ -50,7 +50,7 @@ import {
   // API Clients
   fetchMinioSettings,
   saveMinioSettings,
-  startSearch,
+  startUnifiedSearch,
   
   // Utils
   highlight,
@@ -98,10 +98,10 @@ try {
 #### 示例：开始搜索
 
 ```typescript
-import { startSearch, extractSessionId } from '$lib/modules/logseek';
+import { startUnifiedSearch, extractSessionId } from '$lib/modules/logseek';
 
 try {
-  const response = await startSearch('error AND timeout');
+  const response = await startUnifiedSearch('error AND timeout');
   const sessionId = extractSessionId(response);
   const reader = response.body?.getReader();
   
