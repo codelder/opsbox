@@ -3,8 +3,7 @@ use std::{fs, path::PathBuf};
 use opsbox_core::SqlitePool;
 
 use crate::{
-  api::models::AppError,
-  domain::config::SourceConfig,
+  domain::config::Source,
   domain::source_planner::{DateRange, PlanResult},
 };
 
@@ -20,13 +19,49 @@ use crate::{
 ///   - AGENTS: list[dict]，每项 {"id": str, "tags": dict[str,str]}
 ///   - S3_PROFILES: list[dict]（非敏感字段），每项 {"profile_name": str, "endpoint": str, "bucket": str}
 /// - 脚本需导出：
-///   - SOURCES: list[dict]  每项为 SourceConfig 形状的字典（type: "s3"|"agent"|"local"）
+///   - SOURCES: list[dict]  每项为 Source 形状的字典（endpoint+target 新结构）
 ///   - 可选 CLEANED_QUERY: str 若未覆盖，则沿用全局 CLEANED_QUERY
-pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &str) -> Result<PlanResult, AppError> {
+pub async fn plan_with_starlark(
+  pool: &SqlitePool,
+  app: Option<&str>,
+  query: &str,
+) -> Result<PlanResult, crate::api::LogSeekApiError> {
+  plan_with_starlark_with_script(pool, app, query, None).await
+}
+
+/// 支持传入可选的脚本内容进行规划（用于测试未保存的脚本）
+pub async fn plan_with_starlark_with_script(
+  pool: &SqlitePool,
+  app: Option<&str>,
+  query: &str,
+  script_content: Option<&str>,
+) -> Result<PlanResult, crate::api::LogSeekApiError> {
   use chrono::Utc;
   use chrono_tz::Asia::Shanghai;
 
-  let app = app.unwrap_or("bbip");
+  // 如果没有指定 app，尝试使用默认规划脚本
+  let app = if let Some(a) = app {
+    a.to_string()
+  } else {
+    // 尝试从数据库获取默认规划脚本
+    match crate::repository::planners::get_default(pool).await {
+      Ok(Some(default_app)) => default_app,
+      Ok(None) => {
+        return Err(crate::api::LogSeekApiError::Internal(
+          opsbox_core::AppError::bad_request(
+            "请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp），或在系统设置中配置默认规划脚本",
+          ),
+        ));
+      }
+      Err(e) => {
+        log::warn!("获取默认规划脚本失败: {:?}", e);
+        return Err(crate::api::LogSeekApiError::Internal(
+          opsbox_core::AppError::bad_request("请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp）"),
+        ));
+      }
+    }
+  };
+  let app = app.as_str();
 
   // 1) 解析日期并清理查询
   let today = Utc::now().with_timezone(&Shanghai).date_naive();
@@ -39,9 +74,7 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
   } else {
     vec![]
   };
-  let s3_profiles = crate::repository::settings::list_s3_profiles(pool)
-    .await
-    .map_err(AppError::Settings)?;
+  let s3_profiles = crate::repository::settings::list_s3_profiles(pool).await?;
 
   // 3) 生成 Starlark 运行时前缀（全局变量定义）
   let mut prefix = String::new();
@@ -105,23 +138,71 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
   }
   prefix.push_str("]\n");
 
-  // 4) 读取 Starlark 脚本内容（优先 DB，其次用户目录，最后内置回退）
-  let script_body = match load_planner_script_from_db(pool, app).await {
-    Some(s) => s,
-    None => load_planner_script(app).unwrap_or_else(|| builtin_planner_script(app)),
+  // 4) 读取 Starlark 脚本内容（优先使用传入的脚本内容，其次 DB，最后用户目录）
+  let script_body = if let Some(content) = script_content {
+    content.to_string()
+  } else {
+    // 尝试从数据库加载
+    if let Some(s) = load_planner_script_from_db(pool, app).await {
+      s
+    } else if let Some(s) = load_planner_script(app) {
+      // 尝试从用户目录加载
+      s
+    } else {
+      // 找不到脚本，返回错误
+      return Err(crate::api::LogSeekApiError::Internal(
+        opsbox_core::AppError::bad_request(format!(
+          "未找到应用 '{}' 的规划脚本。请在系统设置中为该应用配置规划脚本。",
+          app
+        )),
+      ));
+    }
   };
   let script = format!("{}\n{}", prefix, script_body);
 
   // 5) 运行 Starlark
   let module = starlark::environment::Module::new();
-  let ast = starlark::syntax::AstModule::parse(&format!("{}.star", app), script, &starlark::syntax::Dialect::Extended)
-    .map_err(|e| AppError::Settings(opsbox_core::AppError::internal(format!("Starlark 脚本解析失败: {}", e))))?;
+  // 配置 Dialect 启用 f-strings
+  let mut dialect = starlark::syntax::Dialect::Extended;
+  dialect.enable_f_strings = true;
+  let ast = starlark::syntax::AstModule::parse(&format!("{}.star", app), script, &dialect).map_err(|e| {
+    crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本解析失败: {}", e)))
+  })?;
 
-  let globals = starlark::environment::GlobalsBuilder::standard().build();
+  // 创建调试日志收集器
+  let debug_logs: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+    std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+  let debug_logs_clone = debug_logs.clone();
+
+  // 使用 Starlark 内置的 print 函数，通过 PrintHandler 捕获输出
+  struct DebugPrintHandler {
+    debug_logs: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+  }
+
+  impl starlark::PrintHandler for DebugPrintHandler {
+    fn println(&self, text: &str) -> starlark::Result<()> {
+      if let Ok(mut logs) = self.debug_logs.lock() {
+        logs.push(text.to_string());
+      }
+      Ok(())
+    }
+  }
+
+  // 创建 print_handler，确保它在整个 eval 生命周期内有效
+  let print_handler = DebugPrintHandler {
+    debug_logs: debug_logs_clone,
+  };
+
+  // 构建全局环境，添加 print 函数
+  // 使用 LibraryExtension::Print 来启用 print 函数
+  let globals =
+    starlark::environment::GlobalsBuilder::extended_by(&[starlark::environment::LibraryExtension::Print]).build();
   let mut eval = starlark::eval::Evaluator::new(&module);
-  eval
-    .eval_module(ast, &globals)
-    .map_err(|e| AppError::Settings(opsbox_core::AppError::internal(format!("Starlark 脚本执行失败: {}", e))))?;
+  // 设置自定义 print 处理器来捕获输出
+  eval.set_print_handler(&print_handler);
+  eval.eval_module(ast, &globals).map_err(|e| {
+    crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本执行失败: {}", e)))
+  })?;
 
   // 6) 读取输出变量
   let cleaned_val = module.get("CLEANED_QUERY");
@@ -129,24 +210,24 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
 
   let sources_val = module
     .get("SOURCES")
-    .ok_or_else(|| AppError::Settings(opsbox_core::AppError::internal("Starlark 未导出 SOURCES")))?;
+    .ok_or_else(|| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal("Starlark 未导出 SOURCES")))?;
 
-  // 转为 JSON，再转为 SourceConfig
+  // 转为 JSON，再转为 Source
   let list = starlark::values::list::ListRef::from_value(sources_val)
-    .ok_or_else(|| AppError::Settings(opsbox_core::AppError::internal("SOURCES 不是列表类型")))?;
+    .ok_or_else(|| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal("SOURCES 不是列表类型")))?;
 
-  let mut sources: Vec<SourceConfig> = Vec::new();
+  let mut sources: Vec<Source> = Vec::new();
   for i in 0..list.len() {
     let Some(v) = list.get(i) else {
       continue;
     };
-    let mut j = starlark_to_json(*v).map_err(|e| AppError::Settings(opsbox_core::AppError::internal(e)))?;
-    normalize_source_tag(&mut j);
-    normalize_source_strings(&mut j);
-    let cfg: SourceConfig = serde_json::from_value(j).map_err(|e| {
-      AppError::Settings(opsbox_core::AppError::internal(format!(
-        "解析 SourceConfig 失败: {}",
-        e
+    let j =
+      starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(e)))?;
+    log::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
+    let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
+      crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!(
+        "解析 Source 失败: {}; JSON={}",
+        e, j
       )))
     })?;
     log_script_source(i, &cfg);
@@ -154,9 +235,14 @@ pub async fn plan_with_starlark(pool: &SqlitePool, app: Option<&str>, query: &st
   }
 
   log::info!("[Planner] 脚本生成来源总数: {}", sources.len());
+
+  // 提取调试日志
+  let debug_logs_vec = debug_logs.lock().unwrap().clone();
+
   Ok(PlanResult {
     sources,
     cleaned_query: cleaned,
+    debug_logs: debug_logs_vec,
   })
 }
 
@@ -218,10 +304,22 @@ fn parse_date_directives_from_query(q_raw: &str, today: chrono::NaiveDate) -> (S
   (cleaned, range)
 }
 
+/// 获取用户主目录（跨平台）
+fn get_user_home() -> Option<String> {
+  #[cfg(windows)]
+  {
+    std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok()
+  }
+  #[cfg(not(windows))]
+  {
+    std::env::var("HOME").ok()
+  }
+}
+
 /// 从用户目录或内置目录加载脚本
 fn load_planner_script(app: &str) -> Option<String> {
-  // 用户目录：$HOME/.opsbox/planners/<app>.star
-  if let Ok(home) = std::env::var("HOME") {
+  // 用户目录：$HOME/.opsbox/planners/<app>.star 或 %USERPROFILE%\.opsbox\planners\<app>.star
+  if let Some(home) = get_user_home() {
     let mut p = PathBuf::from(home);
     p.push(".opsbox/planners");
     p.push(format!("{}.star", app));
@@ -245,18 +343,6 @@ async fn load_planner_script_from_db(pool: &SqlitePool, app: &str) -> Option<Str
   }
 }
 
-/// 内置脚本（作为回退）
-fn builtin_planner_script(app: &str) -> String {
-  match app {
-    // bbip 的等效脚本：基于 DATES/TODAY/BUCKETS 生成 Agent 与 S3 源，S3_PROFILES 由业务选择
-    "bbip" => include_str!("../../planners/bbip.star").to_string(),
-    _ => {
-      // 默认空实现：只透传 CLEANED_QUERY，SOURCES 为空
-      "# 默认空脚本\nSOURCES = []\n".to_string()
-    }
-  }
-}
-
 /// 字符串转义（单引号与反斜杠），用于内联到 Starlark 代码
 fn esc_single(s: &str) -> String {
   let s = s.replace('\\', "\\\\");
@@ -265,7 +351,7 @@ fn esc_single(s: &str) -> String {
 
 /// 将 Starlark 值转为 serde_json::Value（仅支持脚本生成的字面量结构）
 fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, String> {
-  use starlark::values::{ValueLike, dict::DictRef, list::ListRef, none::NoneType, string::StarlarkStr};
+  use starlark::values::{ValueLike, dict::DictRef, list::ListRef, none::NoneType};
 
   if let Some(b) = v.unpack_bool() {
     return Ok(serde_json::Value::Bool(b));
@@ -273,8 +359,9 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
   if let Some(i) = v.unpack_i32() {
     return Ok(serde_json::Value::Number(i.into()));
   }
-  if let Some(s) = v.downcast_ref::<StarlarkStr>() {
-    return Ok(serde_json::Value::String(s.to_string()));
+  // 使用 unpack_str 获取原始字符串，避免多余引号
+  if let Some(s) = v.unpack_str() {
+    return Ok(serde_json::Value::String(s.to_owned()));
   }
   if v.downcast_ref::<NoneType>().is_some() {
     return Ok(serde_json::Value::Null);
@@ -300,82 +387,50 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
   Err(format!("不支持的 Starlark 值类型: {:?}", v))
 }
 
-/// 规范化 SourceConfig 的 type 标签，避免用户脚本误写成 '"s3"' 等
-fn normalize_source_tag(j: &mut serde_json::Value) {
-  use serde_json::Value as V;
-  if let V::Object(map) = j
-    && let Some(V::String(t)) = map.get_mut("type")
-  {
-    let trimmed = t.trim();
-    let normalized = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-      trimmed.trim_matches('"').to_ascii_lowercase()
-    } else {
-      trimmed.to_ascii_lowercase()
-    };
-    if *t != normalized {
-      log::warn!("规范化脚本返回的来源类型: '{}' -> '{}'", t, normalized);
-      *t = normalized;
-    }
-  }
-}
-
-/// 去除顶层所有字符串字段的首尾引号（若存在），修复脚本误写例如 '"s3"'
-fn normalize_source_strings(j: &mut serde_json::Value) {
-  use serde_json::Value as V;
-  if let V::Object(map) = j {
-    for (_k, v) in map.iter_mut() {
-      if let V::String(s) = v {
-        let trimmed = s.trim();
-        if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
-          let newv = trimmed.trim_matches('"').to_string();
-          log::warn!("规范化脚本返回的字符串: '{}' -> '{}'", s, newv);
-          *s = newv;
-        }
-      }
-    }
-  }
-}
-
-/// 日志输出用户脚本返回的来源（已规范化并成功解析）
-fn log_script_source(idx: usize, cfg: &SourceConfig) {
-  match cfg {
-    SourceConfig::S3 {
-      profile,
-      bucket,
-      prefix,
-      pattern,
-      key,
-    } => {
+/// 日志输出用户脚本返回的来源（新结构）
+fn log_script_source(idx: usize, src: &Source) {
+  use crate::domain::config::{Endpoint, Target};
+  match (&src.endpoint, &src.target) {
+    (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
       log::info!(
-        "[Planner] 来源[{}] type=s3 profile={} bucket={} key={} prefix={} pattern={}",
+        "[Planner] 来源[{}] s3 profile={} bucket={} archive={}",
         idx,
         profile,
-        bucket.as_deref().unwrap_or("<none>"),
-        key.as_deref().unwrap_or("<none>"),
-        prefix.as_deref().unwrap_or("<none>"),
-        pattern.as_deref().unwrap_or("<none>")
+        bucket,
+        path
       );
     }
-    SourceConfig::Agent {
-      agent_id,
-      scope_root,
-      path_filter_glob,
-    } => {
+    (Endpoint::Agent { agent_id, subpath }, tgt) => {
+      let scope = match tgt {
+        Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
+        Target::Files { paths } => format!("Files count={}", paths.len()),
+        Target::Archive { path } => format!("Archive path={}", path),
+      };
       log::info!(
-        "[Planner] 来源[{}] type=agent id={} scope_root={} path_glob={}",
+        "[Planner] 来源[{}] agent id={} subpath={} scope={} filter_glob={}",
         idx,
         agent_id,
-        scope_root.as_deref().unwrap_or("logs"),
-        path_filter_glob.as_deref().unwrap_or("<none>")
+        subpath,
+        scope,
+        src.filter_glob.as_deref().unwrap_or("<none>")
       );
     }
-    SourceConfig::Local { path, recursive } => {
+    (Endpoint::Local { root }, tgt) => {
+      let scope = match tgt {
+        Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
+        Target::Files { paths } => format!("Files count={}", paths.len()),
+        Target::Archive { path } => format!("Archive path={}", path),
+      };
       log::info!(
-        "[Planner] 来源[{}] type=local path={} recursive={}",
+        "[Planner] 来源[{}] local root={} scope={} filter_glob={}",
         idx,
-        path,
-        recursive
+        root,
+        scope,
+        src.filter_glob.as_deref().unwrap_or("<none>")
       );
+    }
+    (Endpoint::S3 { .. }, _) => {
+      log::warn!("[Planner] S3 目前仅支持 target=archive（tar/tar.gz/gz；zip 暂不支持）");
     }
   }
 }

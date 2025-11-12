@@ -7,10 +7,9 @@ use axum::{
   http::StatusCode,
 };
 use opsbox_core::SqlitePool;
-use problemdetails::Problem;
 use serde::{Deserialize, Serialize};
 
-use crate::api::models::AppError;
+use crate::api::LogSeekApiError;
 use crate::repository::llm::{self, LlmBackend, LlmBackendPublic, ProviderKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,9 +116,9 @@ pub struct DefaultLlmPayload {
 }
 
 /// 列出所有 LLM 后端
-pub async fn list_backends(State(pool): State<SqlitePool>) -> Result<Json<LlmBackendListResponse>, Problem> {
-  let list = llm::list_backends(&pool).await.map_err(AppError::Settings)?;
-  let default = llm::get_default(&pool).await.map_err(AppError::Settings)?;
+pub async fn list_backends(State(pool): State<SqlitePool>) -> Result<Json<LlmBackendListResponse>, LogSeekApiError> {
+  let list = llm::list_backends(&pool).await?;
+  let default = llm::get_default(&pool).await?;
   Ok(Json(LlmBackendListResponse {
     backends: list.into_iter().map(Into::into).collect(),
     default,
@@ -130,7 +129,7 @@ pub async fn list_backends(State(pool): State<SqlitePool>) -> Result<Json<LlmBac
 pub async fn upsert_backend(
   State(pool): State<SqlitePool>,
   Json(payload): Json<LlmBackendUpsertPayload>,
-) -> Result<StatusCode, Problem> {
+) -> Result<StatusCode, LogSeekApiError> {
   let provider: ProviderKind = payload.provider.into();
   let timeout = if payload.timeout_secs <= 0 {
     60
@@ -163,9 +162,7 @@ pub async fn upsert_backend(
   };
 
   // 检查是否已有存在记录
-  let existing = llm::get_backend(&pool, &backend.name)
-    .await
-    .map_err(AppError::Settings)?;
+  let existing = llm::get_backend(&pool, &backend.name).await?;
   let update_secret = match (
     existing.as_ref().and_then(|b| b.api_key.as_ref()),
     backend.api_key.as_ref(),
@@ -180,21 +177,20 @@ pub async fn upsert_backend(
   }
 
   // 保存前验证：基于模型列表；可选严格探针
-  llm::verify_backend(&backend, payload.verify_strict)
-    .await
-    .map_err(AppError::Settings)?;
+  llm::verify_backend(&backend, payload.verify_strict).await?;
 
   // 持久化
-  llm::save_backend(&pool, &backend, update_secret)
-    .await
-    .map_err(AppError::Settings)?;
+  llm::save_backend(&pool, &backend, update_secret).await?;
 
   Ok(StatusCode::NO_CONTENT)
 }
 
 /// 删除 LLM 后端
-pub async fn delete_backend(State(pool): State<SqlitePool>, Path(name): Path<String>) -> Result<StatusCode, Problem> {
-  llm::delete_backend(&pool, &name).await.map_err(AppError::Settings)?;
+pub async fn delete_backend(
+  State(pool): State<SqlitePool>,
+  Path(name): Path<String>,
+) -> Result<StatusCode, LogSeekApiError> {
+  llm::delete_backend(&pool, &name).await?;
   Ok(StatusCode::NO_CONTENT)
 }
 
@@ -202,17 +198,15 @@ pub async fn delete_backend(State(pool): State<SqlitePool>, Path(name): Path<Str
 pub async fn list_models_by_backend(
   State(pool): State<SqlitePool>,
   Path(name): Path<String>,
-) -> Result<Json<LlmModelsResponse>, Problem> {
-  let models = llm::list_models_for_backend(&pool, &name)
-    .await
-    .map_err(AppError::Settings)?;
+) -> Result<Json<LlmModelsResponse>, LogSeekApiError> {
+  let models = llm::list_models_for_backend(&pool, &name).await?;
   Ok(Json(LlmModelsResponse { models }))
 }
 
 /// 基于临时参数列出可用模型（用于前端编辑未保存配置时）
 pub async fn list_models_by_params(
   Json(payload): Json<LlmModelsParamsPayload>,
-) -> Result<Json<LlmModelsResponse>, Problem> {
+) -> Result<Json<LlmModelsResponse>, LogSeekApiError> {
   let provider: ProviderKind = payload.provider.into();
   let models = llm::list_models_with_params(
     provider,
@@ -221,14 +215,13 @@ pub async fn list_models_by_params(
     payload.organization.as_deref(),
     payload.project.as_deref(),
   )
-  .await
-  .map_err(AppError::Settings)?;
+  .await?;
   Ok(Json(LlmModelsResponse { models }))
 }
 
 /// 获取默认 LLM 后端
-pub async fn get_default(State(pool): State<SqlitePool>) -> Result<Json<Option<String>>, Problem> {
-  let name = llm::get_default(&pool).await.map_err(AppError::Settings)?;
+pub async fn get_default(State(pool): State<SqlitePool>) -> Result<Json<Option<String>>, LogSeekApiError> {
+  let name = llm::get_default(&pool).await?;
   Ok(Json(name))
 }
 
@@ -236,9 +229,7 @@ pub async fn get_default(State(pool): State<SqlitePool>) -> Result<Json<Option<S
 pub async fn set_default(
   State(pool): State<SqlitePool>,
   Json(body): Json<DefaultLlmPayload>,
-) -> Result<StatusCode, Problem> {
-  llm::set_default(&pool, Some(&body.name))
-    .await
-    .map_err(AppError::Settings)?;
+) -> Result<StatusCode, LogSeekApiError> {
+  llm::set_default(&pool, Some(&body.name)).await?;
   Ok(StatusCode::NO_CONTENT)
 }

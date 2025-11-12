@@ -80,7 +80,7 @@ jobs:
           # 先运行测试
           cargo test --all-features --manifest-path backend/Cargo.toml
           # 然后构建 release 版本
-          cargo build --manifest-path backend/Cargo.toml -p opsbox -p opsbox-agent --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server -p opsbox-agent --release --locked
 
       # Windows 构建
       - name: Test and build Windows
@@ -89,7 +89,7 @@ jobs:
           # 先运行测试
           cargo test --all-features --manifest-path backend/Cargo.toml
           # 然后构建 release 版本
-          cargo build --manifest-path backend/Cargo.toml -p opsbox -p opsbox-agent --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server -p opsbox-agent --release --locked
 
       - name: Save build cache
         uses: actions/cache/save@v4
@@ -97,36 +97,36 @@ jobs:
           path: backend/target
           key: target-${{ matrix.config.os }}-${{ steps.rust-setup.outputs.cache-key }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
-      # 打包 opsbox artifacts
-      - name: Package opsbox artifacts
+# 打包 opsbox-server artifacts
+      - name: Package opsbox-server artifacts
         shell: bash
         run: |
           set -eux
           
           case "${{ matrix.config.os }}" in
             macos-x64)
-              mkdir -p dist/opsbox-macos-10.15-x86_64
-              cp backend/target/release/opsbox dist/opsbox-macos-10.15-x86_64/
-              echo "${{ github.sha }}" > dist/opsbox-macos-10.15-x86_64/VERSION
-              echo "Target: x86_64-apple-darwin" >> dist/opsbox-macos-10.15-x86_64/VERSION
-              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-macos-10.15-x86_64/VERSION
-              echo "Binary: opsbox" >> dist/opsbox-macos-10.15-x86_64/VERSION
+              mkdir -p dist/opsbox-server-macos-10.15-x86_64
+              cp backend/target/release/opsbox-server dist/opsbox-server-macos-10.15-x86_64/
+              echo "${{ github.sha }}" > dist/opsbox-server-macos-10.15-x86_64/VERSION
+              echo "Target: x86_64-apple-darwin" >> dist/opsbox-server-macos-10.15-x86_64/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-server-macos-10.15-x86_64/VERSION
+              echo "Binary: opsbox-server" >> dist/opsbox-server-macos-10.15-x86_64/VERSION
               ;;
             macos-arm64)
-              mkdir -p dist/opsbox-macos-11.0-arm64
-              cp backend/target/release/opsbox dist/opsbox-macos-11.0-arm64/
-              echo "${{ github.sha }}" > dist/opsbox-macos-11.0-arm64/VERSION
-              echo "Target: aarch64-apple-darwin" >> dist/opsbox-macos-11.0-arm64/VERSION
-              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-macos-11.0-arm64/VERSION
-              echo "Binary: opsbox" >> dist/opsbox-macos-11.0-arm64/VERSION
+              mkdir -p dist/opsbox-server-macos-11.0-arm64
+              cp backend/target/release/opsbox-server dist/opsbox-server-macos-11.0-arm64/
+              echo "${{ github.sha }}" > dist/opsbox-server-macos-11.0-arm64/VERSION
+              echo "Target: aarch64-apple-darwin" >> dist/opsbox-server-macos-11.0-arm64/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-server-macos-11.0-arm64/VERSION
+              echo "Binary: opsbox-server" >> dist/opsbox-server-macos-11.0-arm64/VERSION
               ;;
             windows)
-              mkdir -p dist/opsbox-windows-x86_64-msvc
-              cp backend/target/release/opsbox.exe dist/opsbox-windows-x86_64-msvc/
-              echo "${{ github.sha }}" > dist/opsbox-windows-x86_64-msvc/VERSION
-              echo "Target: x86_64-pc-windows-msvc" >> dist/opsbox-windows-x86_64-msvc/VERSION
-              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-windows-x86_64-msvc/VERSION
-              echo "Binary: opsbox.exe" >> dist/opsbox-windows-x86_64-msvc/VERSION
+              mkdir -p dist/opsbox-server-windows-x86_64-msvc
+              cp backend/target/release/opsbox-server.exe dist/opsbox-server-windows-x86_64-msvc/
+              echo "${{ github.sha }}" > dist/opsbox-server-windows-x86_64-msvc/VERSION
+              echo "Target: x86_64-pc-windows-msvc" >> dist/opsbox-server-windows-x86_64-msvc/VERSION
+              echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/opsbox-server-windows-x86_64-msvc/VERSION
+              echo "Binary: opsbox-server.exe" >> dist/opsbox-server-windows-x86_64-msvc/VERSION
               ;;
           esac
 
@@ -163,27 +163,27 @@ jobs:
               ;;
           esac
 
-      # 上传 opsbox artifacts
-      - name: Upload opsbox macOS x64 artifact
+      # 上传 opsbox-server artifacts
+      - name: Upload opsbox-server macOS x64 artifact
         if: matrix.config.os == 'macos-x64'
         uses: actions/upload-artifact@v4
         with:
-          name: opsbox-macos-10.15-x86_64
-          path: dist/opsbox-macos-10.15-x86_64
+          name: opsbox-server-macos-10.15-x86_64
+          path: dist/opsbox-server-macos-10.15-x86_64
 
-      - name: Upload opsbox macOS arm64 artifact
+      - name: Upload opsbox-server macOS arm64 artifact
         if: matrix.config.os == 'macos-arm64'
         uses: actions/upload-artifact@v4
         with:
-          name: opsbox-macos-11.0-arm64
-          path: dist/opsbox-macos-11.0-arm64
+          name: opsbox-server-macos-11.0-arm64
+          path: dist/opsbox-server-macos-11.0-arm64
 
-      - name: Upload opsbox Windows artifact
+      - name: Upload opsbox-server Windows artifact
         if: matrix.config.os == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: opsbox-windows-x86_64-msvc
-          path: dist/opsbox-windows-x86_64-msvc
+          name: opsbox-server-windows-x86_64-msvc
+          path: dist/opsbox-server-windows-x86_64-msvc
 
       # 上传 opsbox-agent artifacts
       - name: Upload opsbox-agent macOS x64 artifact
@@ -207,51 +207,51 @@ jobs:
           name: opsbox-agent-windows-x86_64-msvc
           path: dist/opsbox-agent-windows-x86_64-msvc
   # macOS Universal2 二进制
-  macos-universal2-opsbox:
-    name: macOS Universal2 opsbox
+  macos-universal2-opsbox-server:
+    name: macOS Universal2 opsbox-server
     needs: build-other-platforms
     runs-on: macos-13
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Download opsbox macOS x86_64 artifact
+      - name: Download opsbox-server macOS x86_64 artifact
         uses: actions/download-artifact@v5
         with:
-          name: opsbox-macos-10.15-x86_64
+          name: opsbox-server-macos-10.15-x86_64
           path: arch_x64
 
-      - name: Download opsbox macOS arm64 artifact
+      - name: Download opsbox-server macOS arm64 artifact
         uses: actions/download-artifact@v5
         with:
-          name: opsbox-macos-11.0-arm64
+          name: opsbox-server-macos-11.0-arm64
           path: arch_arm64
 
-      - name: Create opsbox universal2 binary
+      - name: Create opsbox-server universal2 binary
         run: |
           set -euxo pipefail
-          OUT_DIR="dist/opsbox-macos-universal2"
+          OUT_DIR="dist/opsbox-server-macos-universal2"
           mkdir -p "$OUT_DIR"
           
-          X64_BIN=$(find arch_x64 -type f -name opsbox | head -n1)
-          ARM_BIN=$(find arch_arm64 -type f -name opsbox | head -n1)
+          X64_BIN=$(find arch_x64 -type f -name opsbox-server | head -n1)
+          ARM_BIN=$(find arch_arm64 -type f -name opsbox-server | head -n1)
           
           if [ -z "$X64_BIN" ] || [ -z "$ARM_BIN" ]; then
-            echo "未找到需要合并的opsbox二进制文件" >&2
+            echo "未找到需要合并的opsbox-server二进制文件" >&2
             exit 1
           fi
           
-          lipo -create -output "$OUT_DIR/opsbox" "$X64_BIN" "$ARM_BIN"
+          lipo -create -output "$OUT_DIR/opsbox-server" "$X64_BIN" "$ARM_BIN"
           
           # 添加版本信息
           echo "${{ github.sha }}" > "$OUT_DIR/VERSION"
           echo "Target: universal2-apple-darwin" >> "$OUT_DIR/VERSION"
           echo "Built: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OUT_DIR/VERSION"
-          echo "Binary: opsbox (universal2)" >> "$OUT_DIR/VERSION"
+          echo "Binary: opsbox-server (universal2)" >> "$OUT_DIR/VERSION"
 
-      - name: Upload opsbox universal2 artifact
+      - name: Upload opsbox-server universal2 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: opsbox-macos-universal2
-          path: dist/opsbox-macos-universal2
+          name: opsbox-server-macos-universal2
+          path: dist/opsbox-server-macos-universal2
 
   # macOS Universal2 opsbox-agent
   macos-universal2-agent:
@@ -303,7 +303,7 @@ jobs:
   # 发布
   release:
     name: Release
-    needs: [build-linux-release, build-other-platforms, macos-universal2-opsbox, macos-universal2-agent]
+    needs: [build-linux-release, build-other-platforms, macos-universal2-opsbox-server, macos-universal2-agent]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -312,7 +312,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
-          pattern: opsbox*
+          pattern: opsbox-*
           path: artifacts
           merge-multiple: true
 

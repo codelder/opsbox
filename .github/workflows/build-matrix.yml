@@ -86,7 +86,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: backend/target-gnu
-          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('server/Cargo.lock') }}
+          key: target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-${{ hashFiles('backend/Cargo.lock') }}
           restore-keys: |
             target-gnu-${{ runner.os }}-${{ steps.rust-toolchain.outputs.cachekey }}-
             target-gnu-${{ runner.os }}-
@@ -126,7 +126,7 @@ jobs:
           # 中文注释：静态 OpenSSL（vendored），避免系统依赖
           export OPENSSL_STATIC=1
           # 中文注释：使用传统 cargo build 进行 musl 静态构建
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --target x86_64-unknown-linux-musl --release --locked
 
 
       - name: Ensure manylinux2014 image present
@@ -181,12 +181,12 @@ jobs:
             # 显式启用静态 OpenSSL（vendored）
             export OPENSSL_STATIC=1
 
-            cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --target x86_64-unknown-linux-gnu --release --locked
 
             # 修正构建产物权限，避免宿主权限问题
-            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/server/target-gnu" || true
+            chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/backend/target-gnu" || true
           '
-          ls -l backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
+          ls -l backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server || true
 
       # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
       - name: Save target cache (musl)
@@ -212,8 +212,8 @@ jobs:
         run: |
           set -euxo pipefail
           # 中文注释：GNU 构建在 manylinux 容器中使用 CARGO_TARGET_DIR=server/target-gnu
-          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/opsbox-server"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
           echo "== Version needs (readelf -V) =="
@@ -231,8 +231,8 @@ jobs:
         run: |
           set -euo pipefail
           # 中文注释：优先检查 target-gnu 目录，回退到默认 target
-          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/opsbox-server"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
@@ -254,7 +254,7 @@ jobs:
           # 中文注释：Intel 目标设置为 10.15，以便在旧系统上运行
           MACOSX_DEPLOYMENT_TARGET: '10.15'
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
 
       - name: Build backend (macOS arm64, 11.0)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
@@ -262,13 +262,13 @@ jobs:
           # 中文注释：Apple Silicon 最低为 11.0
           MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
 
       # ========================= Windows 专用（MSVC 通用构建） =========================
       - name: Build backend (Windows, MSVC)
         if: runner.os == 'Windows'
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
 
       # 非 Linux 平台的打包与上传
       - name: Package artifact (Windows)
@@ -276,8 +276,8 @@ jobs:
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-windows-x86_64-msvc"
-          BIN="backend/target/release/api-gateway.exe"
+          ART_DIR="dist/opsbox-server-windows-x86_64-msvc"
+          BIN="backend/target/release/opsbox-server.exe"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -285,16 +285,16 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-windows-x86_64-msvc
-          path: dist/api-gateway-windows-x86_64-msvc
+          name: opsbox-server-windows-x86_64-msvc
+          path: dist/opsbox-server-windows-x86_64-msvc
 
       - name: Package artifact (macOS x86_64)
         if: runner.os == 'macOS' && runner.arch == 'X64'
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-macos-10.15-x86_64"
-          BIN="backend/target/release/api-gateway"
+          ART_DIR="dist/opsbox-server-macos-10.15-x86_64"
+          BIN="backend/target/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -302,16 +302,16 @@ jobs:
         if: runner.os == 'macOS' && runner.arch == 'X64'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-10.15-x86_64
-          path: dist/api-gateway-macos-10.15-x86_64
+          name: opsbox-server-macos-10.15-x86_64
+          path: dist/opsbox-server-macos-10.15-x86_64
 
       - name: Package artifact (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-macos-11.0-arm64"
-          BIN="backend/target/release/api-gateway"
+          ART_DIR="dist/opsbox-server-macos-11.0-arm64"
+          BIN="backend/target/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -319,8 +319,8 @@ jobs:
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-11.0-arm64
-          path: dist/api-gateway-macos-11.0-arm64
+          name: opsbox-server-macos-11.0-arm64
+          path: dist/opsbox-server-macos-11.0-arm64
 
       # Linux 平台分别打包 musl 与 gnu 两种产物
       - name: Package artifact (Linux, musl)
@@ -328,9 +328,9 @@ jobs:
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-linux-x86_64-musl"
-          BIN="backend/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-musl/release/api-gateway"
+          ART_DIR="dist/opsbox-server-linux-x86_64-musl"
+          BIN="backend/target-musl/x86_64-unknown-linux-musl/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-musl/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -338,17 +338,17 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-linux-x86_64-musl
-          path: dist/api-gateway-linux-x86_64-musl
+          name: opsbox-server-linux-x86_64-musl
+          path: dist/opsbox-server-linux-x86_64-musl
 
       - name: Package artifact (Linux, gnu)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          ART_DIR="dist/opsbox-server-linux-x86_64-gnu"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -356,8 +356,8 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-linux-x86_64-gnu
-          path: dist/api-gateway-linux-x86_64-gnu
+          name: opsbox-server-linux-x86_64-gnu
+          path: dist/opsbox-server-linux-x86_64-gnu
 
   # 打 tag 时跑完整矩阵（Linux/macOS/Windows）
   build-matrix:
@@ -464,7 +464,7 @@ jobs:
           sudo apt-get install -y musl-tools pkg-config
           # 中文注释：统一目标目录（musl 专用），与非 tag 流程保持一致，便于缓存
           export CARGO_TARGET_DIR="$PWD/backend/target-musl"
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-musl --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --target x86_64-unknown-linux-musl --release --locked
 
       - name: Ensure manylinux2014 image present
         if: runner.os == 'Linux'
@@ -517,12 +517,12 @@ jobs:
             # 显式启用静态 OpenSSL（vendored）
             export OPENSSL_STATIC=1
 
-            cargo build --manifest-path backend/Cargo.toml -p api-gateway --target x86_64-unknown-linux-gnu --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --target x86_64-unknown-linux-gnu --release --locked
 
             # 修正构建产物权限，避免宿主权限问题
             chown -R ${HOST_UID:-0}:${HOST_GID:-0} "$PWD/backend/target-gnu" || true
           '
-          ls -l backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway || true
+          ls -l backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server || true
 
       # 保存 target（全部）缓存（使用唯一 key，利用前缀恢复最新一份）
       - name: Save target cache (musl)
@@ -544,8 +544,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/opsbox-server"
           echo "== DT_NEEDED and version references =="
           objdump -p "$BIN" | sed -n '/Dynamic Section:/,/Version References/p' || true
           echo "== Version needs (readelf -V) =="
@@ -562,8 +562,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/opsbox-server"
           if [ ! -f "$BIN" ]; then
             echo "GNU artifact not found: $BIN" >&2
             exit 1
@@ -583,14 +583,14 @@ jobs:
         env:
           MACOSX_DEPLOYMENT_TARGET: '10.15'
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
 
       - name: Build backend (macOS arm64, 11.0)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         env:
           MACOSX_DEPLOYMENT_TARGET: '11.0'
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
 
       # 保存 target（macOS 主机）
       - name: Save target cache (macOS host)
@@ -603,7 +603,7 @@ jobs:
       - name: Build backend (Windows, MSVC)
         if: runner.os == 'Windows'
         run: |
-          cargo build --manifest-path backend/Cargo.toml -p api-gateway --release --locked
+          cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release --locked
 
       # 保存 target（Windows 主机）
       - name: Save target cache (Windows host)
@@ -618,8 +618,8 @@ jobs:
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-windows-x86_64-msvc"
-          BIN="backend/target/release/api-gateway.exe"
+          ART_DIR="dist/opsbox-server-windows-x86_64-msvc"
+          BIN="backend/target/release/opsbox-server.exe"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -627,16 +627,16 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-windows-x86_64-msvc
-          path: dist/api-gateway-windows-x86_64-msvc
+          name: opsbox-server-windows-x86_64-msvc
+          path: dist/opsbox-server-windows-x86_64-msvc
 
       - name: Package artifact (macOS x86_64)
         if: runner.os == 'macOS' && runner.arch == 'X64'
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-macos-10.15-x86_64"
-          BIN="backend/target/release/api-gateway"
+          ART_DIR="dist/opsbox-server-macos-10.15-x86_64"
+          BIN="backend/target/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -644,16 +644,16 @@ jobs:
         if: runner.os == 'macOS' && runner.arch == 'X64'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-10.15-x86_64
-          path: dist/api-gateway-macos-10.15-x86_64
+          name: opsbox-server-macos-10.15-x86_64
+          path: arch_x64
 
       - name: Package artifact (macOS arm64)
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-macos-11.0-arm64"
-          BIN="backend/target/release/api-gateway"
+          ART_DIR="dist/opsbox-server-macos-11.0-arm64"
+          BIN="backend/target/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -661,17 +661,17 @@ jobs:
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-11.0-arm64
-          path: dist/api-gateway-macos-11.0-arm64
+          name: opsbox-server-macos-11.0-arm64
+          path: arch_arm64
 
       - name: Package artifact (Linux, musl)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-linux-x86_64-musl"
-          BIN="backend/target-musl/x86_64-unknown-linux-musl/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-musl/release/api-gateway"
+          ART_DIR="dist/opsbox-server-linux-x86_64-musl"
+          BIN="backend/target-musl/x86_64-unknown-linux-musl/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-musl/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -679,17 +679,17 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-linux-x86_64-musl
-          path: dist/api-gateway-linux-x86_64-musl
+          name: opsbox-server-linux-x86_64-musl
+          path: dist/opsbox-server-linux-x86_64-musl
 
       - name: Package artifact (Linux, gnu)
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -eux
-          ART_DIR="dist/api-gateway-linux-x86_64-gnu"
-          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/api-gateway"
-          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/api-gateway"
+          ART_DIR="dist/opsbox-server-linux-x86_64-gnu"
+          BIN="backend/target-gnu/x86_64-unknown-linux-gnu/release/opsbox-server"
+          [ -f "$BIN" ] || BIN="backend/target/x86_64-unknown-linux-gnu/release/opsbox-server"
           mkdir -p "$ART_DIR"
           cp "$BIN" "$ART_DIR/"
 
@@ -697,8 +697,8 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-linux-x86_64-gnu
-          path: dist/api-gateway-linux-x86_64-gnu
+          name: opsbox-server-linux-x86_64-gnu
+          path: dist/opsbox-server-linux-x86_64-gnu
 
   macos-universal2:
     name: Mac universal2
@@ -709,7 +709,7 @@ jobs:
       - name: Download macOS x86_64 artifact
         uses: actions/download-artifact@v5
         with:
-          name: api-gateway-macos-10.15-x86_64
+          name: opsbox-server-macos-10.15-x86_64
           path: arch_x64
 
       - name: Download macOS arm64 artifact
@@ -717,18 +717,18 @@ jobs:
         env:
           NODE_NO_WARNINGS: '1'
         with:
-          name: api-gateway-macos-11.0-arm64
+          name: opsbox-server-macos-11.0-arm64
           path: arch_arm64
 
       - name: Create universal2 binary
         shell: bash
         run: |
           set -euxo pipefail
-          OUT_DIR="dist/api-gateway-macos-universal2"
+          OUT_DIR="dist/opsbox-server-macos-universal2"
           mkdir -p "$OUT_DIR"
           # 中文注释：下载的工件解压后的结构可能包含或不包含 dist 前缀，此处使用 find 动态查找
-          X64_BIN=$(find arch_x64 -type f -name api-gateway | head -n1 || true)
-          ARM_BIN=$(find arch_arm64 -type f -name api-gateway | head -n1 || true)
+          X64_BIN=$(find arch_x64 -type f -name opsbox-server | head -n1 || true)
+          ARM_BIN=$(find arch_arm64 -type f -name opsbox-server | head -n1 || true)
           if [ -z "${X64_BIN:-}" ] || [ -z "${ARM_BIN:-}" ]; then
             echo "未找到需要合并的二进制：X64='${X64_BIN:-}' ARM='${ARM_BIN:-}'" >&2
             echo "目录结构 (前 3 层)：" >&2
@@ -739,13 +739,13 @@ jobs:
           echo "x64 bin: $X64_BIN" >&2
           echo "arm64 bin: $ARM_BIN" >&2
           # 中文注释：合并两种架构的 Mach-O 可执行文件
-          lipo -create -output "$OUT_DIR/api-gateway" "$X64_BIN" "$ARM_BIN"
+          lipo -create -output "$OUT_DIR/opsbox-server" "$X64_BIN" "$ARM_BIN"
 
       - name: Upload artifact (macOS universal2)
         uses: actions/upload-artifact@v4
         with:
-          name: api-gateway-macos-universal2
-          path: dist/api-gateway-macos-universal2
+          name: opsbox-server-macos-universal2
+          path: dist/opsbox-server-macos-universal2
 
   release:
     name: Release on tag
@@ -758,7 +758,7 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v5
         with:
-          pattern: api-gateway-*
+          pattern: opsbox-server-*
           path: artifacts
           merge-multiple: true
 

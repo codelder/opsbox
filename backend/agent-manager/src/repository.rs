@@ -96,9 +96,17 @@ impl AgentRepository {
 
     sqlx::query(
       r#"
-            INSERT OR REPLACE INTO agents 
+            INSERT INTO agents 
             (id, name, version, hostname, search_roots, last_heartbeat, status, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              version = excluded.version,
+              hostname = excluded.hostname,
+              search_roots = excluded.search_roots,
+              last_heartbeat = excluded.last_heartbeat,
+              status = excluded.status,
+              updated_at = excluded.updated_at
             "#,
     )
     .bind(&info.id)
@@ -113,8 +121,10 @@ impl AgentRepository {
     .execute(&self.pool)
     .await?;
 
-    // 保存标签
-    self.save_agent_tags(&info.id, &info.tags).await?;
+    // 仅当 info.tags 非空时才覆盖（避免空上报清空已存在的标签）
+    if !info.tags.is_empty() {
+      self.save_agent_tags(&info.id, &info.tags).await?;
+    }
 
     Ok(())
   }
@@ -393,20 +403,24 @@ impl AgentRepository {
     Ok(())
   }
 
-  /// 保存 Agent 标签
+  /// 保存 Agent 标签（部分覆盖）
+  /// 仅覆盖本次上报中出现的 tag_key：
+  /// - 对于每个 tag_key：先删除该 Agent 下该 key 的所有旧值，再插入新值
+  /// - 未出现在本次上报中的其他 key 将被保留，不做变更
   pub async fn save_agent_tags(&self, agent_id: &str, tags: &[AgentTag]) -> Result<(), sqlx::Error> {
-    // 先删除现有标签
-    sqlx::query(
-      r#"
-            DELETE FROM agent_tags WHERE agent_id = ?
-            "#,
-    )
-    .bind(agent_id)
-    .execute(&self.pool)
-    .await?;
-
-    // 插入新标签
     for tag in tags {
+      // 删除该 key 既有记录（避免同一 key 存在多个值）
+      sqlx::query(
+        r#"
+              DELETE FROM agent_tags WHERE agent_id = ? AND tag_key = ?
+              "#,
+      )
+      .bind(agent_id)
+      .bind(&tag.key)
+      .execute(&self.pool)
+      .await?;
+
+      // 插入该 key 的新值
       let tag_id = Uuid::new_v4().to_string();
       let now = Utc::now().timestamp();
 
@@ -445,6 +459,22 @@ impl AgentRepository {
       .collect();
 
     Ok(tags)
+  }
+
+  /// 删除指定的 Agent 标签
+  pub async fn delete_agent_tag(&self, agent_id: &str, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+      r#"
+            DELETE FROM agent_tags WHERE agent_id = ? AND tag_key = ? AND tag_value = ?
+            "#,
+    )
+    .bind(agent_id)
+    .bind(key)
+    .bind(value)
+    .execute(&self.pool)
+    .await?;
+
+    Ok(())
   }
 
   /// 获取所有标签

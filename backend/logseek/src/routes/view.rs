@@ -2,19 +2,19 @@
 //!
 //! 处理 /view.cache.json 端点，从缓存中读取文件内容
 
-use crate::api::models::ViewParams;
+use crate::api::{LogSeekApiError, models::ViewParams};
 use crate::domain::FileUrl;
 use crate::repository::cache::cache as simple_cache;
 use axum::{
   body::Body,
   extract::Query,
-  http::{HeaderValue, Response as HttpResponse, StatusCode, header::CONTENT_TYPE},
+  http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
 use log::debug;
-use problemdetails::Problem;
+// Problem 导入已被 LogSeekApiError 的 IntoResponse 实现所需
 
 /// 查看缓存中的文件内容
-pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, Problem> {
+pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
   log::debug!(
     "view-request: sid={} file={} start={:?} end={:?}",
     params.sid,
@@ -33,12 +33,10 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
         params.file,
         e
       );
-      return Ok(
-        HttpResponse::builder()
-          .status(StatusCode::BAD_REQUEST)
-          .body(Body::from(format!("Invalid file URL: {}", e)))
-          .unwrap(),
-      );
+      return Err(LogSeekApiError::Internal(opsbox_core::AppError::bad_request(format!(
+        "Invalid file URL: {}",
+        e
+      ))));
     }
   };
 
@@ -66,16 +64,9 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
     }
     None => {
       debug!("❌ Server缓存未命中: sid={}, file_url={}", params.sid, file_url);
-      return Ok(
-        HttpResponse::builder()
-          .status(404)
-          .header(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json; charset=utf-8"),
-          )
-          .body(Body::from("{\"error\":\"not_found_or_expired\"}"))
-          .unwrap(),
-      );
+      return Err(LogSeekApiError::Internal(opsbox_core::AppError::not_found(
+        "Cache not found or expired",
+      )));
     }
   };
   let start = params.start.unwrap_or(1).max(1);
@@ -102,14 +93,12 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
     "lines": out_lines,
   });
   let body = serde_json::to_vec(&obj).unwrap_or_else(|_| b"{}".to_vec());
-  Ok(
-    HttpResponse::builder()
-      .status(200)
-      .header(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/json; charset=utf-8"),
-      )
-      .body(Body::from(body))
-      .unwrap(),
-  )
+  HttpResponse::builder()
+    .status(200)
+    .header(
+      CONTENT_TYPE,
+      HeaderValue::from_static("application/json; charset=utf-8"),
+    )
+    .body(Body::from(body))
+    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建 HTTP 响应失败: {}", e))))
 }

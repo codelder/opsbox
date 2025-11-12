@@ -124,5 +124,9 @@ impl IntoResponse for AppError {
   }
 }
 
+// 注意：不需要手动实现 From<AppError> for Box<dyn Error + Send + Sync>
+// 因为 AppError 实现了 Error + Send + Sync，Rust 标准库已经提供了自动转换
+// 如果确实需要显式转换，可以使用 Box::new(err) as Box<dyn std::error::Error + Send + Sync>
+
 /// Result 类型别名
 pub type Result<T> = std::result::Result<T, AppError>;

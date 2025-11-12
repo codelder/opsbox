@@ -42,11 +42,17 @@ pub fn router(db_pool: SqlitePool) -> axum::Router {
 /// 初始化 LogSeek 模块数据库 schema
 pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
   // 初始化 S3 配置表
-  repository::settings::init_schema(db_pool).await?;
+  repository::settings::init_schema(db_pool)
+    .await
+    .map_err(|e| opsbox_core::AppError::internal(e.to_string()))?;
   // 初始化 LLM 配置表
-  repository::llm::init_schema(db_pool).await?;
+  repository::llm::init_schema(db_pool)
+    .await
+    .map_err(|e| opsbox_core::AppError::internal(e.to_string()))?;
   // 初始化 Planner 脚本表
-  repository::planners::init_schema(db_pool).await?;
+  repository::planners::init_schema(db_pool)
+    .await
+    .map_err(|e| opsbox_core::AppError::internal(e.to_string()))?;
   Ok(())
 }
 
@@ -96,10 +102,9 @@ impl opsbox_core::Module for LogSeekModule {
   }
 
   async fn init_schema(&self, pool: &SqlitePool) -> std::result::Result<(), Box<dyn std::error::Error>> {
-    // 将 Result<()> 转换为 Result<(), Box<dyn Error>>
-    init_schema(pool)
-      .await
-      .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    // 使用 ? 操作符自动转换（通过 From<AppError> for Box<dyn Error> 实现）
+    init_schema(pool).await?;
+    Ok(())
   }
 
   fn router(&self, pool: SqlitePool) -> axum::Router {

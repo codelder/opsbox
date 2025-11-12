@@ -4,7 +4,7 @@
 
 `opsbox-agent` 现在支持三层过滤架构，提供从粗粒度到细粒度的渐进式过滤：
 
-1. **第一层：SearchScope** - 定义搜索范围（目录、文件、压缩包）
+1. **第一层：Target** - 定义搜索目标（目录、文件、归档）
 2. **第二层：path_filter** - 应用路径模式过滤
 3. **第三层：query path:** - 最终的文件匹配
 
@@ -42,17 +42,16 @@ curl -X POST http://localhost:4001/api/v1/search \
     "query": "error path:error.log",
     "context_lines": 3,
     "path_filter": "**/*.log",
-    "scope": {
-      "Directory": {
-        "path": "app",
-        "recursive": true
-      }
+    "target": {
+      "type": "dir",
+      "path": "app",
+      "recursive": true
     }
   }'
 ```
 
 **执行流程：**
-1. **SearchScope::Directory("app")** → 搜索 `/var/log/app`, `/opt/app/logs/app`, `/tmp/debug/app`
+1. **Target::Dir { path: "app" }** → 搜索 `/var/log/app`, `/opt/app/logs/app`, `/tmp/debug/app`
 2. **path_filter("**/*.log")** → 过滤出所有 `.log` 文件
 3. **query("error path:error.log")** → 最终只搜索 `error.log` 文件中的 "error" 内容
 
@@ -66,16 +65,15 @@ curl -X POST http://localhost:4001/api/v1/search \
     "query": "500",
     "context_lines": 2,
     "path_filter": "**/*error*",
-    "scope": {
-      "Files": {
-        "paths": ["app/error.log", "nginx/access.log"]
-      }
+    "target": {
+      "type": "files",
+      "paths": ["app/error.log", "nginx/access.log"]
     }
   }'
 ```
 
 **执行流程：**
-1. **SearchScope::Files** → 搜索 `/var/log/app/error.log`, `/var/log/nginx/access.log`
+1. **Target::Files** → 搜索 `/var/log/app/error.log`, `/var/log/nginx/access.log`
 2. **path_filter("**/*error*")** → 只保留包含 "error" 的文件
 3. **query("500")** → 搜索包含 "500" 的内容
 
@@ -89,16 +87,15 @@ curl -X POST http://localhost:4001/api/v1/search \
     "query": "exception path:error.log",
     "context_lines": 5,
     "path_filter": "**/*.log",
-    "scope": {
-      "TarGz": {
-        "path": "backup/app-2024-01-01.tar.gz"
-      }
+    "target": {
+      "type": "archive",
+      "path": "backup/app-2024-01-01.tar.gz"
     }
   }'
 ```
 
 **执行流程：**
-1. **SearchScope::TarGz** → 搜索 `/var/log/backup/app-2024-01-01.tar.gz`
+1. **Target::Archive** → 搜索 `/var/log/backup/app-2024-01-01.tar.gz`
 2. **path_filter("**/*.log")** → 在压缩包中过滤 `.log` 文件
 3. **query("exception path:error.log")** → 最终只搜索 `error.log` 文件
 
@@ -112,12 +109,16 @@ curl -X POST http://localhost:4001/api/v1/search \
     "query": "critical",
     "context_lines": 1,
     "path_filter": "**/*.log",
-    "scope": "All"
+    "target": {
+      "type": "dir",
+      "path": ".",
+      "recursive": true
+    }
   }'
 ```
 
 **执行流程：**
-1. **SearchScope::All** → 搜索所有配置的根目录
+1. **Target::Dir { path: ".", recursive: true }** → 搜索所有配置的根目录
 2. **path_filter("**/*.log")** → 过滤出所有 `.log` 文件
 3. **query("critical")** → 搜索包含 "critical" 的内容
 
@@ -132,7 +133,7 @@ Agent 会将相对路径映射到 `search_roots` 的子目录：
 --search-roots "/var/log,/opt/app/logs"
 
 # 请求
-"scope": {"Directory": {"path": "app", "recursive": true}}
+"target": {"type": "dir", "path": "app", "recursive": true}
 
 # 实际搜索路径
 # - /var/log/app (如果存在)
@@ -156,10 +157,10 @@ Agent 会将相对路径映射到 `search_roots` 的子目录：
 ```bash
 # 如果路径不存在
 curl -X POST http://localhost:4001/api/v1/search \
-  -d '{"scope": {"Directory": {"path": "nonexistent", "recursive": true}}}'
+  -d '{"target": {"type": "dir", "path": "nonexistent", "recursive": true}}'
 
 # 返回错误：
-# "SearchScope 解析失败: 未找到目录: nonexistent。可用的子目录: [\"app\", \"nginx\", \"system\"]"
+# "Target 解析失败: 未找到目录: nonexistent。可用的子目录: [\"app\", \"nginx\", \"system\"]"
 ```
 
 ### 路径过滤器错误
@@ -167,7 +168,7 @@ curl -X POST http://localhost:4001/api/v1/search \
 ```bash
 # 无效的 glob 模式
 curl -X POST http://localhost:4001/api/v1/search \
-  -d '{"path_filter": "[invalid", "scope": "All"}'
+  -d '{"path_filter": "[invalid", "target": {"type": "dir", "path": ".", "recursive": true}}'
 
 # 返回错误：
 # "路径过滤器应用失败: 路径过滤器语法错误: ..."
@@ -200,13 +201,7 @@ curl -X POST http://localhost:4001/api/v1/search \
   -d '{...}'
 ```
 
-### 5. 进度查询
-```bash
-curl http://localhost:4001/api/v1/progress/{task_id}
-# 返回搜索进度
-```
-
-### 6. 取消搜索
+### 5. 取消搜索
 ```bash
 curl -X POST http://localhost:4001/api/v1/cancel/{task_id}
 # 取消指定的搜索任务
@@ -220,7 +215,7 @@ curl -X POST http://localhost:4001/api/v1/cancel/{task_id}
 - 定期检查可用路径
 
 ### 2. 过滤策略
-- 先用 `SearchScope` 缩小范围
+- 先用 `Target` 缩小范围
 - 再用 `path_filter` 过滤文件类型
 - 最后用 `query path:` 精确匹配
 
@@ -232,7 +227,6 @@ curl -X POST http://localhost:4001/api/v1/cancel/{task_id}
 ### 4. 错误处理
 - 先查询可用路径再搜索
 - 处理路径不存在的错误
-- 监控搜索进度和状态
 
 ## 总结
 

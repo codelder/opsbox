@@ -137,26 +137,49 @@ input#search {
   list-style: decimal;
 }
 .prose code {
-  background: #f3f4f6;
+  background: #e2e8f0; /* slate-200，提高对比度 */
+  color: #0f172a; /* slate-900，深色文字 */
   padding: 0.15rem 0.35rem;
   border-radius: 0.25rem;
   font-family: var(--font-ui), monospace;
   font-size: 0.9em;
+  border: 1px solid #cbd5e1; /* slate-300，添加边框增强对比 */
 }
 .dark .prose code {
-  background: #111827;
+  background: #1e293b; /* slate-800，更亮的背景 */
+  color: #f1f5f9; /* slate-100，更亮的文字 */
+  border: 1px solid #334155; /* slate-700，边框 */
+}
+/* pre 内部的 code 元素：移除边框和背景，避免每行出现横线 */
+.prose pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  color: inherit;
+  font-size: inherit;
+}
+.dark .prose pre code {
+  background: transparent;
+  border: none;
+  color: inherit;
 }
 .prose pre {
-  background: #f8fafc;
-  color: #111827;
+  background: #e2e8f0; /* slate-200，提高对比度 */
+  color: #0f172a; /* slate-900，深色文字 */
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   overflow: auto;
   margin: 0.75rem 0;
+  border: 1px solid #cbd5e1; /* slate-300，添加边框 */
+  white-space: pre; /* 不折行，保持原始格式 */
+  word-wrap: normal; /* 不自动换行 */
+  overflow-x: auto; /* 横向滚动 */
 }
 .dark .prose pre {
-  background: #0b1220;
-  color: #e5e7eb;
+  background: #1e293b; /* slate-800，更亮的背景 */
+  color: #f1f5f9; /* slate-100，更亮的文字 */
+  border: 1px solid #334155; /* slate-700，边框 */
 }
 .prose table {
   border-collapse: collapse;
@@ -189,4 +212,16 @@ input#search {
 .dark .prose blockquote {
   border-left-color: #374151;
   color: #9ca3af;
+}
+
+/* 测试输出框样式（与帮助代码块一致） */
+.test-output-box {
+  background: #e2e8f0; /* slate-200，与 .prose pre 一致 */
+  color: #0f172a; /* slate-900，深色文字 */
+  border: 1px solid #cbd5e1; /* slate-300，边框 */
+}
+.dark .test-output-box {
+  background: #1e293b; /* slate-800，与 .prose pre 一致 */
+  color: #f1f5f9; /* slate-100，更亮的文字 */
+  border: 1px solid #334155; /* slate-700，边框 */
 }

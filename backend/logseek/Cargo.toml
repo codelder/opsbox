@@ -59,8 +59,10 @@ async-stream = "0.3"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 # Starlark runtime for scriptable source planning
 starlark = "0.13"
-# Markdown rendering for README → HTML
-comrak = "0.24"
+# Text encoding detection and conversion (for GBK support)
+encoding_rs = "0.8"
+# Character encoding detection library (Mozilla's chardetng)
+chardetng = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,6 +1,8 @@
+use super::RepositoryError;
+use super::error::Result;
 use crate::utils::storage::{self, S3Error};
 use log::{debug, error, info};
-use opsbox_core::{AppError, Result, SqlitePool, run_migration};
+use opsbox_core::{SqlitePool, run_migration};
 use serde::{Deserialize, Serialize};
 
 /// S3 兼容对象存储配置
@@ -47,7 +49,9 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
     );
   "#;
 
-  run_migration(db_pool, schema_sql, "logseek").await?;
+  run_migration(db_pool, schema_sql, "logseek")
+    .await
+    .map_err(|e| RepositoryError::Database(e.to_string()))?;
 
   Ok(())
 }
@@ -59,7 +63,7 @@ pub async fn load_s3_settings(pool: &SqlitePool) -> Result<Option<S3Settings>> {
   )
   .fetch_optional(pool)
   .await
-  .map_err(|e| AppError::internal(format!("查询 S3 配置失败: {}", e)))?;
+  .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 配置失败: {}", e)))?;
 
   match &row {
     Some(_) => info!("S3 配置加载成功 (profile=default)"),
@@ -77,7 +81,7 @@ pub async fn load_s3_settings(pool: &SqlitePool) -> Result<Option<S3Settings>> {
 pub async fn load_required_s3_settings(pool: &SqlitePool) -> Result<S3Settings> {
   load_s3_settings(pool)
     .await?
-    .ok_or_else(|| AppError::not_found("未配置 S3 对象存储连接"))
+    .ok_or_else(|| RepositoryError::NotFound("未配置 S3 对象存储连接".to_string()))
 }
 
 pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Result<()> {
@@ -100,7 +104,7 @@ pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Resul
     sqlx::query_as("SELECT profile_name FROM s3_profiles WHERE profile_name = 'default'")
       .fetch_optional(pool)
       .await
-      .map_err(|e| AppError::internal(format!("查询 S3 Profile 失败: {}", e)))?;
+      .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profile 失败: {}", e)))?;
 
   if existing.is_some() {
     sqlx::query(
@@ -113,7 +117,7 @@ pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Resul
     .bind(now)
     .execute(pool)
     .await
-    .map_err(|e| AppError::internal(format!("更新 S3 配置失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("更新 S3 配置失败: {}", e)))?;
   } else {
     sqlx::query(
       "INSERT INTO s3_profiles (profile_name, endpoint, bucket, access_key, secret_key, created_at, updated_at) VALUES ('default', ?, ?, ?, ?, ?, ?)",
@@ -126,7 +130,7 @@ pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Resul
     .bind(now)
     .execute(pool)
     .await
-    .map_err(|e| AppError::internal(format!("保存 S3 配置失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("保存 S3 配置失败: {}", e)))?;
   }
 
   info!("S3 配置保存成功 (profile=default)");
@@ -151,46 +155,57 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
       info!("S3配置验证成功");
       Ok(())
     }
-    Err(S3Error::InvalidBaseUrl(_)) => {
+    Err(S3Error::InvalidBaseUrl { url: _ }) => {
       error!("S3 Endpoint地址无效: {}", settings.endpoint);
-      Err(AppError::external_service(
-        "S3连接失败: Endpoint 地址无效，请确认格式例如 http://host:9000",
+      Err(RepositoryError::StorageError(
+        "S3连接失败: Endpoint 地址无效，请确认格式例如 http://host:9000".to_string(),
       ))
     }
-    Err(S3Error::S3Build) => {
-      error!("S3客户端构建失败: endpoint={}", settings.endpoint);
-      Err(AppError::external_service(
-        "S3连接失败: 无法建立 S3 连接，请检查 Endpoint、Access Key 和 Secret Key",
-      ))
+    Err(S3Error::S3Build { reason }) => {
+      error!("S3客户端构建失败: endpoint={}, reason={}", settings.endpoint, reason);
+      Err(RepositoryError::StorageError(format!(
+        "S3连接失败: 无法建立 S3 连接，请检查 Endpoint、Access Key 和 Secret Key。原因: {}",
+        reason
+      )))
     }
-    Err(S3Error::S3ListObjects(msg)) => {
-      let lower = msg.to_ascii_lowercase();
+    Err(S3Error::S3ListObjects { bucket, prefix, error }) => {
+      let lower = error.to_ascii_lowercase();
       if lower.contains("nosuchbucket") {
-        Err(AppError::external_service(format!(
+        Err(RepositoryError::StorageError(format!(
           "S3连接失败: 桶 {} 不存在或无权限访问，请确认 Bucket 名称",
-          settings.bucket
+          bucket
         )))
       } else if lower.contains("accessdenied") || lower.contains("signature") {
-        Err(AppError::external_service(
-          "S3连接失败: 访问被拒绝，请确认 Access Key 与 Secret Key 是否正确",
+        Err(RepositoryError::StorageError(
+          "S3连接失败: 访问被拒绝，请确认 Access Key 与 Secret Key 是否正确".to_string(),
         ))
       } else {
-        Err(AppError::external_service(format!(
-          "S3连接失败: 无法列举桶 {}：{}",
-          settings.bucket, msg
+        Err(RepositoryError::StorageError(format!(
+          "S3连接失败: 无法列举桶 bucket={}, prefix={}, error={}",
+          bucket, prefix, error
         )))
       }
     }
-    Err(S3Error::S3GetObject(msg)) => Err(AppError::external_service(format!("S3连接失败: 无法读取对象：{}", msg))),
-    Err(S3Error::S3ToStream(msg)) => Err(AppError::external_service(format!(
-      "S3连接失败: 读取对象流失败：{}",
-      msg
+    Err(S3Error::S3GetObject { bucket, key, error }) => Err(RepositoryError::StorageError(format!(
+      "S3连接失败: 无法读取对象 bucket={}, key={}, error={}",
+      bucket, key, error
     ))),
-    Err(S3Error::Regex(msg)) => Err(AppError::bad_request(format!("无效的对象筛选正则：{}", msg))),
-    Err(S3Error::Io(err)) => Err(AppError::external_service(format!("S3连接失败: 网络通信错误：{}", err))),
-    Err(S3Error::ConnectionTimeout) => Err(AppError::external_service(
-      "S3连接失败: 连接超时，请检查网络或 S3 服务状态",
-    )),
+    Err(S3Error::S3ToStream { bucket, key, error }) => Err(RepositoryError::StorageError(format!(
+      "S3连接失败: 读取对象流失败 bucket={}, key={}, error={}",
+      bucket, key, error
+    ))),
+    Err(S3Error::Regex { pattern, error }) => Err(RepositoryError::StorageError(format!(
+      "无效的对象筛选正则 pattern={}, error={}",
+      pattern, error
+    ))),
+    Err(S3Error::Io { path, error }) => Err(RepositoryError::StorageError(format!(
+      "S3连接失败: 网络通信错误 path={}, error={}",
+      path, error
+    ))),
+    Err(S3Error::ConnectionTimeout { bucket, operation }) => Err(RepositoryError::StorageError(format!(
+      "S3连接失败: 连接超时 bucket={}, operation={}，请检查网络或 S3 服务状态",
+      bucket, operation
+    ))),
   }
 }
 
@@ -208,7 +223,7 @@ pub async fn load_s3_profile(pool: &SqlitePool, profile_name: &str) -> Result<Op
   .bind(profile_name)
   .fetch_optional(pool)
   .await
-  .map_err(|e| AppError::internal(format!("查询 S3 Profile 失败: {}", e)))?;
+  .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profile 失败: {}", e)))?;
 
   Ok(
     row.map(|(profile_name, endpoint, bucket, access_key, secret_key)| S3Profile {
@@ -230,7 +245,7 @@ pub async fn list_s3_profiles(pool: &SqlitePool) -> Result<Vec<S3Profile>> {
   )
   .fetch_all(pool)
   .await
-  .map_err(|e| AppError::internal(format!("查询 S3 Profiles 失败: {}", e)))?;
+  .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profiles 失败: {}", e)))?;
 
   Ok(
     rows
@@ -274,7 +289,7 @@ pub async fn save_s3_profile(pool: &SqlitePool, profile: &S3Profile) -> Result<(
     .bind(&profile.profile_name)
     .execute(pool)
     .await
-    .map_err(|e| AppError::internal(format!("更新 S3 Profile 失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("更新 S3 Profile 失败: {}", e)))?;
 
     info!("S3 Profile 更新成功: {}", profile.profile_name);
   } else {
@@ -292,7 +307,7 @@ pub async fn save_s3_profile(pool: &SqlitePool, profile: &S3Profile) -> Result<(
     .bind(now)
     .execute(pool)
     .await
-    .map_err(|e| AppError::internal(format!("保存 S3 Profile 失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("保存 S3 Profile 失败: {}", e)))?;
 
     info!("S3 Profile 创建成功: {}", profile.profile_name);
   }
@@ -306,14 +321,14 @@ pub async fn delete_s3_profile(pool: &SqlitePool, profile_name: &str) -> Result<
 
   // 不允许删除 default profile
   if profile_name == "default" {
-    return Err(AppError::bad_request("不能删除 default profile"));
+    return Err(RepositoryError::StorageError("不能删除 default profile".to_string()));
   }
 
   sqlx::query("DELETE FROM s3_profiles WHERE profile_name = ?")
     .bind(profile_name)
     .execute(pool)
     .await
-    .map_err(|e| AppError::internal(format!("删除 S3 Profile 失败: {}", e)))?;
+    .map_err(|e| RepositoryError::QueryFailed(format!("删除 S3 Profile 失败: {}", e)))?;
 
   info!("S3 Profile 删除成功: {}", profile_name);
   Ok(())

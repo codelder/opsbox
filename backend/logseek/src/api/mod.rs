@@ -8,7 +8,11 @@
 // - 路由定义
 // ============================================================================
 
+pub mod error;
 pub mod models;
+
+// 导出错误类型和 Result 别名
+pub use error::{LogSeekApiError, Result};
 
 // 重新导出 routes.rs 中的公共接口以保持向后兼容
 pub use crate::routes::router;

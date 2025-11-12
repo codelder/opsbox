@@ -38,6 +38,10 @@ export interface SearchJsonResult {
   path: string;
   keywords: string[];
   chunks: JsonChunk[];
+  /**
+   * 文件编码名称（如 "UTF-8"、"GBK"）
+   */
+  encoding?: string;
 }
 
 /**
@@ -209,6 +213,25 @@ export interface ViewState {
   lines: JsonLine[];
   loading: boolean;
   error: string | null;
+}
+
+// ============ 搜索事件类型 ============
+
+/**
+ * 搜索错误事件（从流中接收）
+ */
+export interface SearchErrorEvent {
+  source: string; // 错误来源
+  message: string; // 错误信息
+  recoverable: boolean; // 是否可恢复（是否继续搜索其他源）
+}
+
+/**
+ * 搜索完成事件（从流中接收）
+ */
+export interface SearchCompleteEvent {
+  source: string; // 完成的来源
+  elapsed_ms: number; // 耗时（毫秒）
 }
 
 // ============ 工具类型 ============

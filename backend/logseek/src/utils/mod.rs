@@ -2,4 +2,5 @@
 
 pub mod renderer;
 pub mod storage;
+pub mod strings;
 pub mod tuning;

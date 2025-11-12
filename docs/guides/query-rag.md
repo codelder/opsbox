@@ -1,10 +1,13 @@
 # 查询字符串（q）语法与使用说明 — RAG 资料
 
-本文档面向大模型检索与工程实践，汇总日志检索服务中“查询字符串（q）”的语法规范、日期指令扩展、接口契约、错误类型、示例问答与核心代码片段（含文件路径与起始行号）。
+**文档版本**: v1.0  
+**最后更新**: 2025-11-10
+
+本文档面向大模型检索与工程实践，汇总日志检索服务中"查询字符串（q）"的语法规范、日期指令扩展、接口契约、错误类型、示例问答与核心代码片段（含文件路径与起始行号）。
 
 - 服务路径：/api/v1/logseek
-  - POST /api/v1/logseek/stream → Markdown 流式
-  - POST /api/v1/logseek/stream.ndjson → NDJSON 流式
+  - POST /api/v1/logseek/search.ndjson → NDJSON 流式
+  - GET  /api/v1/logseek/view.cache.json → 查看缓存
 - 请求体：{ q: string, context?: number }
 - 默认 context：3 行
 
@@ -31,28 +34,30 @@
 ## 一、概览与接口契约
 
 - 接口与请求体定义：
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/routes.rs start=51
-#[derive(Debug, Clone, serde::Deserialize)]
+```rs path=PROJECT_ROOT/backend/logseek/src/api/models.rs start=58
+#[derive(Debug, Clone, Deserialize)]
 pub struct SearchBody {
   pub q: String,
   pub context: Option<usize>,
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/routes.rs start=69
-pub fn router() -> Router {
+```rs path=PROJECT_ROOT/backend/logseek/src/routes/mod.rs start=21
+pub fn router(db_pool: SqlitePool) -> Router {
   Router::new()
-    .route("/stream", post(stream_markdown))
-    .route("/stream.ndjson", post(stream_local_ndjson))
+    // 搜索路由（多存储源并行搜索）
+    .route("/search.ndjson", axum::routing::post(search::stream_search))
+    .route("/view.cache.json", axum::routing::get(view::view_cache_json))
+    .with_state(db_pool)
 }
 ```
 
 - 响应格式：
-  - /stream → Content-Type: text/markdown; charset=utf-8（分段 Markdown 输出）
-  - /stream.ndjson → Content-Type: application/x-ndjson; charset=utf-8（行分隔 JSON，每行一条 chunk）
+  - /search.ndjson → Content-Type: application/x-ndjson; charset=utf-8（行分隔 JSON，每行一条 chunk）
+  - /view.cache.json → Content-Type: application/json; charset=utf-8（查看缓存）
 
 - NDJSON 对象结构：
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/renderer.rs start=96
+```rs path=PROJECT_ROOT/backend/logseek/src/utils/renderer.rs start=97
 #[derive(Debug, Serialize)]
 pub struct SearchJsonResult {
   pub path: String,
@@ -62,17 +67,10 @@ pub struct SearchJsonResult {
 ```
 
 - 请求示例：
-  - Markdown 流式：
-```bash path=null start=null
-curl -s -X POST \
-  http://127.0.0.1:4000/api/v1/logseek/stream \
-  -H 'Content-Type: application/json' \
-  -d '{"q":"error OR timeout -debug path:logs/*.log","context":2}'
-```
   - NDJSON 流式：
 ```bash path=null start=null
 curl -s -X POST \
-  http://127.0.0.1:4000/api/v1/logseek/stream.ndjson \
+  http://127.0.0.1:4000/api/v1/logseek/search.ndjson \
   -H 'Content-Type: application/json' \
   -d '{"q":"\"connection reset\" OR /ERR\\d{3}/ dt:20250909"}'
 ```
@@ -87,7 +85,7 @@ curl -s -X POST \
   - Phrase：双引号短语，按子串匹配，大小写敏感
   - Regex：/.../ Rust 正则
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/mod.rs start=30
+```rs path=PROJECT_ROOT/backend/logseek/src/query/mod.rs start=30
 #[derive(Debug, Clone)]
 pub enum Term {
   // 匹配简单子串
@@ -99,7 +97,7 @@ pub enum Term {
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/mod.rs start=40
+```rs path=PROJECT_ROOT/backend/logseek/src/query/mod.rs start=40
 impl Term {
   pub fn matches(&self, line: &str) -> bool {
     match self {
@@ -112,7 +110,7 @@ impl Term {
 ```
 
 - 高亮显示用 display_text：Regex 不参与高亮。
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/mod.rs start=49
+```rs path=PROJECT_ROOT/backend/logseek/src/query/mod.rs start=49
 pub fn display_text(&self) -> Option<String> {
   match self {
     Term::Literal(s) => Some(s.clone()),
@@ -129,7 +127,7 @@ pub fn display_text(&self) -> Option<String> {
   - OR 必须大写；小写 or 作为普通字面量
   - 优先级：NOT > AND > OR
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=6
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=6
 pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
   let tokens = tokenize(input)?;
   // 先提取 path 限定符，再解析布尔表达式
@@ -138,7 +136,7 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
 ```
 
 - 测试：OR 必须大写
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=342
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=342
 #[test]
 fn or_must_be_uppercase() {
   let spec = parse_github_like("foo or bar").expect("parse");
@@ -164,7 +162,7 @@ fn or_must_be_uppercase() {
   - 否则 → 作为“路径包含子串”判断
 - 判定逻辑：先排除（exclude），再检查包含（include / include_contains）。
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/mod.rs start=58
+```rs path=PROJECT_ROOT/backend/logseek/src/query/mod.rs start=58
 #[derive(Debug, Clone, Default)]
 pub struct PathFilter {
   include: Option<GlobSet>,
@@ -175,7 +173,7 @@ pub struct PathFilter {
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/mod.rs start=67
+```rs path=PROJECT_ROOT/backend/logseek/src/query/mod.rs start=67
 impl PathFilter {
   pub fn is_allowed(&self, path: &str) -> bool {
     if let Some(ex) = &self.exclude { if ex.is_match(path) { return false; } }
@@ -190,7 +188,7 @@ impl PathFilter {
 ```
 
 - 行为示例（测试）：
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=319
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=319
 #[test]
 fn path_filter_glob_and_contains() {
   let spec = parse_github_like("path:logs/*.log -path:node_modules/ foo").expect("parse");
@@ -201,7 +199,7 @@ fn path_filter_glob_and_contains() {
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=474
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=474
 #[test]
 fn path_qualifier_requires_no_whitespace() {
   let a = parse_github_like("path:logs/*.log foo").expect("parse a");
@@ -215,7 +213,7 @@ fn path_qualifier_requires_no_whitespace() {
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=486
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=486
 #[test]
 fn path_qualifier_is_case_sensitive() {
   let spec = parse_github_like("PATH:logs/*.log foo").expect("parse");
@@ -236,7 +234,7 @@ fn path_qualifier_is_case_sensitive() {
   2. 用表达式树（AND/OR/NOT）判定文件是否匹配
   3. 若匹配，再收集“命中任一正向 Term”的行，并按 context 合并区间
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/search.rs start=93
+```rs path=PROJECT_ROOT/backend/logseek/src/search.rs start=93
 // 文件级布尔计算：检查各关键字是否在文件中出现
 let term_count = spec.terms.len();
 ...
@@ -268,7 +266,7 @@ if !spec.eval_file(&occurs) { return Ok(None); }
   - 无效日期会被忽略；若最终都无效，也回退为“昨天”
   - 清理：从 q 中删除 dt/fdt/tdt 令牌，重组 cleaned_query
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/bbip_service.rs start=47
+```rs path=PROJECT_ROOT/backend/logseek/src/bbip_service.rs start=47
 /// 内部：从 q 中解析日期指令，返回（清理后的 q，日期区间）
 fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, DateRange) {
   ...
@@ -283,7 +281,7 @@ fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, D
 ```
 
 - 使用链路（NDJSON）：
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/routes.rs start=127
+```rs path=PROJECT_ROOT/backend/logseek/src/routes/mod.rs start=120
 // 通过服务从 q 中解析日期属性并生成文件路径，同时返回清理后的 q
 let plan = derive_plan(base_dir, &buckets, &body.q);
 let files = plan.paths;
@@ -298,7 +296,7 @@ let spec =
 ## 四、错误与诊断
 
 - 解析错误类型（中文报错信息）：
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/mod.rs start=7
+```rs path=PROJECT_ROOT/backend/logseek/src/query/mod.rs start=7
 #[derive(Debug, Error)]
 pub enum ParseError {
   #[error("无效正则，位置 {span:?}：{message}")]
@@ -322,7 +320,7 @@ pub enum ParseError {
   - 无效 path 模式："path:a["
 
 - 测试示例：
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=456
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=456
 #[test]
 fn invalid_regex_unclosed_group() {
   let err = parse_github_like("/(foo").unwrap_err();
@@ -330,7 +328,7 @@ fn invalid_regex_unclosed_group() {
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=336
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=336
 #[test]
 fn unbalanced_parens_error() {
   let err = parse_github_like("foo OR (bar").unwrap_err();
@@ -338,7 +336,7 @@ fn unbalanced_parens_error() {
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=501
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=501
 #[test]
 fn trailing_minus_is_error() {
   let err = parse_github_like("foo -").unwrap_err();
@@ -346,7 +344,7 @@ fn trailing_minus_is_error() {
 }
 ```
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/query/parser.rs start=534
+```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=534
 #[test]
 fn span_invalid_path_pattern_from_qualifier() {
   // "path:a[" => invalid glob; qualifier token spans 0..7
@@ -391,7 +389,7 @@ fn span_invalid_path_pattern_from_qualifier() {
 - 高亮关键字：仅来自非取反的 Literal 与 Phrase；Regex 不参与高亮。
 - 行合并：以 context 为窗口对命中行合并为区间；Markdown 输出区间间以 "..." 分隔。
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/renderer.rs start=64
+```rs path=PROJECT_ROOT/backend/logseek/src/utils/renderer.rs start=64
 pub fn render_markdown(path: &str, ranges: Vec<(usize, usize)>, all_lines: Vec<String>, keywords: &[String]) -> String {
   let mut buf = String::new();
   buf.push_str(&format!("\n## 文件 s3://{}/{}::{}\n\n", "test", "codeler.tar.gz", path));
@@ -421,7 +419,7 @@ pub fn render_markdown(path: &str, ranges: Vec<(usize, usize)>, all_lines: Vec<S
 4) 遍历文件并异步 grep：文件级布尔评估 + 行提取 + 合并 + 流式发送
 5) 下游通道关闭时尽快停止任务
 
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/routes.rs start=142
+```rs path=PROJECT_ROOT/backend/logseek/src/routes/search.rs start=1
 let spec =
   crate::query::Query::parse_github_like(&q_for_search).map_err(|e| Problem::from(AppError::QueryParse(e)))?;
 let parse_dur = parse_start.elapsed();
@@ -444,7 +442,7 @@ while let Some(result) = stream.recv().await {
 ## 八、额外注意（性能与鲁棒性）
 
 - 自动文本判定：若采样包含 NUL 字节等，判为“可能是二进制”则跳过。
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/search.rs start=37
+```rs path=PROJECT_ROOT/backend/logseek/src/search.rs start=37
 fn is_probably_text_bytes(sample: &[u8]) -> bool {
   if sample.is_empty() { return true; }
   if sample.contains(&0) { return false; }
@@ -459,7 +457,7 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
 ```
 
 - 并发控制：基于可用并行度、放大系数与上限，避免任务风暴。
-```rs path=/Users/wangyue/workspace/codelder/opsboard/server/logseek/src/search.rs start=180
+```rs path=PROJECT_ROOT/backend/logseek/src/search.rs start=180
 let max_concurrency = std::thread::available_parallelism()
   .map(|n| n.get())
   .unwrap_or(4)

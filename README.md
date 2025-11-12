@@ -8,7 +8,7 @@
 
 **Monorepo 结构，包含三个 crate：**
 
-- **opsbox** (主程序，输出二进制名 `opsbox`)
+- **opsbox-server** (主程序，输出二进制名 `opsbox-server`)
   - 模块化结构：config、logging、daemon、server
   - 内嵌前端静态资源
   - SQLite 数据库管理
@@ -40,7 +40,7 @@
 ### 环境要求
 
 - **Rust**: 1.90.0 (通过 rust-toolchain.toml 固定)
-- **Node.js**: 20 (使用 nvm: `nvm use 20`)
+- **Node.js**: 22 (使用 nvm: `nvm use 22`)
 - **pnpm**: 通过 corepack 启用
 
 ### 安装依赖
@@ -48,7 +48,7 @@
 ```bash
 # 前端依赖
 corepack enable
-corepack prepare pnpm@latest --activate
+corepack prepare pnpm@10.17.1 --activate
 pnpm --dir web install
 ```
 
@@ -56,7 +56,7 @@ pnpm --dir web install
 
 ```bash
 # 后端（终端1）
-cargo run --manifest-path backend/Cargo.toml -p opsbox
+cargo run --manifest-path backend/Cargo.toml -p opsbox-server
 
 # 前端（终端2）
 pnpm --dir web dev
@@ -67,11 +67,11 @@ pnpm --dir web dev
 ### 生产构建
 
 ```bash
-# 构建前端（输出到 backend/api-gateway/static）
-node scripts/build-frontend.mjs
+# 构建前端（输出到 backend/opsbox-server/static，构建前会清空该目录）
+pnpm --dir web build
 
-# 构建后端
-cargo build --manifest-path backend/Cargo.toml -p opsbox --release
+# 构建后端（会将静态资源嵌入二进制）
+cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 ```
 
 ## 主要功能
@@ -83,11 +83,11 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 - NDJSON 流式结果返回
 - 上下文窗口和关键词高亮
 
-### MinIO 设置
+### 对象存储设置（S3 Profiles）
 
-- 通过 Web UI 配置 MinIO 连接
-- 设置持久化到 SQLite 数据库
-- 连接验证和错误提示
+- 通过 Web UI 管理多个 S3 Profile（endpoint/bucket/credentials）
+- 首次启动会自动迁移旧的单一 S3 设置到 `default` profile
+- 保留 `/settings/s3` 端点以兼容旧前端，推荐使用 Profiles 管理
 
 ### AI 查询生成
 
@@ -100,8 +100,8 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 
 ### 数据库
 
-- 默认：`./opsbox.db`
-- 覆盖：`--database-url` 或 `DATABASE_URL` 环境变量
+- 默认：`$HOME/.opsbox/opsbox.db`
+- 覆盖：`--database-url` 或 `OPSBOX_DATABASE_URL`/`DATABASE_URL` 环境变量
 
 ### 日志级别
 
@@ -113,39 +113,50 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox --release
 
 ```bash
 # 启动守护进程
-cargo run -p opsbox -- start --daemon
+cargo run -p opsbox-server -- start --daemon
 
 # 停止守护进程
-cargo run -p opsbox -- stop
+cargo run -p opsbox-server -- stop
 ```
 
 ## 📚 开发文档
 
 ### 项目文档
-- **架构说明**: [ARCHITECTURE.md](ARCHITECTURE.md) - 系统架构设计
+- **架构说明**: [docs/architecture/architecture.md](docs/architecture/architecture.md) - 系统架构设计
 - **项目指南**: [WARP.md](WARP.md) - WARP AI 开发指南
 
+### 架构文档
+- **架构复盘**: [docs/architecture/architecture.md](docs/architecture/architecture.md) - 项目架构详细分析
+- **模块架构**: [docs/architecture/module-architecture.md](docs/architecture/module-architecture.md) - 模块系统设计
+- **错误处理**: [docs/architecture/error-handling-architecture.md](docs/architecture/error-handling-architecture.md) - 错误处理架构
+
 ### 模块文档
-- **模块架构**: [docs/modules/module-architecture.md](docs/modules/module-architecture.md) - 模块系统设计
 - **Agent Manager**: [docs/modules/agent-manager.md](docs/modules/agent-manager.md) - Agent 管理模块
 - **Agent API**: [docs/modules/agent-api-spec.md](docs/modules/agent-api-spec.md) - Agent HTTP API 规范
 
 ### 功能文档
 - **FileUrl 设计**: [docs/features/file-url.md](docs/features/file-url.md) - 文件 URL 抽象层
 - **S3 Profiles**: [docs/features/s3-profiles.md](docs/features/s3-profiles.md) - S3 配置管理
+- **Agent 标签**: [docs/features/agent-tags.md](docs/features/agent-tags.md) - Agent 标签管理
 
 ### 使用指南
 - **查询语法**: [docs/guides/query-syntax.md](docs/guides/query-syntax.md) - 搜索查询语法
-- **存储层使用**: [docs/guides/storage-usage.md](docs/guides/storage-usage.md) - 存储抽象层示例
-- **前端开发**: [docs/FRONTEND_DEVELOPMENT.md](docs/FRONTEND_DEVELOPMENT.md) - 前端模块化架构
-
-### 测试报告
-- **Agent Manager 测试**: [tests/agent-manager-test-report.md](tests/agent-manager-test-report.md) - 集成测试报告
+- **前端开发**: [docs/guides/frontend-development.md](docs/guides/frontend-development.md) - 前端模块化架构
+- **CPU 资源控制**: [docs/guides/cpu-resource-control.md](docs/guides/cpu-resource-control.md) - Agent CPU 资源控制
 
 ### 脚本工具
-- **启动 Server**: [scripts/start_server.sh](scripts/start_server.sh)
-- **启动 Agent**: [scripts/start_agent.sh](scripts/start_agent.sh)
-- **API 测试**: [scripts/test_agent_api.sh](scripts/test_agent_api.sh)
+- **运行脚本** (`scripts/run/`):
+  - [start-server.sh](scripts/run/start-server.sh) - 启动 Server
+  - [start-agent.sh](scripts/run/start-agent.sh) - 启动 Agent
+  - [run-agent.sh](scripts/run/run-agent.sh) - 运行 Agent（完整配置）
+- **测试脚本** (`scripts/test/`):
+  - [test-agent-api.sh](scripts/test/test-agent-api.sh) - Agent API 测试
+  - [test-graceful-shutdown.sh](scripts/test/test-graceful-shutdown.sh) - 优雅关闭测试
+  - [bench-ndjson.sh](scripts/test/bench-ndjson.sh) - NDJSON 性能测试
+- **构建脚本** (`scripts/build/`):
+  - [build-frontend.sh](scripts/build/build-frontend.sh) - 构建前端
+- **数据生成脚本** (`scripts/generate/`):
+  - [generate-test-logs.py](scripts/generate/generate-test-logs.py) - 生成测试日志
 
 ## 代码规范
 

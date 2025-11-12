@@ -4,6 +4,7 @@
 // Agent 模块：远程 Agent 搜索能力与统一搜索类型
 // 将原 storage 模块中的 Agent 客户端与搜索类型迁移至此
 
+use crate::utils::strings::truncate_utf8;
 use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
@@ -11,26 +12,15 @@ use thiserror::Error;
 
 // 对外暴露的公共类型与 trait
 
-/// 搜索范围
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SearchScope {
-  /// 搜索指定目录
-  Directory { path: String, recursive: bool },
-  /// 搜索指定文件列表
-  Files { paths: Vec<String> },
-  /// 搜索 tar.gz 文件
-  TarGz { path: String },
-  /// 搜索所有（由服务自己决定）
-  All,
-}
+pub use crate::domain::config::Target;
 
 /// 搜索选项
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
   /// 路径过滤
   pub path_filter: Option<String>,
-  /// 搜索范围
-  pub scope: SearchScope,
+  /// 搜索目标
+  pub target: Target,
   /// 超时时间（秒）
   pub timeout_secs: Option<u64>,
   /// 最大结果数
@@ -41,28 +31,14 @@ impl Default for SearchOptions {
   fn default() -> Self {
     Self {
       path_filter: None,
-      scope: SearchScope::All,
+      target: Target::Dir {
+        path: ".".to_string(),
+        recursive: true,
+      },
       timeout_secs: Some(300),
       max_results: None,
     }
   }
-}
-
-/// 搜索进度
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchProgress {
-  pub task_id: String,
-  pub processed_files: usize,
-  pub matched_files: usize,
-  pub total_files: Option<usize>,
-  pub status: SearchStatus,
-}
-
-/// 搜索状态
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SearchStatus {
-  Running,
-  Completed,
 }
 
 /// 搜索结果流
@@ -106,12 +82,6 @@ pub trait SearchService: Send + Sync {
     options: SearchOptions,
   ) -> Result<SearchResultStream, AgentClientError>;
 
-  /// 获取搜索进度（可选）
-  async fn get_progress(&self, task_id: &str) -> Result<Option<SearchProgress>, AgentClientError> {
-    let _ = task_id;
-    Ok(None)
-  }
-
   /// 取消搜索（可选）
   async fn cancel(&self, task_id: &str) -> Result<(), AgentClientError> {
     let _ = task_id;
@@ -123,22 +93,6 @@ pub trait SearchService: Send + Sync {
 use log::{debug, error, info, trace, warn};
 use std::time::Duration;
 
-/// 按 UTF-8 字符边界安全截断字符串，用于调试预览，避免跨多字节字符导致 panic
-///
-/// 参数:
-/// - s: 原始字符串
-/// - max: 允许的最大字节数
-fn truncate_utf8(s: &str, max: usize) -> &str {
-  if s.len() <= max {
-    return s;
-  }
-  let mut end = max;
-  while end > 0 && !s.is_char_boundary(end) {
-    end -= 1;
-  }
-  &s[..end]
-}
-
 // 复用 agent-manager 的数据模型
 pub use agent_manager::models::{AgentInfo, AgentStatus, AgentTag};
 
@@ -149,21 +103,7 @@ pub struct AgentSearchRequest {
   pub query: String,
   pub context_lines: usize,
   pub path_filter: Option<String>,
-  pub scope: SearchScope,
-}
-
-/// Agent 消息格式（NDJSON 流式传输）
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data", rename_all = "lowercase")]
-pub enum AgentMessage {
-  /// 搜索结果
-  Result(crate::service::search::SearchResult),
-  /// 进度更新
-  Progress(SearchProgress),
-  /// 错误
-  Error(String),
-  /// 完成
-  Complete,
+  pub target: Target,
 }
 
 /// Agent 客户端（实现 SearchService）
@@ -289,7 +229,7 @@ impl SearchService for AgentClient {
       query: query.to_string(),
       context_lines,
       path_filter: options.path_filter,
-      scope: options.scope,
+      target: options.target,
     };
 
     // 中文调试：打印请求明细（仅在 debug 级别或显式开启“线级”调试时）
@@ -300,7 +240,7 @@ impl SearchService for AgentClient {
       }
     } else {
       debug!(
-        "Agent 搜索请求: endpoint={}, task_id={}, ctx={}, has_path_filter={}, scope=...",
+        "Agent 搜索请求: endpoint={}, task_id={}, ctx={}, has_path_filter={}, target=...",
         self.endpoint,
         request.task_id,
         request.context_lines,
@@ -405,7 +345,7 @@ impl SearchService for AgentClient {
       }
     };
 
-    // 将完整行解析为 AgentMessage，再提取结果
+    // 将完整行解析为 SearchEvent，提取结果
     let result_stream = Box::pin(
       line_stream
         .filter_map({
@@ -413,38 +353,30 @@ impl SearchService for AgentClient {
           move |line| {
             let agent_id = agent_id_for_parse.clone();
             async move {
-              debug!("🔍 Server尝试解析AgentMessage: {}", line);
-              match serde_json::from_str::<AgentMessage>(&line) {
-                Ok(AgentMessage::Result(result)) => {
+              debug!("🔍 Server尝试解析SearchEvent: {}", line);
+              match serde_json::from_str::<crate::service::search::SearchEvent>(&line) {
+                Ok(crate::service::search::SearchEvent::Success(result)) => {
                   debug!(
-                    "✅ Server收到Result消息: path={}, lines_count={}",
+                    "✅ Server接收到Success消息: path={}, lines_count={}",
                     result.path,
                     result.lines.len()
                   );
                   Some(Ok(result))
                 }
-                Ok(AgentMessage::Progress(progress)) => {
+                Ok(crate::service::search::SearchEvent::Error { source, message, .. }) => {
+                  trace!("[Wire] ← Error: source={}, message={}", source, message);
+                  Some(Err(AgentClientError::Other(format!("Agent 错误: {}", message))))
+                }
+                Ok(crate::service::search::SearchEvent::Complete { source, elapsed_ms }) => {
                   debug!(
-                    "Agent {} 进度: {}/{} 文件",
-                    agent_id, progress.processed_files, progress.matched_files
+                    "Agent {} 搜索完成 (source={}, elapsed={}ms)",
+                    agent_id, source, elapsed_ms
                   );
-                  trace!(
-                    "[Wire] ← Progress: task_id={} status={:?}",
-                    progress.task_id, progress.status
-                  );
-                  None
-                }
-                Ok(AgentMessage::Error(err)) => {
-                  trace!("[Wire] ← Error: {}", err);
-                  Some(Err(AgentClientError::Other(format!("Agent 错误: {}", err))))
-                }
-                Ok(AgentMessage::Complete) => {
-                  debug!("Agent {} 搜索完成", agent_id);
                   trace!("[Wire] ← Complete");
                   None
                 }
                 Err(e) => {
-                  warn!("解析 Agent 消息失败: {} (line: {})", e, line);
+                  warn!("解析 SearchEvent 失败: {} (line: {})", e, line);
                   None
                 }
               }

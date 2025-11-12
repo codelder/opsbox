@@ -102,19 +102,9 @@ impl AgentManager {
 
   /// 移除 Agent 标签
   pub async fn remove_agent_tag(&self, agent_id: &str, key: &str, value: &str) -> Result<(), String> {
-    // 获取现有标签
-    let mut tags = self
-      .repository
-      .get_agent_tags(agent_id)
-      .await
-      .map_err(|e| format!("获取标签失败: {}", e))?;
-
-    // 移除指定标签
-    tags.retain(|tag| !(tag.key == key && tag.value == value));
-
     self
       .repository
-      .save_agent_tags(agent_id, &tags)
+      .delete_agent_tag(agent_id, key, value)
       .await
       .map_err(|e| format!("移除标签失败: {}", e))?;
 

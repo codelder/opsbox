@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
-  "api-gateway",
+  "opsbox-server",
   "opsbox-core",
   "logseek",
   "agent",

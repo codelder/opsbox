@@ -24,7 +24,7 @@ describe('Search API', () => {
       const response = await startSearch('test query');
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/stream.ndjson'),
+        expect.stringContaining('/search.ndjson'),
         expect.objectContaining({
           method: 'POST',
           headers: expect.any(Object),

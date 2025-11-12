@@ -40,7 +40,7 @@ build/
 nohup.out
 
 # Project-specific
-backend/api-gateway/static
+backend/opsbox-server/static
 
 # SvelteKit / Vite (ui)
 .svelte-kit/
