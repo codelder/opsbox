@@ -5,8 +5,7 @@
 use crate::agent::{AgentClient, SearchOptions, SearchService};
 use crate::api::{LogSeekApiError, models::SearchBody};
 use crate::repository::cache::{cache as simple_cache, new_sid};
-use crate::service::entry_stream::{EntryStreamFactory, EntryStreamProcessor};
-use crate::service::search::SearchProcessor;
+use crate::service::{entry_stream::{EntryStreamFactory, EntryStreamProcessor}, search::SearchProcessor, ServiceError};
 use crate::utils::renderer::render_json_chunks;
 use axum::{
   body::Body,
@@ -91,7 +90,7 @@ fn respond_empty_stream(
       HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
     )
     .body(body)
-    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建 HTTP 响应失败: {}", e))))
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
 }
 
 pub async fn stream_search(
@@ -520,7 +519,7 @@ pub async fn stream_search(
     )
     .header("X-Logseek-SID", sid_header)
     .body(body)
-    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建 HTTP 响应失败: {}", e))))
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
 }
 
 /// 根据今天分割日期范围

@@ -4,14 +4,14 @@
 
 use crate::api::{LogSeekApiError, models::ViewParams};
 use crate::domain::FileUrl;
-use crate::repository::cache::cache as simple_cache;
+use crate::repository::{cache::cache as simple_cache, RepositoryError};
+use crate::service::ServiceError;
 use axum::{
   body::Body,
   extract::Query,
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
 use log::debug;
-// Problem 导入已被 LogSeekApiError 的 IntoResponse 实现所需
 
 /// 查看缓存中的文件内容
 pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
@@ -33,10 +33,7 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
         params.file,
         e
       );
-      return Err(LogSeekApiError::Internal(opsbox_core::AppError::bad_request(format!(
-        "Invalid file URL: {}",
-        e
-      ))));
+      return Err(LogSeekApiError::Domain(e));
     }
   };
 
@@ -64,9 +61,10 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
     }
     None => {
       debug!("❌ Server缓存未命中: sid={}, file_url={}", params.sid, file_url);
-      return Err(LogSeekApiError::Internal(opsbox_core::AppError::not_found(
-        "Cache not found or expired",
-      )));
+      return Err(LogSeekApiError::Repository(RepositoryError::NotFound(format!(
+        "Cache not found or expired for sid={}, file={}",
+        params.sid, file_url
+      ))));
     }
   };
   let start = params.start.unwrap_or(1).max(1);
@@ -100,5 +98,5 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
       HeaderValue::from_static("application/json; charset=utf-8"),
     )
     .body(Body::from(body))
-    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建 HTTP 响应失败: {}", e))))
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
 }

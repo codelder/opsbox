@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::LogSeekApiError;
 use crate::domain::config::Source;
-use crate::repository::planners;
+use crate::repository::{planners, RepositoryError};
+use crate::service::ServiceError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannerUpsertPayload {
@@ -88,7 +89,7 @@ pub async fn get_script(
       script: s.script,
       updated_at: s.updated_at,
     })),
-    None => Err(LogSeekApiError::Internal(opsbox_core::AppError::not_found(format!(
+    None => Err(LogSeekApiError::Repository(RepositoryError::NotFound(format!(
       "业务 {} 未配置脚本",
       app
     )))),
@@ -101,8 +102,8 @@ pub async fn save_script(
   Json(body): Json<PlannerUpsertPayload>,
 ) -> Result<(), LogSeekApiError> {
   if body.app.trim().is_empty() {
-    return Err(LogSeekApiError::Internal(opsbox_core::AppError::bad_request(
-      "app 不能为空",
+    return Err(LogSeekApiError::Service(ServiceError::ConfigError(
+      "app 不能为空".to_string(),
     )));
   }
   planners::upsert_script(&pool, &body.app, &body.script).await?;
@@ -123,7 +124,7 @@ pub async fn get_readme_md() -> Result<Response<Body>, LogSeekApiError> {
     .status(StatusCode::OK)
     .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
     .body(Body::from(md))
-    .map_err(|e| LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("构建响应失败: {}", e))))
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建响应失败: {}", e))))
 }
 
 /// 测试脚本：输入完整 q，返回清理后的查询与来源列表
@@ -133,8 +134,8 @@ pub async fn test_script(
   Json(body): Json<PlannerTestPayload>,
 ) -> Result<Json<PlannerTestResponse>, LogSeekApiError> {
   if body.app.trim().is_empty() {
-    return Err(LogSeekApiError::Internal(opsbox_core::AppError::bad_request(
-      "app 不能为空",
+    return Err(LogSeekApiError::Service(ServiceError::ConfigError(
+      "app 不能为空".to_string(),
     )));
   }
   // 使用内部实现，支持传入脚本内容

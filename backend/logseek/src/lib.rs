@@ -34,6 +34,35 @@ pub mod agent;
 
 use opsbox_core::{Result, SqlitePool};
 
+// 实现 ServiceError 到 AppError 的转换
+impl From<service::ServiceError> for opsbox_core::AppError {
+  fn from(err: service::ServiceError) -> Self {
+    match err {
+      service::ServiceError::ConfigError(msg) => opsbox_core::AppError::Config(msg),
+      service::ServiceError::ProcessingError(msg) => opsbox_core::AppError::Internal(msg),
+      service::ServiceError::SearchFailed { path, error } => {
+        opsbox_core::AppError::Internal(format!("搜索失败 - 路径: {}, 错误: {}", path, error))
+      }
+      service::ServiceError::IoError { path, error } => {
+        opsbox_core::AppError::Internal(format!("IO 错误: path={}, error={}", path, error))
+      }
+      service::ServiceError::ChannelClosed => {
+        opsbox_core::AppError::Internal("Channel 已关闭: 接收端已断开连接".to_string())
+      }
+      service::ServiceError::Repository(repo_err) => {
+        // 将 Repository 错误转换为 AppError
+        match repo_err {
+          repository::RepositoryError::NotFound(msg) => opsbox_core::AppError::NotFound(msg),
+          repository::RepositoryError::QueryFailed(msg) => opsbox_core::AppError::Internal(format!("查询失败: {}", msg)),
+          repository::RepositoryError::StorageError(msg) => opsbox_core::AppError::ExternalService(format!("对象存储错误: {}", msg)),
+          repository::RepositoryError::CacheFailed(msg) => opsbox_core::AppError::Internal(format!("缓存操作失败: {}", msg)),
+          repository::RepositoryError::Database(msg) => opsbox_core::AppError::Internal(format!("数据库错误: {}", msg)),
+        }
+      }
+    }
+  }
+}
+
 /// 导出 router 函数（接收数据库连接池）
 pub fn router(db_pool: SqlitePool) -> axum::Router {
   routes::router(db_pool)
@@ -44,15 +73,21 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
   // 初始化 S3 配置表
   repository::settings::init_schema(db_pool)
     .await
-    .map_err(|e| opsbox_core::AppError::internal(e.to_string()))?;
+    .map_err(|e| service::ServiceError::ProcessingError(
+      format!("初始化 S3 配置表失败: {}", e)
+    ))?;
   // 初始化 LLM 配置表
   repository::llm::init_schema(db_pool)
     .await
-    .map_err(|e| opsbox_core::AppError::internal(e.to_string()))?;
+    .map_err(|e| service::ServiceError::ProcessingError(
+      format!("初始化 LLM 配置表失败: {}", e)
+    ))?;
   // 初始化 Planner 脚本表
   repository::planners::init_schema(db_pool)
     .await
-    .map_err(|e| opsbox_core::AppError::internal(e.to_string()))?;
+    .map_err(|e| service::ServiceError::ProcessingError(
+      format!("初始化 Planner 脚本表失败: {}", e)
+    ))?;
   Ok(())
 }
 
