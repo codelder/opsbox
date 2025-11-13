@@ -64,7 +64,7 @@
 
 1. THE System SHALL 创建 service/search_executor.rs 文件定义 SearchExecutor 服务类
 2. THE System SHALL 在 SearchExecutor 中封装多数据源并行搜索逻辑
-3. THE System SHALL 在 SearchExecutor 中封装并发控制逻辑(IO Semaphore)
+3. THE System SHALL 在 SearchExecutor 中封装并发控制逻辑(IO Semaphore 统一控制所有数据源的并发访问，防止端口耗尽和资源耗尽)
 4. THE System SHALL 在 SearchExecutor 中封装单个数据源的搜索逻辑
 5. THE System SHALL 将 routes/search.rs 简化为仅处理 HTTP 请求响应(目标 < 100 行)
 6. THE System SHALL 使 SearchExecutor 可被非 HTTP 场景复用(CLI、定时任务等)

@@ -2,22 +2,19 @@
 //!
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
-use crate::agent::{AgentClient, SearchOptions, SearchService};
 use crate::api::{LogSeekApiError, models::SearchBody};
-use crate::repository::cache::{cache as simple_cache, new_sid};
-use crate::service::{entry_stream::{EntryStreamFactory, EntryStreamProcessor}, search::SearchProcessor, ServiceError};
+use crate::service::search::SearchEvent;
+use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
 use crate::utils::renderer::render_json_chunks;
 use axum::{
   body::Body,
   extract::{Json, State},
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
-use futures::StreamExt;
-use log::debug;
+use bytes::Bytes;
+use futures::Stream;
 use opsbox_core::SqlitePool;
-use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 
 use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 
@@ -25,620 +22,91 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 // 搜索（多存储源并行搜索）
 // ============================================================================
 
-/// 获取存储源配置列表（支持混合数据源）
-///
-/// 混合数据源策略：
-/// - 当前日期（今天）：使用 Agent 存储源
-/// - 历史日期（昨天及以前）：使用 S3 存储源
-///
-/// 当前实现：
-/// 1. 从数据库加载所有 S3 Profiles
-/// 2. 解析查询中的日期指令（dt:/fdt:/tdt:）
-/// 3. 根据日期分割策略分配数据源：
-///    - 当前日期范围 → Agent 配置
-///    - 历史日期范围 → S3 配置
-/// 4. 返回混合配置列表和清理后的查询
-///
-/// TODO: 后续扩展：
-/// 1. 支持按权限过滤（不同用户看到不同的存储源）
-/// 2. 支持按标签/分组过滤（例如 "production" 标签的所有存储源）
-/// 3. 支持动态启用/禁用某些存储源
-/// 4. 支持本地文件系统存储源配置
-/// 5. 支持可配置的日期分割策略
-pub async fn get_storage_source_configs(
-  pool: &SqlitePool,
-  query: &str,
-) -> Result<(Vec<crate::domain::config::Source>, String, Option<String>), LogSeekApiError> {
-  // 从查询字符串中提取 app 和 encoding 限定词
-  // 同时移除这些限定词以得到传入规划器的"清理前"查询（随后规划器还会继续清理日期指令等）
-  let mut app: Option<String> = None;
-  let mut encoding: Option<String> = None;
-  let mut tokens: Vec<&str> = Vec::new();
-  for t in query.split_whitespace() {
-    if let Some(rest) = t.strip_prefix("app:")
-      && !rest.is_empty()
-    {
-      app = Some(rest.to_string());
-      continue; // 跳过该限定词，不纳入后续查询
+/// 序列化事件为 NDJSON 字节
+fn serialize_event(value: &serde_json::Value) -> Option<Bytes> {
+  match serde_json::to_vec(value) {
+    Ok(mut v) => {
+      v.push(b'\n');
+      Some(Bytes::from(v))
     }
-    if let Some(rest) = t.strip_prefix("encoding:")
-      && !rest.is_empty()
-    {
-      encoding = Some(rest.to_string());
-      continue; // 跳过该限定词，不纳入后续查询
+    Err(e) => {
+      log::warn!("[Search] 序列化失败: {}", e);
+      None
     }
-    tokens.push(t);
   }
-  let cleaned_before_plan = tokens.join(" ");
+}
 
-  // 通过 Starlark 调度：使用 app 对应的脚本，未指定 app 时使用默认规划脚本，未找到时返回错误
-  let plan = crate::domain::source_planner::plan_with_starlark(pool, app.as_deref(), &cleaned_before_plan).await?;
-  Ok((plan.sources, plan.cleaned_query, encoding))
+/// 将 SearchEvent 流转换为 NDJSON 字节流
+fn convert_to_ndjson_stream(
+  mut rx: mpsc::Receiver<SearchEvent>,
+  highlights: Vec<String>,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
+  async_stream::stream! {
+    while let Some(event) = rx.recv().await {
+      let json_value = match event {
+        SearchEvent::Success(res) => {
+          let json_obj = render_json_chunks(
+            &res.path,
+            res.merged.clone(),
+            res.lines.clone(),
+            &highlights,
+            res.encoding.clone(),
+          );
+          Some(serde_json::json!({"type": "result", "data": json_obj}))
+        }
+        SearchEvent::Error { source, message, recoverable } => {
+          serde_json::to_value(SearchEvent::Error { source, message, recoverable }).ok()
+        }
+        SearchEvent::Complete { source, elapsed_ms } => {
+          serde_json::to_value(SearchEvent::Complete { source, elapsed_ms }).ok()
+        }
+      };
+      
+      if let Some(value) = json_value {
+        if let Some(bytes) = serialize_event(&value) {
+          yield Ok(bytes);
+        }
+      }
+    }
+  }
+}
+
+/// 构建 NDJSON HTTP 响应（包含 X-Logseek-SID 头）
+fn build_ndjson_response(
+  stream: impl Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
+  sid: String,
+) -> Result<HttpResponse<Body>, LogSeekApiError> {
+  let sid_header = HeaderValue::from_str(&sid).unwrap_or_else(|_| HeaderValue::from_static(""));
+  HttpResponse::builder()
+    .status(200)
+    .header(CONTENT_TYPE, HeaderValue::from_static("application/x-ndjson; charset=utf-8"))
+    .header("X-Logseek-SID", sid_header)
+    .body(Body::from_stream(stream))
+    .map_err(|e| LogSeekApiError::Service(
+      crate::service::ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))
+    ))
 }
 
 /// 搜索处理函数（多存储源并行搜索）
-fn respond_empty_stream(
-  tx: mpsc::Sender<Result<bytes::Bytes, std::io::Error>>,
-  rx: mpsc::Receiver<Result<bytes::Bytes, std::io::Error>>,
-) -> Result<HttpResponse<Body>, LogSeekApiError> {
-  drop(tx);
-  let body = Body::from_stream(ReceiverStream::new(rx));
-  HttpResponse::builder()
-    .status(200)
-    .header(
-      CONTENT_TYPE,
-      HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-    )
-    .body(body)
-    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
-}
-
 pub async fn stream_search(
   State(pool): State<SqlitePool>,
   Json(body): Json<SearchBody>,
 ) -> Result<HttpResponse<Body>, LogSeekApiError> {
   log::info!("[Search] 开始搜索: q={}", body.q);
 
-  let cap = stream_channel_capacity();
-  let (tx, rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(cap);
-  log::debug!("profiling: [Search] 建立响应通道，容量={}", cap);
-
-  // 分层限流——IO 并发
-  let io_sem = Arc::new(tokio::sync::Semaphore::new(s3_max_concurrency()));
-
-  // 已简化：仅使用固定的 IO 并发上限
-
-  let overall_start = std::time::Instant::now();
-
-  // 1. 获取存储源配置列表（同时获取清理后的查询和编码限定词）
-  let (source_configs, cleaned_query, encoding_qualifier) = get_storage_source_configs(&pool, &body.q).await?;
-  log::info!("[Search] 获取到 {} 个存储源配置", source_configs.len());
-
-  if source_configs.is_empty() {
-    log::warn!("[Search] 没有可用的存储源配置");
-    return respond_empty_stream(tx, rx);
-  }
-
-  // 3. 解析查询并准备搜索参数
   let ctx = body.context.unwrap_or(3);
-  let parse_start = std::time::Instant::now();
-  let spec = match crate::query::Query::parse_github_like(&cleaned_query) {
-    Ok(s) => s,
-    Err(e) => {
-      log::error!("[Search] 查询解析失败: {:?}", e);
-      return Err(LogSeekApiError::QueryParse(e));
-    }
+  let config = SearchExecutorConfig {
+    io_max_concurrency: s3_max_concurrency(),
+    stream_channel_capacity: stream_channel_capacity(),
   };
-  let parse_dur = parse_start.elapsed();
-  let highlights = spec.highlights.clone();
-  let sid = new_sid();
-  simple_cache().put_keywords(&sid, highlights.clone()).await;
-  log::debug!("profiling: [Search] 查询解析完成，ctx={}, 耗时={:?}", ctx, parse_dur);
-
-  log::info!(
-    "[Search] 开始并行搜索: 原始query={}, 清理后query={}, context={}, sid={}, sources={}",
-    body.q,
-    cleaned_query,
-    ctx,
-    sid,
-    source_configs.len()
-  );
-
-  // 4. 为每个存储源启动搜索任务（带并发控制，基于 EntryStreamFactory；Agent 走 SearchService）
-  let spec = Arc::new(spec);
-  let encoding_qualifier_clone = encoding_qualifier.clone();
-  for (idx, config) in source_configs.iter().enumerate() {
-    let tx_clone = tx.clone();
-    let spec_clone = spec.clone();
-    let highlights_clone = highlights.clone();
-    let sid_clone = sid.clone();
-    let io_sem_clone = io_sem.clone();
-    let pool_clone = pool.clone();
-    let config_clone = config.clone();
-    let cleaned_query_clone = cleaned_query.clone();
-    let encoding_qualifier_clone = encoding_qualifier_clone.clone();
-
-    tokio::spawn(async move {
-      let task_start = std::time::Instant::now();
-
-      log::debug!(
-        "profiling: [Search] 任务开始排队 source_idx={} io_avail={}",
-        idx,
-        io_sem_clone.available_permits()
-      );
-
-      // 获取 IO 并发许可
-      let io_wait_start = std::time::Instant::now();
-      let _io_permit = match io_sem_clone.acquire_owned().await {
-        Ok(p) => p,
-        Err(_) => {
-          log::warn!("profiling: [Search] 获取 IO 许可失败，跳过 source_idx={}", idx);
-          return;
-        }
-      };
-      let io_wait_time = io_wait_start.elapsed();
-
-      log::debug!(
-        "profiling: [Search] 获得 IO 许可 source_idx={}, 等待={:.3}s",
-        idx,
-        io_wait_time.as_secs_f64()
-      );
-
-      // 对 Agent 来源走远程 SearchService；其它来源走 EntryStream 路径
-      if let crate::domain::config::Endpoint::Agent { agent_id, .. } = &config_clone.endpoint {
-        // 使用 Agent ID 构造 AgentClient（标准格式）
-        let client = match AgentClient::new_by_agent_id(agent_id.clone()).await {
-          Ok(client) => client,
-          Err(e) => {
-            log::error!(
-              "[Search] 无法创建 Agent 客户端 source_idx={} agent_id={} err={}",
-              idx,
-              agent_id,
-              e
-            );
-            return;
-          }
-        };
-
-        // 可选健康检查
-        if !client.health_check().await {
-          log::error!("[Search] Agent 健康检查失败，跳过: {}", agent_id);
-          return;
-        }
-
-        // 从来源规划中读取 endpoint/target/filter，直接使用 Target
-        use crate::domain::config::{Endpoint, Target};
-        let path_glob = config_clone.filter_glob.clone();
-
-        // 对于 Agent endpoint，需要调整 Target 中的路径（拼接 subpath）
-        let adjusted_target = match (&config_clone.endpoint, &config_clone.target) {
-          (Endpoint::Agent { subpath, .. }, Target::Dir { path, recursive }) => {
-            // 拼接 subpath 和 path
-            let joined = if path == "." {
-              subpath.clone()
-            } else {
-              format!("{}/{}", subpath, path)
-            };
-            Target::Dir {
-              path: joined,
-              recursive: *recursive,
-            }
-          }
-          (Endpoint::Agent { subpath, .. }, Target::Files { paths }) => {
-            // 拼接 subpath 和每个文件路径
-            let ps = paths
-              .iter()
-              .map(|p| {
-                if p.starts_with('/') {
-                  p.clone()
-                } else {
-                  format!("{}/{}", subpath, p)
-                }
-              })
-              .collect();
-            Target::Files { paths: ps }
-          }
-          (Endpoint::Agent { subpath, .. }, Target::Archive { path }) => {
-            // Agent 归档：拼接 subpath 与归档相对路径
-            let joined = if path.starts_with('/') {
-              path.clone()
-            } else {
-              format!("{}/{}", subpath, path)
-            };
-            Target::Archive { path: joined }
-          }
-          _ => config_clone.target.clone(), // 非 Agent endpoint，直接使用原 Target
-        };
-
-        let search_options = SearchOptions {
-          target: adjusted_target,
-          path_filter: path_glob,
-          ..Default::default()
-        };
-
-        // 调用远程搜索
-        let mut stream = match client.search(&cleaned_query_clone, ctx, search_options).await {
-          Ok(st) => st,
-          Err(e) => {
-            log::error!(
-              "[Search] 调用 Agent 搜索失败 source_idx={} agent_id={} err={}",
-              idx,
-              agent_id,
-              e
-            );
-            return;
-          }
-        };
-
-        // 直接消费结果流并发送 SearchEvent 格式
-        let tx_bytes = tx_clone.clone();
-        let sid_for_cache = sid_clone.clone();
-        let agent_id_clone = agent_id.clone();
-        let highlights_s = highlights_clone.clone();
-        let cfg_for_url = config_clone.clone();
-        let service_task = tokio::spawn(async move {
-          use crate::domain::file_url::build_file_url_for_result;
-          let start_time = std::time::Instant::now();
-          while let Some(item) = stream.next().await {
-            let Ok(res) = item else {
-              log::warn!("profiling: [Search] Agent 返回错误条目，已跳过");
-              continue;
-            };
-            if tx_bytes.is_closed() {
-              break;
-            }
-
-            // 基于来源配置构造 FileUrl（支持 agent 归档）
-            let (file_url, file_id) = match build_file_url_for_result(&cfg_for_url, &res.path) {
-              Some((url, id)) => (url, id),
-              None => {
-                log::warn!("profiling: [Search] 无法构造 Agent FileUrl, path={}", res.path);
-                continue;
-              }
-            };
-
-            // 缓存结果
-            debug!(
-              "🔍 Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
-              sid_for_cache,
-              file_url,
-              res.lines.len()
-            );
-            simple_cache()
-              .put_lines(&sid_for_cache, &file_url, res.lines.clone())
-              .await;
-
-            // 渲染为 SearchJsonResult，会自动去掉 lines，只保留 chunks、keywords、path
-            // Agent 端可能已经处理了编码，这里传递 None（Agent 结果通常已经是 UTF-8）
-            let json_obj = render_json_chunks(
-              &file_id,
-              res.merged.clone(),
-              res.lines.clone(),
-              &highlights_s,
-              res.encoding.clone(),
-            );
-            // 包装成 SearchEvent
-            let success_event = serde_json::json!({
-              "type": "result",
-              "data": json_obj
-            });
-            match serde_json::to_vec(&success_event) {
-              Ok(mut v) => {
-                v.push(b'\n');
-                if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
-                  break;
-                }
-              }
-              Err(e) => {
-                log::warn!("profiling: [Search] Agent 序列化结果失败: {}", e);
-              }
-            }
-          }
-          // 发送 Complete 事件
-          let elapsed = start_time.elapsed();
-          let complete_event = crate::service::search::SearchEvent::Complete {
-            source: format!("agent:{}", agent_id_clone),
-            elapsed_ms: elapsed.as_millis() as u64,
-          };
-          if let Ok(bytes) = serde_json::to_vec(&complete_event) {
-            let mut v = bytes;
-            v.push(b'\n');
-            let _ = tx_bytes.send(Ok(bytes::Bytes::from(v))).await;
-          }
-        });
-
-        let total_time = task_start.elapsed();
-        let _ = service_task.await; // 等待发送结束
-        log::info!(
-          "profiling: [Search] 任务完成 source_idx={} name=AgentService 总耗时={:.3}s, io_wait={:.3}s",
-          idx,
-          total_time.as_secs_f64(),
-          io_wait_time.as_secs_f64()
-        );
-        return; // 结束该任务
-      }
-
-      // 基于 EntryStreamFactory 创建条目流
-      let factory = EntryStreamFactory::new(pool_clone);
-      let mut estream = match factory.create_stream(config_clone.clone()).await {
-        Ok(s) => s,
-        Err(e) => {
-          log::error!("[Search] 创建条目流失败 source_idx={} err={}", idx, e);
-          return;
-        }
-      };
-
-      // 准备搜索处理器与条目流处理器
-      let search_proc = Arc::new(SearchProcessor::new_with_encoding(
-        spec_clone,
-        ctx,
-        encoding_qualifier_clone.clone(),
-      ));
-      let mut processor = EntryStreamProcessor::new(search_proc);
-
-      // 设置规划脚本的 filter_glob（与用户查询的 path: 限定词做 AND）
-      if let Some(glob) = &config_clone.filter_glob {
-        match crate::query::path_glob_to_filter(glob) {
-          Ok(filter) => {
-            log::debug!("[Search] 为 source_idx={} 设置 filter_glob: {}", idx, glob);
-            processor = processor.with_extra_path_filter(filter);
-          }
-          Err(e) => {
-            log::warn!(
-              "[Search] 解析 filter_glob 失败 source_idx={} glob={} error={}",
-              idx,
-              glob,
-              e
-            );
-          }
-        }
-      }
-
-      // 中转通道：SearchEvent -> NDJSON 字节
-      let (sr_tx, mut sr_rx) = mpsc::channel::<crate::service::search::SearchEvent>(32);
-
-      // 后台发送 NDJSON
-      let tx_bytes = tx_clone.clone();
-      let highlights_s = highlights_clone.clone();
-      let cfg_for_url = config_clone.clone();
-      let sid_for_cache = sid_clone.clone();
-      let sender_task = tokio::spawn(async move {
-        use crate::domain::file_url::build_file_url_for_result;
-        while let Some(event) = sr_rx.recv().await {
-          if tx_bytes.is_closed() {
-            break;
-          }
-
-          match event {
-            crate::service::search::SearchEvent::Success(res) => {
-              // 构造 FileUrl（基于来源+相对路径）
-              let (file_url, file_id) = match build_file_url_for_result(&cfg_for_url, &res.path) {
-                Some((url, id)) => (url, id),
-                None => {
-                  log::warn!("profiling: [Search] 无法构造 FileUrl, path={}", res.path);
-                  continue;
-                }
-              };
-
-              // 缓存结果（lines 不发送给前端）
-              simple_cache()
-                .put_lines(&sid_for_cache, &file_url, res.lines.clone())
-                .await;
-
-              // 渲染为 SearchJsonResult，会自动去掉 lines，只保留 chunks、keywords、path
-              let json_obj = render_json_chunks(
-                &file_id,
-                res.merged.clone(),
-                res.lines.clone(),
-                &highlights_s,
-                res.encoding.clone(),
-              );
-              // 包装成 SearchEvent
-              let success_event = serde_json::json!({
-                "type": "result",
-                "data": json_obj
-              });
-              match serde_json::to_vec(&success_event) {
-                Ok(mut v) => {
-                  v.push(b'\n');
-                  if tx_bytes.send(Ok(bytes::Bytes::from(v))).await.is_err() {
-                    break;
-                  }
-                }
-                Err(e) => {
-                  log::warn!("profiling: [Search] 序列化结果失败: {}", e);
-                }
-              }
-            }
-            crate::service::search::SearchEvent::Error {
-              source,
-              message,
-              recoverable,
-            } => {
-              // 发送错误事件
-              let error_event = crate::service::search::SearchEvent::Error {
-                source,
-                message,
-                recoverable,
-              };
-              match serde_json::to_vec(&error_event) {
-                Ok(mut v) => {
-                  v.push(b'\n');
-                  let _ = tx_bytes.send(Ok(bytes::Bytes::from(v))).await;
-                }
-                Err(e) => {
-                  log::warn!("profiling: [Search] 序列化错误事件失败: {}", e);
-                }
-              }
-            }
-            crate::service::search::SearchEvent::Complete { source, elapsed_ms } => {
-              // 发送完成事件
-              let complete_event = crate::service::search::SearchEvent::Complete { source, elapsed_ms };
-              match serde_json::to_vec(&complete_event) {
-                Ok(mut v) => {
-                  v.push(b'\n');
-                  let _ = tx_bytes.send(Ok(bytes::Bytes::from(v))).await;
-                }
-                Err(e) => {
-                  log::warn!("profiling: [Search] 序列化完成事件失败: {}", e);
-                }
-              }
-            }
-          }
-        }
-      });
-
-      // 处理条目流
-      if let Err(e) = processor.process_stream(&mut *estream, sr_tx).await {
-        log::error!("[Search] 处理条目流失败 source_idx={} err={}", idx, e);
-      }
-
-      let total_time = task_start.elapsed();
-      let _ = sender_task.await; // 等待发送任务结束
-      log::info!(
-        "profiling: [Search] 任务完成 source_idx={} name=EntryStream 总耗时={:.3}s, io_wait={:.3}s",
-        idx,
-        total_time.as_secs_f64(),
-        io_wait_time.as_secs_f64()
-      );
-    });
-  }
-
-  log::info!("[Search] 搜索任务已启动，耗时={:?}", overall_start.elapsed());
-
-  // 删除发送端，让任务完成后自动关闭
-  drop(tx);
-
-  let body = Body::from_stream(ReceiverStream::new(rx));
-  let sid_header = HeaderValue::from_str(&sid).unwrap_or_else(|_| HeaderValue::from_static(""));
-  HttpResponse::builder()
-    .status(200)
-    .header(
-      CONTENT_TYPE,
-      HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
-    )
-    .header("X-Logseek-SID", sid_header)
-    .body(body)
-    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
-}
-
-/// 根据今天分割日期范围
-///
-/// 返回：(当前日期范围, 历史日期范围)
-/// - 当前日期范围：包含今天及以后的日期
-/// - 历史日期范围：包含昨天及以前的日期
-#[allow(dead_code)]
-fn split_date_range_by_today(
-  range: crate::domain::source_planner::DateRange,
-  today: chrono::NaiveDate,
-) -> (
-  Option<crate::domain::source_planner::DateRange>,
-  Option<crate::domain::source_planner::DateRange>,
-) {
-  use crate::domain::source_planner::DateRange;
-
-  let yesterday = today - chrono::Duration::days(1);
-
-  // 如果整个范围都在昨天及以前，全部作为历史日期
-  if range.end <= yesterday {
-    return (None, Some(range));
-  }
-
-  // 如果整个范围都在今天及以后，全部作为当前日期
-  if range.start >= today {
-    return (Some(range), None);
-  }
-
-  // 范围跨越今天，需要分割
-  let historical_range = if range.start <= yesterday {
-    Some(DateRange::new(range.start, yesterday))
-  } else {
-    None
-  };
-
-  let current_range = Some(DateRange::new(today, range.end));
-
-  (current_range, historical_range)
-}
-
-/// 获取可用的 Agent 端点列表
-///
-/// 获取包含 app=bbipapp 标签的在线 Agent 端点
-#[allow(dead_code)]
-async fn get_agent_endpoints() -> Vec<String> {
-  // 获取包含 app=bbipapp 标签的在线 Agent
-  let _tags = [("app".to_string(), "bbipapp".to_string())];
-  // let endpoints = agent_manager::get_online_agent_endpoints_by_tags(&_tags).await;
-  let endpoints = agent_manager::get_online_agent_endpoints().await;
-
-  if !endpoints.is_empty() {
-    log::info!("找到 {} 个包含 app=bbipapp 标签的在线 Agent 端点", endpoints.len());
-  } else {
-    log::warn!("没有找到包含 app=bbipapp 标签的在线 Agent");
-  }
-
-  endpoints
-}
-
-#[cfg(test)]
-mod tests {
-  use crate::domain::source_planner::DateRange;
-
-  use super::*;
-  use chrono::NaiveDate;
-
-  #[test]
-  fn test_split_date_range_by_today() {
-    let today = NaiveDate::from_ymd_opt(2024, 10, 12).unwrap();
-
-    // 测试1: 整个范围都在昨天及以前
-    let historical_range = DateRange::new(
-      NaiveDate::from_ymd_opt(2024, 10, 10).unwrap(),
-      NaiveDate::from_ymd_opt(2024, 10, 11).unwrap(),
-    );
-    let (current, historical) = split_date_range_by_today(historical_range, today);
-    assert!(current.is_none());
-    assert!(historical.is_some());
-    assert_eq!(historical.unwrap(), historical_range);
-
-    // 测试2: 整个范围都在今天及以后
-    let future_range = DateRange::new(
-      NaiveDate::from_ymd_opt(2024, 10, 12).unwrap(),
-      NaiveDate::from_ymd_opt(2024, 10, 15).unwrap(),
-    );
-    let (current, historical) = split_date_range_by_today(future_range, today);
-    assert!(current.is_some());
-    assert!(historical.is_none());
-    assert_eq!(current.unwrap(), future_range);
-
-    // 测试3: 范围跨越今天
-    let mixed_range = DateRange::new(
-      NaiveDate::from_ymd_opt(2024, 10, 10).unwrap(),
-      NaiveDate::from_ymd_opt(2024, 10, 15).unwrap(),
-    );
-    let (current, historical) = split_date_range_by_today(mixed_range, today);
-
-    assert!(current.is_some());
-    assert!(historical.is_some());
-
-    let current_range = current.unwrap();
-    let historical_range = historical.unwrap();
-
-    // 当前日期范围应该是从今天开始
-    assert_eq!(current_range.start, today);
-    assert_eq!(current_range.end, NaiveDate::from_ymd_opt(2024, 10, 15).unwrap());
-
-    // 历史日期范围应该是到昨天结束
-    assert_eq!(historical_range.start, NaiveDate::from_ymd_opt(2024, 10, 10).unwrap());
-    assert_eq!(historical_range.end, NaiveDate::from_ymd_opt(2024, 10, 11).unwrap());
-  }
-
-  #[tokio::test]
-  async fn test_get_agent_endpoints() {
-    // 测试获取包含 app=bbipapp 标签的 Agent 端点
-    // 由于没有真实的 AgentManager 实例，这个测试会返回空列表
-    let endpoints = get_agent_endpoints().await;
-    // 在没有 AgentManager 实例的情况下，应该返回空列表
-    assert_eq!(endpoints, Vec::<String>::new());
-  }
+  
+  let executor = SearchExecutor::new(pool, config);
+  let (result_rx, sid) = executor.search(&body.q, ctx).await?;
+  
+  let highlights = crate::query::Query::parse_github_like(&body.q)
+    .map(|spec| spec.highlights)
+    .unwrap_or_default();
+  
+  let stream = convert_to_ndjson_stream(result_rx, highlights);
+  build_ndjson_response(stream, sid)
 }

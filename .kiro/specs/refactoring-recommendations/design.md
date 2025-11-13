@@ -86,7 +86,8 @@ use tokio::sync::{Semaphore, mpsc};
 
 /// 搜索执行器配置
 pub struct SearchExecutorConfig {
-    /// IO 并发数(S3 访问)
+    /// IO 并发数（统一控制 S3/Local/Agent 数据源的并发访问）
+    /// 防止大量并发连接导致端口耗尽、文件描述符耗尽等资源问题
     pub io_max_concurrency: usize,
     /// 流通道容量
     pub stream_channel_capacity: usize,
@@ -95,6 +96,16 @@ pub struct SearchExecutorConfig {
 impl Default for SearchExecutorConfig {
     fn default() -> Self {
         Self {
+            // 默认并发数 12 是保守的设置，适用于：
+            // - 少量数据源（< 20 个）
+            // - 混合 S3/Local/Agent 数据源
+            // 
+            // 如果有大量 Agent 数据源（> 50 个），建议增加到 50-100
+            // 需要考虑的因素：
+            // - 系统临时端口数量（通常 28000 个）
+            // - 文件描述符限制（ulimit -n）
+            // - 内存容量
+            // - 网络带宽
             io_max_concurrency: 12,
             stream_channel_capacity: 128,
         }
@@ -172,7 +183,8 @@ impl SearchExecutor {
         let pool = self.pool.clone();
         
         tokio::spawn(async move {
-            // 获取 IO 许可
+            // 获取 IO 许可（统一控制所有数据源的并发）
+            // 防止大量并发连接导致端口耗尽、文件描述符耗尽等问题
             let _permit = io_sem.acquire_owned().await.ok()?;
             
             // 执行搜索

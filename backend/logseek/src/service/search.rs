@@ -1674,4 +1674,241 @@ foo lower
         .any(|line| line.contains("200") || line.contains("500"))
     );
   }
+
+  #[tokio::test]
+  async fn test_search_processor_with_encoding() {
+    let spec = Arc::new(Query::parse_github_like("test").unwrap());
+    let processor = SearchProcessor::new_with_encoding(spec, 0, Some("UTF-8".to_string()));
+
+    let content = "test line\n";
+    let mut reader = content.as_bytes();
+
+    let result = processor
+      .process_content("test.log".to_string(), &mut reader)
+      .await
+      .unwrap();
+
+    assert!(result.is_some());
+    let result = result.unwrap();
+    assert_eq!(result.encoding, Some("UTF-8".to_string()));
+  }
+
+  #[tokio::test]
+  async fn test_search_processor_should_process_path_with() {
+    let spec = Arc::new(Query::parse_github_like("test").unwrap());
+    let processor = SearchProcessor::new(spec, 0);
+
+    // 没有额外过滤器
+    assert!(processor.should_process_path_with("test.log", None));
+
+    // 有额外过滤器
+    let extra_filter = crate::query::path_glob_to_filter("*.log").unwrap();
+    assert!(processor.should_process_path_with("test.log", Some(&extra_filter)));
+    assert!(!processor.should_process_path_with("test.txt", Some(&extra_filter)));
+  }
+
+  #[test]
+  fn test_search_error_from_io_error() {
+    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+    let search_err: SearchError = io_err.into();
+
+    match search_err {
+      SearchError::Io { path, error } => {
+        assert_eq!(path, "unknown");
+        assert!(error.contains("file not found"));
+      }
+      _ => panic!("Expected Io error"),
+    }
+  }
+
+  #[test]
+  fn test_search_error_display() {
+    let err = SearchError::Io {
+      path: "/test/path".to_string(),
+      error: "permission denied".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("/test/path"));
+    assert!(msg.contains("permission denied"));
+
+    let err = SearchError::ChannelClosed;
+    assert_eq!(err.to_string(), "Channel 已关闭: 接收端已断开连接");
+  }
+
+  #[tokio::test]
+  async fn test_search_processor_process_content_error() {
+    let spec = Arc::new(Query::parse_github_like("test").unwrap());
+    let processor = SearchProcessor::new(spec, 0);
+
+    // 创建一个会失败的 reader
+    struct FailingReader;
+    impl tokio::io::AsyncRead for FailingReader {
+      fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        _buf: &mut tokio::io::ReadBuf<'_>,
+      ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Err(std::io::Error::new(
+          std::io::ErrorKind::Other,
+          "read error",
+        )))
+      }
+    }
+
+    let mut reader = FailingReader;
+    let result = processor
+      .process_content("test.log".to_string(), &mut reader)
+      .await;
+
+    assert!(result.is_err());
+  }
+
+  #[tokio::test]
+  async fn test_search_processor_send_result_error() {
+    let spec = Arc::new(Query::parse_github_like("test").unwrap());
+    let processor = SearchProcessor::new(spec, 0);
+
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    drop(rx); // 关闭接收端
+
+    let result = SearchResult {
+      path: "test.log".to_string(),
+      lines: vec!["test line".to_string()],
+      merged: vec![(1, 1)],
+      encoding: Some("UTF-8".to_string()),
+    };
+
+    let send_result = processor.send_result(result, &tx).await;
+    assert!(send_result.is_err());
+    assert!(matches!(send_result.unwrap_err(), SearchError::ChannelClosed));
+  }
+
+  #[tokio::test]
+  async fn test_grep_context_with_large_context() {
+    let content = "line1\nline2\nerror\nline4\nline5\n";
+    let mut reader = content.as_bytes();
+    let spec = Query::parse_github_like("error").unwrap();
+
+    // 使用非常大的上下文
+    let result = grep_context(&mut reader, &spec, 100, None).await.unwrap();
+
+    assert!(result.is_some());
+    let (lines, merged, _) = result.unwrap();
+    // 应该包含所有行
+    assert!(lines.len() >= 3);
+    assert!(!merged.is_empty());
+  }
+
+  #[tokio::test]
+  async fn test_grep_context_with_encoding_override() {
+    let content = "测试内容\n";
+    let mut reader = content.as_bytes();
+    let spec = Query::parse_github_like("测试").unwrap();
+
+    // 指定编码
+    let result = grep_context(&mut reader, &spec, 0, Some("UTF-8")).await.unwrap();
+
+    assert!(result.is_some());
+    let (_, _, encoding) = result.unwrap();
+    assert_eq!(encoding, Some("UTF-8".to_string()));
+  }
+
+
+
+  #[tokio::test]
+  async fn test_search_result_clone() {
+    let result = SearchResult {
+      path: "test.log".to_string(),
+      lines: vec!["line1".to_string()],
+      merged: vec![(1, 1)],
+      encoding: Some("UTF-8".to_string()),
+    };
+
+    let cloned = result.clone();
+    assert_eq!(result.path, cloned.path);
+    assert_eq!(result.lines, cloned.lines);
+    assert_eq!(result.merged, cloned.merged);
+    assert_eq!(result.encoding, cloned.encoding);
+  }
+
+  #[tokio::test]
+  async fn test_search_event_variants() {
+    let success = SearchEvent::Success(SearchResult {
+      path: "test.log".to_string(),
+      lines: vec!["line".to_string()],
+      merged: vec![(1, 1)],
+      encoding: Some("UTF-8".to_string()),
+    });
+
+    match success {
+      SearchEvent::Success(_) => {}
+      _ => panic!("Expected Success variant"),
+    }
+
+    let error = SearchEvent::Error {
+      source: "test".to_string(),
+      message: "error".to_string(),
+      recoverable: true,
+    };
+
+    match error {
+      SearchEvent::Error { recoverable, .. } => {
+        assert!(recoverable);
+      }
+      _ => panic!("Expected Error variant"),
+    }
+
+    let complete = SearchEvent::Complete {
+      source: "test".to_string(),
+      elapsed_ms: 100,
+    };
+
+    match complete {
+      SearchEvent::Complete { elapsed_ms, .. } => {
+        assert_eq!(elapsed_ms, 100);
+      }
+      _ => panic!("Expected Complete variant"),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_grep_context_empty_file() {
+    let content = "";
+    let mut reader = content.as_bytes();
+    let spec = Query::parse_github_like("test").unwrap();
+
+    let result = grep_context(&mut reader, &spec, 0, None).await.unwrap();
+    assert!(result.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_grep_context_no_newline_at_end() {
+    let content = "line1\nline2\nerror";
+    let mut reader = content.as_bytes();
+    let spec = Query::parse_github_like("error").unwrap();
+
+    let result = grep_context(&mut reader, &spec, 0, None).await.unwrap();
+    assert!(result.is_some());
+    let (lines, _, _) = result.unwrap();
+    assert!(lines.iter().any(|line| line.contains("error")));
+  }
+
+  #[tokio::test]
+  async fn test_search_processor_new_methods() {
+    let spec = Arc::new(Query::parse_github_like("test").unwrap());
+
+    // new
+    let processor1 = SearchProcessor::new(spec.clone(), 5);
+    assert_eq!(processor1.context_lines, 5);
+    assert!(processor1.encoding.is_none());
+
+    // new_with_encoding
+    let processor2 = SearchProcessor::new_with_encoding(spec.clone(), 3, Some("GBK".to_string()));
+    assert_eq!(processor2.context_lines, 3);
+    assert_eq!(processor2.encoding, Some("GBK".to_string()));
+
+    let processor3 = SearchProcessor::new_with_encoding(spec, 1, None);
+    assert_eq!(processor3.context_lines, 1);
+    assert!(processor3.encoding.is_none());
+  }
 }

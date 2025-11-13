@@ -34,3 +34,99 @@ impl From<std::io::Error> for ServiceError {
     Self::ProcessingError(format!("IO 错误: {}", err))
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_service_error_config_error() {
+    let err = ServiceError::ConfigError("配置文件缺失".to_string());
+    assert_eq!(err.to_string(), "配置错误: 配置文件缺失");
+  }
+
+  #[test]
+  fn test_service_error_search_failed() {
+    let err = ServiceError::SearchFailed {
+      path: "/test/path".to_string(),
+      error: "连接超时".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("/test/path"));
+    assert!(msg.contains("连接超时"));
+  }
+
+  #[test]
+  fn test_service_error_processing_error() {
+    let err = ServiceError::ProcessingError("数据解析失败".to_string());
+    assert_eq!(err.to_string(), "数据处理错误: 数据解析失败");
+  }
+
+  #[test]
+  fn test_service_error_io_error() {
+    let err = ServiceError::IoError {
+      path: "/test/file.log".to_string(),
+      error: "文件不存在".to_string(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("/test/file.log"));
+    assert!(msg.contains("文件不存在"));
+  }
+
+  #[test]
+  fn test_service_error_channel_closed() {
+    let err = ServiceError::ChannelClosed;
+    assert_eq!(err.to_string(), "Channel 已关闭: 接收端已断开连接");
+  }
+
+  #[test]
+  fn test_service_error_from_io_error() {
+    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "文件未找到");
+    let service_err: ServiceError = io_err.into();
+    
+    match service_err {
+      ServiceError::ProcessingError(msg) => {
+        assert!(msg.contains("IO 错误"));
+        assert!(msg.contains("文件未找到"));
+      }
+      _ => panic!("期望 ProcessingError"),
+    }
+  }
+
+  #[test]
+  fn test_service_error_from_repository_error() {
+    let repo_err = crate::repository::RepositoryError::NotFound("资源不存在".to_string());
+    let service_err: ServiceError = repo_err.into();
+    
+    match service_err {
+      ServiceError::Repository(_) => {
+        // 成功转换
+      }
+      _ => panic!("期望 Repository 错误"),
+    }
+  }
+
+  #[test]
+  fn test_service_error_clone() {
+    let err = ServiceError::ConfigError("test".to_string());
+    let cloned = err.clone();
+    assert_eq!(err.to_string(), cloned.to_string());
+  }
+
+  #[test]
+  fn test_service_error_debug() {
+    let err = ServiceError::ProcessingError("test".to_string());
+    let debug_str = format!("{:?}", err);
+    assert!(debug_str.contains("ProcessingError"));
+  }
+
+  #[test]
+  fn test_result_type_alias() {
+    let ok_result: Result<i32> = Ok(42);
+    assert_eq!(ok_result.unwrap(), 42);
+
+    let err_result: Result<i32> = Err(ServiceError::ChannelClosed);
+    assert!(err_result.is_err());
+  }
+}
+
