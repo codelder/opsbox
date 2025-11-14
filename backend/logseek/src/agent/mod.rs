@@ -29,13 +29,24 @@ pub struct SearchOptions {
 
 impl Default for SearchOptions {
   fn default() -> Self {
+    // 从全局配置读取超时时间
+    let timeout_secs = if let Some(t) = crate::utils::tuning::get() {
+      t.io_timeout_sec.clamp(5, 300)
+    } else {
+      std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(5, 300)
+    };
+
     Self {
       path_filter: None,
       target: Target::Dir {
         path: ".".to_string(),
         recursive: true,
       },
-      timeout_secs: Some(300),
+      timeout_secs: Some(timeout_secs),
       max_results: None,
     }
   }
