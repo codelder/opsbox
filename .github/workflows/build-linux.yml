@@ -34,7 +34,7 @@ jobs:
             target-musl-${{ runner.os }}-${{ env.RUST_VERSION }}-
             target-musl-${{ runner.os }}-
 
-      - name: Test and build backend
+      - name: Run tests
         run: |
           set -euxo pipefail
           # 安装 musl 工具链
@@ -45,10 +45,22 @@ jobs:
           export CARGO_TARGET_DIR="${PWD}/backend/target-musl"
           export OPENSSL_STATIC=1
           
-          # 先运行测试（会编译所有代码）
-          cargo test --all-features --manifest-path backend/Cargo.toml
+          # 运行测试（使用 release 模式，与后续构建共享编译产物）
+          cargo test \
+            --manifest-path backend/Cargo.toml \
+            --target x86_64-unknown-linux-musl \
+            --release \
+            --all-features
+
+      - name: Build backend
+        run: |
+          set -euxo pipefail
           
-          # 然后构建 release 版本（利用测试阶段的编译缓存）
+          # 设置编译环境
+          export CARGO_TARGET_DIR="${PWD}/backend/target-musl"
+          export OPENSSL_STATIC=1
+          
+          # 构建 release 版本（利用测试阶段的编译缓存）
           cargo build \
             --manifest-path backend/Cargo.toml \
             -p opsbox-server -p opsbox-agent \
@@ -84,7 +96,7 @@ jobs:
       - name: Save build cache
         if: success() && !startsWith(github.ref, 'refs/tags/')
         continue-on-error: true  # 缓存失败不影响构建成功
-        timeout-minutes: 10      # 最多等待 10 分钟
+        timeout-minutes: 1       # 最多等待 1 分钟
         uses: actions/cache/save@v4
         with:
           path: backend/target-musl
