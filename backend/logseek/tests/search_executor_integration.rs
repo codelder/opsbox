@@ -76,7 +76,7 @@ async fn test_search_executor_basic_search() {
         io_max_concurrency: 2,
         stream_channel_capacity: 32,
     };
-    let executor = SearchExecutor::new(pool, config);
+    let _executor = SearchExecutor::new(pool, config);
 
     // 注意：由于 SearchExecutor 依赖 Starlark 规划器和数据库配置，
     // 这个测试需要预先配置数据源。在实际环境中，这通过 settings 表完成。
@@ -89,7 +89,7 @@ async fn test_search_executor_basic_search() {
 #[tokio::test]
 async fn test_search_executor_with_local_source() {
     // 创建测试环境
-    let (pool, _temp_dir) = create_test_pool().await;
+    let (_pool, _temp_dir) = create_test_pool().await;
     let log_dir = TempDir::new().expect("创建临时日志目录失败");
     create_test_log_files(log_dir.path())
         .await
@@ -180,7 +180,7 @@ async fn test_concurrent_search_simulation() {
         let config_clone = config.clone();
 
         let handle = tokio::spawn(async move {
-            let executor = SearchExecutor::new(pool_clone, config_clone);
+            let _executor = SearchExecutor::new(pool_clone, config_clone);
             // 验证 executor 可以被创建
             format!("executor-{}", i)
         });
