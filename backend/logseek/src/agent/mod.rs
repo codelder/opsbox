@@ -400,40 +400,69 @@ impl SearchService for AgentClient {
     // 创建结果流
     let (tx, mut rx) = tokio::sync::mpsc::channel(128);
 
+    // 创建取消令牌
+    use tokio_util::sync::CancellationToken;
+    let cancel_token = CancellationToken::new();
+    let cancel_token_clone = cancel_token.clone();
+
     // 在后台任务中处理行流
     let agent_id_for_task = agent_id.clone();
     tokio::spawn(async move {
-      // 处理正常的行
-      while let Some(line_result) = lines.next().await {
-        match line_result {
-          Ok(line) => {
-            if !line.trim().is_empty() {
-              debug!("🔍 Server解析到NDJSON行: {}", line);
-              if log::log_enabled!(log::Level::Trace) {
-                let preview = if line.len() > 512 {
-                  format!("{}...", truncate_utf8(&line, 512))
-                } else {
-                  line.clone()
-                };
-                trace!("[Wire] ← NDJSON行: {}", preview);
-              }
+      // 设置总超时（5 分钟）
+      let total_timeout = Duration::from_secs(300);
+      let start = tokio::time::Instant::now();
 
-              // 发送到结果流
-              if tx.send(line).await.is_err() {
-                debug!("结果流接收端已关闭");
+      // 处理正常的行
+      loop {
+        // 检查总超时
+        if start.elapsed() > total_timeout {
+          warn!(
+            "Agent {} 流式接收总超时（{}秒），停止处理",
+            agent_id_for_task,
+            total_timeout.as_secs()
+          );
+          break;
+        }
+
+        tokio::select! {
+          line_result = lines.next() => {
+            match line_result {
+              Some(Ok(line)) => {
+                if !line.trim().is_empty() {
+                  debug!("🔍 Server解析到NDJSON行: {}", line);
+                  if log::log_enabled!(log::Level::Trace) {
+                    let preview = if line.len() > 512 {
+                      format!("{}...", truncate_utf8(&line, 512))
+                    } else {
+                      line.clone()
+                    };
+                    trace!("[Wire] ← NDJSON行: {}", preview);
+                  }
+
+                  // 发送到结果流
+                  if tx.send(line).await.is_err() {
+                    debug!("结果流接收端已关闭，触发取消");
+                    cancel_token_clone.cancel();
+                    break;
+                  }
+                }
+              }
+              Some(Err(e)) => {
+                warn!("Agent {} 行解析失败: {}", agent_id_for_task, e);
+                // 继续处理其他行
+              }
+              None => {
+                debug!("Agent {} 流结束", agent_id_for_task);
                 break;
               }
             }
           }
-          Err(e) => {
-            warn!("Agent {} 行解析失败: {}", agent_id_for_task, e);
-            // 继续处理其他行
+          _ = cancel_token_clone.cancelled() => {
+            info!("Agent {} 搜索被取消", agent_id_for_task);
+            break;
           }
         }
       }
-
-      // 流结束时，尝试处理最后一行（可能没有换行符）
-      // LinesCodec 会自动处理最后一行，无需手动flush
 
       // 关闭发送端
       drop(tx);
@@ -494,7 +523,21 @@ impl SearchService for AgentClient {
         }),
     );
 
-    Ok(Box::new(result_stream))
+    // 创建 Drop guard 来触发取消
+    struct CancelOnDrop(CancellationToken);
+    impl Drop for CancelOnDrop {
+      fn drop(&mut self) {
+        self.0.cancel();
+      }
+    }
+    let _cancel_guard = CancelOnDrop(cancel_token);
+
+    // 将 guard 移入流中，确保流被 drop 时触发取消
+    let result_stream_with_cancel = result_stream.inspect(move |_| {
+      let _ = &_cancel_guard; // 捕获 guard
+    });
+
+    Ok(Box::new(result_stream_with_cancel))
   }
 }
 

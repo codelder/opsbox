@@ -17,6 +17,7 @@ logseek = { path = "../logseek" }
 axum = { version = "0.8", features = ["json"] }
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = "0.1"
+tokio-util = "0.7"
 
 # 序列化
 serde = { version = "1.0", features = ["derive"] }

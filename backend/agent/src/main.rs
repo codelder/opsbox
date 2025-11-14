@@ -665,11 +665,31 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
   // 创建结果 channel
   let (tx, rx) = mpsc::channel(128);
 
+  // 创建取消令牌
+  use tokio_util::sync::CancellationToken;
+  let cancel_token = CancellationToken::new();
+  let cancel_token_clone = cancel_token.clone();
+
   // 在后台执行搜索
-  tokio::spawn(execute_search(state.config.clone(), request, tx));
+  tokio::spawn(execute_search(
+    state.config.clone(),
+    request,
+    tx,
+    cancel_token_clone,
+  ));
+
+  // 创建 Drop guard 来触发取消
+  struct CancelOnDrop(tokio_util::sync::CancellationToken);
+  impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+      self.0.cancel();
+    }
+  }
+  let _cancel_guard = CancelOnDrop(cancel_token);
 
   // 将 channel 转换为 NDJSON 流
-  let stream = ReceiverStream::new(rx).map(|msg| {
+  let stream = ReceiverStream::new(rx).map(move |msg| {
+    let _ = &_cancel_guard; // 捕获 guard
     let json = serde_json::to_string(&msg).unwrap_or_else(|_| "{}".to_string());
     if wire_debug_enabled() {
       let preview = if json.len() > 512 {
@@ -700,22 +720,39 @@ async fn handle_cancel(State(_state): State<AppState>, Path(task_id): Path<Strin
 // ============================================================================
 
 /// 执行搜索
-async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, tx: mpsc::Sender<SearchEvent>) {
+async fn execute_search(
+  config: Arc<AgentConfig>,
+  request: AgentSearchRequest,
+  tx: mpsc::Sender<SearchEvent>,
+  cancel_token: tokio_util::sync::CancellationToken,
+) {
   let task_id = request.task_id.clone();
   let started_at = std::time::Instant::now();
+
+  // 辅助宏：发送事件并检查取消
+  macro_rules! send_event {
+    ($event:expr) => {
+      if cancel_token.is_cancelled() {
+        info!("搜索任务 {} 已被取消", task_id);
+        return;
+      }
+      if tx.send($event).await.is_err() {
+        info!("客户端已断开连接，停止搜索任务 {}", task_id);
+        return;
+      }
+    };
+  }
 
   // 1. 解析查询（第三层过滤：query 中的 path: 指令）
   let spec = match Query::parse_github_like(&request.query) {
     Ok(s) => Arc::new(s),
     Err(e) => {
       error!("查询解析失败: {}", e);
-      let _ = tx
-        .send(SearchEvent::Error {
-          source: "agent-query-parse".to_string(),
-          message: format!("查询解析失败: {}", e),
-          recoverable: false,
-        })
-        .await;
+      send_event!(SearchEvent::Error {
+        source: "agent-query-parse".to_string(),
+        message: format!("查询解析失败: {}", e),
+        recoverable: false,
+      });
       return;
     }
   };
@@ -737,13 +774,11 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
       } else {
         format!("Target 解析失败: {}。可用的子目录: {:?}", e, available_dirs)
       };
-      let _ = tx
-        .send(SearchEvent::Error {
-          source: "agent-target".to_string(),
-          message: error_msg,
-          recoverable: false,
-        })
-        .await;
+      send_event!(SearchEvent::Error {
+        source: "agent-target".to_string(),
+        message: error_msg,
+        recoverable: false,
+      });
       return;
     }
   };
@@ -754,13 +789,11 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
       Ok(f) => Some(f),
       Err(e) => {
         error!("路径过滤器解析失败: {}", e);
-        let _ = tx
-          .send(SearchEvent::Error {
-            source: "agent-path-filter".to_string(),
-            message: format!("路径过滤器解析失败: {}", e),
-            recoverable: true,
-          })
-          .await;
+        send_event!(SearchEvent::Error {
+          source: "agent-path-filter".to_string(),
+          message: format!("路径过滤器解析失败: {}", e),
+          recoverable: true,
+        });
         return;
       }
     }
@@ -772,13 +805,11 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
 
   if filtered_paths.is_empty() {
     warn!("没有找到匹配的搜索路径");
-    let _ = tx
-      .send(SearchEvent::Error {
-        source: "agent-path".to_string(),
-        message: "没有找到匹配的搜索路径".to_string(),
-        recoverable: true,
-      })
-      .await;
+    send_event!(SearchEvent::Error {
+      source: "agent-path".to_string(),
+      message: "没有找到匹配的搜索路径".to_string(),
+      recoverable: true,
+    });
     return;
   }
 
@@ -787,6 +818,12 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
   let mut all_matched = 0;
 
   for search_path in filtered_paths {
+    // 检查是否被取消
+    if cancel_token.is_cancelled() {
+      info!("搜索任务 {} 已被取消", task_id);
+      return;
+    }
+
     info!("开始搜索路径: {}", search_path.display());
 
     // 统一由 logseek 提供的构造器创建本地来源条目流
@@ -828,6 +865,7 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
       &mut all_processed,
       &mut all_matched,
       extra_path_filter.clone(),
+      &cancel_token,
     )
     .await
     {
@@ -837,12 +875,10 @@ async fn execute_search(config: Arc<AgentConfig>, request: AgentSearchRequest, t
 
   // 发送完成事件
   let elapsed_ms = started_at.elapsed().as_millis() as u64;
-  let _ = tx
-    .send(SearchEvent::Complete {
-      source: "agent:complete".to_string(),
-      elapsed_ms,
-    })
-    .await;
+  send_event!(SearchEvent::Complete {
+    source: "agent:complete".to_string(),
+    elapsed_ms,
+  });
 
   info!(
     "搜索完成: task_id={}, processed={}, matched={}",
@@ -860,15 +896,23 @@ async fn search_with_entry_stream(
   all_processed: &mut usize,
   all_matched: &mut usize,
   extra_path_filter: Option<logseek::query::PathFilter>,
+  cancel_token: &tokio_util::sync::CancellationToken,
 ) -> Result<(), String> {
   // 使用通用条目流处理函数
   let tx_clone = tx.clone();
+  let cancel_token_clone = cancel_token.clone();
 
   let (processed, matched) = logseek::service::entry_stream::process_entry_stream_with_callback(
     stream,
     processor,
     extra_path_filter,
     move |result| {
+      // 检查是否被取消
+      if cancel_token_clone.is_cancelled() {
+        debug!("搜索已被取消，停止处理");
+        return false;
+      }
+
       // 发送结果到 channel
       let tx_ref = &tx_clone;
       match tokio::runtime::Handle::try_current() {
@@ -876,7 +920,7 @@ async fn search_with_entry_stream(
           match handle.block_on(async { tx_ref.send(result).await }) {
             Ok(_) => true, // 继续处理
             Err(_) => {
-              debug!("接收端已关闭");
+              debug!("接收端已关闭，停止处理");
               false // 停止处理
             }
           }
