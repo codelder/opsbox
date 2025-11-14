@@ -168,3 +168,179 @@ async fn resolve_llm_client(pool: &SqlitePool) -> Result<DynLlmClient, NL2QError
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_build_messages() {
+    let nl = "查找错误日志";
+    let messages = build_messages(nl);
+
+    // 应该有 2 条消息：system + user
+    assert_eq!(messages.len(), 2);
+
+    // 第一条是 system 消息
+    assert!(matches!(messages[0].role, Role::System));
+    assert!(messages[0].content.contains("查询字符串规范"));
+
+    // 第二条是 user 消息
+    assert!(matches!(messages[1].role, Role::User));
+    assert_eq!(messages[1].content, "查找错误日志");
+  }
+
+  #[test]
+  fn test_build_messages_with_whitespace() {
+    let nl = "  查找错误日志  \n";
+    let messages = build_messages(nl);
+
+    // user 消息应该被 trim
+    assert_eq!(messages[1].content, "查找错误日志");
+  }
+
+  #[test]
+  fn test_strip_think_sections_no_think() {
+    let input = "error AND warning";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "error AND warning");
+  }
+
+  #[test]
+  fn test_strip_think_sections_single_think() {
+    let input = "<think>这是思考过程</think>error AND warning";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "error AND warning");
+  }
+
+  #[test]
+  fn test_strip_think_sections_multiple_think() {
+    let input = "<think>思考1</think>error<think>思考2</think> AND warning";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "error AND warning");
+  }
+
+  #[test]
+  fn test_strip_think_sections_unclosed_think() {
+    let input = "error AND warning<think>未闭合的思考";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "error AND warning");
+  }
+
+  #[test]
+  fn test_strip_think_sections_nested_think() {
+    let input = "<think>外层<think>内层</think>外层</think>result";
+    let output = strip_think_sections(input);
+    // 应该移除第一个 <think>...</think> 对
+    assert!(output.contains("result"));
+  }
+
+  #[test]
+  fn test_strip_think_sections_empty_think() {
+    let input = "<think></think>error";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "error");
+  }
+
+  #[test]
+  fn test_nl2q_error_display() {
+    let err = NL2QError::Http("连接失败".to_string());
+    assert_eq!(err.to_string(), "Ollama服务未就绪或连接失败: 连接失败");
+
+    let err = NL2QError::Empty;
+    assert_eq!(err.to_string(), "AI 生成了空结果，请重试或改写需求");
+  }
+
+  #[test]
+  fn test_nl_body_deserialization() {
+    let json = r#"{"nl": "查找错误日志"}"#;
+    let body: NLBody = serde_json::from_str(json).unwrap();
+    assert_eq!(body.nl, "查找错误日志");
+  }
+
+  #[test]
+  fn test_nl2q_response_serialization() {
+    let response = NL2QResponse {
+      q: "error AND warning".to_string(),
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    assert!(json.contains("error AND warning"));
+  }
+
+  #[test]
+  fn test_quick_guide_loaded() {
+    // 验证 QUICK_GUIDE 常量已正确加载
+    assert!(!QUICK_GUIDE.is_empty());
+    assert!(QUICK_GUIDE.contains("查询字符串规范"));
+  }
+
+  #[test]
+  fn test_build_messages_preserves_quotes() {
+    let nl = r#"查找包含 "exact phrase" 的日志"#;
+    let messages = build_messages(nl);
+    assert!(messages[1].content.contains(r#""exact phrase""#));
+  }
+
+  #[test]
+  fn test_strip_think_sections_preserves_content() {
+    let input = "before<think>思考</think>middle<think>更多思考</think>after";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "beforemiddleafter");
+  }
+
+  #[test]
+  fn test_strip_think_sections_with_newlines() {
+    let input = "result\n<think>\n思考过程\n</think>\nmore";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "result\n\nmore");
+  }
+
+  #[test]
+  fn test_nl_body_clone() {
+    let body = NLBody {
+      nl: "test".to_string(),
+    };
+    let cloned = body.clone();
+    assert_eq!(body.nl, cloned.nl);
+  }
+
+  #[test]
+  fn test_nl2q_response_clone() {
+    let response = NL2QResponse {
+      q: "test query".to_string(),
+    };
+    let cloned = response.clone();
+    assert_eq!(response.q, cloned.q);
+  }
+
+  #[test]
+  fn test_nl2q_error_debug() {
+    let err = NL2QError::Http("test".to_string());
+    let debug_str = format!("{:?}", err);
+    assert!(debug_str.contains("Http"));
+    assert!(debug_str.contains("test"));
+  }
+
+  #[test]
+  fn test_build_messages_empty_nl() {
+    let nl = "";
+    let messages = build_messages(nl);
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].content, "");
+  }
+
+  #[test]
+  fn test_strip_think_sections_only_think() {
+    let input = "<think>只有思考</think>";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "");
+  }
+
+  #[test]
+  fn test_strip_think_sections_multiple_unclosed() {
+    let input = "result<think>思考1<think>思考2";
+    let output = strip_think_sections(input);
+    assert_eq!(output, "result");
+  }
+}
+

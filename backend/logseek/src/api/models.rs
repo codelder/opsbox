@@ -1,5 +1,5 @@
 // API 层数据模型
-use crate::repository::settings;
+use crate::repository::s3;
 use serde::{Deserialize, Serialize};
 
 /// 搜索请求体
@@ -32,7 +32,7 @@ pub struct S3SettingsPayload {
   pub connection_error: Option<String>,
 }
 
-impl From<S3SettingsPayload> for settings::S3Settings {
+impl From<S3SettingsPayload> for s3::S3Settings {
   fn from(value: S3SettingsPayload) -> Self {
     Self {
       endpoint: value.endpoint,
@@ -43,8 +43,8 @@ impl From<S3SettingsPayload> for settings::S3Settings {
   }
 }
 
-impl From<settings::S3Settings> for S3SettingsPayload {
-  fn from(value: settings::S3Settings) -> Self {
+impl From<s3::S3Settings> for S3SettingsPayload {
+  fn from(value: s3::S3Settings) -> Self {
     Self {
       endpoint: value.endpoint,
       bucket: value.bucket,
@@ -77,7 +77,7 @@ pub struct S3ProfilePayload {
   pub secret_key: String,
 }
 
-impl From<S3ProfilePayload> for settings::S3Profile {
+impl From<S3ProfilePayload> for s3::S3Profile {
   fn from(value: S3ProfilePayload) -> Self {
     Self {
       profile_name: value.profile_name,
@@ -89,8 +89,8 @@ impl From<S3ProfilePayload> for settings::S3Profile {
   }
 }
 
-impl From<settings::S3Profile> for S3ProfilePayload {
-  fn from(value: settings::S3Profile) -> Self {
+impl From<s3::S3Profile> for S3ProfilePayload {
+  fn from(value: s3::S3Profile) -> Self {
     Self {
       profile_name: value.profile_name,
       endpoint: value.endpoint,
@@ -188,7 +188,7 @@ mod tests {
       connection_error: None,
     };
 
-    let settings: settings::S3Settings = payload.into();
+    let settings: s3::S3Settings = payload.into();
 
     assert_eq!(settings.endpoint, "localhost:9000");
     assert_eq!(settings.bucket, "logs");
@@ -198,7 +198,7 @@ mod tests {
 
   #[test]
   fn test_s3_settings_conversion_from_domain() {
-    let settings = settings::S3Settings {
+    let settings = s3::S3Settings {
       endpoint: "localhost:9000".to_string(),
       bucket: "logs".to_string(),
       access_key: "admin".to_string(),

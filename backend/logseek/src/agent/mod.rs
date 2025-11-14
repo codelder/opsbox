@@ -29,13 +29,24 @@ pub struct SearchOptions {
 
 impl Default for SearchOptions {
   fn default() -> Self {
+    // 从全局配置读取超时时间
+    let timeout_secs = if let Some(t) = crate::utils::tuning::get() {
+      t.io_timeout_sec.clamp(5, 300)
+    } else {
+      std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(5, 300)
+    };
+
     Self {
       path_filter: None,
       target: Target::Dir {
         path: ".".to_string(),
         recursive: true,
       },
-      timeout_secs: Some(300),
+      timeout_secs: Some(timeout_secs),
       max_results: None,
     }
   }
@@ -128,14 +139,25 @@ impl AgentClient {
       format!("http://{}", endpoint)
     };
 
+    // 从全局配置读取超时时间
+    let timeout_secs = if let Some(t) = crate::utils::tuning::get() {
+      t.io_timeout_sec.clamp(5, 300)
+    } else {
+      std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(5, 300)
+    };
+
     Self {
       agent_id,
       endpoint: full_endpoint,
       client: reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(timeout_secs * 5)) // 总超时为单次操作的5倍（考虑重试）
         .build()
         .unwrap(),
-      timeout: Duration::from_secs(60),
+      timeout: Duration::from_secs(timeout_secs),
     }
   }
 
@@ -183,14 +205,55 @@ impl AgentClient {
 
   /// 获取 Agent 信息
   pub async fn get_info(&self) -> Result<AgentInfo, AgentClientError> {
+    // 获取重试配置
+    let max_attempts = if let Some(t) = crate::utils::tuning::get() {
+      t.io_max_retries.clamp(1, 20)
+    } else {
+      std::env::var("LOGSEEK_IO_MAX_RETRIES")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(5)
+        .clamp(1, 20)
+    };
+
     let url = format!("{}/api/v1/info", self.endpoint);
-    let response = self
-      .client
-      .get(&url)
-      .timeout(Duration::from_secs(10))
-      .send()
-      .await
-      .map_err(|e| AgentClientError::ConnectionError(format!("获取 Agent 信息失败: {}", e)))?;
+    let mut attempt = 0u32;
+    
+    let response = loop {
+      attempt += 1;
+      
+      let result = self
+        .client
+        .get(&url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
+
+      match result {
+        Ok(resp) => break resp,
+        Err(e) => {
+          if attempt >= max_attempts {
+            return Err(AgentClientError::ConnectionError(format!(
+              "获取 Agent 信息失败（已重试 {} 次）: {}",
+              attempt - 1,
+              e
+            )));
+          }
+
+          // 指数退避
+          let backoff_ms = 100u64 * 2u64.pow(attempt - 1);
+          warn!(
+            "获取 Agent {} 信息失败（第 {}/{} 次尝试），{}ms 后重试: {}",
+            self.agent_id,
+            attempt,
+            max_attempts,
+            backoff_ms,
+            e
+          );
+          tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        }
+      }
+    };
 
     if !response.status().is_success() {
       return Err(AgentClientError::Other(format!(
@@ -248,19 +311,57 @@ impl SearchService for AgentClient {
       );
     }
 
-    // 发送 POST 请求到 Agent
+    // 获取重试配置
+    let max_attempts = if let Some(t) = crate::utils::tuning::get() {
+      t.io_max_retries.clamp(1, 20)
+    } else {
+      std::env::var("LOGSEEK_IO_MAX_RETRIES")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(5)
+        .clamp(1, 20)
+    };
+
+    // 发送 POST 请求到 Agent（带重试，指数退避）
     let url = format!("{}/api/v1/search", self.endpoint);
-    let response = self
-      .client
-      .post(&url)
-      .json(&request)
-      .timeout(options.timeout_secs.map(Duration::from_secs).unwrap_or(self.timeout))
-      .send()
-      .await
-      .map_err(|e| {
-        error!("Agent {} 连接失败: {}", self.agent_id, e);
-        AgentClientError::ConnectionError(format!("Agent 连接失败: {}", e))
-      })?;
+    let mut attempt = 0u32;
+    let response = loop {
+      attempt += 1;
+      
+      let result = self
+        .client
+        .post(&url)
+        .json(&request)
+        .timeout(options.timeout_secs.map(Duration::from_secs).unwrap_or(self.timeout))
+        .send()
+        .await;
+
+      match result {
+        Ok(resp) => break resp,
+        Err(e) => {
+          if attempt >= max_attempts {
+            error!("Agent {} 连接失败（已重试 {} 次）: {}", self.agent_id, attempt - 1, e);
+            return Err(AgentClientError::ConnectionError(format!(
+              "Agent 连接失败（已重试 {} 次）: {}",
+              attempt - 1,
+              e
+            )));
+          }
+
+          // 指数退避：100ms * 2^(attempt-1)
+          let backoff_ms = 100u64 * 2u64.pow(attempt - 1);
+          warn!(
+            "Agent {} 连接失败（第 {}/{} 次尝试），{}ms 后重试: {}",
+            self.agent_id,
+            attempt,
+            max_attempts,
+            backoff_ms,
+            e
+          );
+          tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        }
+      }
+    };
 
     // 中文调试：打印响应状态与头
     let status = response.status();
@@ -299,40 +400,69 @@ impl SearchService for AgentClient {
     // 创建结果流
     let (tx, mut rx) = tokio::sync::mpsc::channel(128);
 
+    // 创建取消令牌
+    use tokio_util::sync::CancellationToken;
+    let cancel_token = CancellationToken::new();
+    let cancel_token_clone = cancel_token.clone();
+
     // 在后台任务中处理行流
     let agent_id_for_task = agent_id.clone();
     tokio::spawn(async move {
-      // 处理正常的行
-      while let Some(line_result) = lines.next().await {
-        match line_result {
-          Ok(line) => {
-            if !line.trim().is_empty() {
-              debug!("🔍 Server解析到NDJSON行: {}", line);
-              if log::log_enabled!(log::Level::Trace) {
-                let preview = if line.len() > 512 {
-                  format!("{}...", truncate_utf8(&line, 512))
-                } else {
-                  line.clone()
-                };
-                trace!("[Wire] ← NDJSON行: {}", preview);
-              }
+      // 设置总超时（5 分钟）
+      let total_timeout = Duration::from_secs(300);
+      let start = tokio::time::Instant::now();
 
-              // 发送到结果流
-              if tx.send(line).await.is_err() {
-                debug!("结果流接收端已关闭");
+      // 处理正常的行
+      loop {
+        // 检查总超时
+        if start.elapsed() > total_timeout {
+          warn!(
+            "Agent {} 流式接收总超时（{}秒），停止处理",
+            agent_id_for_task,
+            total_timeout.as_secs()
+          );
+          break;
+        }
+
+        tokio::select! {
+          line_result = lines.next() => {
+            match line_result {
+              Some(Ok(line)) => {
+                if !line.trim().is_empty() {
+                  debug!("🔍 Server解析到NDJSON行: {}", line);
+                  if log::log_enabled!(log::Level::Trace) {
+                    let preview = if line.len() > 512 {
+                      format!("{}...", truncate_utf8(&line, 512))
+                    } else {
+                      line.clone()
+                    };
+                    trace!("[Wire] ← NDJSON行: {}", preview);
+                  }
+
+                  // 发送到结果流
+                  if tx.send(line).await.is_err() {
+                    debug!("结果流接收端已关闭，触发取消");
+                    cancel_token_clone.cancel();
+                    break;
+                  }
+                }
+              }
+              Some(Err(e)) => {
+                warn!("Agent {} 行解析失败: {}", agent_id_for_task, e);
+                // 继续处理其他行
+              }
+              None => {
+                debug!("Agent {} 流结束", agent_id_for_task);
                 break;
               }
             }
           }
-          Err(e) => {
-            warn!("Agent {} 行解析失败: {}", agent_id_for_task, e);
-            // 继续处理其他行
+          _ = cancel_token_clone.cancelled() => {
+            info!("Agent {} 搜索被取消", agent_id_for_task);
+            break;
           }
         }
       }
-
-      // 流结束时，尝试处理最后一行（可能没有换行符）
-      // LinesCodec 会自动处理最后一行，无需手动flush
 
       // 关闭发送端
       drop(tx);
@@ -393,7 +523,21 @@ impl SearchService for AgentClient {
         }),
     );
 
-    Ok(Box::new(result_stream))
+    // 创建 Drop guard 来触发取消
+    struct CancelOnDrop(CancellationToken);
+    impl Drop for CancelOnDrop {
+      fn drop(&mut self) {
+        self.0.cancel();
+      }
+    }
+    let _cancel_guard = CancelOnDrop(cancel_token);
+
+    // 将 guard 移入流中，确保流被 drop 时触发取消
+    let result_stream_with_cancel = result_stream.inspect(move |_| {
+      let _ = &_cancel_guard; // 捕获 guard
+    });
+
+    Ok(Box::new(result_stream_with_cancel))
   }
 }
 

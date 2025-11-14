@@ -4,6 +4,7 @@
 
 use crate::api::LogSeekApiError;
 use crate::api::models::NL2QOut;
+use crate::service::ServiceError;
 use axum::extract::{Json, State};
 use opsbox_core::SqlitePool;
 
@@ -17,7 +18,7 @@ pub async fn nl2q(
   let start = std::time::Instant::now();
   let q = crate::service::nl2q::call_llm(&pool, &body.nl).await.map_err(|e| {
     log::error!("NL2Q API失败: {}", e);
-    LogSeekApiError::Internal(opsbox_core::AppError::internal(e.to_string()))
+    LogSeekApiError::Service(ServiceError::ProcessingError(format!("LLM 调用失败: {}", e)))
   })?;
 
   log::info!("NL2Q API成功: {} -> '{}', 耗时: {:?}", body.nl, q, start.elapsed());

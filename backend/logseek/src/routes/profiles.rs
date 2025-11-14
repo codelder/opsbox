@@ -4,7 +4,7 @@
 
 use crate::api::LogSeekApiError;
 use crate::api::models::{S3ProfileListResponse, S3ProfilePayload};
-use crate::repository::settings;
+use crate::repository::s3;
 use axum::{
   extract::{Json, Path, State},
   http::StatusCode,
@@ -13,7 +13,7 @@ use opsbox_core::SqlitePool;
 
 /// 列出所有 S3 Profiles
 pub async fn list_profiles(State(pool): State<SqlitePool>) -> Result<Json<S3ProfileListResponse>, LogSeekApiError> {
-  let profiles = settings::list_s3_profiles(&pool).await?;
+  let profiles = s3::list_s3_profiles(&pool).await?;
 
   let payload_list: Vec<S3ProfilePayload> = profiles.into_iter().map(Into::into).collect();
 
@@ -26,20 +26,20 @@ pub async fn save_profile(
   Json(payload): Json<S3ProfilePayload>,
 ) -> Result<StatusCode, LogSeekApiError> {
   // 将前端负载转换为内部 Profile 结构
-  let profile: settings::S3Profile = payload.into();
+  let profile: s3::S3Profile = payload.into();
 
   // 在持久化前先验证 S3 连接可用性（防止保存不可用配置）
   // 校验内容：Endpoint、Bucket、Access Key、Secret Key
-  let verify_target = settings::S3Settings {
+  let verify_target = s3::S3Settings {
     endpoint: profile.endpoint.clone(),
     bucket: profile.bucket.clone(),
     access_key: profile.access_key.clone(),
     secret_key: profile.secret_key.clone(),
   };
-  settings::verify_s3_settings(&verify_target).await?;
+  s3::verify_s3_settings(&verify_target).await?;
 
   // 验证通过后再保存/更新 Profile
-  settings::save_s3_profile(&pool, &profile).await?;
+  s3::save_s3_profile(&pool, &profile).await?;
 
   Ok(StatusCode::NO_CONTENT)
 }
@@ -49,6 +49,6 @@ pub async fn delete_profile(
   State(pool): State<SqlitePool>,
   Path(name): Path<String>,
 ) -> Result<StatusCode, LogSeekApiError> {
-  settings::delete_s3_profile(&pool, &name).await?;
+  s3::delete_s3_profile(&pool, &name).await?;
   Ok(StatusCode::NO_CONTENT)
 }

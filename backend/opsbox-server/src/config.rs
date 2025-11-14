@@ -53,7 +53,7 @@ pub struct AppConfig {
     long,
     short = 'H',
     value_name = "HOST",
-    default_value = "127.0.0.1",
+    default_value = "0.0.0.0",
     help = "监听地址"
   )]
   pub host: String,
@@ -88,18 +88,26 @@ pub struct AppConfig {
   pub database_url: Option<String>,
 
   // 性能配置（LogSeek 模块）
-  #[arg(long = "s3-max-concurrency", value_name = "N", help = "S3/MinIO 最大并发")]
-  pub s3_max_concurrency: Option<usize>,
-
-  #[arg(long = "s3-timeout-sec", value_name = "SECS", help = "S3 操作超时秒数（get/list）")]
-  pub s3_timeout_sec: Option<u64>,
+  #[arg(
+    long = "io-max-concurrency",
+    value_name = "N",
+    help = "IO 最大并发数（控制 S3/Local/Agent 等所有数据源的并发访问）"
+  )]
+  pub io_max_concurrency: Option<usize>,
 
   #[arg(
-    long = "s3-max-retries",
-    value_name = "N",
-    help = "S3 对象下载最大重试次数（指数退避）"
+    long = "io-timeout-sec",
+    value_name = "SECS",
+    help = "IO 操作超时秒数（适用于所有远程数据源：S3/Agent 等）"
   )]
-  pub s3_max_retries: Option<u32>,
+  pub io_timeout_sec: Option<u64>,
+
+  #[arg(
+    long = "io-max-retries",
+    value_name = "N",
+    help = "IO 操作最大重试次数（指数退避，适用于所有远程数据源）"
+  )]
+  pub io_max_retries: Option<u32>,
 
   /// 管理子命令（start/stop）
   #[command(subcommand)]
@@ -172,29 +180,29 @@ impl AppConfig {
       })
   }
 
-  /// 获取 S3 最大并发
-  pub fn get_s3_max_concurrency(&self) -> usize {
+  /// 获取 IO 最大并发（用于所有数据源：S3/Local/Agent）
+  pub fn get_io_max_concurrency(&self) -> usize {
     self
-      .s3_max_concurrency
-      .or_else(|| Self::env_usize("LOGSEEK_S3_MAX_CONCURRENCY"))
+      .io_max_concurrency
+      .or_else(|| Self::env_usize("LOGSEEK_IO_MAX_CONCURRENCY"))
       .unwrap_or(12)
       .clamp(1, 128)
   }
 
-  /// 获取 S3 超时时间
-  pub fn get_s3_timeout_sec(&self) -> u64 {
+  /// 获取 IO 超时时间（用于所有远程数据源）
+  pub fn get_io_timeout_sec(&self) -> u64 {
     self
-      .s3_timeout_sec
-      .or_else(|| Self::env_u64("LOGSEEK_S3_TIMEOUT_SEC"))
+      .io_timeout_sec
+      .or_else(|| Self::env_u64("LOGSEEK_IO_TIMEOUT_SEC"))
       .unwrap_or(60)
       .clamp(5, 300)
   }
 
-  /// 获取 S3 最大重试次数
-  pub fn get_s3_max_retries(&self) -> u32 {
+  /// 获取 IO 最大重试次数（用于所有远程数据源）
+  pub fn get_io_max_retries(&self) -> u32 {
     self
-      .s3_max_retries
-      .or_else(|| Self::env_u32("LOGSEEK_S3_MAX_RETRIES"))
+      .io_max_retries
+      .or_else(|| Self::env_u32("LOGSEEK_IO_MAX_RETRIES"))
       .unwrap_or(5)
       .clamp(1, 20)
   }

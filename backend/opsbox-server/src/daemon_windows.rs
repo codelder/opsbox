@@ -3,15 +3,24 @@
 #[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
+use std::sync::OnceLock;
+#[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use windows_service::{
+  define_windows_service,
   service::{ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus, ServiceType},
   service_control_handler::{self, ServiceControlHandlerResult},
+  service_dispatcher,
 };
+
+use crate::config::AppConfig;
 
 #[cfg(windows)]
 static SERVICE_STOPPING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(windows)]
+static SERVICE_CONFIG: OnceLock<AppConfig> = OnceLock::new();
 
 /// Windows 服务控制处理器
 #[cfg(windows)]
@@ -447,4 +456,118 @@ pub fn stop_service(service_name: &str) -> Result<(), Box<dyn std::error::Error>
 
   println!("Windows 服务 '{}' 停止成功", service_name);
   Ok(())
+}
+
+/// 处理安装 Windows 服务（高级包装函数）
+#[cfg(windows)]
+pub fn handle_install_service(service_name: &str, display_name: &str) {
+  use std::env;
+
+  // 获取当前可执行文件路径
+  let exe_path = env::current_exe()
+    .expect("无法获取当前可执行文件路径")
+    .to_string_lossy()
+    .to_string();
+
+  if let Err(e) = install_service(service_name, display_name, &exe_path) {
+    eprintln!("安装 Windows 服务失败: {}", e);
+    std::process::exit(1);
+  }
+
+  println!("Windows 服务安装成功！");
+  println!("使用以下命令管理服务：");
+  println!("  启动服务: sc start {}", service_name);
+  println!("  停止服务: sc stop {}", service_name);
+  println!("  查看状态: sc query {}", service_name);
+}
+
+/// 处理卸载 Windows 服务（高级包装函数）
+#[cfg(windows)]
+pub fn handle_uninstall_service(service_name: &str) {
+  if let Err(e) = uninstall_service(service_name) {
+    eprintln!("卸载 Windows 服务失败: {}", e);
+    std::process::exit(1);
+  }
+}
+
+/// 处理启动 Windows 服务（高级包装函数）
+#[cfg(windows)]
+pub fn handle_start_service(service_name: &str) {
+  if let Err(e) = start_service(service_name) {
+    eprintln!("启动 Windows 服务失败: {}", e);
+    std::process::exit(1);
+  }
+}
+
+/// 处理停止 Windows 服务（高级包装函数）
+#[cfg(windows)]
+pub fn handle_stop_service(service_name: &str) {
+  if let Err(e) = stop_service(service_name) {
+    eprintln!("停止 Windows 服务失败: {}", e);
+    std::process::exit(1);
+  }
+}
+
+/// 以 Windows 服务模式运行（使用服务调度器）
+#[cfg(windows)]
+pub fn run_windows_service_with_dispatcher(service_name: &str, config: AppConfig) {
+  // 将配置存入全局 OnceLock，供服务主入口读取
+  let _ = SERVICE_CONFIG.set(config.clone());
+
+  // 生成符合 SCM 要求的 FFI 入口，并委托到本地 service_main
+  define_windows_service!(ffi_service_main, service_main);
+
+  fn service_main(_: Vec<std::ffi::OsString>) {
+    // 从全局取出配置
+    let cfg = SERVICE_CONFIG.get().expect("服务配置未初始化").clone();
+
+    if let Err(e) = run_as_service("OpsBoxService", move |shutdown| {
+      // 初始化日志系统
+      crate::logging::init(&cfg);
+
+      // 初始化网络环境
+      crate::network::init_network_env();
+
+      log::info!("OpsBox Windows 服务启动中...");
+      log::debug!("配置: {:?}", cfg);
+
+      // 获取监听地址
+      let addr = cfg.get_addr().expect("无效的监听地址");
+
+      // 初始化数据库
+      let db_url = cfg.get_database_url();
+      log::info!("数据库路径: {}", db_url);
+
+      // 设置模块配置环境变量
+      crate::setup_module_env_vars(&cfg);
+
+      // 创建 Tokio 运行时
+      let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("创建 Tokio 运行时失败");
+
+      // 在运行时中执行异步主逻辑
+      let shutdown_clone = shutdown.clone();
+      rt.block_on(async {
+        // 监听关闭信号
+        tokio::spawn(async move {
+          shutdown_clone.notified().await;
+          log::info!("收到停止信号，开始优雅关闭...");
+        });
+
+        crate::async_main(addr, db_url).await;
+      });
+
+      Ok(())
+    }) {
+      eprintln!("Windows 服务运行失败: {}", e);
+    }
+  }
+
+  // 通过服务调度器启动，确保在 SCM 上下文中运行
+  if let Err(e) = service_dispatcher::start(service_name, ffi_service_main) {
+    eprintln!("启动 Windows 服务调度器失败: {}", e);
+    std::process::exit(1);
+  }
 }

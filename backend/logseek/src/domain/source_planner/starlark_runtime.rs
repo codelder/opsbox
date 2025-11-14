@@ -5,6 +5,7 @@ use opsbox_core::SqlitePool;
 use crate::{
   domain::config::Source,
   domain::source_planner::{DateRange, PlanResult},
+  service::ServiceError,
 };
 
 /// 通过 Starlark 脚本调度的存储源规划运行时
@@ -47,16 +48,16 @@ pub async fn plan_with_starlark_with_script(
     match crate::repository::planners::get_default(pool).await {
       Ok(Some(default_app)) => default_app,
       Ok(None) => {
-        return Err(crate::api::LogSeekApiError::Internal(
-          opsbox_core::AppError::bad_request(
-            "请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp），或在系统设置中配置默认规划脚本",
+        return Err(crate::api::LogSeekApiError::Service(
+          ServiceError::ConfigError(
+            "请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp），或在系统设置中配置默认规划脚本".to_string(),
           ),
         ));
       }
       Err(e) => {
         log::warn!("获取默认规划脚本失败: {:?}", e);
-        return Err(crate::api::LogSeekApiError::Internal(
-          opsbox_core::AppError::bad_request("请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp）"),
+        return Err(crate::api::LogSeekApiError::Service(
+          ServiceError::ConfigError("请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp）".to_string()),
         ));
       }
     }
@@ -74,7 +75,7 @@ pub async fn plan_with_starlark_with_script(
   } else {
     vec![]
   };
-  let s3_profiles = crate::repository::settings::list_s3_profiles(pool).await?;
+  let s3_profiles = crate::repository::s3::list_s3_profiles(pool).await?;
 
   // 3) 生成 Starlark 运行时前缀（全局变量定义）
   let mut prefix = String::new();
@@ -150,8 +151,8 @@ pub async fn plan_with_starlark_with_script(
       s
     } else {
       // 找不到脚本，返回错误
-      return Err(crate::api::LogSeekApiError::Internal(
-        opsbox_core::AppError::bad_request(format!(
+      return Err(crate::api::LogSeekApiError::Service(
+        ServiceError::ConfigError(format!(
           "未找到应用 '{}' 的规划脚本。请在系统设置中为该应用配置规划脚本。",
           app
         )),
@@ -166,7 +167,7 @@ pub async fn plan_with_starlark_with_script(
   let mut dialect = starlark::syntax::Dialect::Extended;
   dialect.enable_f_strings = true;
   let ast = starlark::syntax::AstModule::parse(&format!("{}.star", app), script, &dialect).map_err(|e| {
-    crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本解析失败: {}", e)))
+    crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!("Starlark 脚本解析失败: {}", e)))
   })?;
 
   // 创建调试日志收集器
@@ -201,7 +202,7 @@ pub async fn plan_with_starlark_with_script(
   // 设置自定义 print 处理器来捕获输出
   eval.set_print_handler(&print_handler);
   eval.eval_module(ast, &globals).map_err(|e| {
-    crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!("Starlark 脚本执行失败: {}", e)))
+    crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!("Starlark 脚本执行失败: {}", e)))
   })?;
 
   // 6) 读取输出变量
@@ -210,11 +211,11 @@ pub async fn plan_with_starlark_with_script(
 
   let sources_val = module
     .get("SOURCES")
-    .ok_or_else(|| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal("Starlark 未导出 SOURCES")))?;
+    .ok_or_else(|| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("Starlark 未导出 SOURCES".to_string())))?;
 
   // 转为 JSON，再转为 Source
   let list = starlark::values::list::ListRef::from_value(sources_val)
-    .ok_or_else(|| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal("SOURCES 不是列表类型")))?;
+    .ok_or_else(|| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("SOURCES 不是列表类型".to_string())))?;
 
   let mut sources: Vec<Source> = Vec::new();
   for i in 0..list.len() {
@@ -222,10 +223,10 @@ pub async fn plan_with_starlark_with_script(
       continue;
     };
     let j =
-      starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(e)))?;
+      starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(e)))?;
     log::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
     let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
-      crate::api::LogSeekApiError::Internal(opsbox_core::AppError::internal(format!(
+      crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
         "解析 Source 失败: {}; JSON={}",
         e, j
       )))
