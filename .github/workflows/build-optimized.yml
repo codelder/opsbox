@@ -314,11 +314,53 @@ jobs:
         with:
           pattern: opsbox-*
           path: artifacts
-          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -lR artifacts/
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          
+          # 为每个 artifact 创建 tar.gz 包
+          for dir in artifacts/*/; do
+            if [ -d "$dir" ]; then
+              artifact_name=$(basename "$dir")
+              echo "Packaging $artifact_name..."
+              tar -czf "release-files/${artifact_name}.tar.gz" -C "$dir" .
+            fi
+          done
+          
+          echo "Release files:"
+          ls -lh release-files/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: release-files/*.tar.gz
           prerelease: true
           generate_release_notes: true
+          body: |
+            ## opsbox v${{ github.ref_name }}
+            
+            ### 下载
+            
+            #### Linux (推荐 - 通用静态链接)
+            - [opsbox-server-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/opsbox-server-linux-x86_64-musl.tar.gz)
+            - [opsbox-agent-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/opsbox-agent-linux-x86_64-musl.tar.gz)
+            
+            #### macOS
+            - [opsbox-server-macos-universal2.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/opsbox-server-macos-universal2.tar.gz) (Intel + Apple Silicon)
+            - [opsbox-agent-macos-universal2.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/opsbox-agent-macos-universal2.tar.gz) (Intel + Apple Silicon)
+            
+            #### Windows
+            - [opsbox-server-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/opsbox-server-windows-x86_64-msvc.tar.gz)
+            - [opsbox-agent-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/opsbox-agent-windows-x86_64-msvc.tar.gz)
+            
+            ### 特性
+            - ✅ 静态链接（Linux musl）
+            - ✅ 通用兼容性
+            - ✅ 优化的二进制大小
+            - ✅ 完整测试覆盖
