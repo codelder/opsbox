@@ -11,8 +11,8 @@ pub mod llm;
 pub mod nl2q;
 pub mod planners;
 pub mod profiles;
+pub mod s3;
 pub mod search;
-pub mod settings;
 pub mod view;
 
 // 重新导出常用函数
@@ -26,7 +26,7 @@ pub fn router(db_pool: SqlitePool) -> Router {
     .route("/view.cache.json", axum::routing::get(view::view_cache_json))
     .route(
       "/settings/s3",
-      axum::routing::get(settings::get_s3_settings).post(settings::save_s3_settings),
+      axum::routing::get(s3::get_s3_settings).post(s3::save_s3_settings),
     )
     // LLM 设置管理
     .route(
