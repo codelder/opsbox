@@ -1,6 +1,41 @@
 # 发布指南
 
-## 方法 1: 使用自动化脚本（推荐）
+## 🎯 推荐方法: Cargo Workspace 版本管理
+
+从 0.1.0-rc1 开始，项目使用 Cargo Workspace 统一管理版本号。
+
+### 设置新版本
+只需修改一个文件：`backend/Cargo.toml`
+
+```toml
+[workspace.package]
+version = "0.1.0-rc2"  # 修改这里
+edition = "2024"
+license = "MIT"
+authors = ["wangyue"]
+```
+
+所有子包会自动继承这个版本号！
+
+### 完整发布流程
+```bash
+# 1. 修改版本号
+vim backend/Cargo.toml  # 修改 [workspace.package] version
+
+# 2. 更新前端版本（可选）
+vim web/package.json
+
+# 3. 更新 Cargo.lock
+cd backend && cargo update --workspace && cd ..
+
+# 4. 提交和打标签
+git add -A
+git commit -m "chore: bump version to 0.1.0-rc2"
+git tag v0.1.0-rc2
+git push origin v0.1.0-rc2
+```
+
+## 方法 2: 使用自动化脚本
 
 ### 快速发布
 ```bash
