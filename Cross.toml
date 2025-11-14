@@ -1,0 +1,17 @@
+# Cross 交叉编译配置
+# https://github.com/cross-rs/cross
+
+[build]
+# 使用预构建的镜像
+pre-build = []
+
+[target.x86_64-unknown-linux-musl]
+# 使用官方镜像
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl:latest"
+
+# 环境变量
+[target.x86_64-unknown-linux-musl.env]
+passthrough = [
+    "RUST_BACKTRACE",
+    "RUST_LOG",
+]
