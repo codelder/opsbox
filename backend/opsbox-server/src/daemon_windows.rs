@@ -521,7 +521,7 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, config: AppConfig
     // 从全局取出配置
     let cfg = SERVICE_CONFIG.get().expect("服务配置未初始化").clone();
 
-    if let Err(e) = run_as_service(service_name, move |shutdown| {
+    if let Err(e) = run_as_service("OpsBoxService", move |shutdown| {
       // 初始化日志系统
       crate::logging::init(&cfg);
 

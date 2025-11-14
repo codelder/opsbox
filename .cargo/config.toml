@@ -2,3 +2,20 @@
 [target.x86_64-pc-windows-gnu]
 linker = "x86_64-w64-mingw32-gcc"
 ar = "x86_64-w64-mingw32-ar"
+
+# Linux GNU 优化 - 减小二进制大小
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+  "-C", "link-arg=-Wl,--gc-sections",           # 移除未使用的代码段
+  "-C", "link-arg=-Wl,--strip-all",             # 剥离所有符号
+  "-C", "link-arg=-Wl,--as-needed",             # 只链接需要的库
+  "-C", "link-arg=-Wl,-z,relro,-z,now",         # 安全加固
+]
+
+# Linux musl 优化 - 减小二进制大小
+[target.x86_64-unknown-linux-musl]
+rustflags = [
+  "-C", "link-arg=-Wl,--gc-sections",           # 移除未使用的代码段
+  "-C", "link-arg=-Wl,--strip-all",             # 剥离所有符号
+  "-C", "target-feature=+crt-static",           # 确保静态链接
+]
