@@ -1279,6 +1279,16 @@ mod tests {
       no_heartbeat: false,
       heartbeat_interval: 60,
       worker_threads: Some(4),
+      #[cfg(windows)]
+      service_mode: false,
+      #[cfg(windows)]
+      install_service: false,
+      #[cfg(windows)]
+      uninstall_service: false,
+      #[cfg(windows)]
+      start_service: false,
+      #[cfg(windows)]
+      stop_service: false,
     };
 
     let config = AgentConfig::from_args(args);
