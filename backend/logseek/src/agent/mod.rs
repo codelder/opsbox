@@ -128,14 +128,25 @@ impl AgentClient {
       format!("http://{}", endpoint)
     };
 
+    // 从全局配置读取超时时间
+    let timeout_secs = if let Some(t) = crate::utils::tuning::get() {
+      t.io_timeout_sec.clamp(5, 300)
+    } else {
+      std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(5, 300)
+    };
+
     Self {
       agent_id,
       endpoint: full_endpoint,
       client: reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(timeout_secs * 5)) // 总超时为单次操作的5倍（考虑重试）
         .build()
         .unwrap(),
-      timeout: Duration::from_secs(60),
+      timeout: Duration::from_secs(timeout_secs),
     }
   }
 
@@ -183,14 +194,55 @@ impl AgentClient {
 
   /// 获取 Agent 信息
   pub async fn get_info(&self) -> Result<AgentInfo, AgentClientError> {
+    // 获取重试配置
+    let max_attempts = if let Some(t) = crate::utils::tuning::get() {
+      t.io_max_retries.clamp(1, 20)
+    } else {
+      std::env::var("LOGSEEK_IO_MAX_RETRIES")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(5)
+        .clamp(1, 20)
+    };
+
     let url = format!("{}/api/v1/info", self.endpoint);
-    let response = self
-      .client
-      .get(&url)
-      .timeout(Duration::from_secs(10))
-      .send()
-      .await
-      .map_err(|e| AgentClientError::ConnectionError(format!("获取 Agent 信息失败: {}", e)))?;
+    let mut attempt = 0u32;
+    
+    let response = loop {
+      attempt += 1;
+      
+      let result = self
+        .client
+        .get(&url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
+
+      match result {
+        Ok(resp) => break resp,
+        Err(e) => {
+          if attempt >= max_attempts {
+            return Err(AgentClientError::ConnectionError(format!(
+              "获取 Agent 信息失败（已重试 {} 次）: {}",
+              attempt - 1,
+              e
+            )));
+          }
+
+          // 指数退避
+          let backoff_ms = 100u64 * 2u64.pow(attempt - 1);
+          warn!(
+            "获取 Agent {} 信息失败（第 {}/{} 次尝试），{}ms 后重试: {}",
+            self.agent_id,
+            attempt,
+            max_attempts,
+            backoff_ms,
+            e
+          );
+          tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        }
+      }
+    };
 
     if !response.status().is_success() {
       return Err(AgentClientError::Other(format!(
@@ -248,19 +300,57 @@ impl SearchService for AgentClient {
       );
     }
 
-    // 发送 POST 请求到 Agent
+    // 获取重试配置
+    let max_attempts = if let Some(t) = crate::utils::tuning::get() {
+      t.io_max_retries.clamp(1, 20)
+    } else {
+      std::env::var("LOGSEEK_IO_MAX_RETRIES")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(5)
+        .clamp(1, 20)
+    };
+
+    // 发送 POST 请求到 Agent（带重试，指数退避）
     let url = format!("{}/api/v1/search", self.endpoint);
-    let response = self
-      .client
-      .post(&url)
-      .json(&request)
-      .timeout(options.timeout_secs.map(Duration::from_secs).unwrap_or(self.timeout))
-      .send()
-      .await
-      .map_err(|e| {
-        error!("Agent {} 连接失败: {}", self.agent_id, e);
-        AgentClientError::ConnectionError(format!("Agent 连接失败: {}", e))
-      })?;
+    let mut attempt = 0u32;
+    let response = loop {
+      attempt += 1;
+      
+      let result = self
+        .client
+        .post(&url)
+        .json(&request)
+        .timeout(options.timeout_secs.map(Duration::from_secs).unwrap_or(self.timeout))
+        .send()
+        .await;
+
+      match result {
+        Ok(resp) => break resp,
+        Err(e) => {
+          if attempt >= max_attempts {
+            error!("Agent {} 连接失败（已重试 {} 次）: {}", self.agent_id, attempt - 1, e);
+            return Err(AgentClientError::ConnectionError(format!(
+              "Agent 连接失败（已重试 {} 次）: {}",
+              attempt - 1,
+              e
+            )));
+          }
+
+          // 指数退避：100ms * 2^(attempt-1)
+          let backoff_ms = 100u64 * 2u64.pow(attempt - 1);
+          warn!(
+            "Agent {} 连接失败（第 {}/{} 次尝试），{}ms 后重试: {}",
+            self.agent_id,
+            attempt,
+            max_attempts,
+            backoff_ms,
+            e
+          );
+          tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        }
+      }
+    };
 
     // 中文调试：打印响应状态与头
     let status = response.status();

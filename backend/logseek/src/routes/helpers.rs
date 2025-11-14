@@ -9,12 +9,12 @@ pub fn stream_channel_capacity() -> usize {
   256usize
 }
 
-/// 读取 S3 IO 并发上限（限制同时打开/读取的对象数）
+/// 读取 IO 并发上限（限制同时打开/读取的对象数，适用于所有数据源）
 pub fn s3_max_concurrency() -> usize {
   if let Some(t) = crate::utils::tuning::get() {
-    return t.s3_max_concurrency.clamp(1, 128);
+    return t.io_max_concurrency.clamp(1, 128);
   }
-  std::env::var("LOGSEEK_S3_MAX_CONCURRENCY")
+  std::env::var("LOGSEEK_IO_MAX_CONCURRENCY")
     .ok()
     .and_then(|s| s.parse::<usize>().ok())
     .map(|v| v.clamp(1, 128))

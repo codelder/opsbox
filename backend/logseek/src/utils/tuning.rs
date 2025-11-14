@@ -4,9 +4,9 @@ use std::sync::Arc;
 /// 运行期可调参数（仅包含 S3 相关的关键项）
 #[derive(Debug, Clone)]
 pub struct Tuning {
-  pub s3_max_concurrency: usize,
-  pub s3_timeout_sec: u64,
-  pub s3_max_retries: u32,
+  pub io_max_concurrency: usize,
+  pub io_timeout_sec: u64,
+  pub io_max_retries: u32,
 }
 
 static TUNING: OnceCell<Arc<Tuning>> = OnceCell::new();

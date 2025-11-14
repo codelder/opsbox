@@ -136,9 +136,8 @@ pub fn start_daemon(pid_path: PathBuf) -> io::Result<()> {
   let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
   ensure_parent_dir(&pid_path);
 
-  // 准备日志文件
+  // 准备日志文件（目录已在 default_log_file() 中创建）
   let log_path = default_log_file();
-  let _ = fs::create_dir_all(log_path.parent().unwrap_or(Path::new(".")));
   let stdout = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
   let stderr = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
 

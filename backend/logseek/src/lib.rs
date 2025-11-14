@@ -110,26 +110,26 @@ impl opsbox_core::Module for LogSeekModule {
   }
 
   fn configure(&self) {
-    // 从环境变量读取 S3 相关配置（若无则使用合理默认值）
-    let s3_max_concurrency = std::env::var("LOGSEEK_S3_MAX_CONCURRENCY")
+    // 从环境变量读取配置（若无则使用合理默认值）
+    let io_max_concurrency = std::env::var("LOGSEEK_IO_MAX_CONCURRENCY")
       .ok()
       .and_then(|v| v.parse().ok())
       .unwrap_or(12);
 
-    let s3_timeout_sec = std::env::var("LOGSEEK_S3_TIMEOUT_SEC")
+    let io_timeout_sec = std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
       .ok()
       .and_then(|v| v.parse().ok())
       .unwrap_or(60);
 
-    let s3_max_retries = std::env::var("LOGSEEK_S3_MAX_RETRIES")
+    let io_max_retries = std::env::var("LOGSEEK_IO_MAX_RETRIES")
       .ok()
       .and_then(|v| v.parse().ok())
       .unwrap_or(5);
 
     let tuning = utils::tuning::Tuning {
-      s3_max_concurrency,
-      s3_timeout_sec,
-      s3_max_retries,
+      io_max_concurrency,
+      io_timeout_sec,
+      io_max_retries,
     };
 
     log::debug!("LogSeek 模块配置: {:?}", tuning);

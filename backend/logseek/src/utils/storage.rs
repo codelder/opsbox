@@ -51,12 +51,12 @@ impl From<io::Error> for S3Error {
 // 全局 S3 客户端缓存（按 url+access_key 维度缓存，避免切换配置后仍复用旧客户端）
 static S3_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<S3Client>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-// S3 操作超时配置（可由环境变量 LOGSEEK_S3_TIMEOUT_SEC 覆盖，默认 60 秒）
-fn s3_timeout() -> Duration {
+// IO 操作超时配置（可由环境变量 LOGSEEK_IO_TIMEOUT_SEC 覆盖，默认 60 秒）
+fn io_timeout() -> Duration {
   if let Some(t) = crate::utils::tuning::get() {
-    return Duration::from_secs(t.s3_timeout_sec.clamp(5, 300));
+    return Duration::from_secs(t.io_timeout_sec.clamp(5, 300));
   }
-  let secs = std::env::var("LOGSEEK_S3_TIMEOUT_SEC")
+  let secs = std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
     .ok()
     .and_then(|s| s.parse::<u64>().ok())
     .unwrap_or(60)
@@ -151,11 +151,11 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
 
     debug!("S3 客户端获取成功，开始获取对象");
 
-    // 最多重试次数（指数退避），可由环境变量 LOGSEEK_S3_MAX_RETRIES 覆盖，默认 5 次
+    // 最多重试次数（指数退避），可由环境变量 LOGSEEK_IO_MAX_RETRIES 覆盖，默认 5 次
     let max_attempts: u32 = if let Some(t) = crate::utils::tuning::get() {
-      t.s3_max_retries.clamp(1, 20)
+      t.io_max_retries.clamp(1, 20)
     } else {
-      std::env::var("LOGSEEK_S3_MAX_RETRIES")
+      std::env::var("LOGSEEK_IO_MAX_RETRIES")
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(5)
@@ -164,7 +164,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
 
     let mut attempt: u32 = 0;
     loop {
-      let timeout = s3_timeout();
+      let timeout = io_timeout();
       let fut = async {
         let response = client
           .get_object()
@@ -256,7 +256,7 @@ impl<'a> S3ReaderProvider<'a> {
     };
 
     // 使用超时包装列举操作
-    let list_result = time::timeout(s3_timeout(), async {
+    let list_result = time::timeout(io_timeout(), async {
       debug!("开始列举S3对象");
 
       let mut keys = Vec::new();
@@ -341,7 +341,7 @@ pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, b
   debug!("尝试列举桶内对象以验证连接");
 
   // 使用超时包装连接测试
-  time::timeout(s3_timeout(), async {
+  time::timeout(io_timeout(), async {
     // 使用标准的 list_objects_v2 操作测试连接
     let _response = client
       .list_objects_v2()

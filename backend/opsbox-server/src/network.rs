@@ -35,13 +35,27 @@ pub fn init_network_env() {
     log::info!("NO_PROXY 未设置，已自动设为: {}", defaults);
   }
 
-  // 清除 all_proxy，避免其覆盖 NO_PROXY 设置
+  // 将 ALL_PROXY 转换为 HTTP_PROXY/HTTPS_PROXY，避免其覆盖 NO_PROXY 设置
   if all_proxy.is_some() {
+    let proxy_value = all_proxy.as_ref().unwrap();
     unsafe {
-      std::env::set_var("ALL_PROXY", "");
-      std::env::set_var("all_proxy", "");
+      // 只在未设置协议特定代理时才设置
+      if http_proxy.is_none() {
+        std::env::set_var("HTTP_PROXY", proxy_value);
+        std::env::set_var("http_proxy", proxy_value);
+      }
+      if https_proxy.is_none() {
+        std::env::set_var("HTTPS_PROXY", proxy_value);
+        std::env::set_var("https_proxy", proxy_value);
+      }
+      // 移除 ALL_PROXY，使用更明确的协议代理配合 NO_PROXY
+      std::env::remove_var("ALL_PROXY");
+      std::env::remove_var("all_proxy");
     }
-    log::info!("检测到 all_proxy 设置，已清除以确保 NO_PROXY 生效");
+    log::info!(
+      "检测到 ALL_PROXY={}，已转换为 HTTP_PROXY/HTTPS_PROXY 以确保 NO_PROXY 生效",
+      proxy_value
+    );
   }
 
   // 如检测到空的 HTTP(S)_PROXY 值，主动移除

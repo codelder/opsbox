@@ -211,13 +211,13 @@ fn handle_daemon_mode(config: &AppConfig) {
 /// 将命令行参数转换为环境变量，供各模块在 configure() 中读取
 pub(crate) fn setup_module_env_vars(config: &AppConfig) {
   unsafe {
-    // LogSeek 模块配置（仅保留 S3 相关参数）
+    // LogSeek 模块配置
     std::env::set_var(
-      "LOGSEEK_S3_MAX_CONCURRENCY",
-      config.get_s3_max_concurrency().to_string(),
+      "LOGSEEK_IO_MAX_CONCURRENCY",
+      config.get_io_max_concurrency().to_string(),
     );
-    std::env::set_var("LOGSEEK_S3_TIMEOUT_SEC", config.get_s3_timeout_sec().to_string());
-    std::env::set_var("LOGSEEK_S3_MAX_RETRIES", config.get_s3_max_retries().to_string());
+    std::env::set_var("LOGSEEK_IO_TIMEOUT_SEC", config.get_io_timeout_sec().to_string());
+    std::env::set_var("LOGSEEK_IO_MAX_RETRIES", config.get_io_max_retries().to_string());
   }
 
   log::debug!("模块配置环境变量已设置");
