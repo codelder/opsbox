@@ -53,7 +53,7 @@ pub struct AppConfig {
     long,
     short = 'H',
     value_name = "HOST",
-    default_value = "127.0.0.1",
+    default_value = "0.0.0.0",
     help = "监听地址"
   )]
   pub host: String,
