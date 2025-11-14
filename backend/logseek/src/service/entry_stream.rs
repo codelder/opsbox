@@ -342,7 +342,7 @@ impl EntryStreamFactory {
       }
       (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
         // 加载 Profile
-        let profile_row = crate::repository::settings::load_s3_profile(&self.db_pool, profile)
+        let profile_row = crate::repository::s3::load_s3_profile(&self.db_pool, profile)
           .await
           .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
           .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;

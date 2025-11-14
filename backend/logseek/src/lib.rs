@@ -71,7 +71,7 @@ pub fn router(db_pool: SqlitePool) -> axum::Router {
 /// 初始化 LogSeek 模块数据库 schema
 pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
   // 初始化 S3 配置表
-  repository::settings::init_schema(db_pool)
+  repository::s3::init_schema(db_pool)
     .await
     .map_err(|e| service::ServiceError::ProcessingError(
       format!("初始化 S3 配置表失败: {}", e)

@@ -4,7 +4,7 @@ pub mod cache;
 pub mod error;
 pub mod llm;
 pub mod planners;
-pub mod settings;
+pub mod s3;
 
 // 导出错误类型和 Result 别名
 pub use error::{RepositoryError, Result};

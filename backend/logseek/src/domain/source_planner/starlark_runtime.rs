@@ -75,7 +75,7 @@ pub async fn plan_with_starlark_with_script(
   } else {
     vec![]
   };
-  let s3_profiles = crate::repository::settings::list_s3_profiles(pool).await?;
+  let s3_profiles = crate::repository::s3::list_s3_profiles(pool).await?;
 
   // 3) 生成 Starlark 运行时前缀（全局变量定义）
   let mut prefix = String::new();
