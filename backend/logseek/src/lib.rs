@@ -132,7 +132,7 @@ impl opsbox_core::Module for LogSeekModule {
       io_max_retries,
     };
 
-    log::debug!("LogSeek 模块配置: {:?}", tuning);
+    tracing::debug!("LogSeek 模块配置: {:?}", tuning);
     utils::tuning::set(tuning);
   }
 

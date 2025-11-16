@@ -119,7 +119,7 @@ impl Cache {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
     let key = (sid.to_string(), file_url.clone());
-    log::debug!(
+    tracing::debug!(
       "🔍 Cache存储: key=({:?}, {:?}), lines_count={}",
       key.0,
       key.1,
@@ -132,7 +132,7 @@ impl Cache {
         value: lines,
       },
     );
-    log::debug!("🔍 Cache当前大小: {}", map.len());
+    tracing::debug!("🔍 Cache当前大小: {}", map.len());
   }
   pub async fn get_lines_slice(
     &self,
@@ -144,11 +144,11 @@ impl Cache {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
     let key = (sid.to_string(), file_url.clone());
-    log::debug!("🔍 Cache查找: key=({:?}, {:?}), cache_size={}", key.0, key.1, map.len());
+    tracing::debug!("🔍 Cache查找: key=({:?}, {:?}), cache_size={}", key.0, key.1, map.len());
 
     // 打印所有现有的键用于调试
     for (existing_key, entry) in map.iter() {
-      log::debug!(
+      tracing::debug!(
         "🔍 Cache现有条目: key=({:?}, {:?}), expired={}",
         existing_key.0,
         existing_key.1,
@@ -158,7 +158,7 @@ impl Cache {
 
     let e = map.get_mut(&key)?;
     if self.expired(e) {
-      log::debug!("🔍 Cache条目已过期，移除");
+      tracing::debug!("🔍 Cache条目已过期，移除");
       map.remove(&key);
       return None;
     }

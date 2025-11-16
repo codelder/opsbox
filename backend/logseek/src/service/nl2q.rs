@@ -1,4 +1,4 @@
-use log::{debug, error, info, warn};
+use tracing::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 // 使用新的 LLM 客户端
 use crate::repository::llm::{self, ProviderKind};
@@ -101,8 +101,8 @@ pub async fn call_llm(pool: &SqlitePool, nl: &str) -> Result<String, NL2QError> 
   info!("LLM 响应耗时: {:?}，模型: {}", duration, resp.model);
 
   let mut q = resp.content.trim().to_string();
-  info!("LLM 内容输出: '{}'", &q);
-  info!("LLM 内容输出: '{:?}'", resp);
+  debug!("LLM 内容输出: '{}'", &q);
+  debug!("LLM 响应详情: {:?}", resp);
 
   // 兜底清理：移除 <think> 片段、去掉代码块，仅取首行
   // 注意：不要移除双引号！双引号是查询语法的一部分（精确查找）

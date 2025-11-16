@@ -11,11 +11,11 @@ use axum::{
   extract::Query,
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
-use log::debug;
+use tracing::debug;
 
 /// 查看缓存中的文件内容
 pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
-  log::debug!(
+  tracing::debug!(
     "view-request: sid={} file={} start={:?} end={:?}",
     params.sid,
     params.file,
@@ -27,7 +27,7 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
   let file_url: FileUrl = match params.file.parse() {
     Ok(url) => url,
     Err(e) => {
-      log::warn!(
+      tracing::warn!(
         "view-parse-error: sid={} file={} error={:?}",
         params.sid,
         params.file,
@@ -73,7 +73,7 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
   for (i, line) in slice.iter().enumerate() {
     out_lines.push(serde_json::json!({ "no": start + i, "text": line }));
   }
-  log::debug!(
+  tracing::debug!(
     "view-hit: sid={} file={} total={} slice={} range=[{}..{}]",
     params.sid,
     params.file,

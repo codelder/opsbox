@@ -129,6 +129,7 @@ cargo run -p opsbox-server -- stop
 - **架构复盘**: [docs/architecture/architecture.md](docs/architecture/architecture.md) - 项目架构详细分析
 - **模块架构**: [docs/architecture/module-architecture.md](docs/architecture/module-architecture.md) - 模块系统设计
 - **错误处理**: [docs/architecture/error-handling-architecture.md](docs/architecture/error-handling-architecture.md) - 错误处理架构
+- **日志系统**: [docs/architecture/logging-architecture.md](docs/architecture/logging-architecture.md) - 日志系统架构设计
 
 ### 模块文档
 - **Agent Manager**: [docs/modules/agent-manager.md](docs/modules/agent-manager.md) - Agent 管理模块
@@ -141,6 +142,8 @@ cargo run -p opsbox-server -- stop
 
 ### 使用指南
 - **查询语法**: [docs/guides/query-syntax.md](docs/guides/query-syntax.md) - 搜索查询语法
+- **日志配置**: [docs/guides/logging-configuration.md](docs/guides/logging-configuration.md) - 日志系统配置和管理
+- **Tracing 使用**: [docs/guides/tracing-usage.md](docs/guides/tracing-usage.md) - 开发者日志使用指南
 - **前端开发**: [docs/guides/frontend-development.md](docs/guides/frontend-development.md) - 前端模块化架构
 - **CPU 资源控制**: [docs/guides/cpu-resource-control.md](docs/guides/cpu-resource-control.md) - Agent CPU 资源控制
 

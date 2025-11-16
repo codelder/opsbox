@@ -30,7 +30,7 @@ fn serialize_event(value: &serde_json::Value) -> Option<Bytes> {
       Some(Bytes::from(v))
     }
     Err(e) => {
-      log::warn!("[Search] 序列化失败: {}", e);
+      tracing::warn!("[Search] 序列化失败: {}", e);
       None
     }
   }
@@ -42,7 +42,18 @@ fn convert_to_ndjson_stream(
   highlights: Vec<String>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
   async_stream::stream! {
+    let mut event_count = 0;
+    
     while let Some(event) = rx.recv().await {
+      event_count += 1;
+      tracing::debug!("[Search Route] 收到事件 #{}: {:?}", event_count, 
+        match &event {
+          SearchEvent::Success(res) => format!("Success(path={}, lines={})", res.path, res.lines.len()),
+          SearchEvent::Error { source, message, .. } => format!("Error(source={}, msg={})", source, message),
+          SearchEvent::Complete { source, elapsed_ms } => format!("Complete(source={}, elapsed={}ms)", source, elapsed_ms),
+        }
+      );
+      
       let json_value = match event {
         SearchEvent::Success(res) => {
           let json_obj = render_json_chunks(
@@ -55,19 +66,24 @@ fn convert_to_ndjson_stream(
           Some(serde_json::json!({"type": "result", "data": json_obj}))
         }
         SearchEvent::Error { source, message, recoverable } => {
+          tracing::debug!("[Search Route] 错误事件: source={}, msg={}", source, message);
           serde_json::to_value(SearchEvent::Error { source, message, recoverable }).ok()
         }
         SearchEvent::Complete { source, elapsed_ms } => {
+          tracing::debug!("[Search Route] 完成事件: source={}, elapsed={}ms", source, elapsed_ms);
           serde_json::to_value(SearchEvent::Complete { source, elapsed_ms }).ok()
         }
       };
       
-      if let Some(value) = json_value {
-        if let Some(bytes) = serialize_event(&value) {
+      if let Some(value) = json_value
+        && let Some(bytes) = serialize_event(&value) {
           yield Ok(bytes);
+        } else {
+          tracing::warn!("[Search Route] 序列化失败，跳过事件");
         }
-      }
     }
+    
+    tracing::debug!("[Search Route] SearchEvent 流结束，共处理 {} 个事件", event_count);
   }
 }
 
@@ -92,7 +108,7 @@ pub async fn stream_search(
   State(pool): State<SqlitePool>,
   Json(body): Json<SearchBody>,
 ) -> Result<HttpResponse<Body>, LogSeekApiError> {
-  log::info!("[Search] 开始搜索: q={}", body.q);
+  tracing::info!("[Search] 开始搜索: q={}", body.q);
 
   let ctx = body.context.unwrap_or(3);
   let config = SearchExecutorConfig {

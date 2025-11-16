@@ -1,55 +1,34 @@
 use crate::config::AppConfig;
-use log::LevelFilter;
-
-/// 从字符串解析日志级别
-fn level_from_str(s: &str) -> Option<LevelFilter> {
-  match s.to_ascii_lowercase().as_str() {
-    "error" => Some(LevelFilter::Error),
-    "warn" | "warning" => Some(LevelFilter::Warn),
-    "info" => Some(LevelFilter::Info),
-    "debug" => Some(LevelFilter::Debug),
-    "trace" => Some(LevelFilter::Trace),
-    _ => None,
-  }
-}
-
-/// 从 -V 参数计数转换为日志级别
-fn verbosity_to_level(v: u8) -> LevelFilter {
-  match v {
-    0 => LevelFilter::Info,
-    1 => LevelFilter::Debug,
-    _ => LevelFilter::Trace,
-  }
-}
-
-/// 根据配置选择最终的日志级别
-fn choose_level(config: &AppConfig) -> LevelFilter {
-  let mut level = config
-    .log_level
-    .as_deref()
-    .and_then(level_from_str)
-    .unwrap_or(LevelFilter::Info);
-
-  let vlevel = verbosity_to_level(config.verbose);
-  if vlevel > level {
-    level = vlevel;
-  }
-  level
-}
+use opsbox_core::logging::{init as core_init, LogConfig, LogLevel, ReloadHandle};
+use std::str::FromStr;
 
 /// 初始化日志系统
-pub fn init(config: &AppConfig) {
-  // 若用户设置了 RUST_LOG，则尊重该环境变量；否则使用我们计算出的 level
-  let mut builder = if std::env::var("RUST_LOG").is_ok() {
-    env_logger::Builder::from_env(env_logger::Env::default())
+///
+/// 使用 opsbox-core 的 logging 模块初始化日志系统
+/// 返回 ReloadHandle 用于动态修改日志级别
+pub fn init(config: &AppConfig) -> Result<ReloadHandle, opsbox_core::logging::LogError> {
+  // 确定日志级别
+  let level = if let Some(ref level_str) = config.log_level {
+    LogLevel::from_str(level_str)?
   } else {
-    let mut b = env_logger::Builder::new();
-    b.filter_level(choose_level(config));
-    b
+    // 根据 verbose 参数确定日志级别
+    match config.verbose {
+      0 => LogLevel::Info,
+      1 => LogLevel::Debug,
+      _ => LogLevel::Trace,
+    }
   };
 
-  // 初始化（忽略二次初始化错误）
-  let _ = builder.try_init();
+  // 构建日志配置
+  let log_config = LogConfig {
+    level,
+    log_dir: config.get_log_dir(),
+    retention_count: config.get_log_retention(),
+    enable_console: true,
+    enable_file: true,
+    file_prefix: "opsbox-server".to_string(),
+  };
 
-  log::info!("日志系统初始化完成，级别: {:?}", choose_level(config));
+  // 初始化日志系统
+  core_init(log_config)
 }

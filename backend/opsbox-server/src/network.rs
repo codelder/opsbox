@@ -11,7 +11,7 @@ pub fn init_network_env() {
   let all_proxy = get("ALL_PROXY").or_else(|| get("all_proxy"));
   let no_proxy = get("NO_PROXY").or_else(|| get("no_proxy"));
 
-  log::debug!(
+  tracing::debug!(
     "代理环境: HTTP_PROXY={:?} HTTPS_PROXY={:?} ALL_PROXY={:?} NO_PROXY={:?}",
     http_proxy
       .as_deref()
@@ -32,7 +32,7 @@ pub fn init_network_env() {
       std::env::set_var("NO_PROXY", defaults);
       std::env::set_var("no_proxy", defaults);
     }
-    log::info!("NO_PROXY 未设置，已自动设为: {}", defaults);
+    tracing::info!("NO_PROXY 未设置，已自动设为: {}", defaults);
   }
 
   // 将 ALL_PROXY 转换为 HTTP_PROXY/HTTPS_PROXY，避免其覆盖 NO_PROXY 设置
@@ -52,7 +52,7 @@ pub fn init_network_env() {
       std::env::remove_var("ALL_PROXY");
       std::env::remove_var("all_proxy");
     }
-    log::info!(
+    tracing::info!(
       "检测到 ALL_PROXY={}，已转换为 HTTP_PROXY/HTTPS_PROXY 以确保 NO_PROXY 生效",
       proxy_value
     );
@@ -71,6 +71,6 @@ pub fn init_network_env() {
         std::env::remove_var("https_proxy");
       }
     }
-    log::info!("检测到空代理环境变量，已移除空的 HTTP(S)_PROXY");
+    tracing::info!("检测到空代理环境变量，已移除空的 HTTP(S)_PROXY");
   }
 }

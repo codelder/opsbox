@@ -27,7 +27,7 @@ impl DatabaseConfig {
 
 /// 初始化数据库连接池
 pub async fn init_pool(config: &DatabaseConfig) -> Result<SqlitePool> {
-  log::info!("初始化数据库连接池: {}", config.url);
+  tracing::info!("初始化数据库连接池: {}", config.url);
 
   // 解析连接选项
   let connect_options = if config.url.starts_with("sqlite://") {
@@ -51,7 +51,7 @@ pub async fn init_pool(config: &DatabaseConfig) -> Result<SqlitePool> {
     .await
     .map_err(AppError::Database)?;
 
-  log::info!("数据库连接池初始化成功，最大连接数: {}", config.max_connections);
+  tracing::info!("数据库连接池初始化成功，最大连接数: {}", config.max_connections);
 
   Ok(pool)
 }
@@ -67,13 +67,13 @@ pub async fn health_check(pool: &SqlitePool) -> Result<()> {
 
 /// 辅助函数：执行数据库迁移（各模块调用）
 pub async fn run_migration(pool: &SqlitePool, sql: &str, module: &str) -> Result<()> {
-  log::info!("执行 {} 模块的数据库迁移", module);
+  tracing::info!("执行 {} 模块的数据库迁移", module);
 
   sqlx::query(sql).execute(pool).await.map_err(|e| {
-    log::error!("{} 模块数据库迁移失败: {}", module, e);
+    tracing::error!("{} 模块数据库迁移失败: {}", module, e);
     AppError::Database(e)
   })?;
 
-  log::info!("{} 模块数据库迁移完成", module);
+  tracing::info!("{} 模块数据库迁移完成", module);
   Ok(())
 }

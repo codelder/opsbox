@@ -9,7 +9,7 @@ use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::service::search::SearchEvent;
 use crate::service::ServiceError;
 use futures::StreamExt;
-use log::debug;
+use tracing::debug;
 use opsbox_core::SqlitePool;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Semaphore};
@@ -170,16 +170,18 @@ impl SearchExecutor {
         let agent_id = match &source.endpoint {
             Endpoint::Agent { agent_id, .. } => agent_id.clone(),
             _ => {
-                log::error!("[SearchExecutor] 非 Agent 端点，跳过");
+                tracing::error!("[SearchExecutor] 非 Agent 端点，跳过");
                 return;
             }
         };
+
+        debug!("[SearchExecutor] 开始 Agent 搜索: agent_id={}", agent_id);
 
         // 创建 Agent 客户端
         let client = match AgentClient::new_by_agent_id(agent_id.clone()).await {
             Ok(client) => client,
             Err(e) => {
-                log::error!(
+                tracing::error!(
                     "[SearchExecutor] 无法创建 Agent 客户端 agent_id={} err={}",
                     agent_id,
                     e
@@ -197,7 +199,7 @@ impl SearchExecutor {
 
         // 健康检查
         if !client.health_check().await {
-            log::error!("[SearchExecutor] Agent 健康检查失败: {}", agent_id);
+            tracing::error!("[SearchExecutor] Agent 健康检查失败: {}", agent_id);
             let _ = tx
                 .send(SearchEvent::Error {
                     source: format!("agent:{}", agent_id),
@@ -255,7 +257,7 @@ impl SearchExecutor {
         let mut stream = match client.search(&cleaned_query, ctx, search_options).await {
             Ok(st) => st,
             Err(e) => {
-                log::error!(
+                tracing::error!(
                     "[SearchExecutor] 调用 Agent 搜索失败 agent_id={} err={}",
                     agent_id,
                     e
@@ -272,13 +274,25 @@ impl SearchExecutor {
         };
 
         // 消费结果流
+        debug!("[SearchExecutor] 开始消费 Agent 结果流");
+        let mut result_count = 0;
+        
         while let Some(item) = stream.next().await {
             let Ok(res) = item else {
-                log::warn!("[SearchExecutor] Agent 返回错误条目，已跳过");
+                tracing::warn!("[SearchExecutor] Agent 返回错误条目，已跳过");
                 continue;
             };
 
+            result_count += 1;
+            debug!(
+                "[SearchExecutor] 收到 Agent 结果 #{}: path={}, lines={}",
+                result_count,
+                res.path,
+                res.lines.len()
+            );
+
             if tx.is_closed() {
+                debug!("[SearchExecutor] 结果通道已关闭，停止发送");
                 break;
             }
 
@@ -287,7 +301,7 @@ impl SearchExecutor {
                 match crate::domain::file_url::build_file_url_for_result(&source, &res.path) {
                     Some((url, id)) => (url, id),
                     None => {
-                        log::warn!(
+                        tracing::warn!(
                             "[SearchExecutor] 无法构造 Agent FileUrl, path={}",
                             res.path
                         );
@@ -297,7 +311,7 @@ impl SearchExecutor {
 
             // 缓存结果
             debug!(
-                "🔍 Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
+                "Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
                 sid,
                 file_url,
                 res.lines.len()
@@ -309,15 +323,21 @@ impl SearchExecutor {
             // 发送成功事件
             let success_event = SearchEvent::Success(crate::service::search::SearchResult {
                 path: file_id,
-                lines: res.lines,
+                lines: res.lines.clone(),
                 merged: res.merged,
-                encoding: res.encoding,
+                encoding: res.encoding.clone(),
             });
 
             if tx.send(success_event).await.is_err() {
+                debug!("[SearchExecutor] 发送失败，通道已关闭");
                 break;
             }
         }
+
+        debug!(
+            "[SearchExecutor] Agent 结果流消费完成，共处理 {} 个结果",
+            result_count
+        );
 
         // 发送完成事件
         let elapsed = start_time.elapsed();
@@ -358,7 +378,7 @@ impl SearchExecutor {
         let mut estream = match factory.create_stream(source.clone()).await {
             Ok(s) => s,
             Err(e) => {
-                log::error!("[SearchExecutor] 创建条目流失败 err={}", e);
+                tracing::error!("[SearchExecutor] 创建条目流失败 err={}", e);
                 let _ = tx
                     .send(SearchEvent::Error {
                         source: source_name.clone(),
@@ -382,11 +402,11 @@ impl SearchExecutor {
         if let Some(glob) = &source.filter_glob {
             match crate::query::path_glob_to_filter(glob) {
                 Ok(filter) => {
-                    log::debug!("[SearchExecutor] 设置 filter_glob: {}", glob);
+                    tracing::debug!("[SearchExecutor] 设置 filter_glob: {}", glob);
                     processor = processor.with_extra_path_filter(filter);
                 }
                 Err(e) => {
-                    log::warn!(
+                    tracing::warn!(
                         "[SearchExecutor] 解析 filter_glob 失败 glob={} error={}",
                         glob,
                         e
@@ -402,6 +422,8 @@ impl SearchExecutor {
         let tx_clone = tx.clone();
         let source_clone = source.clone();
         let sid_clone = sid.clone();
+        let tx_for_error = tx.clone();
+        let source_name_for_error = source.display_name.clone().unwrap_or_else(|| "unknown".to_string());
         let sender_task = tokio::spawn(async move {
             while let Some(event) = sr_rx.recv().await {
                 if tx_clone.is_closed() {
@@ -409,16 +431,16 @@ impl SearchExecutor {
                 }
 
                 match event {
-                    SearchEvent::Success(res) => {
+                    SearchEvent::Success(mut res) => {
                         // 构造 FileUrl
-                        let (file_url, _file_id) =
+                        let (file_url, file_id) =
                             match crate::domain::file_url::build_file_url_for_result(
                                 &source_clone,
                                 &res.path,
                             ) {
                                 Some((url, id)) => (url, id),
                                 None => {
-                                    log::warn!(
+                                    tracing::warn!(
                                         "[SearchExecutor] 无法构造 FileUrl, path={}",
                                         res.path
                                     );
@@ -430,6 +452,9 @@ impl SearchExecutor {
                         simple_cache()
                             .put_lines(&sid_clone, &file_url, res.lines.clone())
                             .await;
+
+                        // 更新 path 为完整的 FileUrl 字符串
+                        res.path = file_id;
 
                         // 发送成功事件
                         if tx_clone.send(SearchEvent::Success(res)).await.is_err() {
@@ -460,7 +485,15 @@ impl SearchExecutor {
 
         // 处理条目流
         if let Err(e) = processor.process_stream(&mut *estream, sr_tx).await {
-            log::error!("[SearchExecutor] 处理条目流失败 err={}", e);
+            tracing::error!("[SearchExecutor] 处理条目流失败 err={}", e);
+            // 发送错误事件到前端
+            let _ = tx_for_error
+                .send(SearchEvent::Error {
+                    source: source_name_for_error,
+                    message: format!("处理归档文件失败: {}", e),
+                    recoverable: true,
+                })
+                .await;
         }
 
         // 等待发送任务结束
@@ -512,7 +545,7 @@ impl SearchExecutor {
             let _permit = match io_sem.acquire_owned().await {
                 Ok(p) => p,
                 Err(_) => {
-                    log::warn!("[SearchExecutor] 获取 IO 许可失败，跳过数据源");
+                    tracing::warn!("[SearchExecutor] 获取 IO 许可失败，跳过数据源");
                     return;
                 }
             };
@@ -560,14 +593,14 @@ impl SearchExecutor {
         query: &str,
         context_lines: usize,
     ) -> Result<(mpsc::Receiver<SearchEvent>, String), ServiceError> {
-        log::info!("[SearchExecutor] 开始搜索: q={}", query);
+        tracing::info!("[SearchExecutor] 开始搜索: q={}", query);
 
         // 1. 获取存储源配置列表
         let (sources, cleaned_query, encoding_qualifier) = self.get_sources(query).await?;
-        log::info!("[SearchExecutor] 获取到 {} 个存储源配置", sources.len());
+        tracing::info!("[SearchExecutor] 获取到 {} 个存储源配置", sources.len());
 
         if sources.is_empty() {
-            log::warn!("[SearchExecutor] 没有可用的存储源配置");
+            tracing::warn!("[SearchExecutor] 没有可用的存储源配置");
             // 返回空的接收器
             let (tx, rx) = mpsc::channel(1);
             drop(tx);
@@ -581,13 +614,11 @@ impl SearchExecutor {
         // 3. 生成 sid 并缓存关键字
         let sid = self.generate_sid_and_cache_keywords(highlights.clone()).await;
 
-        log::info!(
-            "[SearchExecutor] 开始并行搜索: 原始query={}, 清理后query={}, context={}, sid={}, sources={}",
-            query,
-            cleaned_query,
-            context_lines,
+        tracing::info!(
+            "[SearchExecutor] 开始并行搜索: sid={}, sources={}, context={}",
             sid,
-            sources.len()
+            sources.len(),
+            context_lines
         );
 
         // 4. 创建结果通道

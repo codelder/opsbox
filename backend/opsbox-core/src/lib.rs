@@ -5,10 +5,12 @@
 //! - 数据库连接管理
 //! - 标准 HTTP 响应
 //! - 共享中间件
+//! - 日志系统
 
 pub mod database;
 pub mod error;
 pub mod llm;
+pub mod logging;
 pub mod middleware;
 pub mod module;
 pub mod response;
@@ -16,6 +18,10 @@ pub mod response;
 // 重新导出常用类型
 pub use database::{DatabaseConfig, health_check, init_pool, run_migration};
 pub use error::{AppError, Result};
+pub use logging::{
+    repository::{LogConfigModel, LogConfigRepository, LogConfigResponse},
+    LogConfig, LogError, LogLevel, ReloadHandle,
+};
 pub use module::{Module, get_all_modules};
 pub use response::{SuccessResponse, created, no_content, ok, ok_message, ok_with_message};
 

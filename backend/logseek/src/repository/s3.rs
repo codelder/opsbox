@@ -1,7 +1,7 @@
 use super::RepositoryError;
 use super::error::Result;
 use crate::utils::storage::{self, S3Error};
-use log::{debug, error, info};
+use tracing::{debug, error, info};
 use opsbox_core::{SqlitePool, run_migration};
 use serde::{Deserialize, Serialize};
 

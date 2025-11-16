@@ -5,12 +5,33 @@
    */
   import Alert from '$lib/components/Alert.svelte';
   import { useAgents } from '$lib/modules/agent';
+  import {
+    fetchAgentLogConfig,
+    updateAgentLogLevel,
+    updateAgentLogRetention,
+    type LogConfigResponse
+  } from '$lib/modules/agent/api';
 
   const agentsStore = useAgents();
 
   // 每个 Agent 的新标签输入状态（以 agentId 为 key）
   let newTagKey: Record<string, string> = $state({});
   let newTagValue: Record<string, string> = $state({});
+
+  // 日志设置展开状态
+  let expandedLogSettings: Record<string, boolean> = $state({});
+
+  // 每个 Agent 的日志配置
+  let agentLogConfigs: Record<string, LogConfigResponse> = $state({});
+
+  // 日志配置加载状态
+  let logConfigLoading: Record<string, boolean> = $state({});
+
+  // 日志配置错误
+  let logConfigError: Record<string, string> = $state({});
+
+  // 日志配置成功消息
+  let logConfigSuccess: Record<string, string> = $state({});
 
   // 初始化加载
   let inited = $state(false);
@@ -37,6 +58,53 @@
     await agentsStore.addTag(agentId, key, value);
     newTagKey[agentId] = '';
     newTagValue[agentId] = '';
+  }
+
+  async function toggleLogSettings(agentId: string) {
+    expandedLogSettings[agentId] = !expandedLogSettings[agentId];
+    
+    // 如果展开且还没有加载配置，则加载
+    if (expandedLogSettings[agentId] && !agentLogConfigs[agentId]) {
+      await loadAgentLogConfig(agentId);
+    }
+  }
+
+  async function loadAgentLogConfig(agentId: string) {
+    logConfigLoading[agentId] = true;
+    logConfigError[agentId] = '';
+    try {
+      agentLogConfigs[agentId] = await fetchAgentLogConfig(agentId);
+    } catch (e) {
+      logConfigError[agentId] = e instanceof Error ? e.message : '加载日志配置失败';
+    } finally {
+      logConfigLoading[agentId] = false;
+    }
+  }
+
+  async function handleSaveAgentLogConfig(agentId: string) {
+    const config = agentLogConfigs[agentId];
+    if (!config) return;
+
+    logConfigLoading[agentId] = true;
+    logConfigError[agentId] = '';
+    logConfigSuccess[agentId] = '';
+
+    try {
+      // 更新日志级别
+      await updateAgentLogLevel(agentId, config.level);
+
+      // 更新保留数量
+      await updateAgentLogRetention(agentId, config.retention_count);
+
+      logConfigSuccess[agentId] = '配置已保存';
+      setTimeout(() => {
+        logConfigSuccess[agentId] = '';
+      }, 3000);
+    } catch (e) {
+      logConfigError[agentId] = e instanceof Error ? e.message : '保存失败';
+    } finally {
+      logConfigLoading[agentId] = false;
+    }
   }
 </script>
 
@@ -172,6 +240,110 @@
                   >添加标签</button
                 >
               </div>
+            </div>
+
+            <!-- 日志设置（可展开） -->
+            <div class="mt-4 border-t border-[var(--border)] pt-4">
+              <button
+                class="flex w-full items-center justify-between text-sm font-medium text-[var(--text)] hover:text-[var(--primary)]"
+                onclick={() => toggleLogSettings(a.id)}
+              >
+                <span>日志设置</span>
+                <svg
+                  class="h-4 w-4 transition-transform {expandedLogSettings[a.id] ? 'rotate-180' : ''}"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  fill="none"
+                >
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+
+              {#if expandedLogSettings[a.id]}
+                <div class="mt-4 space-y-3">
+                  {#if logConfigError[a.id]}
+                    <div class="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+                      {logConfigError[a.id]}
+                    </div>
+                  {/if}
+
+                  {#if logConfigSuccess[a.id]}
+                    <div class="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                      {logConfigSuccess[a.id]}
+                    </div>
+                  {/if}
+
+                  {#if logConfigLoading[a.id] && !agentLogConfigs[a.id]}
+                    <div class="py-4 text-center text-xs text-[var(--muted)]">加载中…</div>
+                  {:else if agentLogConfigs[a.id]}
+                    <!-- 日志级别 -->
+                    <div class="flex items-center gap-3">
+                      <label for="log-level-{a.id}" class="w-24 text-xs text-[var(--muted)]">日志级别</label>
+                      <select
+                        id="log-level-{a.id}"
+                        class="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--text)] focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)] focus:outline-none"
+                        bind:value={agentLogConfigs[a.id].level}
+                        disabled={a.status?.type !== 'Online'}
+                      >
+                        <option value="error">ERROR</option>
+                        <option value="warn">WARN</option>
+                        <option value="info">INFO</option>
+                        <option value="debug">DEBUG</option>
+                        <option value="trace">TRACE</option>
+                      </select>
+                    </div>
+
+                    <!-- 日志保留 -->
+                    <div class="flex items-center gap-3">
+                      <label for="log-retention-{a.id}" class="w-24 text-xs text-[var(--muted)]">日志保留</label>
+                      <input
+                        id="log-retention-{a.id}"
+                        type="number"
+                        class="flex-1 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--text)] focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)] focus:outline-none"
+                        bind:value={agentLogConfigs[a.id].retention_count}
+                        min="1"
+                        max="365"
+                        disabled={a.status?.type !== 'Online'}
+                      />
+                      <span class="text-xs text-[var(--muted)]">天</span>
+                    </div>
+
+                    <!-- 日志路径（只读） -->
+                    <div class="flex items-center gap-3">
+                      <label for="log-dir-{a.id}" class="w-24 text-xs text-[var(--muted)]">日志路径</label>
+                      <input
+                        id="log-dir-{a.id}"
+                        type="text"
+                        class="flex-1 rounded-lg border border-[var(--border)] bg-slate-100 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400"
+                        value={agentLogConfigs[a.id].log_dir}
+                        disabled
+                      />
+                    </div>
+
+                    <!-- 操作按钮 -->
+                    <div class="flex items-center gap-2">
+                      <button
+                        class="rounded-lg bg-[var(--primary)] px-4 py-1.5 text-xs font-semibold text-[var(--primary-foreground)] shadow-sm transition hover:opacity-90 focus:ring-4 focus:ring-[var(--ring)] focus:outline-none disabled:opacity-50"
+                        onclick={() => handleSaveAgentLogConfig(a.id)}
+                        disabled={a.status?.type !== 'Online' || logConfigLoading[a.id]}
+                      >
+                        {logConfigLoading[a.id] ? '保存中…' : '保存'}
+                      </button>
+                      {#if a.status?.type !== 'Online'}
+                        <span class="text-xs text-amber-600 dark:text-amber-400">Agent 离线，无法修改配置</span>
+                      {/if}
+                    </div>
+
+                    <!-- 提示信息 -->
+                    <div class="rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                      <ul class="list-disc space-y-1 pl-4">
+                        <li>修改日志级别会立即生效，无需重启 Agent</li>
+                        <li>修改日志保留数量会在下次日志滚动时生效</li>
+                      </ul>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
             </div>
           </div>
         {/each}

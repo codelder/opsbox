@@ -1,6 +1,6 @@
 use super::RepositoryError;
 use super::error::Result;
-use log::{debug, warn};
+use tracing::{debug, warn};
 use opsbox_core::{SqlitePool, run_migration};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};

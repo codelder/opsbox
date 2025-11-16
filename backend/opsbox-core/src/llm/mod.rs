@@ -15,7 +15,7 @@
 //! - OPENAI_MODEL（默认：gpt-4o-mini）
 use crate::error::AppError;
 use async_trait::async_trait;
-use log::{debug, info, warn};
+use tracing::{debug, info, warn};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -371,7 +371,7 @@ impl LlmClient for OllamaClient {
         });
       }
       // 若解析失败，回退为普通文本
-      log::warn!("Ollama 未返回期望的 JSON，回退为纯文本");
+      tracing::warn!("Ollama 未返回期望的 JSON，回退为纯文本");
     }
 
     Ok(ChatResponse {
@@ -556,7 +556,7 @@ impl LlmClient for OpenAIClient {
           finish_reason: Some("stop".to_string()),
         });
       }
-      log::warn!("OpenAI 未返回期望的 JSON，回退为纯文本");
+      tracing::warn!("OpenAI 未返回期望的 JSON，回退为纯文本");
     }
 
     Ok(ChatResponse {

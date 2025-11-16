@@ -101,7 +101,7 @@ pub trait SearchService: Send + Sync {
 }
 
 // =========================== Agent 客户端实现 ===============================
-use log::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 use std::time::Duration;
 
 // 复用 agent-manager 的数据模型
@@ -296,7 +296,7 @@ impl SearchService for AgentClient {
     };
 
     // 中文调试：打印请求明细（仅在 debug 级别或显式开启“线级”调试时）
-    if log::log_enabled!(log::Level::Trace) {
+    if tracing::enabled!(tracing::Level::TRACE) {
       match serde_json::to_string(&request) {
         Ok(s) => trace!("[Wire] → POST {}/api/v1/search body={}", self.endpoint, s),
         Err(_) => trace!("[Wire] → POST {}/api/v1/search (body序列化失败)", self.endpoint),
@@ -366,7 +366,7 @@ impl SearchService for AgentClient {
     // 中文调试：打印响应状态与头
     let status = response.status();
     trace!("[Wire] ← 状态: {}", status);
-    if log::log_enabled!(log::Level::Trace) {
+    if tracing::enabled!(tracing::Level::TRACE) {
       for (k, v) in response.headers() {
         trace!("[Wire] ← 头: {}: {}", k.as_str(), v.to_str().unwrap_or("<bin>"));
       }
@@ -430,7 +430,7 @@ impl SearchService for AgentClient {
               Some(Ok(line)) => {
                 if !line.trim().is_empty() {
                   debug!("🔍 Server解析到NDJSON行: {}", line);
-                  if log::log_enabled!(log::Level::Trace) {
+                  if tracing::enabled!(tracing::Level::TRACE) {
                     let preview = if line.len() > 512 {
                       format!("{}...", truncate_utf8(&line, 512))
                     } else {

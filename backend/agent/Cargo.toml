@@ -6,6 +6,10 @@ license.workspace = true
 authors.workspace = true
 description = "OpsBox agent binary"
 
+[lib]
+name = "opsbox_agent"
+path = "src/lib.rs"
+
 [[bin]]
 name = "opsbox-agent"
 path = "src/main.rs"
@@ -13,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # 复用 logseek 的搜索逻辑和存储抽象
 logseek = { path = "../logseek" }
+opsbox-core = { path = "../opsbox-core" }
 
 # Web 框架
 axum = { version = "0.8", features = ["json"] }
@@ -25,8 +30,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # 日志
-log = "0.4"
-env_logger = "0.11"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
 
 # HTTP 客户端
 reqwest = { version = "0.12", features = ["json"] }
@@ -54,6 +60,10 @@ num_cpus = "1.0"
 # 异步流
 futures = "0.3"
 async-stream = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(windows)'.dependencies]
 # Windows 服务支持

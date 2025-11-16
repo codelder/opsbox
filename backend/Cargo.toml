@@ -13,3 +13,9 @@ version = "0.1.0-rc3"
 edition = "2024"
 license = "MIT"
 authors = ["wangyue"]
+
+[workspace.dependencies]
+# Tracing and logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+tracing-appender = "0.2"

@@ -33,7 +33,7 @@ impl opsbox_core::Module for AgentManagerModule {
   }
 
   fn configure(&self) {
-    log::info!("Agent Manager 模块配置完成");
+    tracing::info!("Agent Manager 模块配置完成");
   }
 
   async fn init_schema(&self, pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
@@ -44,10 +44,10 @@ impl opsbox_core::Module for AgentManagerModule {
     // 额外：初始化全局 Agent Manager（避免在运行时内 block_on）
     if let Err(e) = init_global_agent_manager(pool.clone()).await {
       // 如果已经初始化则忽略，仅记录告警
-      log::warn!("全局 Agent Manager 初始化跳过: {}", e);
+      tracing::warn!("全局 Agent Manager 初始化跳过: {}", e);
     }
 
-    log::info!("Agent Manager: 数据库表结构初始化完成");
+    tracing::info!("Agent Manager: 数据库表结构初始化完成");
     Ok(())
   }
 
@@ -62,7 +62,7 @@ impl opsbox_core::Module for AgentManagerModule {
   }
 
   fn cleanup(&self) {
-    log::info!("Agent Manager 模块清理完成");
+    tracing::info!("Agent Manager 模块清理完成");
   }
 }
 
@@ -72,7 +72,7 @@ pub async fn init_global_agent_manager(pool: SqlitePool) -> Result<(), String> {
   GLOBAL_AGENT_MANAGER
     .set(Arc::new(manager))
     .map_err(|_| "全局 Agent Manager 已初始化".to_string())?;
-  log::info!("全局 Agent Manager 初始化完成");
+  tracing::info!("全局 Agent Manager 初始化完成");
   Ok(())
 }
 
@@ -97,7 +97,7 @@ pub async fn get_online_agent_endpoints() -> Vec<String> {
       .map(|agent| build_agent_endpoint(&agent))
       .collect()
   } else {
-    log::warn!("全局 Agent Manager 未初始化");
+    tracing::warn!("全局 Agent Manager 未初始化");
     vec![]
   }
 }
@@ -118,7 +118,7 @@ pub async fn get_online_agent_endpoints_by_tags(tags: &[(String, String)]) -> Ve
       .map(|agent| build_agent_endpoint(&agent))
       .collect()
   } else {
-    log::warn!("全局 Agent Manager 未初始化");
+    tracing::warn!("全局 Agent Manager 未初始化");
     vec![]
   }
 }
@@ -133,7 +133,7 @@ pub async fn get_all_tags() -> Vec<(String, String)> {
       .map(|tag| (tag.key, tag.value))
       .collect()
   } else {
-    log::warn!("全局 Agent Manager 未初始化");
+    tracing::warn!("全局 Agent Manager 未初始化");
     vec![]
   }
 }

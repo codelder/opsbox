@@ -3,7 +3,7 @@ use std::{io, path::PathBuf, sync::Arc, time::Duration};
 use async_compression::tokio::bufread::GzipDecoder;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
-use log::{debug, warn};
+use tracing::{debug, warn};
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 
@@ -137,24 +137,30 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    match self.entries.next().await {
-      Some(Ok(entry)) => {
-        let raw = entry
-          .path()
-          .ok()
-          .map(|p| p.to_string_lossy().to_string())
-          .unwrap_or_else(|| "<unknown>".into());
-        let path = normalize_archive_entry_path(&raw);
-        let reader = entry.compat(); // 转为 tokio AsyncRead
-        let meta = EntryMeta {
-          path,
-          size: None,
-          is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
-        };
-        Ok(Some((meta, Box::new(reader))))
+    loop {
+      match self.entries.next().await {
+        Some(Ok(entry)) => {
+          let raw = entry
+            .path()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".into());
+          let path = normalize_archive_entry_path(&raw);
+          let reader = entry.compat(); // 转为 tokio AsyncRead
+          let meta = EntryMeta {
+            path,
+            size: None,
+            is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
+          };
+          return Ok(Some((meta, Box::new(reader))));
+        }
+        Some(Err(e)) => {
+          // 记录错误但继续处理下一个条目（使用debug级别避免日志泛滥）
+          tracing::debug!("跳过损坏的 tar.gz 条目: {}", e);
+          continue;
+        }
+        None => return Ok(None),
       }
-      Some(Err(e)) => Err(e),
-      None => Ok(None),
     }
   }
 }
@@ -347,7 +353,7 @@ impl EntryStreamFactory {
           .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
           .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
         if &profile_row.bucket != bucket {
-          log::warn!(
+          tracing::warn!(
             "S3 配置中的桶与脚本提供不一致：db='{}' script='{}'，以脚本为准",
             profile_row.bucket,
             bucket
@@ -633,24 +639,30 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    match self.entries.next().await {
-      Some(Ok(entry)) => {
-        let raw = entry
-          .path()
-          .ok()
-          .map(|p| p.to_string_lossy().to_string())
-          .unwrap_or_else(|| "<unknown>".into());
-        let path = normalize_archive_entry_path(&raw);
-        let reader = entry.compat();
-        let meta = EntryMeta {
-          path,
-          size: None,
-          is_compressed: true,
-        };
-        Ok(Some((meta, Box::new(reader))))
+    loop {
+      match self.entries.next().await {
+        Some(Ok(entry)) => {
+          let raw = entry
+            .path()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".into());
+          let path = normalize_archive_entry_path(&raw);
+          let reader = entry.compat();
+          let meta = EntryMeta {
+            path,
+            size: None,
+            is_compressed: true,
+          };
+          return Ok(Some((meta, Box::new(reader))));
+        }
+        Some(Err(e)) => {
+          // 记录错误但继续处理下一个条目
+          tracing::warn!("跳过损坏的 tar 条目: {}", e);
+          continue;
+        }
+        None => return Ok(None),
       }
-      Some(Err(e)) => Err(e),
-      None => Ok(None),
     }
   }
 }

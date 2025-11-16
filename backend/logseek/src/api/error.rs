@@ -104,7 +104,7 @@ impl IntoResponse for LogSeekApiError {
     };
 
     // 记录错误日志
-    log::error!("[LogSeek API] [{}] {}", title, detail);
+    tracing::error!("[LogSeek API] [{}] {}", title, detail);
 
     // 构建简单 JSON 响应
     let json_body = serde_json::json!({

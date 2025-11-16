@@ -89,14 +89,14 @@ pub fn stop_daemon(pid_path: PathBuf, force: bool) -> io::Result<()> {
   let signal = if force { Signal::SIGKILL } else { Signal::SIGTERM };
   send_signal_to_process(pid, signal)?;
 
-  log::info!("已发送 {} 到进程 {}", signal_name(force), pid_num);
+  tracing::info!("已发送 {} 到进程 {}", signal_name(force), pid_num);
 
   // 等待最多 5 秒确认进程退出
   let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
   let mut exited = false;
   while std::time::Instant::now() < deadline {
     if !check_process_alive(pid) {
-      log::info!("进程 {} 已退出", pid_num);
+      tracing::info!("进程 {} 已退出", pid_num);
       exited = true;
       break;
     }
@@ -105,12 +105,12 @@ pub fn stop_daemon(pid_path: PathBuf, force: bool) -> io::Result<()> {
 
   // 如未退出且非强制，尝试升级为 SIGKILL 再等 2 秒
   if !exited && !force {
-    log::warn!("进程 {} 未在超时时间内退出，升级为 SIGKILL", pid_num);
+    tracing::warn!("进程 {} 未在超时时间内退出，升级为 SIGKILL", pid_num);
     send_signal_to_process(pid, Signal::SIGKILL)?;
     let deadline2 = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while std::time::Instant::now() < deadline2 {
       if !check_process_alive(pid) {
-        log::info!("进程 {} 已被 SIGKILL 终止", pid_num);
+        tracing::info!("进程 {} 已被 SIGKILL 终止", pid_num);
         exited = true;
         break;
       }
@@ -122,7 +122,7 @@ pub fn stop_daemon(pid_path: PathBuf, force: bool) -> io::Result<()> {
   if exited {
     let _ = fs::remove_file(&pid_path);
   } else {
-    log::warn!("进程 {} 仍在运行，未移除 PID 文件", pid_num);
+    tracing::warn!("进程 {} 仍在运行，未移除 PID 文件", pid_num);
   }
   Ok(())
 }

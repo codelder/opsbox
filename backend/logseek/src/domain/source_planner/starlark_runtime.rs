@@ -55,7 +55,7 @@ pub async fn plan_with_starlark_with_script(
         ));
       }
       Err(e) => {
-        log::warn!("获取默认规划脚本失败: {:?}", e);
+        tracing::warn!("获取默认规划脚本失败: {:?}", e);
         return Err(crate::api::LogSeekApiError::Service(
           ServiceError::ConfigError("请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp）".to_string()),
         ));
@@ -224,7 +224,7 @@ pub async fn plan_with_starlark_with_script(
     };
     let j =
       starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(e)))?;
-    log::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
+    tracing::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
     let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
       crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
         "解析 Source 失败: {}; JSON={}",
@@ -235,7 +235,7 @@ pub async fn plan_with_starlark_with_script(
     sources.push(cfg);
   }
 
-  log::info!("[Planner] 脚本生成来源总数: {}", sources.len());
+  tracing::info!("[Planner] 脚本生成来源总数: {}", sources.len());
 
   // 提取调试日志
   let debug_logs_vec = debug_logs.lock().unwrap().clone();
@@ -338,7 +338,7 @@ async fn load_planner_script_from_db(pool: &SqlitePool, app: &str) -> Option<Str
   match crate::repository::planners::load_script_text(pool, app).await {
     Ok(opt) => opt,
     Err(e) => {
-      log::warn!("从数据库加载 Planner 脚本失败: {}", e);
+      tracing::warn!("从数据库加载 Planner 脚本失败: {}", e);
       None
     }
   }
@@ -393,7 +393,7 @@ fn log_script_source(idx: usize, src: &Source) {
   use crate::domain::config::{Endpoint, Target};
   match (&src.endpoint, &src.target) {
     (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
-      log::info!(
+      tracing::info!(
         "[Planner] 来源[{}] s3 profile={} bucket={} archive={}",
         idx,
         profile,
@@ -407,7 +407,7 @@ fn log_script_source(idx: usize, src: &Source) {
         Target::Files { paths } => format!("Files count={}", paths.len()),
         Target::Archive { path } => format!("Archive path={}", path),
       };
-      log::info!(
+      tracing::info!(
         "[Planner] 来源[{}] agent id={} subpath={} scope={} filter_glob={}",
         idx,
         agent_id,
@@ -422,7 +422,7 @@ fn log_script_source(idx: usize, src: &Source) {
         Target::Files { paths } => format!("Files count={}", paths.len()),
         Target::Archive { path } => format!("Archive path={}", path),
       };
-      log::info!(
+      tracing::info!(
         "[Planner] 来源[{}] local root={} scope={} filter_glob={}",
         idx,
         root,
@@ -431,7 +431,7 @@ fn log_script_source(idx: usize, src: &Source) {
       );
     }
     (Endpoint::S3 { .. }, _) => {
-      log::warn!("[Planner] S3 目前仅支持 target=archive（tar/tar.gz/gz；zip 暂不支持）");
+      tracing::warn!("[Planner] S3 目前仅支持 target=archive（tar/tar.gz/gz；zip 暂不支持）");
     }
   }
 }

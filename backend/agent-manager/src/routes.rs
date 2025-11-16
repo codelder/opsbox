@@ -49,6 +49,37 @@ pub struct RemoveTagRequest {
   pub value: String,
 }
 
+/// 日志配置响应
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct LogConfigResponse {
+  /// 日志级别
+  pub level: String,
+  /// 日志保留数量（天）
+  pub retention_count: usize,
+  /// 日志目录
+  pub log_dir: String,
+}
+
+/// 更新日志级别请求
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct UpdateLogLevelRequest {
+  /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
+  pub level: String,
+}
+
+/// 更新保留数量请求
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct UpdateRetentionRequest {
+  /// 保留数量（天）
+  pub retention_count: usize,
+}
+
+/// 通用成功响应
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SuccessResponse {
+  pub message: String,
+}
+
 /// 创建 Agent 管理路由
 pub fn create_routes(manager: Arc<AgentManager>) -> Router {
   Router::new()
@@ -61,6 +92,9 @@ pub fn create_routes(manager: Arc<AgentManager>) -> Router {
     .route("/{agent_id}/tags/add", post(add_agent_tag))
     .route("/{agent_id}/tags/remove", delete(remove_agent_tag))
     .route("/{agent_id}/tags/clear", delete(clear_agent_tags))
+    .route("/{agent_id}/log/config", get(proxy_agent_log_config))
+    .route("/{agent_id}/log/level", axum::routing::put(proxy_agent_log_level))
+    .route("/{agent_id}/log/retention", axum::routing::put(proxy_agent_log_retention))
     .with_state(manager)
 }
 
@@ -71,7 +105,7 @@ async fn register_agent(
   headers: HeaderMap,
   Json(req): Json<AgentRegisterRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-  log::info!("收到 Agent 注册请求: id={}, name={}", req.info.id, req.info.name);
+  tracing::info!("收到 Agent 注册请求: id={}, name={}", req.info.id, req.info.name);
 
   // 先完成 Agent 基础信息注册
   manager
@@ -89,7 +123,7 @@ async fn register_agent(
   // 组合监听端口（若未上报则使用 Agent 默认端口 4001）
   let port = req.listen_port.unwrap_or(4001);
 
-  log::info!("推断 Agent 访问端点: host={}, port={}", client_ip, port);
+  tracing::info!("推断 Agent 访问端点: host={}, port={}", client_ip, port);
 
   // 以标签的形式持久化（保留现有用户自定义标签）：host 与 listen_port
   let host_tag = AgentTag::new("host".to_string(), client_ip);
@@ -97,10 +131,10 @@ async fn register_agent(
 
   // 使用 add 接口避免覆盖已有标签集合
   if let Err(e) = manager.add_agent_tag(&req.info.id, host_tag).await {
-    log::warn!("保存 host 标签失败: {}", e);
+    tracing::warn!("保存 host 标签失败: {}", e);
   }
   if let Err(e) = manager.add_agent_tag(&req.info.id, port_tag).await {
-    log::warn!("保存 listen_port 标签失败: {}", e);
+    tracing::warn!("保存 listen_port 标签失败: {}", e);
   }
 
   Ok(StatusCode::CREATED)
@@ -202,7 +236,7 @@ async fn set_agent_tags(
   match manager.set_agent_tags(&agent_id, req.tags).await {
     Ok(_) => Ok(Json(serde_json::json!({"message": "标签设置成功"}))),
     Err(e) => {
-      log::error!("设置标签失败: {}", e);
+      tracing::error!("设置标签失败: {}", e);
       Err(StatusCode::NOT_FOUND)
     }
   }
@@ -229,7 +263,7 @@ async fn add_agent_tag(
   match manager.add_agent_tag(&agent_id, tag).await {
     Ok(_) => Ok(Json(serde_json::json!({"message": "标签添加成功"}))),
     Err(e) => {
-      log::error!("添加标签失败: {}", e);
+      tracing::error!("添加标签失败: {}", e);
       Err(StatusCode::NOT_FOUND)
     }
   }
@@ -244,7 +278,7 @@ async fn remove_agent_tag(
   match manager.remove_agent_tag(&agent_id, &req.key, &req.value).await {
     Ok(_) => Ok(Json(serde_json::json!({"message": "标签移除成功"}))),
     Err(e) => {
-      log::error!("移除标签失败: {}", e);
+      tracing::error!("移除标签失败: {}", e);
       Err(StatusCode::NOT_FOUND)
     }
   }
@@ -258,10 +292,256 @@ async fn clear_agent_tags(
   match manager.clear_agent_tags(&agent_id).await {
     Ok(_) => Ok(Json(serde_json::json!({"message": "标签清空成功"}))),
     Err(e) => {
-      log::error!("清空标签失败: {}", e);
+      tracing::error!("清空标签失败: {}", e);
       Err(StatusCode::NOT_FOUND)
     }
   }
+}
+
+/// 代理获取 Agent 日志配置
+async fn proxy_agent_log_config(
+  State(manager): State<Arc<AgentManager>>,
+  Path(agent_id): Path<String>,
+) -> Result<Json<LogConfigResponse>, (StatusCode, String)> {
+  // 1. 获取 Agent 信息（包含 host 和 listen_port 标签）
+  let agent = manager
+    .get_agent(&agent_id)
+    .await
+    .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
+
+  // 2. 从标签中提取 host 和 port
+  let host = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "host")
+    .map(|t| t.value.clone())
+    .ok_or_else(|| {
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Agent 缺少 host 标签".to_string(),
+      )
+    })?;
+
+  let port = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "listen_port")
+    .and_then(|t| t.value.parse::<u16>().ok())
+    .unwrap_or(4001);
+
+  // 3. 构造 Agent API URL
+  let url = format!("http://{}:{}/api/v1/log/config", host, port);
+
+  tracing::debug!("代理请求 Agent 日志配置: agent_id={}, url={}", agent_id, url);
+
+  // 4. 转发请求
+  let client = reqwest::Client::new();
+  let response = client
+    .get(&url)
+    .timeout(std::time::Duration::from_secs(10))
+    .send()
+    .await
+    .map_err(|e| {
+      tracing::error!("无法连接到 Agent {}: {}", agent_id, e);
+      (
+        StatusCode::BAD_GATEWAY,
+        format!("无法连接到 Agent: {}", e),
+      )
+    })?;
+
+  if !response.status().is_success() {
+    let status = response.status();
+    tracing::error!("Agent {} 返回错误状态: {}", agent_id, status);
+    return Err((
+      StatusCode::BAD_GATEWAY,
+      format!("Agent 返回错误: {}", status),
+    ));
+  }
+
+  let config = response.json::<LogConfigResponse>().await.map_err(|e| {
+    tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
+    (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      format!("解析响应失败: {}", e),
+    )
+  })?;
+
+  tracing::info!("成功获取 Agent {} 日志配置", agent_id);
+  Ok(Json(config))
+}
+
+/// 代理更新 Agent 日志级别
+async fn proxy_agent_log_level(
+  State(manager): State<Arc<AgentManager>>,
+  Path(agent_id): Path<String>,
+  Json(req): Json<UpdateLogLevelRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, String)> {
+  // 1. 获取 Agent 信息（包含 host 和 listen_port 标签）
+  let agent = manager
+    .get_agent(&agent_id)
+    .await
+    .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
+
+  // 2. 从标签中提取 host 和 port
+  let host = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "host")
+    .map(|t| t.value.clone())
+    .ok_or_else(|| {
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Agent 缺少 host 标签".to_string(),
+      )
+    })?;
+
+  let port = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "listen_port")
+    .and_then(|t| t.value.parse::<u16>().ok())
+    .unwrap_or(4001);
+
+  // 3. 构造 Agent API URL
+  let url = format!("http://{}:{}/api/v1/log/level", host, port);
+
+  tracing::debug!(
+    "代理更新 Agent 日志级别: agent_id={}, level={}, url={}",
+    agent_id,
+    req.level,
+    url
+  );
+
+  // 4. 转发请求
+  let client = reqwest::Client::new();
+  let response = client
+    .put(&url)
+    .json(&req)
+    .timeout(std::time::Duration::from_secs(10))
+    .send()
+    .await
+    .map_err(|e| {
+      tracing::error!("无法连接到 Agent {}: {}", agent_id, e);
+      (
+        StatusCode::BAD_GATEWAY,
+        format!("无法连接到 Agent: {}", e),
+      )
+    })?;
+
+  if !response.status().is_success() {
+    let status = response.status();
+    let error_text = response.text().await.unwrap_or_default();
+    tracing::error!(
+      "Agent {} 返回错误状态: {}, 错误信息: {}",
+      agent_id,
+      status,
+      error_text
+    );
+    return Err((
+      StatusCode::BAD_GATEWAY,
+      format!("Agent 返回错误: {}", status),
+    ));
+  }
+
+  let result = response.json::<SuccessResponse>().await.map_err(|e| {
+    tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
+    (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      format!("解析响应失败: {}", e),
+    )
+  })?;
+
+  tracing::info!("成功更新 Agent {} 日志级别为: {}", agent_id, req.level);
+  Ok(Json(result))
+}
+
+/// 代理更新 Agent 日志保留数量
+async fn proxy_agent_log_retention(
+  State(manager): State<Arc<AgentManager>>,
+  Path(agent_id): Path<String>,
+  Json(req): Json<UpdateRetentionRequest>,
+) -> Result<Json<SuccessResponse>, (StatusCode, String)> {
+  // 1. 获取 Agent 信息（包含 host 和 listen_port 标签）
+  let agent = manager
+    .get_agent(&agent_id)
+    .await
+    .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
+
+  // 2. 从标签中提取 host 和 port
+  let host = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "host")
+    .map(|t| t.value.clone())
+    .ok_or_else(|| {
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Agent 缺少 host 标签".to_string(),
+      )
+    })?;
+
+  let port = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "listen_port")
+    .and_then(|t| t.value.parse::<u16>().ok())
+    .unwrap_or(4001);
+
+  // 3. 构造 Agent API URL
+  let url = format!("http://{}:{}/api/v1/log/retention", host, port);
+
+  tracing::debug!(
+    "代理更新 Agent 日志保留数量: agent_id={}, retention_count={}, url={}",
+    agent_id,
+    req.retention_count,
+    url
+  );
+
+  // 4. 转发请求
+  let client = reqwest::Client::new();
+  let response = client
+    .put(&url)
+    .json(&req)
+    .timeout(std::time::Duration::from_secs(10))
+    .send()
+    .await
+    .map_err(|e| {
+      tracing::error!("无法连接到 Agent {}: {}", agent_id, e);
+      (
+        StatusCode::BAD_GATEWAY,
+        format!("无法连接到 Agent: {}", e),
+      )
+    })?;
+
+  if !response.status().is_success() {
+    let status = response.status();
+    let error_text = response.text().await.unwrap_or_default();
+    tracing::error!(
+      "Agent {} 返回错误状态: {}, 错误信息: {}",
+      agent_id,
+      status,
+      error_text
+    );
+    return Err((
+      StatusCode::BAD_GATEWAY,
+      format!("Agent 返回错误: {}", status),
+    ));
+  }
+
+  let result = response.json::<SuccessResponse>().await.map_err(|e| {
+    tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
+    (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      format!("解析响应失败: {}", e),
+    )
+  })?;
+
+  tracing::info!(
+    "成功更新 Agent {} 日志保留数量为: {} 天",
+    agent_id,
+    req.retention_count
+  );
+  Ok(Json(result))
 }
 
 #[cfg(test)]

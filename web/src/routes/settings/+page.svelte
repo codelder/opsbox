@@ -10,9 +10,10 @@
   import AgentManagement from './AgentManagement.svelte';
   import LlmManagement from './LlmManagement.svelte';
   import PlannerManagement from './PlannerManagement.svelte';
+  import ServerLogSettings from './ServerLogSettings.svelte';
 
   // 选项卡状态
-  let activeTab = $state<'profiles' | 'agents' | 'planners' | 'llm'>('profiles');
+  let activeTab = $state<'profiles' | 'agents' | 'planners' | 'llm' | 'server-log'>('profiles');
 
   // 返回上一页，如果没有历史记录则返回首页
   function handleBack() {
@@ -96,6 +97,15 @@
     >
       大模型
     </button>
+    <button
+      type="button"
+      class="rounded-full px-3 py-1 transition {activeTab === 'server-log'
+        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
+        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
+      onclick={() => (activeTab = 'server-log')}
+    >
+      Server 日志
+    </button>
   </nav>
 
   {#if activeTab === 'profiles'}
@@ -106,5 +116,7 @@
     <PlannerManagement />
   {:else if activeTab === 'llm'}
     <LlmManagement />
+  {:else if activeTab === 'server-log'}
+    <ServerLogSettings />
   {/if}
 </div>

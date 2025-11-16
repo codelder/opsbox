@@ -79,6 +79,23 @@ pub struct AppConfig {
   #[arg(global = true, short = 'v', action = clap::ArgAction::Count, help = "增加日志详细程度（-v/-vv/-vvv）")]
   pub verbose: u8,
 
+  #[arg(
+    global = true,
+    long = "log-dir",
+    value_name = "DIR",
+    help = "日志文件目录"
+  )]
+  pub log_dir: Option<PathBuf>,
+
+  #[arg(
+    global = true,
+    long = "log-retention",
+    value_name = "N",
+    help = "保留的日志文件数量",
+    default_value = "7"
+  )]
+  pub log_retention: usize,
+
   // 数据库配置
   #[arg(
     long = "database-url",
@@ -217,5 +234,18 @@ impl AppConfig {
 
   fn env_u32(key: &str) -> Option<u32> {
     std::env::var(key).ok().and_then(|s| s.parse().ok())
+  }
+
+  /// 获取日志目录（优先级：CLI > 默认值 ~/.opsbox/logs）
+  pub fn get_log_dir(&self) -> PathBuf {
+    self.log_dir.clone().unwrap_or_else(|| {
+      let home = Self::get_user_home();
+      std::path::PathBuf::from(home).join(".opsbox").join("logs")
+    })
+  }
+
+  /// 获取日志保留数量
+  pub fn get_log_retention(&self) -> usize {
+    self.log_retention
   }
 }

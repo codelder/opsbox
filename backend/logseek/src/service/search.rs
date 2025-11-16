@@ -6,7 +6,7 @@ use std::{
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
 use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
-use log::{debug, warn};
+use tracing::{debug, warn};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 
@@ -160,14 +160,42 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
     return Some(UTF_8);
   }
 
+  // 优先检测是否为有效的 UTF-8
+  // 处理样本可能在多字节字符中间截断的情况
+  match std::str::from_utf8(sample) {
+    Ok(_) => {
+      // 样本完全是有效的 UTF-8
+      debug!("样本是有效的 UTF-8，使用 UTF-8 编码");
+      return Some(UTF_8);
+    }
+    Err(e) => {
+      // 检查是否只是因为末尾截断导致的错误
+      let valid_up_to = e.valid_up_to();
+      
+      // 如果大部分内容是有效的 UTF-8，只是末尾可能被截断
+      // 我们认为这是 UTF-8 文件（允许末尾最多3个字节的不完整字符）
+      if valid_up_to > 0 && sample.len() - valid_up_to <= 3 {
+        // 验证前面的部分确实是有效的 UTF-8
+        if std::str::from_utf8(&sample[..valid_up_to]).is_ok() {
+          debug!(
+            "样本前 {} 字节是有效的 UTF-8（末尾 {} 字节可能被截断），使用 UTF-8 编码",
+            valid_up_to,
+            sample.len() - valid_up_to
+          );
+          return Some(UTF_8);
+        }
+      }
+      // 如果有效部分太少，说明不是 UTF-8，继续使用 chardetng 检测
+    }
+  }
+
   // 使用 chardetng 进行编码检测
   let mut detector = EncodingDetector::new();
   detector.feed(sample, true); // last=true 表示这是最后一块数据
   let detected_encoding = detector.guess(None, true); // tld=None, allow_utf8=true
 
   debug!(
-    "chardetng 检测到编码: {} ({})",
-    detected_encoding.name(),
+    "chardetng 检测到编码: {}",
     detected_encoding.name()
   );
   Some(detected_encoding)
@@ -182,12 +210,25 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
   let mut lines: Vec<String> = Vec::new();
 
   // 将样本转换为字符串并处理其中的行
-  let sample_str = match String::from_utf8(sample) {
+  let sample_str = match String::from_utf8(sample.clone()) {
     Ok(s) => s,
     Err(e) => {
-      // 如果样本不是有效的 UTF-8，使用 lossy 转换
-      warn!("样本包含无效 UTF-8，使用 lossy 转换");
-      String::from_utf8_lossy(&e.into_bytes()).into_owned()
+      // 检查是否只是末尾被截断
+      let valid_up_to = e.utf8_error().valid_up_to();
+      if valid_up_to > 0 && sample.len() - valid_up_to <= 3 {
+        // 只使用有效的部分，丢弃末尾不完整的字节
+        debug!(
+          "样本末尾 {} 字节被截断，使用前 {} 字节",
+          sample.len() - valid_up_to,
+          valid_up_to
+        );
+        String::from_utf8(sample[..valid_up_to].to_vec())
+          .expect("valid_up_to 应该保证这部分是有效的 UTF-8")
+      } else {
+        // 如果不是末尾截断问题，使用 lossy 转换
+        warn!("样本包含无效 UTF-8，使用 lossy 转换");
+        String::from_utf8_lossy(&e.into_bytes()).into_owned()
+      }
     }
   };
 
@@ -207,17 +248,35 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
     lines.push(line.to_string());
   }
 
-  // 继续读取剩余行
+  // 继续读取剩余行（使用字节读取以处理可能的UTF-8错误）
   let mut line = incomplete_line.take().unwrap_or_default();
   loop {
-    let mut temp_line = String::new();
-    let n = buf_reader.read_line(&mut temp_line).await?;
+    let mut temp_bytes = Vec::new();
+    let n = buf_reader.read_until(b'\n', &mut temp_bytes).await?;
     if n == 0 {
       if !line.is_empty() {
         lines.push(line.trim_end_matches(['\r', '\n']).to_string());
       }
       break;
     }
+    
+    // 尝试将字节转换为字符串
+    let temp_line = match String::from_utf8(temp_bytes.clone()) {
+      Ok(s) => s,
+      Err(e) => {
+        // 处理末尾截断的情况
+        let valid_up_to = e.utf8_error().valid_up_to();
+        if valid_up_to > 0 && temp_bytes.len() - valid_up_to <= 3 {
+          // 只使用有效的部分
+          String::from_utf8(temp_bytes[..valid_up_to].to_vec())
+            .unwrap_or_else(|_| String::from_utf8_lossy(&temp_bytes).into_owned())
+        } else {
+          // 使用 lossy 转换
+          String::from_utf8_lossy(&temp_bytes).into_owned()
+        }
+      }
+    };
+    
     line.push_str(&temp_line);
     let trimmed = line.trim_end_matches(['\r', '\n']);
     if trimmed != line {
