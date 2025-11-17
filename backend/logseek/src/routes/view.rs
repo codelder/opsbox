@@ -4,7 +4,7 @@
 
 use crate::api::{LogSeekApiError, models::ViewParams};
 use crate::domain::FileUrl;
-use crate::repository::{cache::cache as simple_cache, RepositoryError};
+use crate::repository::{RepositoryError, cache::cache as simple_cache};
 use crate::service::ServiceError;
 use axum::{
   body::Body,

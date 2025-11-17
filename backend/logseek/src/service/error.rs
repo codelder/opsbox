@@ -83,7 +83,7 @@ mod tests {
   fn test_service_error_from_io_error() {
     let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "文件未找到");
     let service_err: ServiceError = io_err.into();
-    
+
     match service_err {
       ServiceError::ProcessingError(msg) => {
         assert!(msg.contains("IO 错误"));
@@ -97,7 +97,7 @@ mod tests {
   fn test_service_error_from_repository_error() {
     let repo_err = crate::repository::RepositoryError::NotFound("资源不存在".to_string());
     let service_err: ServiceError = repo_err.into();
-    
+
     match service_err {
       ServiceError::Repository(_) => {
         // 成功转换
@@ -129,4 +129,3 @@ mod tests {
     assert!(err_result.is_err());
   }
 }
-

@@ -6,9 +6,9 @@ use std::{
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
 use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
-use tracing::{debug, warn};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
+use tracing::{debug, warn};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -171,7 +171,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
     Err(e) => {
       // 检查是否只是因为末尾截断导致的错误
       let valid_up_to = e.valid_up_to();
-      
+
       // 如果大部分内容是有效的 UTF-8，只是末尾可能被截断
       // 我们认为这是 UTF-8 文件（允许末尾最多3个字节的不完整字符）
       if valid_up_to > 0 && sample.len() - valid_up_to <= 3 {
@@ -194,10 +194,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   detector.feed(sample, true); // last=true 表示这是最后一块数据
   let detected_encoding = detector.guess(None, true); // tld=None, allow_utf8=true
 
-  debug!(
-    "chardetng 检测到编码: {}",
-    detected_encoding.name()
-  );
+  debug!("chardetng 检测到编码: {}", detected_encoding.name());
   Some(detected_encoding)
 }
 
@@ -222,8 +219,7 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
           sample.len() - valid_up_to,
           valid_up_to
         );
-        String::from_utf8(sample[..valid_up_to].to_vec())
-          .expect("valid_up_to 应该保证这部分是有效的 UTF-8")
+        String::from_utf8(sample[..valid_up_to].to_vec()).expect("valid_up_to 应该保证这部分是有效的 UTF-8")
       } else {
         // 如果不是末尾截断问题，使用 lossy 转换
         warn!("样本包含无效 UTF-8，使用 lossy 转换");
@@ -259,7 +255,7 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
       }
       break;
     }
-    
+
     // 尝试将字节转换为字符串
     let temp_line = match String::from_utf8(temp_bytes.clone()) {
       Ok(s) => s,
@@ -276,7 +272,7 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
         }
       }
     };
-    
+
     line.push_str(&temp_line);
     let trimmed = line.trim_end_matches(['\r', '\n']);
     if trimmed != line {
@@ -1807,17 +1803,12 @@ foo lower
         _cx: &mut std::task::Context<'_>,
         _buf: &mut tokio::io::ReadBuf<'_>,
       ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Err(std::io::Error::new(
-          std::io::ErrorKind::Other,
-          "read error",
-        )))
+        std::task::Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, "read error")))
       }
     }
 
     let mut reader = FailingReader;
-    let result = processor
-      .process_content("test.log".to_string(), &mut reader)
-      .await;
+    let result = processor.process_content("test.log".to_string(), &mut reader).await;
 
     assert!(result.is_err());
   }
@@ -1871,8 +1862,6 @@ foo lower
     let (_, _, encoding) = result.unwrap();
     assert_eq!(encoding, Some("UTF-8".to_string()));
   }
-
-
 
   #[tokio::test]
   async fn test_search_result_clone() {

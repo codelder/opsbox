@@ -48,17 +48,15 @@ pub async fn plan_with_starlark_with_script(
     match crate::repository::planners::get_default(pool).await {
       Ok(Some(default_app)) => default_app,
       Ok(None) => {
-        return Err(crate::api::LogSeekApiError::Service(
-          ServiceError::ConfigError(
-            "请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp），或在系统设置中配置默认规划脚本".to_string(),
-          ),
-        ));
+        return Err(crate::api::LogSeekApiError::Service(ServiceError::ConfigError(
+          "请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp），或在系统设置中配置默认规划脚本".to_string(),
+        )));
       }
       Err(e) => {
         tracing::warn!("获取默认规划脚本失败: {:?}", e);
-        return Err(crate::api::LogSeekApiError::Service(
-          ServiceError::ConfigError("请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp）".to_string()),
-        ));
+        return Err(crate::api::LogSeekApiError::Service(ServiceError::ConfigError(
+          "请指定应用标识（使用 app:<应用名> 限定词，例如 app:myapp）".to_string(),
+        )));
       }
     }
   };
@@ -151,12 +149,9 @@ pub async fn plan_with_starlark_with_script(
       s
     } else {
       // 找不到脚本，返回错误
-      return Err(crate::api::LogSeekApiError::Service(
-        ServiceError::ConfigError(format!(
-          "未找到应用 '{}' 的规划脚本。请在系统设置中为该应用配置规划脚本。",
-          app
-        )),
-      ));
+      return Err(crate::api::LogSeekApiError::Service(ServiceError::ConfigError(
+        format!("未找到应用 '{}' 的规划脚本。请在系统设置中为该应用配置规划脚本。", app),
+      )));
     }
   };
   let script = format!("{}\n{}", prefix, script_body);
@@ -209,21 +204,21 @@ pub async fn plan_with_starlark_with_script(
   let cleaned_val = module.get("CLEANED_QUERY");
   let cleaned = cleaned_val.map(|v| v.to_str().to_string()).unwrap_or(cleaned_query);
 
-  let sources_val = module
-    .get("SOURCES")
-    .ok_or_else(|| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("Starlark 未导出 SOURCES".to_string())))?;
+  let sources_val = module.get("SOURCES").ok_or_else(|| {
+    crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("Starlark 未导出 SOURCES".to_string()))
+  })?;
 
   // 转为 JSON，再转为 Source
-  let list = starlark::values::list::ListRef::from_value(sources_val)
-    .ok_or_else(|| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("SOURCES 不是列表类型".to_string())))?;
+  let list = starlark::values::list::ListRef::from_value(sources_val).ok_or_else(|| {
+    crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("SOURCES 不是列表类型".to_string()))
+  })?;
 
   let mut sources: Vec<Source> = Vec::new();
   for i in 0..list.len() {
     let Some(v) = list.get(i) else {
       continue;
     };
-    let j =
-      starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(e)))?;
+    let j = starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(e)))?;
     tracing::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
     let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
       crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(

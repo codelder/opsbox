@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::LogSeekApiError;
 use crate::domain::config::Source;
-use crate::repository::{planners, RepositoryError};
+use crate::repository::{RepositoryError, planners};
 use crate::service::ServiceError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -43,17 +43,17 @@ fn convert_to_ndjson_stream(
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
   async_stream::stream! {
     let mut event_count = 0;
-    
+
     while let Some(event) = rx.recv().await {
       event_count += 1;
-      tracing::debug!("[Search Route] 收到事件 #{}: {:?}", event_count, 
+      tracing::debug!("[Search Route] 收到事件 #{}: {:?}", event_count,
         match &event {
           SearchEvent::Success(res) => format!("Success(path={}, lines={})", res.path, res.lines.len()),
           SearchEvent::Error { source, message, .. } => format!("Error(source={}, msg={})", source, message),
           SearchEvent::Complete { source, elapsed_ms } => format!("Complete(source={}, elapsed={}ms)", source, elapsed_ms),
         }
       );
-      
+
       let json_value = match event {
         SearchEvent::Success(res) => {
           let json_obj = render_json_chunks(
@@ -74,7 +74,7 @@ fn convert_to_ndjson_stream(
           serde_json::to_value(SearchEvent::Complete { source, elapsed_ms }).ok()
         }
       };
-      
+
       if let Some(value) = json_value
         && let Some(bytes) = serialize_event(&value) {
           yield Ok(bytes);
@@ -82,7 +82,7 @@ fn convert_to_ndjson_stream(
           tracing::warn!("[Search Route] 序列化失败，跳过事件");
         }
     }
-    
+
     tracing::debug!("[Search Route] SearchEvent 流结束，共处理 {} 个事件", event_count);
   }
 }
@@ -95,12 +95,18 @@ fn build_ndjson_response(
   let sid_header = HeaderValue::from_str(&sid).unwrap_or_else(|_| HeaderValue::from_static(""));
   HttpResponse::builder()
     .status(200)
-    .header(CONTENT_TYPE, HeaderValue::from_static("application/x-ndjson; charset=utf-8"))
+    .header(
+      CONTENT_TYPE,
+      HeaderValue::from_static("application/x-ndjson; charset=utf-8"),
+    )
     .header("X-Logseek-SID", sid_header)
     .body(Body::from_stream(stream))
-    .map_err(|e| LogSeekApiError::Service(
-      crate::service::ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))
-    ))
+    .map_err(|e| {
+      LogSeekApiError::Service(crate::service::ServiceError::ProcessingError(format!(
+        "构建 HTTP 响应失败: {}",
+        e
+      )))
+    })
 }
 
 /// 搜索处理函数（多存储源并行搜索）
@@ -115,14 +121,14 @@ pub async fn stream_search(
     io_max_concurrency: s3_max_concurrency(),
     stream_channel_capacity: stream_channel_capacity(),
   };
-  
+
   let executor = SearchExecutor::new(pool, config);
   let (result_rx, sid) = executor.search(&body.q, ctx).await?;
-  
+
   let highlights = crate::query::Query::parse_github_like(&body.q)
     .map(|spec| spec.highlights)
     .unwrap_or_default();
-  
+
   let stream = convert_to_ndjson_stream(result_rx, highlights);
   build_ndjson_response(stream, sid)
 }

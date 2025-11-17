@@ -1,7 +1,7 @@
 use axum::http::{StatusCode, header::CONTENT_TYPE};
 use axum::{Router, http, response::Response, routing::get};
-use opsbox_core::{Module, SqlitePool};
 use opsbox_core::logging::ReloadHandle;
+use opsbox_core::{Module, SqlitePool};
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 use std::net::SocketAddr;
@@ -159,7 +159,9 @@ fn build_router(db_pool: SqlitePool, modules: &[Arc<dyn Module>]) -> Router {
     .route("/healthy", get(|| async { "ok" }));
 
   // 注册系统级日志配置路由
-  let log_dir = get_log_dir().cloned().unwrap_or_else(|| std::path::PathBuf::from("logs"));
+  let log_dir = get_log_dir()
+    .cloned()
+    .unwrap_or_else(|| std::path::PathBuf::from("logs"));
   let log_routes = crate::log_routes::create_log_routes(db_pool.clone(), log_dir);
   app = app.merge(log_routes);
   tracing::info!("注册路由: 日志配置 -> /api/v1/log/*");

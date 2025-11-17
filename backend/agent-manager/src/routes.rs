@@ -4,10 +4,10 @@ use crate::manager::AgentManager;
 use crate::models::{AgentInfo, AgentListResponse, AgentRegisterRequest, AgentTag, HeartbeatResponse};
 use axum::extract::connect_info::ConnectInfo;
 use axum::{
+  Json, Router,
   extract::{Path, Query, State},
   http::{HeaderMap, StatusCode},
   routing::{delete, get, post},
-  Json, Router,
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -94,7 +94,10 @@ pub fn create_routes(manager: Arc<AgentManager>) -> Router {
     .route("/{agent_id}/tags/clear", delete(clear_agent_tags))
     .route("/{agent_id}/log/config", get(proxy_agent_log_config))
     .route("/{agent_id}/log/level", axum::routing::put(proxy_agent_log_level))
-    .route("/{agent_id}/log/retention", axum::routing::put(proxy_agent_log_retention))
+    .route(
+      "/{agent_id}/log/retention",
+      axum::routing::put(proxy_agent_log_retention),
+    )
     .with_state(manager)
 }
 
@@ -315,12 +318,7 @@ async fn proxy_agent_log_config(
     .iter()
     .find(|t| t.key == "host")
     .map(|t| t.value.clone())
-    .ok_or_else(|| {
-      (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Agent 缺少 host 标签".to_string(),
-      )
-    })?;
+    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
 
   let port = agent
     .tags
@@ -343,27 +341,18 @@ async fn proxy_agent_log_config(
     .await
     .map_err(|e| {
       tracing::error!("无法连接到 Agent {}: {}", agent_id, e);
-      (
-        StatusCode::BAD_GATEWAY,
-        format!("无法连接到 Agent: {}", e),
-      )
+      (StatusCode::BAD_GATEWAY, format!("无法连接到 Agent: {}", e))
     })?;
 
   if !response.status().is_success() {
     let status = response.status();
     tracing::error!("Agent {} 返回错误状态: {}", agent_id, status);
-    return Err((
-      StatusCode::BAD_GATEWAY,
-      format!("Agent 返回错误: {}", status),
-    ));
+    return Err((StatusCode::BAD_GATEWAY, format!("Agent 返回错误: {}", status)));
   }
 
   let config = response.json::<LogConfigResponse>().await.map_err(|e| {
     tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
-    (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      format!("解析响应失败: {}", e),
-    )
+    (StatusCode::INTERNAL_SERVER_ERROR, format!("解析响应失败: {}", e))
   })?;
 
   tracing::info!("成功获取 Agent {} 日志配置", agent_id);
@@ -388,12 +377,7 @@ async fn proxy_agent_log_level(
     .iter()
     .find(|t| t.key == "host")
     .map(|t| t.value.clone())
-    .ok_or_else(|| {
-      (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Agent 缺少 host 标签".to_string(),
-      )
-    })?;
+    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
 
   let port = agent
     .tags
@@ -422,33 +406,19 @@ async fn proxy_agent_log_level(
     .await
     .map_err(|e| {
       tracing::error!("无法连接到 Agent {}: {}", agent_id, e);
-      (
-        StatusCode::BAD_GATEWAY,
-        format!("无法连接到 Agent: {}", e),
-      )
+      (StatusCode::BAD_GATEWAY, format!("无法连接到 Agent: {}", e))
     })?;
 
   if !response.status().is_success() {
     let status = response.status();
     let error_text = response.text().await.unwrap_or_default();
-    tracing::error!(
-      "Agent {} 返回错误状态: {}, 错误信息: {}",
-      agent_id,
-      status,
-      error_text
-    );
-    return Err((
-      StatusCode::BAD_GATEWAY,
-      format!("Agent 返回错误: {}", status),
-    ));
+    tracing::error!("Agent {} 返回错误状态: {}, 错误信息: {}", agent_id, status, error_text);
+    return Err((StatusCode::BAD_GATEWAY, format!("Agent 返回错误: {}", status)));
   }
 
   let result = response.json::<SuccessResponse>().await.map_err(|e| {
     tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
-    (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      format!("解析响应失败: {}", e),
-    )
+    (StatusCode::INTERNAL_SERVER_ERROR, format!("解析响应失败: {}", e))
   })?;
 
   tracing::info!("成功更新 Agent {} 日志级别为: {}", agent_id, req.level);
@@ -473,12 +443,7 @@ async fn proxy_agent_log_retention(
     .iter()
     .find(|t| t.key == "host")
     .map(|t| t.value.clone())
-    .ok_or_else(|| {
-      (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "Agent 缺少 host 标签".to_string(),
-      )
-    })?;
+    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
 
   let port = agent
     .tags
@@ -507,40 +472,22 @@ async fn proxy_agent_log_retention(
     .await
     .map_err(|e| {
       tracing::error!("无法连接到 Agent {}: {}", agent_id, e);
-      (
-        StatusCode::BAD_GATEWAY,
-        format!("无法连接到 Agent: {}", e),
-      )
+      (StatusCode::BAD_GATEWAY, format!("无法连接到 Agent: {}", e))
     })?;
 
   if !response.status().is_success() {
     let status = response.status();
     let error_text = response.text().await.unwrap_or_default();
-    tracing::error!(
-      "Agent {} 返回错误状态: {}, 错误信息: {}",
-      agent_id,
-      status,
-      error_text
-    );
-    return Err((
-      StatusCode::BAD_GATEWAY,
-      format!("Agent 返回错误: {}", status),
-    ));
+    tracing::error!("Agent {} 返回错误状态: {}, 错误信息: {}", agent_id, status, error_text);
+    return Err((StatusCode::BAD_GATEWAY, format!("Agent 返回错误: {}", status)));
   }
 
   let result = response.json::<SuccessResponse>().await.map_err(|e| {
     tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
-    (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      format!("解析响应失败: {}", e),
-    )
+    (StatusCode::INTERNAL_SERVER_ERROR, format!("解析响应失败: {}", e))
   })?;
 
-  tracing::info!(
-    "成功更新 Agent {} 日志保留数量为: {} 天",
-    agent_id,
-    req.retention_count
-  );
+  tracing::info!("成功更新 Agent {} 日志保留数量为: {} 天", agent_id, req.retention_count);
   Ok(Json(result))
 }
 

@@ -1,9 +1,9 @@
 use super::RepositoryError;
 use super::error::Result;
 use crate::utils::storage::{self, S3Error};
-use tracing::{debug, error, info};
 use opsbox_core::{SqlitePool, run_migration};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info};
 
 /// S3 兼容对象存储配置
 ///

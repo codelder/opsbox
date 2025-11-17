@@ -1,9 +1,9 @@
 use super::RepositoryError;
 use super::error::Result;
-use tracing::{debug, warn};
 use opsbox_core::{SqlitePool, run_migration};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 /// 提供方类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

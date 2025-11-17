@@ -96,6 +96,9 @@
       // 更新保留数量
       await updateAgentLogRetention(agentId, config.retention_count);
 
+      // 重新加载配置以获取最新值
+      await loadAgentLogConfig(agentId);
+
       logConfigSuccess[agentId] = '配置已保存';
       setTimeout(() => {
         logConfigSuccess[agentId] = '';

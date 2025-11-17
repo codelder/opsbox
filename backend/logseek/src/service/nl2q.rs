@@ -1,5 +1,5 @@
-use tracing::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error, info, warn};
 // 使用新的 LLM 客户端
 use crate::repository::llm::{self, ProviderKind};
 use opsbox_core::SqlitePool;
@@ -297,9 +297,7 @@ mod tests {
 
   #[test]
   fn test_nl_body_clone() {
-    let body = NLBody {
-      nl: "test".to_string(),
-    };
+    let body = NLBody { nl: "test".to_string() };
     let cloned = body.clone();
     assert_eq!(body.nl, cloned.nl);
   }
@@ -343,4 +341,3 @@ mod tests {
     assert_eq!(output, "result");
   }
 }
-
