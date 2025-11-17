@@ -16,7 +16,6 @@ use axum::{
 };
 use clap::{Parser, Subcommand};
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use tracing::{debug, error, info, warn};
 use logseek::utils::strings::truncate_utf8;
 use logseek::{
   agent::{AgentInfo, AgentSearchRequest, AgentStatus},
@@ -34,6 +33,7 @@ use std::{
 use tokio::sync::{Notify, mpsc};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::{debug, error, info, warn};
 
 /// 是否启用与 Server 通讯的“线级”调试日志（打印请求/响应、NDJSON 行等）
 /// 通过环境变量 AGENT_DEBUG_WIRE=1 启用
@@ -117,11 +117,35 @@ struct Args {
   worker_threads: Option<usize>,
 
   /// 日志目录
-  #[arg(global = true, long = "log-dir", value_name = "DIR", help = "日志文件目录")]
-  log_dir: Option<PathBuf>,
+  #[arg(
+    global = true,
+    long = "log-dir",
+    value_name = "DIR",
+    default_value_t = {
+      #[cfg(windows)]
+      {
+        let home = std::env::var("USERPROFILE")
+          .or_else(|_| std::env::var("HOME"))
+          .unwrap_or_else(|_| "C:\\Users\\User".to_string());
+        format!("{}\\.opsbox-agent\\logs", home.trim_end_matches(['/', '\\']))
+      }
+      #[cfg(not(windows))]
+      {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
+        format!("{}/.opsbox-agent/logs", home.trim_end_matches('/'))
+      }
+    }
+  )]
+  log_dir: String,
 
   /// 日志保留数量
-  #[arg(global = true, long = "log-retention", value_name = "N", help = "保留的日志文件数量", default_value = "7")]
+  #[arg(
+    global = true,
+    long = "log-retention",
+    value_name = "N",
+    help = "保留的日志文件数量",
+    default_value = "7"
+  )]
   log_retention: usize,
 
   /// 以 Windows 服务模式运行
@@ -233,6 +257,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   match opsbox_core::logging::init(log_config) {
     Ok(reload_handle) => {
       config.set_reload_handle(reload_handle);
+      // 如果环境变量 RUST_LOG 设置了日志级别，更新 current_log_level
+      if let Ok(rust_log) = std::env::var("RUST_LOG") {
+        // 解析 RUST_LOG 环境变量（可能是 "info"、"opsbox_agent=debug" 等格式）
+        let level = rust_log
+          .split(',')
+          .find_map(|s| {
+            let s = s.trim();
+            // 处理 "opsbox_agent=debug" 格式
+            if let Some((_, level)) = s.split_once('=') {
+              let level = level.trim().to_lowercase();
+              if matches!(level.as_str(), "error" | "warn" | "info" | "debug" | "trace") {
+                return Some(level);
+              }
+            }
+            // 处理纯级别字符串 "info"
+            let s_lower = s.to_lowercase();
+            if matches!(s_lower.as_str(), "error" | "warn" | "info" | "debug" | "trace") {
+              return Some(s_lower);
+            }
+            None
+          })
+          .unwrap_or_else(|| "info".to_string());
+        *config.current_log_level.lock().unwrap() = level;
+      }
       info!("日志系统初始化成功");
     }
     Err(e) => {
@@ -341,6 +389,7 @@ struct AgentConfig {
   log_dir: PathBuf,
   log_retention: usize,
   reload_handle: Option<Arc<ReloadHandle>>,
+  current_log_level: Arc<std::sync::Mutex<String>>,
 }
 
 impl Clone for AgentConfig {
@@ -357,23 +406,13 @@ impl Clone for AgentConfig {
       log_dir: self.log_dir.clone(),
       log_retention: self.log_retention,
       reload_handle: self.reload_handle.clone(),
+      current_log_level: self.current_log_level.clone(),
     }
   }
 }
 
 impl AgentConfig {
   fn from_args(args: Args) -> Self {
-    // 默认日志目录：~/.opsbox-agent/logs
-    let default_log_dir = {
-      #[cfg(windows)]
-      let home = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_else(|_| "C:\\Users\\User".to_string());
-      #[cfg(not(windows))]
-      let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
-      PathBuf::from(home).join(".opsbox-agent").join("logs")
-    };
-
     Self {
       agent_id: args.agent_id,
       agent_name: args.agent_name,
@@ -388,9 +427,10 @@ impl AgentConfig {
       enable_heartbeat: args.enable_heartbeat && !args.no_heartbeat,
       heartbeat_interval_secs: args.heartbeat_interval,
       worker_threads: args.worker_threads,
-      log_dir: args.log_dir.unwrap_or(default_log_dir),
+      log_dir: PathBuf::from(args.log_dir),
       log_retention: args.log_retention,
       reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
     }
   }
 
@@ -707,67 +747,60 @@ fn is_under_any_root(path: &StdPath, canon_roots: &[PathBuf]) -> bool {
 /// 日志配置响应
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct LogConfigResponse {
-    /// 日志级别
-    pub level: String,
-    /// 日志保留数量（天）
-    pub retention_count: usize,
-    /// 日志目录
-    pub log_dir: String,
+  /// 日志级别
+  pub level: String,
+  /// 日志保留数量（天）
+  pub retention_count: usize,
+  /// 日志目录
+  pub log_dir: String,
 }
 
 /// 更新日志级别请求
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct UpdateLogLevelRequest {
-    /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
-    pub level: String,
+  /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
+  pub level: String,
 }
 
 /// 更新保留数量请求
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct UpdateRetentionRequest {
-    /// 保留数量（天）
-    pub retention_count: usize,
+  /// 保留数量（天）
+  pub retention_count: usize,
 }
 
 /// 通用成功响应
 #[derive(Debug, serde::Serialize)]
 pub struct SuccessResponse {
-    pub message: String,
+  pub message: String,
 }
 
 /// 错误响应
 #[derive(Debug, serde::Serialize)]
 struct ErrorResponse {
-    error: String,
+  error: String,
 }
 
 /// API 错误类型
 #[derive(Debug)]
 pub enum ApiError {
-    InvalidLevel(String),
-    InvalidRetention(String),
-    ReloadFailed(String),
-    NotInitialized,
+  InvalidLevel(String),
+  InvalidRetention(String),
+  ReloadFailed(String),
+  NotInitialized,
 }
 
 impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        let (status, message) = match self {
-            ApiError::InvalidLevel(msg) => (StatusCode::BAD_REQUEST, format!("无效的日志级别: {}", msg)),
-            ApiError::InvalidRetention(msg) => {
-                (StatusCode::BAD_REQUEST, format!("无效的保留数量: {}", msg))
-            }
-            ApiError::ReloadFailed(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("重载失败: {}", msg))
-            }
-            ApiError::NotInitialized => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "日志系统未初始化".to_string(),
-            ),
-        };
+  fn into_response(self) -> Response {
+    let (status, message) = match self {
+      ApiError::InvalidLevel(msg) => (StatusCode::BAD_REQUEST, format!("无效的日志级别: {}", msg)),
+      ApiError::InvalidRetention(msg) => (StatusCode::BAD_REQUEST, format!("无效的保留数量: {}", msg)),
+      ApiError::ReloadFailed(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("重载失败: {}", msg)),
+      ApiError::NotInitialized => (StatusCode::INTERNAL_SERVER_ERROR, "日志系统未初始化".to_string()),
+    };
 
-        (status, Json(ErrorResponse { error: message })).into_response()
-    }
+    (status, Json(ErrorResponse { error: message })).into_response()
+  }
 }
 
 // ============================================================================
@@ -815,12 +848,7 @@ async fn handle_search(State(state): State<AppState>, Json(request): Json<AgentS
   let cancel_token_clone = cancel_token.clone();
 
   // 在后台执行搜索
-  tokio::spawn(execute_search(
-    state.config.clone(),
-    request,
-    tx,
-    cancel_token_clone,
-  ));
+  tokio::spawn(execute_search(state.config.clone(), request, tx, cancel_token_clone));
 
   // 创建 Drop guard 来触发取消
   struct CancelOnDrop(tokio_util::sync::CancellationToken);
@@ -861,61 +889,60 @@ async fn handle_cancel(State(_state): State<AppState>, Path(task_id): Path<Strin
 
 /// 获取日志配置
 async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigResponse>, ApiError> {
-    let response = LogConfigResponse {
-        level: "info".to_string(), // Agent 默认使用 INFO 级别
-        retention_count: state.config.log_retention,
-        log_dir: state.config.log_dir.to_string_lossy().to_string(),
-    };
+  let current_level = state.config.current_log_level.lock().unwrap().clone();
+  let response = LogConfigResponse {
+    level: current_level,
+    retention_count: state.config.log_retention,
+    log_dir: state.config.log_dir.to_string_lossy().to_string(),
+  };
 
-    Ok(Json(response))
+  Ok(Json(response))
 }
 
 /// 更新日志级别
 async fn update_log_level(
-    State(state): State<AppState>,
-    Json(req): Json<UpdateLogLevelRequest>,
+  State(state): State<AppState>,
+  Json(req): Json<UpdateLogLevelRequest>,
 ) -> Result<Json<SuccessResponse>, ApiError> {
-    use std::str::FromStr;
+  use std::str::FromStr;
 
-    // 验证日志级别
-    let level = LogLevel::from_str(&req.level).map_err(|e| ApiError::InvalidLevel(e.to_string()))?;
+  // 验证日志级别
+  let level = LogLevel::from_str(&req.level).map_err(|e| ApiError::InvalidLevel(e.to_string()))?;
 
-    // 动态重载日志级别
-    let reload_handle = state
-        .config
-        .get_reload_handle()
-        .ok_or(ApiError::NotInitialized)?;
+  // 动态重载日志级别
+  let reload_handle = state.config.get_reload_handle().ok_or(ApiError::NotInitialized)?;
 
-    reload_handle
-        .update_level(level)
-        .map_err(|e| ApiError::ReloadFailed(e.to_string()))?;
+  reload_handle
+    .update_level(level)
+    .map_err(|e| ApiError::ReloadFailed(e.to_string()))?;
 
-    info!("日志级别已更新为: {}", level);
+  // 更新保存的当前日志级别
+  *state.config.current_log_level.lock().unwrap() = req.level.clone();
 
-    Ok(Json(SuccessResponse {
-        message: format!("日志级别已更新为: {}", level),
-    }))
+  info!("日志级别已更新为: {}", level);
+
+  Ok(Json(SuccessResponse {
+    message: format!("日志级别已更新为: {}", level),
+  }))
 }
 
 /// 更新日志保留数量
 async fn update_log_retention(
-    State(_state): State<AppState>,
-    Json(req): Json<UpdateRetentionRequest>,
+  State(_state): State<AppState>,
+  Json(req): Json<UpdateRetentionRequest>,
 ) -> Result<Json<SuccessResponse>, ApiError> {
-    // 验证保留数量
-    if req.retention_count == 0 || req.retention_count > 365 {
-        return Err(ApiError::InvalidRetention(
-            "保留数量必须在 1-365 之间".to_string(),
-        ));
-    }
+  // 验证保留数量
+  if req.retention_count == 0 || req.retention_count > 365 {
+    return Err(ApiError::InvalidRetention("保留数量必须在 1-365 之间".to_string()));
+  }
 
-    // 注意：Agent 不持久化配置到数据库，仅在内存中更新
-    // 重启后会使用命令行参数指定的值
-    info!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count);
+  // 注意：Agent 不持久化配置到数据库，仅在内存中更新
+  // 重启后会使用命令行参数指定的值
+  info!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count);
 
-    Ok(Json(SuccessResponse {
-        message: format!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count),
-    }))
+  Ok(Json(SuccessResponse {
+    message: format!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count),
+  }))
 }
 
 // ============================================================================
@@ -1266,15 +1293,6 @@ fn default_pid_file() -> PathBuf {
   dir.join("agent.pid")
 }
 
-/// 默认日志文件路径
-#[cfg(unix)]
-fn default_log_file() -> PathBuf {
-  let home = get_user_home();
-  let dir = PathBuf::from(home).join(".opsbox-agent");
-  let _ = fs::create_dir_all(&dir);
-  dir.join("agent.log")
-}
-
 /// 确保父目录存在
 #[cfg(unix)]
 fn ensure_parent_dir(path: &std::path::Path) {
@@ -1375,11 +1393,10 @@ fn start_daemon(pid_path: PathBuf) -> io::Result<()> {
   let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
   ensure_parent_dir(&pid_path);
 
-  // 准备日志文件
-  let log_path = default_log_file();
-  let _ = fs::create_dir_all(log_path.parent().unwrap_or(std::path::Path::new(".")));
-  let stdout = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
-  let stderr = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
+  // 守护进程输出重定向：不再写入 ~/.opsbox-agent/agent.log，直接丢弃
+  let dev_null = PathBuf::from("/dev/null");
+  let stdout = fs::OpenOptions::new().create(true).append(true).open(&dev_null)?;
+  let stderr = fs::OpenOptions::new().create(true).append(true).open(&dev_null)?;
 
   let daemon = Daemonize::new()
     .pid_file(pid_path.clone())
@@ -1477,7 +1494,7 @@ mod tests {
       no_heartbeat: false,
       heartbeat_interval: 60,
       worker_threads: Some(4),
-      log_dir: Some(PathBuf::from("/custom/logs")),
+      log_dir: "/custom/logs".to_string(),
       log_retention: 14,
       #[cfg(windows)]
       service_mode: false,
@@ -1522,6 +1539,7 @@ mod tests {
       log_dir: PathBuf::from("/tmp/logs"),
       log_retention: 7,
       reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
     };
 
     // 测试不存在的目录
@@ -1551,6 +1569,7 @@ mod tests {
       log_dir: PathBuf::from("/tmp/logs"),
       log_retention: 7,
       reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
     };
 
     // 测试不存在的文件
@@ -1579,6 +1598,7 @@ mod tests {
       log_dir: PathBuf::from("/tmp/logs"),
       log_retention: 7,
       reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
     };
 
     // 测试不存在的 tar.gz 文件
@@ -1601,6 +1621,7 @@ mod tests {
       log_dir: PathBuf::from("/tmp/logs"),
       log_retention: 7,
       reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
     };
 
     // 测试 Target::Dir (替代 All)

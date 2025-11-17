@@ -27,15 +27,6 @@ pub fn default_pid_file() -> PathBuf {
   dir.join("opsbox.pid")
 }
 
-/// 默认日志文件路径
-#[cfg(unix)]
-pub fn default_log_file() -> PathBuf {
-  let home = get_user_home();
-  let dir = PathBuf::from(home).join(".opsbox");
-  let _ = fs::create_dir_all(&dir);
-  dir.join("opsbox.log")
-}
-
 /// 确保父目录存在
 #[cfg(unix)]
 pub fn ensure_parent_dir(path: &Path) {
@@ -136,10 +127,10 @@ pub fn start_daemon(pid_path: PathBuf) -> io::Result<()> {
   let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
   ensure_parent_dir(&pid_path);
 
-  // 准备日志文件（目录已在 default_log_file() 中创建）
-  let log_path = default_log_file();
-  let stdout = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
-  let stderr = fs::OpenOptions::new().create(true).append(true).open(&log_path)?;
+  // 守护进程输出重定向：不再写入 ~/.opsbox/opsbox.log，直接丢弃
+  let dev_null = PathBuf::from("/dev/null");
+  let stdout = fs::OpenOptions::new().create(true).append(true).open(&dev_null)?;
+  let stderr = fs::OpenOptions::new().create(true).append(true).open(&dev_null)?;
 
   let daemon = Daemonize::new()
     .pid_file(pid_path.clone())

@@ -37,6 +37,7 @@ problemdetails = { version = "0.6", features = ["axum"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # HTTP types
 http = "1.0"
