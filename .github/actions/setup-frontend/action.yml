@@ -17,6 +17,14 @@ runs:
       with:
         node-version: ${{ env.NODE_VERSION }}
 
+    - name: Verify Node.js installation
+      shell: bash
+      run: |
+        echo "Verifying Node.js installation..."
+        node --version || (echo "ERROR: node command not found" && exit 1)
+        npm --version || (echo "ERROR: npm command not found" && exit 1)
+        echo "Node.js and npm are available"
+
     - name: Setup pnpm
       shell: bash
       run: |
@@ -27,10 +35,12 @@ runs:
           corepack prepare pnpm@latest --activate
         else
           echo "corepack not found, installing pnpm via npm"
+          # 确保 npm 在 PATH 中
+          export PATH="$PATH:$(npm config get prefix)/bin"
           npm install -g pnpm@latest
         fi
         # 验证 pnpm 安装成功
-        pnpm --version
+        pnpm --version || (echo "ERROR: pnpm installation failed" && exit 1)
 
     - name: Restore pnpm cache
       if: ${{ runner.environment != 'self-hosted' }}
