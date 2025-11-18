@@ -15,6 +15,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Verify setup-node action
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+        continue-on-error: true
+
+      - name: Check Node.js after setup-node
+        run: |
+          echo "Checking Node.js installation after setup-node..."
+          if command -v node &> /dev/null; then
+            echo "✓ Node.js found: $(which node)"
+            node --version
+            npm --version
+          else
+            echo "⚠ Node.js not found in PATH after setup-node"
+            echo "This is expected if setup-node failed or on self-hosted runners"
+            echo "The composite action will handle fallback to system Node.js"
+          fi
+
       - name: Setup Frontend
         uses: ./.github/actions/setup-frontend
 
