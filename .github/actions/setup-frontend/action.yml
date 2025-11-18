@@ -17,11 +17,20 @@ runs:
       with:
         node-version: ${{ env.NODE_VERSION }}
 
-    - name: Enable pnpm via corepack
+    - name: Setup pnpm
       shell: bash
       run: |
-        corepack enable
-        corepack prepare pnpm@latest --activate
+        # 检查 corepack 是否可用（Node.js 16.9+ 自带）
+        if command -v corepack &> /dev/null; then
+          echo "Using corepack to enable pnpm"
+          corepack enable
+          corepack prepare pnpm@latest --activate
+        else
+          echo "corepack not found, installing pnpm via npm"
+          npm install -g pnpm@latest
+        fi
+        # 验证 pnpm 安装成功
+        pnpm --version
 
     - name: Restore pnpm cache
       if: ${{ runner.environment != 'self-hosted' }}
