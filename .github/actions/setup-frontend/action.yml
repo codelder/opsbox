@@ -13,43 +13,76 @@ runs:
   using: 'composite'
   steps:
     - name: Setup Node.js
+      id: setup-node
       uses: actions/setup-node@v5
+      continue-on-error: true
       with:
         node-version: ${{ env.NODE_VERSION }}
 
-    - name: Verify Node.js installation
+    - name: Verify and setup Node.js
       shell: bash
       run: |
-        echo "Verifying Node.js installation..."
+        echo "Checking Node.js installation..."
+        
         # 在 composite action 中，actions/setup-node 通过 $GITHUB_PATH 设置 PATH
         # 需要显式读取 $GITHUB_PATH 并添加到 PATH
         if [ -f "$GITHUB_PATH" ]; then
+          echo "Reading GITHUB_PATH file..."
           while IFS= read -r path_line; do
-            export PATH="$path_line:$PATH"
+            if [ -n "$path_line" ]; then
+              echo "Adding to PATH: $path_line"
+              export PATH="$path_line:$PATH"
+            fi
           done < "$GITHUB_PATH"
+        else
+          echo "WARNING: GITHUB_PATH file does not exist"
         fi
         
         # 尝试查找 node 和 npm
         NODE_PATH=$(which node 2>/dev/null || echo "")
         NPM_PATH=$(which npm 2>/dev/null || echo "")
         
+        # 如果 actions/setup-node 没有成功，尝试使用系统安装的 Node.js
         if [ -z "$NODE_PATH" ]; then
-          echo "ERROR: node command not found in PATH"
+          echo "WARNING: actions/setup-node@v5 did not set up Node.js"
+          echo "Checking for system-installed Node.js..."
+          
+          # 检查常见的 Node.js 安装位置
+          for node_dir in "$HOME/.local/bin" "/usr/local/bin" "/usr/bin" "/opt/nodejs/bin"; do
+            if [ -f "$node_dir/node" ] && [ -x "$node_dir/node" ]; then
+              echo "Found Node.js at: $node_dir/node"
+              export PATH="$node_dir:$PATH"
+              NODE_PATH=$(which node 2>/dev/null || echo "")
+              if [ -n "$NODE_PATH" ]; then
+                break
+              fi
+            fi
+          done
+        fi
+        
+        # 最终检查
+        if [ -z "$NODE_PATH" ]; then
+          echo "ERROR: node command not found"
           echo "Current PATH: $PATH"
           echo "GITHUB_PATH file exists: $([ -f "$GITHUB_PATH" ] && echo 'yes' || echo 'no')"
           if [ -f "$GITHUB_PATH" ]; then
             echo "GITHUB_PATH contents:"
-            cat "$GITHUB_PATH"
+            cat "$GITHUB_PATH" || echo "(empty or unreadable)"
           fi
+          echo ""
+          echo "Please ensure Node.js is installed on the self-hosted runner, or"
+          echo "check network connectivity for actions/setup-node@v5 to download Node.js."
           exit 1
         fi
+        
         if [ -z "$NPM_PATH" ]; then
-          echo "ERROR: npm command not found in PATH"
+          echo "ERROR: npm command not found"
           echo "Current PATH: $PATH"
           exit 1
         fi
-        echo "Node.js found at: $NODE_PATH"
-        echo "npm found at: $NPM_PATH"
+        
+        echo "✓ Node.js found at: $NODE_PATH"
+        echo "✓ npm found at: $NPM_PATH"
         node --version
         npm --version
         echo "Node.js and npm are available"
@@ -60,8 +93,22 @@ runs:
         # 确保 PATH 包含 Node.js（composite action 需要显式读取）
         if [ -f "$GITHUB_PATH" ]; then
           while IFS= read -r path_line; do
-            export PATH="$path_line:$PATH"
+            if [ -n "$path_line" ]; then
+              export PATH="$path_line:$PATH"
+            fi
           done < "$GITHUB_PATH"
+        fi
+        
+        # 如果 node 仍然不可用，尝试系统安装的位置
+        if ! command -v node &> /dev/null; then
+          for node_dir in "$HOME/.local/bin" "/usr/local/bin" "/usr/bin" "/opt/nodejs/bin"; do
+            if [ -f "$node_dir/node" ] && [ -x "$node_dir/node" ]; then
+              export PATH="$node_dir:$PATH"
+              if command -v node &> /dev/null; then
+                break
+              fi
+            fi
+          done
         fi
         
         # 检查 corepack 是否可用（Node.js 16.9+ 自带）
