@@ -3,9 +3,9 @@ use std::{io, path::PathBuf, sync::Arc, time::Duration};
 use async_compression::tokio::bufread::GzipDecoder;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
-use log::{debug, warn};
 use tokio::io::{AsyncRead, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use tracing::{debug, info, warn};
 
 // 统一读取并发度：使用 ENTRY_CONCURRENCY（范围 1-64，默认 8）
 fn entry_concurrency() -> usize {
@@ -137,24 +137,30 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    match self.entries.next().await {
-      Some(Ok(entry)) => {
-        let raw = entry
-          .path()
-          .ok()
-          .map(|p| p.to_string_lossy().to_string())
-          .unwrap_or_else(|| "<unknown>".into());
-        let path = normalize_archive_entry_path(&raw);
-        let reader = entry.compat(); // 转为 tokio AsyncRead
-        let meta = EntryMeta {
-          path,
-          size: None,
-          is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
-        };
-        Ok(Some((meta, Box::new(reader))))
+    loop {
+      match self.entries.next().await {
+        Some(Ok(entry)) => {
+          let raw = entry
+            .path()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".into());
+          let path = normalize_archive_entry_path(&raw);
+          let reader = entry.compat(); // 转为 tokio AsyncRead
+          let meta = EntryMeta {
+            path,
+            size: None,
+            is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
+          };
+          return Ok(Some((meta, Box::new(reader))));
+        }
+        Some(Err(e)) => {
+          // 记录错误但继续处理下一个条目（使用debug级别避免日志泛滥）
+          tracing::debug!("跳过损坏的 tar.gz 条目: {}", e);
+          continue;
+        }
+        None => return Ok(None),
       }
-      Some(Err(e)) => Err(e),
-      None => Ok(None),
     }
   }
 }
@@ -347,7 +353,7 @@ impl EntryStreamFactory {
           .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
           .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
         if &profile_row.bucket != bucket {
-          log::warn!(
+          tracing::warn!(
             "S3 配置中的桶与脚本提供不一致：db='{}' script='{}'，以脚本为准",
             profile_row.bucket,
             bucket
@@ -446,7 +452,23 @@ pub async fn build_local_entry_stream(
       }
       Target::Archive { path } => {
         // Archive 类型：处理归档文件
-        let archive_path = PathBuf::from(root_or_file).join(path);
+        // 如果 root_or_file 本身已经是归档文件（通过扩展名判断），直接使用它
+        // 否则拼接 path（适用于 root_or_file 是目录的情况）
+        let archive_path = {
+          let root_path = PathBuf::from(root_or_file);
+          let root_lower = root_or_file.to_lowercase();
+          if root_lower.ends_with(".tar")
+            || root_lower.ends_with(".tar.gz")
+            || root_lower.ends_with(".tgz")
+            || root_lower.ends_with(".gz")
+          {
+            // root_or_file 本身就是归档文件，直接使用
+            root_path
+          } else {
+            // root_or_file 是目录，需要拼接 path
+            root_path.join(path)
+          }
+        };
         let file = tokio::fs::File::open(&archive_path)
           .await
           .map_err(|e| format!("无法打开归档文件 {}: {}", archive_path.display(), e))?;
@@ -551,15 +573,22 @@ fn sniff_archive_kind(head: &[u8]) -> ArchiveKind {
   if head.len() >= 4 {
     let sig = &head[..4];
     if sig == [0x50, 0x4B, 0x03, 0x04] || sig == [0x50, 0x4B, 0x05, 0x06] || sig == [0x50, 0x4B, 0x07, 0x08] {
+      info!("检测到归档类型: Zip");
       return ArchiveKind::Zip;
     }
   }
-  if head.len() >= 2 && head[0] == 0x1F && head[1] == 0x8B {
-    return ArchiveKind::Gzip;
-  }
+  // 优先检查 tar（tar 头在固定位置 257-262，更可靠）
+  // 这样可以避免纯 tar 文件被误判为 gzip（如果前2字节恰好是 0x1F 0x8B）
   if head.len() >= 512 && &head[257..257 + 5] == b"ustar" {
+    info!("检测到归档类型: Tar");
     return ArchiveKind::Tar;
   }
+  // 然后检查 gzip（前2字节）
+  if head.len() >= 2 && head[0] == 0x1F && head[1] == 0x8B {
+    info!("检测到归档类型: Gzip");
+    return ArchiveKind::Gzip;
+  }
+  info!("检测到归档类型: Unknown");
   ArchiveKind::Unknown
 }
 
@@ -633,24 +662,30 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    match self.entries.next().await {
-      Some(Ok(entry)) => {
-        let raw = entry
-          .path()
-          .ok()
-          .map(|p| p.to_string_lossy().to_string())
-          .unwrap_or_else(|| "<unknown>".into());
-        let path = normalize_archive_entry_path(&raw);
-        let reader = entry.compat();
-        let meta = EntryMeta {
-          path,
-          size: None,
-          is_compressed: true,
-        };
-        Ok(Some((meta, Box::new(reader))))
+    loop {
+      match self.entries.next().await {
+        Some(Ok(entry)) => {
+          let raw = entry
+            .path()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "<unknown>".into());
+          let path = normalize_archive_entry_path(&raw);
+          let reader = entry.compat();
+          let meta = EntryMeta {
+            path,
+            size: None,
+            is_compressed: true,
+          };
+          return Ok(Some((meta, Box::new(reader))));
+        }
+        Some(Err(e)) => {
+          // 记录错误但继续处理下一个条目
+          tracing::warn!("跳过损坏的 tar 条目: {}", e);
+          continue;
+        }
+        None => return Ok(None),
       }
-      Some(Err(e)) => Err(e),
-      None => Ok(None),
     }
   }
 }
@@ -767,9 +802,7 @@ mod tests {
       .await
       .expect("Failed to create test pool");
 
-    crate::init_schema(&pool)
-      .await
-      .expect("Failed to initialize schema");
+    crate::init_schema(&pool).await.expect("Failed to initialize schema");
 
     pool
   }
@@ -808,20 +841,17 @@ mod tests {
       .await
       .expect("创建 nested 失败");
 
-    tokio::fs::write(
-      root.join("subdir/nested/file4.log"),
-      "line1\ndebug message\nline3\n",
-    )
-    .await
-    .expect("写入 file4.log 失败");
+    tokio::fs::write(root.join("subdir/nested/file4.log"), "line1\ndebug message\nline3\n")
+      .await
+      .expect("写入 file4.log 失败");
 
     temp_dir
   }
 
   /// 创建测试用的 tar.gz 归档文件（使用同步 I/O 以确保正确性）
   fn create_test_tar_gz(dir: &Path) -> PathBuf {
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
     use std::io::Write;
 
     let tar_gz_path = dir.join("test.tar.gz");
@@ -850,7 +880,7 @@ mod tests {
 
     // 完成 tar 构建
     builder.finish().expect("完成 tar 构建失败");
-    
+
     // 完成 gzip 编码
     let mut gz = builder.into_inner().expect("获取 gzip 编码器失败");
     gz.flush().expect("刷新 gzip 编码器失败");
@@ -879,14 +909,8 @@ mod tests {
 
     // 非递归模式：只应该看到根目录下的文件
     assert_eq!(entries.len(), 2, "应该有 2 个文件");
-    assert!(
-      entries.contains(&"file1.log".to_string()),
-      "应该包含 file1.log"
-    );
-    assert!(
-      entries.contains(&"file2.txt".to_string()),
-      "应该包含 file2.txt"
-    );
+    assert!(entries.contains(&"file1.log".to_string()), "应该包含 file1.log");
+    assert!(entries.contains(&"file2.txt".to_string()), "应该包含 file2.txt");
     assert!(
       !entries.iter().any(|p| p.contains("subdir")),
       "不应该包含子目录中的文件"
@@ -909,24 +933,12 @@ mod tests {
 
     // 递归模式：应该看到所有文件
     assert_eq!(entries.len(), 4, "应该有 4 个文件");
-    assert!(
-      entries.contains(&"file1.log".to_string()),
-      "应该包含 file1.log"
-    );
-    assert!(
-      entries.contains(&"file2.txt".to_string()),
-      "应该包含 file2.txt"
-    );
+    assert!(entries.contains(&"file1.log".to_string()), "应该包含 file1.log");
+    assert!(entries.contains(&"file2.txt".to_string()), "应该包含 file2.txt");
 
     // 检查子目录中的文件（路径格式可能是 "subdir/file3.log" 或 "subdir\\file3.log"）
-    assert!(
-      entries.iter().any(|p| p.contains("file3.log")),
-      "应该包含 file3.log"
-    );
-    assert!(
-      entries.iter().any(|p| p.contains("file4.log")),
-      "应该包含 file4.log"
-    );
+    assert!(entries.iter().any(|p| p.contains("file3.log")), "应该包含 file3.log");
+    assert!(entries.iter().any(|p| p.contains("file4.log")), "应该包含 file4.log");
   }
 
   // ============================================================================
@@ -951,14 +963,8 @@ mod tests {
     }
 
     assert_eq!(entries.len(), 2, "应该有 2 个文件");
-    assert!(
-      entries.contains(&"file1.log".to_string()),
-      "应该包含 file1.log"
-    );
-    assert!(
-      entries.contains(&"file2.txt".to_string()),
-      "应该包含 file2.txt"
-    );
+    assert!(entries.contains(&"file1.log".to_string()), "应该包含 file1.log");
+    assert!(entries.contains(&"file2.txt".to_string()), "应该包含 file2.txt");
   }
 
   #[tokio::test]
@@ -978,19 +984,15 @@ mod tests {
     let temp_dir = TempDir::new().expect("创建临时目录失败");
     let tar_gz_path = create_test_tar_gz(temp_dir.path());
 
-    let file = tokio::fs::File::open(&tar_gz_path)
-      .await
-      .expect("打开 tar.gz 文件失败");
+    let file = tokio::fs::File::open(&tar_gz_path).await.expect("打开 tar.gz 文件失败");
 
-    let mut stream = TarGzEntryStream::new(file)
-      .await
-      .expect("创建 TarGzEntryStream 失败");
+    let mut stream = TarGzEntryStream::new(file).await.expect("创建 TarGzEntryStream 失败");
 
     let mut entries = Vec::new();
     while let Some((meta, mut reader)) = stream.next_entry().await.expect("读取条目失败") {
       entries.push(meta.path.clone());
       assert!(meta.is_compressed, "tar.gz 条目应该标记为 compressed");
-      
+
       // 必须读取内容才能移动到下一个条目（tar 格式要求）
       let mut content = Vec::new();
       tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut content)
@@ -999,14 +1001,8 @@ mod tests {
     }
 
     assert_eq!(entries.len(), 2, "应该有 2 个归档条目");
-    assert!(
-      entries.contains(&"archived1.log".to_string()),
-      "应该包含 archived1.log"
-    );
-    assert!(
-      entries.contains(&"archived2.log".to_string()),
-      "应该包含 archived2.log"
-    );
+    assert!(entries.contains(&"archived1.log".to_string()), "应该包含 archived1.log");
+    assert!(entries.contains(&"archived2.log".to_string()), "应该包含 archived2.log");
   }
 
   #[tokio::test]
@@ -1014,13 +1010,9 @@ mod tests {
     let temp_dir = TempDir::new().expect("创建临时目录失败");
     let tar_gz_path = create_test_tar_gz(temp_dir.path());
 
-    let file = tokio::fs::File::open(&tar_gz_path)
-      .await
-      .expect("打开 tar.gz 文件失败");
+    let file = tokio::fs::File::open(&tar_gz_path).await.expect("打开 tar.gz 文件失败");
 
-    let mut stream = TarGzEntryStream::new(file)
-      .await
-      .expect("创建 TarGzEntryStream 失败");
+    let mut stream = TarGzEntryStream::new(file).await.expect("创建 TarGzEntryStream 失败");
 
     // 读取第一个条目的内容
     if let Some((meta, mut reader)) = stream.next_entry().await.expect("读取条目失败") {
@@ -1031,10 +1023,7 @@ mod tests {
         .await
         .expect("读取内容失败");
 
-      assert!(
-        content.contains("error in archive"),
-        "内容应该包含 'error in archive'"
-      );
+      assert!(content.contains("error in archive"), "内容应该包含 'error in archive'");
     } else {
       panic!("应该有至少一个条目");
     }
@@ -1050,9 +1039,7 @@ mod tests {
     let root = temp_dir.path().to_string_lossy().to_string();
 
     // 测试自动检测目录（无 target 提示）
-    let mut stream = build_local_entry_stream(&root, None)
-      .await
-      .expect("构建条目流失败");
+    let mut stream = build_local_entry_stream(&root, None).await.expect("构建条目流失败");
 
     let mut count = 0;
     while let Some((_meta, _reader)) = stream.next_entry().await.expect("读取条目失败") {
@@ -1101,9 +1088,7 @@ mod tests {
       root.join("file2.txt").to_string_lossy().to_string(),
     ];
 
-    let target = Target::Files {
-      paths: files.clone(),
-    };
+    let target = Target::Files { paths: files.clone() };
 
     let mut stream = build_local_entry_stream(root.to_str().unwrap(), Some(target))
       .await
@@ -1192,10 +1177,7 @@ mod tests {
       display_name: None,
     };
 
-    let mut stream = factory
-      .create_stream(source)
-      .await
-      .expect("创建条目流失败");
+    let mut stream = factory.create_stream(source).await.expect("创建条目流失败");
 
     let mut count = 0;
     while let Some((_meta, _reader)) = stream.next_entry().await.expect("读取条目失败") {
@@ -1224,10 +1206,7 @@ mod tests {
       display_name: None,
     };
 
-    let mut stream = factory
-      .create_stream(source)
-      .await
-      .expect("创建条目流失败");
+    let mut stream = factory.create_stream(source).await.expect("创建条目流失败");
 
     let mut entries = Vec::new();
     while let Some((meta, _reader)) = stream.next_entry().await.expect("读取条目失败") {
@@ -1258,10 +1237,7 @@ mod tests {
       display_name: None,
     };
 
-    let mut stream = factory
-      .create_stream(source)
-      .await
-      .expect("创建条目流失败");
+    let mut stream = factory.create_stream(source).await.expect("创建条目流失败");
 
     let mut entries = Vec::new();
     while let Some((meta, mut reader)) = stream.next_entry().await.expect("读取条目失败") {
@@ -1290,9 +1266,7 @@ mod tests {
     let processor = Arc::new(crate::service::search::SearchProcessor::new(Arc::new(query), 1));
 
     // 创建条目流
-    let mut stream = FsEntryStream::new(root, true)
-      .await
-      .expect("创建 FsEntryStream 失败");
+    let mut stream = FsEntryStream::new(root, true).await.expect("创建 FsEntryStream 失败");
 
     // 创建结果通道
     let (tx, mut rx) = tokio::sync::mpsc::channel(128);
@@ -1334,9 +1308,7 @@ mod tests {
     let processor = Arc::new(crate::service::search::SearchProcessor::new(Arc::new(query), 0));
 
     // 创建条目流
-    let mut stream = FsEntryStream::new(root, true)
-      .await
-      .expect("创建 FsEntryStream 失败");
+    let mut stream = FsEntryStream::new(root, true).await.expect("创建 FsEntryStream 失败");
 
     // 创建结果通道
     let (tx, mut rx) = tokio::sync::mpsc::channel(128);
@@ -1433,14 +1405,8 @@ mod tests {
     }
 
     assert_eq!(entries.len(), 2, "应该有 2 个归档条目");
-    assert!(
-      entries.contains(&"archived1.log".to_string()),
-      "应该包含 archived1.log"
-    );
-    assert!(
-      entries.contains(&"archived2.log".to_string()),
-      "应该包含 archived2.log"
-    );
+    assert!(entries.contains(&"archived1.log".to_string()), "应该包含 archived1.log");
+    assert!(entries.contains(&"archived2.log".to_string()), "应该包含 archived2.log");
   }
 
   #[tokio::test]
@@ -1538,8 +1504,8 @@ mod tests {
   #[tokio::test]
   async fn test_s3_single_file_archive() {
     // 创建只包含一个文件的 tar.gz 归档
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
 
     let mut gz_data = Vec::new();
     {
@@ -1574,7 +1540,7 @@ mod tests {
     while let Some((meta, mut reader)) = stream.next_entry().await.expect("读取条目失败") {
       entry_count += 1;
       assert_eq!(meta.path, "single.log", "文件名应该是 single.log");
-      
+
       // 读取内容
       let mut content = String::new();
       tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut content)
@@ -1588,8 +1554,8 @@ mod tests {
   #[tokio::test]
   async fn test_s3_large_archive_entry() {
     // 创建包含大文件的 tar.gz 归档
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
 
     let mut gz_data = Vec::new();
     {

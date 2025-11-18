@@ -79,11 +79,42 @@ pub struct AppConfig {
   #[arg(global = true, short = 'v', action = clap::ArgAction::Count, help = "增加日志详细程度（-v/-vv/-vvv）")]
   pub verbose: u8,
 
+  #[arg(
+    global = true,
+    long = "log-dir",
+    value_name = "DIR",
+    default_value_t = {
+      #[cfg(windows)]
+      {
+        let home = std::env::var("USERPROFILE")
+          .or_else(|_| std::env::var("HOME"))
+          .unwrap_or_else(|_| "C:\\Users\\User".to_string());
+        format!("{}\\.opsbox\\logs", home.trim_end_matches(['\\', '/']))
+      }
+      #[cfg(not(windows))]
+      {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
+        format!("{}/.opsbox/logs", home.trim_end_matches('/'))
+      }
+    },
+    help = "日志文件目录"
+  )]
+  pub log_dir: String,
+
+  #[arg(
+    global = true,
+    long = "log-retention",
+    value_name = "N",
+    help = "保留的日志文件数量",
+    default_value = "7"
+  )]
+  pub log_retention: usize,
+
   // 数据库配置
   #[arg(
     long = "database-url",
     value_name = "URL",
-    help = "数据库路径（覆盖 OPSBOX_DATABASE_URL）"
+    help = "数据库路径（覆盖 OPSBOX_DATABASE_URL，默认：$HOME/.opsbox/opsbox.db）"
   )]
   pub database_url: Option<String>,
 
@@ -91,21 +122,21 @@ pub struct AppConfig {
   #[arg(
     long = "io-max-concurrency",
     value_name = "N",
-    help = "IO 最大并发数（控制 S3/Local/Agent 等所有数据源的并发访问）"
+    help = "IO 最大并发数（控制 S3/Local/Agent 等所有数据源的并发访问，默认 12）"
   )]
   pub io_max_concurrency: Option<usize>,
 
   #[arg(
     long = "io-timeout-sec",
     value_name = "SECS",
-    help = "IO 操作超时秒数（适用于所有远程数据源：S3/Agent 等）"
+    help = "IO 操作超时秒数（适用于所有远程数据源：S3/Agent 等，默认 60 秒）"
   )]
   pub io_timeout_sec: Option<u64>,
 
   #[arg(
     long = "io-max-retries",
     value_name = "N",
-    help = "IO 操作最大重试次数（指数退避，适用于所有远程数据源）"
+    help = "IO 操作最大重试次数（指数退避，适用于所有远程数据源，默认 5 次）"
   )]
   pub io_max_retries: Option<u32>,
 
@@ -217,5 +248,15 @@ impl AppConfig {
 
   fn env_u32(key: &str) -> Option<u32> {
     std::env::var(key).ok().and_then(|s| s.parse().ok())
+  }
+
+  /// 获取日志目录
+  pub fn get_log_dir(&self) -> PathBuf {
+    PathBuf::from(self.log_dir.trim())
+  }
+
+  /// 获取日志保留数量
+  pub fn get_log_retention(&self) -> usize {
+    self.log_retention
   }
 }

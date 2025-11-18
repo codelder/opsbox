@@ -53,9 +53,15 @@ impl From<service::ServiceError> for opsbox_core::AppError {
         // 将 Repository 错误转换为 AppError
         match repo_err {
           repository::RepositoryError::NotFound(msg) => opsbox_core::AppError::NotFound(msg),
-          repository::RepositoryError::QueryFailed(msg) => opsbox_core::AppError::Internal(format!("查询失败: {}", msg)),
-          repository::RepositoryError::StorageError(msg) => opsbox_core::AppError::ExternalService(format!("对象存储错误: {}", msg)),
-          repository::RepositoryError::CacheFailed(msg) => opsbox_core::AppError::Internal(format!("缓存操作失败: {}", msg)),
+          repository::RepositoryError::QueryFailed(msg) => {
+            opsbox_core::AppError::Internal(format!("查询失败: {}", msg))
+          }
+          repository::RepositoryError::StorageError(msg) => {
+            opsbox_core::AppError::ExternalService(format!("对象存储错误: {}", msg))
+          }
+          repository::RepositoryError::CacheFailed(msg) => {
+            opsbox_core::AppError::Internal(format!("缓存操作失败: {}", msg))
+          }
           repository::RepositoryError::Database(msg) => opsbox_core::AppError::Internal(format!("数据库错误: {}", msg)),
         }
       }
@@ -73,21 +79,15 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
   // 初始化 S3 配置表
   repository::s3::init_schema(db_pool)
     .await
-    .map_err(|e| service::ServiceError::ProcessingError(
-      format!("初始化 S3 配置表失败: {}", e)
-    ))?;
+    .map_err(|e| service::ServiceError::ProcessingError(format!("初始化 S3 配置表失败: {}", e)))?;
   // 初始化 LLM 配置表
   repository::llm::init_schema(db_pool)
     .await
-    .map_err(|e| service::ServiceError::ProcessingError(
-      format!("初始化 LLM 配置表失败: {}", e)
-    ))?;
+    .map_err(|e| service::ServiceError::ProcessingError(format!("初始化 LLM 配置表失败: {}", e)))?;
   // 初始化 Planner 脚本表
   repository::planners::init_schema(db_pool)
     .await
-    .map_err(|e| service::ServiceError::ProcessingError(
-      format!("初始化 Planner 脚本表失败: {}", e)
-    ))?;
+    .map_err(|e| service::ServiceError::ProcessingError(format!("初始化 Planner 脚本表失败: {}", e)))?;
   Ok(())
 }
 
@@ -132,7 +132,7 @@ impl opsbox_core::Module for LogSeekModule {
       io_max_retries,
     };
 
-    log::debug!("LogSeek 模块配置: {:?}", tuning);
+    tracing::debug!("LogSeek 模块配置: {:?}", tuning);
     utils::tuning::set(tuning);
   }
 

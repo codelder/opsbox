@@ -5,7 +5,6 @@ use aws_sdk_s3::{
   Client as S3Client,
   config::{Credentials, Region},
 };
-use log::{debug, error, info, warn};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::HashMap;
@@ -13,6 +12,7 @@ use std::sync::Mutex;
 use thiserror::Error;
 use tokio::io::AsyncRead;
 use tokio::time;
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Error)]
 pub enum S3Error {
@@ -187,7 +187,7 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
 
       match time::timeout(timeout, fut).await {
         Ok(Ok(stream)) => {
-          info!("S3对象打开成功: bucket={}, key={}", self.bucket, self.key);
+          debug!("S3对象打开成功: bucket={}, key={}", self.bucket, self.key);
           return Ok(Box::new(stream));
         }
         Ok(Err(e)) => {

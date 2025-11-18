@@ -94,13 +94,13 @@ impl IntoResponse for AppError {
     // 记录错误日志
     match status {
       StatusCode::INTERNAL_SERVER_ERROR | StatusCode::BAD_GATEWAY => {
-        log::error!("[{}] {}", error_type, error_msg);
+        tracing::error!("[{}] {}", error_type, error_msg);
       }
       StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND => {
-        log::warn!("[{}] {}", error_type, error_msg);
+        tracing::warn!("[{}] {}", error_type, error_msg);
       }
       _ => {
-        log::info!("[{}] {}", error_type, error_msg);
+        tracing::info!("[{}] {}", error_type, error_msg);
       }
     }
 

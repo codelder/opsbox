@@ -14,6 +14,7 @@ extern crate agent_manager;
 // 模块声明
 mod config;
 mod daemon;
+mod log_routes;
 mod logging;
 mod network;
 mod server;
@@ -74,20 +75,24 @@ fn main() {
   handle_daemon_mode(&config);
 
   // 初始化日志系统
-  logging::init(&config);
+  let reload_handle = logging::init(&config).expect("日志系统初始化失败");
+
+  // 将 ReloadHandle 和日志目录存储到全局状态（用于 API 动态修改日志级别）
+  server::set_log_reload_handle(reload_handle);
+  server::set_log_dir(config.get_log_dir());
 
   // 初始化网络环境
   network::init_network_env();
 
-  log::info!("OpsBox 启动中...");
-  log::debug!("配置: {:?}", config);
+  tracing::info!("OpsBox 启动中...");
+  tracing::debug!("配置: {:?}", config);
 
   // 获取监听地址
   let addr = config.get_addr().expect("无效的监听地址");
 
   // 初始化数据库
   let db_url = config.get_database_url();
-  log::info!("数据库路径: {}", db_url);
+  tracing::info!("数据库路径: {}", db_url);
 
   // 设置模块配置环境变量（模块将从环境变量读取配置）
   setup_module_env_vars(&config);
@@ -110,28 +115,33 @@ pub(crate) async fn async_main(addr: std::net::SocketAddr, db_url: String) {
     .await
     .expect("数据库连接池初始化失败");
 
-  log::info!("数据库连接池初始化成功");
+  tracing::info!("数据库连接池初始化成功");
+
+  // 初始化日志配置数据库
+  opsbox_core::logging::run_migration(&db_pool)
+    .await
+    .expect("日志配置数据库迁移失败");
 
   // ✅ 自动发现所有已注册的模块
   let modules = opsbox_core::get_all_modules();
-  log::info!("发现 {} 个模块", modules.len());
+  tracing::info!("发现 {} 个模块", modules.len());
 
   // 配置各模块（从环境变量读取配置）
   for module in &modules {
-    log::info!("配置模块: {}", module.name());
+    tracing::info!("配置模块: {}", module.name());
     module.configure();
   }
 
   // 初始化各模块的数据库 schema
   for module in &modules {
-    log::info!("初始化模块数据库: {}", module.name());
+    tracing::info!("初始化模块数据库: {}", module.name());
     module.init_schema(&db_pool).await.unwrap_or_else(|e| {
-      log::error!("模块 {} 数据库初始化失败: {}", module.name(), e);
+      tracing::error!("模块 {} 数据库初始化失败: {}", module.name(), e);
       std::process::exit(1);
     });
   }
 
-  log::info!("所有模块初始化完成");
+  tracing::info!("所有模块初始化完成");
 
   // 启动 HTTP 服务器
   server::run(addr, db_pool, modules).await;
@@ -220,5 +230,5 @@ pub(crate) fn setup_module_env_vars(config: &AppConfig) {
     std::env::set_var("LOGSEEK_IO_MAX_RETRIES", config.get_io_max_retries().to_string());
   }
 
-  log::debug!("模块配置环境变量已设置");
+  tracing::debug!("模块配置环境变量已设置");
 }

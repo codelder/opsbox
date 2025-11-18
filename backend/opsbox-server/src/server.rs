@@ -1,11 +1,40 @@
 use axum::http::{StatusCode, header::CONTENT_TYPE};
 use axum::{Router, http, response::Response, routing::get};
+use opsbox_core::logging::ReloadHandle;
 use opsbox_core::{Module, SqlitePool};
 use rust_embed::RustEmbed;
 use std::borrow::Cow;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Notify;
+
+/// 全局日志重载句柄
+static LOG_RELOAD_HANDLE: OnceLock<ReloadHandle> = OnceLock::new();
+
+/// 全局日志目录
+static LOG_DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+/// 设置日志重载句柄（在启动时调用一次）
+pub fn set_log_reload_handle(handle: ReloadHandle) {
+  LOG_RELOAD_HANDLE.set(handle).unwrap_or_else(|_| {
+    panic!("日志重载句柄已被设置");
+  });
+}
+
+/// 获取日志重载句柄（用于 API 调用）
+pub fn get_log_reload_handle() -> Option<&'static ReloadHandle> {
+  LOG_RELOAD_HANDLE.get()
+}
+
+/// 设置日志目录（在启动时调用一次）
+pub fn set_log_dir(log_dir: std::path::PathBuf) {
+  LOG_DIR.set(log_dir).expect("日志目录已被设置");
+}
+
+/// 获取日志目录（用于 API 调用）
+pub fn get_log_dir() -> Option<&'static std::path::PathBuf> {
+  LOG_DIR.get()
+}
 
 // 将 backend/opsbox-server/static 目录在编译期打包进二进制
 #[derive(RustEmbed)]
@@ -79,14 +108,14 @@ fn create_shutdown_notify(modules: Vec<Arc<dyn Module>>) -> Arc<Notify> {
   tokio::spawn(async move {
     // 等待系统信号
     let signal_name = wait_for_shutdown_signal().await;
-    log::info!("收到关闭信号 [{}]，开始优雅关闭...", signal_name);
+    tracing::info!("收到关闭信号 [{}]，开始优雅关闭...", signal_name);
 
     // 清理模块资源
     for module in &modules {
-      log::info!("清理模块: {}", module.name());
+      tracing::info!("清理模块: {}", module.name());
       module.cleanup();
     }
-    log::info!("所有模块已清理完成，通知服务优雅关闭...");
+    tracing::info!("所有模块已清理完成，通知服务优雅关闭...");
 
     // 通知 Axum 停止接受新连接
     notify_clone.notify_waiters();
@@ -94,7 +123,7 @@ fn create_shutdown_notify(modules: Vec<Arc<dyn Module>>) -> Arc<Notify> {
     // 10 秒后若仍未退出，强制结束进程（与旧实现对齐）
     tokio::spawn(async move {
       tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-      log::warn!("优雅关闭超时（10秒），仍有活跃连接未关闭，强制退出");
+      tracing::warn!("优雅关闭超时（10秒），仍有活跃连接未关闭，强制退出");
       std::process::exit(0);
     });
   });
@@ -129,11 +158,19 @@ fn build_router(db_pool: SqlitePool, modules: &[Arc<dyn Module>]) -> Router {
     // 健康检查
     .route("/healthy", get(|| async { "ok" }));
 
+  // 注册系统级日志配置路由
+  let log_dir = get_log_dir()
+    .cloned()
+    .unwrap_or_else(|| std::path::PathBuf::from("logs"));
+  let log_routes = crate::log_routes::create_log_routes(db_pool.clone(), log_dir);
+  app = app.merge(log_routes);
+  tracing::info!("注册路由: 日志配置 -> /api/v1/log/*");
+
   // ✅ 动态注册所有模块路由
   for module in modules {
     let prefix = module.api_prefix();
     let router = module.router(db_pool.clone());
-    log::info!("注册路由: {} -> {}", module.name(), prefix);
+    tracing::info!("注册路由: {} -> {}", module.name(), prefix);
     app = app.nest(prefix, router);
   }
 
@@ -145,7 +182,7 @@ fn build_router(db_pool: SqlitePool, modules: &[Arc<dyn Module>]) -> Router {
 
 /// 运行HTTP服务器
 pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Module>>) {
-  log::info!("启动 HTTP 服务器，监听地址: {}", addr);
+  tracing::info!("启动 HTTP 服务器，监听地址: {}", addr);
 
   // 构建应用
   let app = build_router(db_pool, &modules);
@@ -153,7 +190,7 @@ pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Mod
   // 绑定监听
   let listener = tokio::net::TcpListener::bind(addr).await.expect("监听地址绑定失败");
 
-  log::info!("OpsBox 服务启动成功，访问地址: http://{}", addr);
+  tracing::info!("OpsBox 服务启动成功，访问地址: http://{}", addr);
 
   // 启动服务器并支持优雅关闭（附带连接信息，以便业务侧获取客户端远端地址）
 
@@ -168,5 +205,5 @@ pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Mod
     .await
     .expect("服务启动失败");
 
-  log::info!("服务已关闭");
+  tracing::info!("服务已关闭");
 }

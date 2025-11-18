@@ -15,11 +15,11 @@
 //! - OPENAI_MODEL（默认：gpt-4o-mini）
 use crate::error::AppError;
 use async_trait::async_trait;
-use log::{debug, info, warn};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::{debug, info, warn};
 
 const INTERNAL_THINK_PROMPT: &str = "你是一名助手。请严格仅输出一个 JSON 对象：{\"think\": string, \"answer\": string}。\n- think：简明思考过程（可中文）。\n- answer：给用户的最终答案（中文为主）。\n不要输出除 JSON 以外的任何多余文本。";
 
@@ -371,7 +371,7 @@ impl LlmClient for OllamaClient {
         });
       }
       // 若解析失败，回退为普通文本
-      log::warn!("Ollama 未返回期望的 JSON，回退为纯文本");
+      tracing::warn!("Ollama 未返回期望的 JSON，回退为纯文本");
     }
 
     Ok(ChatResponse {
@@ -556,7 +556,7 @@ impl LlmClient for OpenAIClient {
           finish_reason: Some("stop".to_string()),
         });
       }
-      log::warn!("OpenAI 未返回期望的 JSON，回退为纯文本");
+      tracing::warn!("OpenAI 未返回期望的 JSON，回退为纯文本");
     }
 
     Ok(ChatResponse {

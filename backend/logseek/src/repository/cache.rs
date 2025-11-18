@@ -58,6 +58,8 @@ impl Cache {
             _ = tokio_time::sleep(interval) => {
               let c = cache();
               let now = Instant::now();
+              let mut total_removed = 0;
+
               // 清理 keywords
               {
                 let mut m = c.keywords.write().await;
@@ -66,10 +68,12 @@ impl Cache {
                   .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
                   .map(|(k, _)| k.clone())
                   .collect();
+                total_removed += to_remove.len();
                 for k in to_remove {
                   let _ = m.remove(&k);
                 }
               }
+
               // 清理 files
               {
                 let mut m = c.files.write().await;
@@ -78,8 +82,28 @@ impl Cache {
                   .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
                   .map(|(k, _)| k.clone())
                   .collect();
+                total_removed += to_remove.len();
                 for k in to_remove {
                   let _ = m.remove(&k);
+                }
+              }
+
+              // 如果清理了缓存条目，可以尝试触发底层分配器的内存回收
+              if total_removed > 0 {
+                tracing::info!("缓存清理完成: 移除 {} 个条目", total_removed);
+
+                // 仅在启用了 mimalloc-collect 特性且使用 mimalloc 作为分配器的进程中，
+                // 才调用 mimalloc 的 mi_collect(true) 尝试将空闲内存返还给操作系统。
+                #[cfg(feature = "mimalloc-collect")]
+                {
+                  // 使用 spawn_blocking 避免阻塞异步运行时线程
+                  tokio::task::spawn_blocking(move || {
+                    // 直接调用 libmimalloc-sys 提供的 mi_collect FFI
+                    unsafe {
+                      libmimalloc_sys::mi_collect(true);
+                    }
+                    tracing::info!("libmimalloc_sys::mi_collect(true) 调用完成");
+                  });
                 }
               }
             }
@@ -119,7 +143,7 @@ impl Cache {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
     let key = (sid.to_string(), file_url.clone());
-    log::debug!(
+    tracing::debug!(
       "🔍 Cache存储: key=({:?}, {:?}), lines_count={}",
       key.0,
       key.1,
@@ -132,7 +156,7 @@ impl Cache {
         value: lines,
       },
     );
-    log::debug!("🔍 Cache当前大小: {}", map.len());
+    tracing::debug!("🔍 Cache当前大小: {}", map.len());
   }
   pub async fn get_lines_slice(
     &self,
@@ -144,11 +168,11 @@ impl Cache {
     Self::start_cleaner_once();
     let mut map = self.files.write().await;
     let key = (sid.to_string(), file_url.clone());
-    log::debug!("🔍 Cache查找: key=({:?}, {:?}), cache_size={}", key.0, key.1, map.len());
+    tracing::debug!("🔍 Cache查找: key=({:?}, {:?}), cache_size={}", key.0, key.1, map.len());
 
     // 打印所有现有的键用于调试
     for (existing_key, entry) in map.iter() {
-      log::debug!(
+      tracing::debug!(
         "🔍 Cache现有条目: key=({:?}, {:?}), expired={}",
         existing_key.0,
         existing_key.1,
@@ -158,7 +182,7 @@ impl Cache {
 
     let e = map.get_mut(&key)?;
     if self.expired(e) {
-      log::debug!("🔍 Cache条目已过期，移除");
+      tracing::debug!("🔍 Cache条目已过期，移除");
       map.remove(&key);
       return None;
     }

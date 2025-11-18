@@ -13,14 +13,14 @@ pub async fn nl2q(
   State(pool): State<SqlitePool>,
   Json(body): Json<crate::service::nl2q::NLBody>,
 ) -> Result<Json<NL2QOut>, LogSeekApiError> {
-  log::info!("NL2Q API请求: {}", body.nl);
+  tracing::info!("NL2Q API请求: {}", body.nl);
 
   let start = std::time::Instant::now();
   let q = crate::service::nl2q::call_llm(&pool, &body.nl).await.map_err(|e| {
-    log::error!("NL2Q API失败: {}", e);
+    tracing::error!("NL2Q API失败: {}", e);
     LogSeekApiError::Service(ServiceError::ProcessingError(format!("LLM 调用失败: {}", e)))
   })?;
 
-  log::info!("NL2Q API成功: {} -> '{}', 耗时: {:?}", body.nl, q, start.elapsed());
+  tracing::info!("NL2Q API成功: {} -> '{}', 耗时: {:?}", body.nl, q, start.elapsed());
   Ok(Json(NL2QOut { q }))
 }

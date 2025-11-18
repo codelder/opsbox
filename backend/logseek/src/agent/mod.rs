@@ -101,8 +101,8 @@ pub trait SearchService: Send + Sync {
 }
 
 // =========================== Agent 客户端实现 ===============================
-use log::{debug, error, info, trace, warn};
 use std::time::Duration;
+use tracing::{debug, error, info, trace, warn};
 
 // 复用 agent-manager 的数据模型
 pub use agent_manager::models::{AgentInfo, AgentStatus, AgentTag};
@@ -218,16 +218,11 @@ impl AgentClient {
 
     let url = format!("{}/api/v1/info", self.endpoint);
     let mut attempt = 0u32;
-    
+
     let response = loop {
       attempt += 1;
-      
-      let result = self
-        .client
-        .get(&url)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await;
+
+      let result = self.client.get(&url).timeout(Duration::from_secs(10)).send().await;
 
       match result {
         Ok(resp) => break resp,
@@ -244,11 +239,7 @@ impl AgentClient {
           let backoff_ms = 100u64 * 2u64.pow(attempt - 1);
           warn!(
             "获取 Agent {} 信息失败（第 {}/{} 次尝试），{}ms 后重试: {}",
-            self.agent_id,
-            attempt,
-            max_attempts,
-            backoff_ms,
-            e
+            self.agent_id, attempt, max_attempts, backoff_ms, e
           );
           tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
         }
@@ -296,7 +287,7 @@ impl SearchService for AgentClient {
     };
 
     // 中文调试：打印请求明细（仅在 debug 级别或显式开启“线级”调试时）
-    if log::log_enabled!(log::Level::Trace) {
+    if tracing::enabled!(tracing::Level::TRACE) {
       match serde_json::to_string(&request) {
         Ok(s) => trace!("[Wire] → POST {}/api/v1/search body={}", self.endpoint, s),
         Err(_) => trace!("[Wire] → POST {}/api/v1/search (body序列化失败)", self.endpoint),
@@ -327,7 +318,7 @@ impl SearchService for AgentClient {
     let mut attempt = 0u32;
     let response = loop {
       attempt += 1;
-      
+
       let result = self
         .client
         .post(&url)
@@ -352,11 +343,7 @@ impl SearchService for AgentClient {
           let backoff_ms = 100u64 * 2u64.pow(attempt - 1);
           warn!(
             "Agent {} 连接失败（第 {}/{} 次尝试），{}ms 后重试: {}",
-            self.agent_id,
-            attempt,
-            max_attempts,
-            backoff_ms,
-            e
+            self.agent_id, attempt, max_attempts, backoff_ms, e
           );
           tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
         }
@@ -366,7 +353,7 @@ impl SearchService for AgentClient {
     // 中文调试：打印响应状态与头
     let status = response.status();
     trace!("[Wire] ← 状态: {}", status);
-    if log::log_enabled!(log::Level::Trace) {
+    if tracing::enabled!(tracing::Level::TRACE) {
       for (k, v) in response.headers() {
         trace!("[Wire] ← 头: {}: {}", k.as_str(), v.to_str().unwrap_or("<bin>"));
       }
@@ -430,7 +417,7 @@ impl SearchService for AgentClient {
               Some(Ok(line)) => {
                 if !line.trim().is_empty() {
                   debug!("🔍 Server解析到NDJSON行: {}", line);
-                  if log::log_enabled!(log::Level::Trace) {
+                  if tracing::enabled!(tracing::Level::TRACE) {
                     let preview = if line.len() > 512 {
                       format!("{}...", truncate_utf8(&line, 512))
                     } else {

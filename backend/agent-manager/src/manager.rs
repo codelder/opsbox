@@ -38,7 +38,7 @@ impl AgentManager {
     // 更新心跳时间
     info.update_heartbeat();
 
-    log::info!(
+    tracing::info!(
       "注册 Agent: id={}, name={}, hostname={}, tags={:?}",
       info.id,
       info.name,
@@ -74,7 +74,7 @@ impl AgentManager {
       .await
       .map_err(|e| format!("设置标签失败: {}", e))?;
 
-    log::info!("设置 Agent {} 的标签: {:?}", agent_id, tags);
+    tracing::info!("设置 Agent {} 的标签: {:?}", agent_id, tags);
     Ok(())
   }
 
@@ -95,7 +95,7 @@ impl AgentManager {
         .save_agent_tags(agent_id, &tags)
         .await
         .map_err(|e| format!("添加标签失败: {}", e))?;
-      log::info!("为 Agent {} 添加标签: {}", agent_id, tag);
+      tracing::info!("为 Agent {} 添加标签: {}", agent_id, tag);
     }
     Ok(())
   }
@@ -108,7 +108,7 @@ impl AgentManager {
       .await
       .map_err(|e| format!("移除标签失败: {}", e))?;
 
-    log::info!("从 Agent {} 移除标签: {}={}", agent_id, key, value);
+    tracing::info!("从 Agent {} 移除标签: {}={}", agent_id, key, value);
     Ok(())
   }
 
@@ -120,7 +120,7 @@ impl AgentManager {
       .await
       .map_err(|e| format!("清空标签失败: {}", e))?;
 
-    log::info!("清空 Agent {} 的所有标签", agent_id);
+    tracing::info!("清空 Agent {} 的所有标签", agent_id);
     Ok(())
   }
 
@@ -132,7 +132,7 @@ impl AgentManager {
       .await
       .map_err(|e| format!("注销 Agent 失败: {}", e))?;
 
-    log::info!("注销 Agent: {}", agent_id);
+    tracing::info!("注销 Agent: {}", agent_id);
     Ok(())
   }
 
@@ -144,7 +144,7 @@ impl AgentManager {
       .await
       .map_err(|e| format!("更新心跳失败: {}", e))?;
 
-    log::debug!("Agent {} 心跳更新", agent_id);
+    tracing::debug!("Agent {} 心跳更新", agent_id);
     Ok(())
   }
 
@@ -168,7 +168,7 @@ impl AgentManager {
       .repository
       .get_agent(agent_id)
       .await
-      .map_err(|e| log::error!("获取 Agent 失败: {}", e))
+      .map_err(|e| tracing::error!("获取 Agent 失败: {}", e))
       .ok()
       .flatten()
       .map(|a| self.apply_dynamic_status(a))
@@ -180,7 +180,7 @@ impl AgentManager {
       .repository
       .list_agents()
       .await
-      .map_err(|e| log::error!("获取 Agent 列表失败: {}", e))
+      .map_err(|e| tracing::error!("获取 Agent 列表失败: {}", e))
       .unwrap_or_default();
     list.into_iter().map(|a| self.apply_dynamic_status(a)).collect()
   }
@@ -200,7 +200,7 @@ impl AgentManager {
       .repository
       .list_agents_by_tags(tag_filters)
       .await
-      .map_err(|e| log::error!("按标签筛选 Agent 失败: {}", e))
+      .map_err(|e| tracing::error!("按标签筛选 Agent 失败: {}", e))
       .unwrap_or_default();
     list.into_iter().map(|a| self.apply_dynamic_status(a)).collect()
   }
@@ -220,7 +220,7 @@ impl AgentManager {
       .repository
       .get_all_tag_keys()
       .await
-      .map_err(|e| log::error!("获取标签键失败: {}", e))
+      .map_err(|e| tracing::error!("获取标签键失败: {}", e))
       .unwrap_or_default()
   }
 
@@ -230,7 +230,7 @@ impl AgentManager {
       .repository
       .get_tag_values_by_key(key)
       .await
-      .map_err(|e| log::error!("获取标签值失败: {}", e))
+      .map_err(|e| tracing::error!("获取标签值失败: {}", e))
       .unwrap_or_default()
   }
 
@@ -240,7 +240,7 @@ impl AgentManager {
       .repository
       .get_all_tags()
       .await
-      .map_err(|e| log::error!("获取所有标签失败: {}", e))
+      .map_err(|e| tracing::error!("获取所有标签失败: {}", e))
       .unwrap_or_default()
   }
 
@@ -250,7 +250,7 @@ impl AgentManager {
       .repository
       .cleanup_offline_agents(self.heartbeat_timeout)
       .await
-      .map_err(|e| log::error!("清理离线 Agent 失败: {}", e))
+      .map_err(|e| tracing::error!("清理离线 Agent 失败: {}", e))
       .unwrap_or(0)
   }
 }

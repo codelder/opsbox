@@ -5,7 +5,7 @@
 use crate::models::{AgentInfo, AgentStatus, AgentTag};
 use chrono::Utc;
 use serde_json;
-use sqlx::{sqlite::SqlitePool, Row};
+use sqlx::{Row, sqlite::SqlitePool};
 use uuid::Uuid;
 
 /// 数据库操作结构体

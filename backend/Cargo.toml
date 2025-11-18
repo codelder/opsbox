@@ -9,7 +9,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0-rc3"
+version = "0.1.0-rc4"
 edition = "2024"
 license = "MIT"
 authors = ["wangyue"]
+
+[workspace.dependencies]
+# Tracing and logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "time"] }
+tracing-appender = "0.2"

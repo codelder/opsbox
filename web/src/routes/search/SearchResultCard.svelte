@@ -118,7 +118,14 @@
     }
     if (parsed.type === 'dir-entry') {
       const title = parsed.entryPath || parsed.displayName || full;
-      const source = `source ${parsed.baseUrl}`; // 不显示 dir 字样
+      // 解析 baseUrl 以获取更友好的显示
+      const baseUrlParsed = parseFileUrl(parsed.baseUrl);
+      let source = `source ${parsed.baseUrl}`;
+      if (baseUrlParsed?.type === 'local') {
+        source = `source local:${baseUrlParsed.path}`;
+      } else if (baseUrlParsed?.type === 'agent') {
+        source = `source agent://${baseUrlParsed.agentId}${baseUrlParsed.path}`;
+      }
       return { title, source };
     }
     if (parsed.type === 'agent') {
@@ -132,6 +139,12 @@
         }
       }
       const source = `source agent://${parsed.agentId}${dir}`;
+      return { title, source };
+    }
+    if (parsed.type === 's3') {
+      const title = parsed.displayName || full;
+      const profilePart = parsed.profile ? `${parsed.profile}:` : '';
+      const source = `source s3://${profilePart}${parsed.bucket}`;
       return { title, source };
     }
     return { title: full };

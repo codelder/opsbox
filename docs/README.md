@@ -10,7 +10,11 @@ docs/
 │   ├── architecture.md                    # 项目架构复盘分析
 │   ├── error-handling-architecture.md     # 错误处理架构设计
 │   ├── error-handling-quick-reference.md  # 错误处理快速参考
+│   ├── logging-architecture.md            # 日志系统架构设计
 │   └── module-architecture.md              # 模块化架构设计
+│
+├── api/                   # API 文档
+│   └── logging-api.md                     # 日志配置 API 参考
 │
 ├── modules/               # 模块文档
 │   ├── agent-api-spec.md                  # Agent HTTP API 规范
@@ -26,8 +30,13 @@ docs/
 ├── guides/                # 使用指南
 │   ├── cpu-resource-control.md           # CPU 资源控制指南
 │   ├── frontend-development.md           # 前端开发指南
+│   ├── logging-configuration.md          # 日志配置和管理指南
 │   ├── query-rag.md                      # 查询语法 RAG 资料
-│   └── query-syntax.md                    # 查询字符串规范
+│   ├── query-syntax.md                    # 查询字符串规范
+│   └── tracing-usage.md                   # Tracing 使用指南
+│
+├── testing/               # 测试文档
+│   └── logging-e2e-test-checklist.md     # 日志 E2E 测试清单
 │
 ├── archive/               # 历史参考文档
 │   └── cpu-tuning-analysis.md            # CPU 调优分析（历史参考）
@@ -39,7 +48,10 @@ docs/
 ## 📚 文档分类说明
 
 ### 架构文档 (`architecture/`)
-系统架构设计、模块化设计、错误处理架构等核心设计文档。
+系统架构设计、模块化设计、错误处理架构、日志系统架构等核心设计文档。
+
+### API 文档 (`api/`)
+REST API 接口文档，包括请求/响应格式、错误处理等。
 
 ### 模块文档 (`modules/`)
 各个模块的详细文档，包括 API 规范和模块说明。
@@ -48,7 +60,10 @@ docs/
 具体功能的详细说明，包括设计思路、使用方法等。
 
 ### 使用指南 (`guides/`)
-面向开发者和用户的使用指南，包括开发指南、配置说明等。
+面向开发者和用户的使用指南，包括开发指南、配置说明、日志管理等。
+
+### 测试文档 (`testing/`)
+测试相关文档，包括测试清单、测试策略等。
 
 ### 历史参考 (`archive/`)
 已过时但保留作为历史参考的文档。
@@ -58,12 +73,24 @@ docs/
 
 ## 🔗 快速链接
 
+### 项目文档
 - [项目主 README](../README.md)
 - [WARP 开发指南](../WARP.md)
+- [CHANGELOG](../CHANGELOG.md)
+
+### 架构文档
 - [架构复盘分析](architecture/architecture.md)
 - [模块化架构](architecture/module-architecture.md)
-- [Agent API 规范](modules/agent-api-spec.md)
+- [日志系统架构](architecture/logging-architecture.md)
+
+### 使用指南
+- [日志配置指南](guides/logging-configuration.md)
+- [Tracing 使用指南](guides/tracing-usage.md)
 - [前端开发指南](guides/frontend-development.md)
+
+### API 文档
+- [日志配置 API](api/logging-api.md)
+- [Agent API 规范](modules/agent-api-spec.md)
 
 ## 📝 文档维护
 

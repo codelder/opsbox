@@ -26,7 +26,7 @@ serde_json = "1.0"
 inventory = "0.3"
 
 # Database
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros"] }
 libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 
 # Error handling
@@ -34,7 +34,10 @@ thiserror = "2"
 problemdetails = { version = "0.6", features = ["axum"] }
 
 # Logging
-log = "0.4"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # HTTP types
 http = "1.0"

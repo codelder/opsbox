@@ -28,7 +28,7 @@ fn service_control_handler(control_event: ServiceControl) -> ServiceControlHandl
   match control_event {
     ServiceControl::Stop => {
       SERVICE_STOPPING.store(true, Ordering::SeqCst);
-      log::info!("收到 Windows 服务停止请求");
+      tracing::info!("收到 Windows 服务停止请求");
       ServiceControlHandlerResult::NoError
     }
     ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -42,22 +42,23 @@ pub fn run_as_service(
   service_name: &str,
   main_fn: impl FnOnce(std::sync::Arc<tokio::sync::Notify>) -> Result<(), Box<dyn std::error::Error>> + Send + 'static,
 ) -> Result<(), Box<dyn std::error::Error>> {
-  // 在服务启动的早期阶段初始化基本日志（使用 stderr，因为服务可能没有控制台）
+  // TODO: 在服务启动的早期阶段初始化基本日志（使用 stderr，因为服务可能没有控制台）
   // 这样即使后续初始化失败，也能看到错误信息
-  let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-    .target(env_logger::Target::Stderr)
-    .try_init();
+  // 将在后续任务中使用 tracing 实现
+  // let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+  //     .target(env_logger::Target::Stderr)
+  //     .try_init();
 
   let service_name = OsString::from(service_name);
   let shutdown_notify = std::sync::Arc::new(tokio::sync::Notify::new());
 
-  log::info!("开始注册 Windows 服务控制处理器...");
+  tracing::info!("开始注册 Windows 服务控制处理器...");
 
   // 注册服务控制处理器
   // 注意：这只能在服务已经被服务控制管理器启动时调用
   let status_handle = match service_control_handler::register(service_name.as_os_str(), service_control_handler) {
     Ok(handle) => {
-      log::info!("服务控制处理器注册成功");
+      tracing::info!("服务控制处理器注册成功");
       handle
     }
     Err(e) => {
@@ -65,13 +66,13 @@ pub fn run_as_service(
         "注册服务控制处理器失败: {}. 请确保服务已正确安装并通过 'sc start' 启动，而不是直接运行 --service-mode",
         e
       );
-      log::error!("{}", error_msg);
+      tracing::error!("{}", error_msg);
       eprintln!("{}", error_msg);
       return Err(error_msg.into());
     }
   };
 
-  log::info!("设置服务状态为启动中...");
+  tracing::info!("设置服务状态为启动中...");
 
   // 先设置为启动中状态
   status_handle.set_service_status(ServiceStatus {
@@ -84,7 +85,7 @@ pub fn run_as_service(
     process_id: None,
   })?;
 
-  log::info!("启动主逻辑线程...");
+  tracing::info!("启动主逻辑线程...");
 
   // 使用 Arc 来共享状态，以便主线程可以检查启动是否成功
   let startup_result = std::sync::Arc::new(std::sync::Mutex::new(None::<Box<dyn std::error::Error + Send + Sync>>));
@@ -94,10 +95,10 @@ pub fn run_as_service(
 
   // 启动主逻辑（在新线程中运行 Tokio 运行时）
   let main_thread = std::thread::spawn(move || {
-    log::info!("主逻辑线程已启动，开始执行初始化...");
+    tracing::info!("主逻辑线程已启动，开始执行初始化...");
     if let Err(e) = main_fn(shutdown) {
       let error_msg = format!("服务运行错误: {}", e);
-      log::error!("{}", error_msg);
+      tracing::error!("{}", error_msg);
       eprintln!("{}", error_msg);
       *startup_result_clone.lock().unwrap() = Some(format!("{}", e).into());
       // 设置服务状态为已停止（错误）
@@ -111,13 +112,13 @@ pub fn run_as_service(
         process_id: None,
       });
     } else {
-      log::info!("主逻辑正常退出");
+      tracing::info!("主逻辑正常退出");
     }
   });
 
   // 等待主线程启动（最多等待 30 秒）
   // 如果主线程还在运行且没有错误，就认为启动成功
-  log::info!("等待主逻辑初始化完成...");
+  tracing::info!("等待主逻辑初始化完成...");
   let start_time = std::time::Instant::now();
   let timeout = std::time::Duration::from_secs(30);
   let min_wait_time = std::time::Duration::from_millis(500); // 缩短最小等待时间，尽快报告 Running
@@ -127,7 +128,7 @@ pub fn run_as_service(
   loop {
     // 检查是否有错误
     if let Some(err) = startup_result.lock().unwrap().take() {
-      log::error!("主逻辑初始化失败: {}", err);
+      tracing::error!("主逻辑初始化失败: {}", err);
       // 设置服务状态为已停止（错误）
       status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
@@ -145,7 +146,7 @@ pub fn run_as_service(
     if main_thread.is_finished() {
       // 再次检查是否有错误（可能在检查 is_finished 之后才设置）
       if let Some(err) = startup_result.lock().unwrap().take() {
-        log::error!("主逻辑线程退出，错误: {}", err);
+        tracing::error!("主逻辑线程退出，错误: {}", err);
         status_handle.set_service_status(ServiceStatus {
           service_type: ServiceType::OWN_PROCESS,
           current_state: ServiceState::Stopped,
@@ -157,7 +158,7 @@ pub fn run_as_service(
         })?;
         return Err(err);
       }
-      log::error!("主逻辑线程意外退出（无错误信息）");
+      tracing::error!("主逻辑线程意外退出（无错误信息）");
       status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
         current_state: ServiceState::Stopped,
@@ -198,7 +199,7 @@ pub fn run_as_service(
 
     // 如果主线程还在运行，且已经等待了足够的时间，认为启动成功
     if elapsed >= min_wait_time && !main_thread.is_finished() {
-      log::info!("主逻辑初始化成功（线程运行中），设置服务状态为运行中");
+      tracing::info!("主逻辑初始化成功（线程运行中），设置服务状态为运行中");
       // 设置服务状态为运行中
       status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
@@ -209,12 +210,12 @@ pub fn run_as_service(
         wait_hint: std::time::Duration::default(),
         process_id: None,
       })?;
-      log::info!("Windows 服务已成功启动并运行");
+      tracing::info!("Windows 服务已成功启动并运行");
       break;
     }
 
     if elapsed > timeout {
-      log::error!("主逻辑初始化超时（{} 秒）", timeout.as_secs());
+      tracing::error!("主逻辑初始化超时（{} 秒）", timeout.as_secs());
       // 设置服务状态为已停止（超时）
       status_handle.set_service_status(ServiceStatus {
         service_type: ServiceType::OWN_PROCESS,
@@ -232,12 +233,12 @@ pub fn run_as_service(
   }
 
   // 等待停止信号
-  log::info!("服务运行中，等待停止信号...");
+  tracing::info!("服务运行中，等待停止信号...");
   while !SERVICE_STOPPING.load(Ordering::SeqCst) {
     std::thread::sleep(std::time::Duration::from_millis(100));
   }
 
-  log::info!("收到停止信号，开始停止 Windows 服务...");
+  tracing::info!("收到停止信号，开始停止 Windows 服务...");
 
   // 先上报 STOP_PENDING，告知 SCM 正在优雅关闭
   let _ = status_handle.set_service_status(ServiceStatus {
@@ -261,7 +262,7 @@ pub fn run_as_service(
   }
 
   if !main_thread.is_finished() {
-    log::warn!("主线程在 {} 秒内未完成关闭", shutdown_timeout.as_secs());
+    tracing::warn!("主线程在 {} 秒内未完成关闭", shutdown_timeout.as_secs());
   }
 
   // 设置服务状态为已停止
@@ -275,7 +276,7 @@ pub fn run_as_service(
     process_id: None,
   })?;
 
-  log::info!("Windows 服务已停止");
+  tracing::info!("Windows 服务已停止");
   Ok(())
 }
 
@@ -528,15 +529,15 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, config: AppConfig
       // 初始化网络环境
       crate::network::init_network_env();
 
-      log::info!("OpsBox Windows 服务启动中...");
-      log::debug!("配置: {:?}", cfg);
+      tracing::info!("OpsBox Windows 服务启动中...");
+      tracing::debug!("配置: {:?}", cfg);
 
       // 获取监听地址
       let addr = cfg.get_addr().expect("无效的监听地址");
 
       // 初始化数据库
       let db_url = cfg.get_database_url();
-      log::info!("数据库路径: {}", db_url);
+      tracing::info!("数据库路径: {}", db_url);
 
       // 设置模块配置环境变量
       crate::setup_module_env_vars(&cfg);
@@ -553,7 +554,7 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, config: AppConfig
         // 监听关闭信号
         tokio::spawn(async move {
           shutdown_clone.notified().await;
-          log::info!("收到停止信号，开始优雅关闭...");
+          tracing::info!("收到停止信号，开始优雅关闭...");
         });
 
         crate::async_main(addr, db_url).await;
