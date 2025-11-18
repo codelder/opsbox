@@ -38,6 +38,10 @@ runs:
         # 跳过 Playwright 浏览器下载，加速 CI
         PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
 
+    - name: Install Playwright browsers
+      shell: bash
+      run: pnpm --dir ${{ inputs.working-directory }} exec playwright install --with-deps
+
     - name: Run frontend tests
       shell: bash
       run: pnpm --dir ${{ inputs.working-directory }} test
