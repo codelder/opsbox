@@ -270,7 +270,6 @@ mod tests {
   #[test]
   fn test_quick_guide_loaded() {
     // 验证 QUICK_GUIDE 常量已正确加载
-    assert!(!QUICK_GUIDE.is_empty());
     assert!(QUICK_GUIDE.contains("查询字符串规范"));
   }
 

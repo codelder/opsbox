@@ -123,7 +123,10 @@ mod tests {
   #[test]
   fn test_result_type_alias() {
     let ok_result: Result<i32> = Ok(42);
-    assert_eq!(ok_result.unwrap(), 42);
+    match ok_result {
+      Ok(value) => assert_eq!(value, 42),
+      Err(e) => panic!("unexpected error: {e}"),
+    }
 
     let err_result: Result<i32> = Err(ServiceError::ChannelClosed);
     assert!(err_result.is_err());

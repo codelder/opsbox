@@ -6,7 +6,6 @@ import { expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from '@vitest/browser/context';
 import type { AgentInfo } from '$lib/modules/agent';
-import type { LogConfigResponse } from '$lib/modules/agent/api';
 import AgentManagement from './AgentManagement.svelte';
 
 // Mock API 模块
@@ -18,13 +17,6 @@ vi.mock('$lib/modules/agent/api', () => ({
   fetchAgentLogConfig: vi.fn(),
   updateAgentLogLevel: vi.fn(),
   updateAgentLogRetention: vi.fn()
-}));
-
-// Mock Alert 组件
-vi.mock('$lib/components/Alert.svelte', () => ({
-  default: vi.fn(() => ({
-    render: () => '<div data-testid="alert"></div>'
-  }))
 }));
 
 import { useAgents } from '$lib/modules/agent';
@@ -48,6 +40,15 @@ const mockAgentsStore = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockAgentsStore.agents = [];
+  mockAgentsStore.total = 0;
+  mockAgentsStore.loading = false;
+  mockAgentsStore.error = null;
+  mockAgentsStore.tagFilter = '';
+  mockAgentsStore.onlineOnly = false;
+  mockAgentsStore.load = vi.fn();
+  mockAgentsStore.addTag = vi.fn();
+  mockAgentsStore.removeTag = vi.fn();
   vi.mocked(useAgents).mockReturnValue(mockAgentsStore);
 });
 
@@ -75,10 +76,10 @@ test('组件渲染 - 显示 Agent 列表', async () => {
   render(AgentManagement, {});
 
   const agentName = await page.getByText('Test Agent 1');
-  expect.element(agentName).toBeInTheDocument();
+  await expect.element(agentName).toBeInTheDocument();
 
   const hostname = await page.getByText(/host1/);
-  expect.element(hostname).toBeInTheDocument();
+  await expect.element(hostname).toBeInTheDocument();
 });
 
 test('组件渲染 - 显示空状态', async () => {
@@ -88,7 +89,7 @@ test('组件渲染 - 显示空状态', async () => {
   render(AgentManagement, {});
 
   const emptyState = await page.getByText('暂无数据');
-  expect.element(emptyState).toBeInTheDocument();
+  await expect.element(emptyState).toBeInTheDocument();
 });
 
 test('日志设置 - 展开日志设置区域', async () => {
@@ -121,12 +122,14 @@ test('日志设置 - 展开日志设置区域', async () => {
   const logSettingsButton = await page.getByRole('button', { name: /日志设置/ });
   await userEvent.click(logSettingsButton);
 
-  await vi.waitFor(async () => {
-    const levelLabel = await page.getByText('日志级别');
-    expect.element(levelLabel).toBeInTheDocument();
+  await vi.waitFor(() => {
+    expect(fetchAgentLogConfig).toHaveBeenCalledWith('agent-1');
   });
 
-  expect(fetchAgentLogConfig).toHaveBeenCalledWith('agent-1');
+  await vi.waitFor(async () => {
+    const levelSelect = await page.getByRole('combobox');
+    await expect.element(levelSelect).toBeInTheDocument();
+  });
 });
 
 test('日志设置 - 修改日志级别', async () => {
@@ -159,9 +162,13 @@ test('日志设置 - 修改日志级别', async () => {
   const logSettingsButton = await page.getByRole('button', { name: /日志设置/ });
   await userEvent.click(logSettingsButton);
 
+  await vi.waitFor(() => {
+    expect(fetchAgentLogConfig).toHaveBeenCalledWith('agent-1');
+  });
+
   await vi.waitFor(async () => {
     const levelSelect = await page.getByRole('combobox');
-    expect.element(levelSelect).toBeInTheDocument();
+    await expect.element(levelSelect).toBeInTheDocument();
   });
 
   const levelSelect = page.getByRole('combobox');
@@ -203,9 +210,13 @@ test('日志设置 - 保存配置成功', async () => {
   const logSettingsButton = await page.getByRole('button', { name: /日志设置/ });
   await userEvent.click(logSettingsButton);
 
+  await vi.waitFor(() => {
+    expect(fetchAgentLogConfig).toHaveBeenCalledWith('agent-1');
+  });
+
   await vi.waitFor(async () => {
     const saveButton = await page.getByRole('button', { name: /保存/ });
-    expect.element(saveButton).toBeInTheDocument();
+    await expect.element(saveButton).toBeInTheDocument();
   });
 
   const saveButton = await page.getByRole('button', { name: /保存/ });
@@ -247,13 +258,17 @@ test('日志设置 - Agent 离线时禁用表单', async () => {
   const logSettingsButton = await page.getByRole('button', { name: /日志设置/ });
   await userEvent.click(logSettingsButton);
 
+  await vi.waitFor(() => {
+    expect(fetchAgentLogConfig).toHaveBeenCalledWith('agent-1');
+  });
+
   await vi.waitFor(async () => {
     const levelSelect = await page.getByRole('combobox');
-    expect.element(levelSelect).toBeDisabled();
+    await expect.element(levelSelect).toBeDisabled();
   });
 
   const warningText = await page.getByText(/Agent 离线，无法修改配置/);
-  expect.element(warningText).toBeInTheDocument();
+  await expect.element(warningText).toBeInTheDocument();
 });
 
 test('日志设置 - 加载配置失败显示错误', async () => {
@@ -280,9 +295,13 @@ test('日志设置 - 加载配置失败显示错误', async () => {
   const logSettingsButton = await page.getByRole('button', { name: /日志设置/ });
   await userEvent.click(logSettingsButton);
 
+  await vi.waitFor(() => {
+    expect(fetchAgentLogConfig).toHaveBeenCalledWith('agent-1');
+  });
+
   await vi.waitFor(async () => {
     const errorMessage = await page.getByText('加载日志配置失败');
-    expect.element(errorMessage).toBeInTheDocument();
+    await expect.element(errorMessage).toBeInTheDocument();
   });
 });
 
@@ -317,9 +336,13 @@ test('日志设置 - 保存配置失败显示错误', async () => {
   const logSettingsButton = await page.getByRole('button', { name: /日志设置/ });
   await userEvent.click(logSettingsButton);
 
+  await vi.waitFor(() => {
+    expect(fetchAgentLogConfig).toHaveBeenCalledWith('agent-1');
+  });
+
   await vi.waitFor(async () => {
     const saveButton = await page.getByRole('button', { name: /保存/ });
-    expect.element(saveButton).toBeInTheDocument();
+    await expect.element(saveButton).toBeInTheDocument();
   });
 
   const saveButton = await page.getByRole('button', { name: /保存/ });
@@ -327,7 +350,7 @@ test('日志设置 - 保存配置失败显示错误', async () => {
 
   await vi.waitFor(async () => {
     const errorMessage = await page.getByText('保存失败');
-    expect.element(errorMessage).toBeInTheDocument();
+    await expect.element(errorMessage).toBeInTheDocument();
   });
 });
 
@@ -350,8 +373,8 @@ test('标签管理 - 添加标签', async () => {
 
   render(AgentManagement, {});
 
-  const keyInput = await page.getByPlaceholder('key');
-  const valueInput = await page.getByPlaceholder('value');
+  const keyInput = await page.getByTestId('tag-key-agent-1');
+  const valueInput = await page.getByTestId('tag-value-agent-1');
   const addButton = await page.getByRole('button', { name: /添加标签/ });
 
   await userEvent.type(keyInput, 'env');

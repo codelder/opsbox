@@ -1803,7 +1803,7 @@ foo lower
         _cx: &mut std::task::Context<'_>,
         _buf: &mut tokio::io::ReadBuf<'_>,
       ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, "read error")))
+        std::task::Poll::Ready(Err(std::io::Error::other("read error")))
       }
     }
 

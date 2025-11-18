@@ -78,8 +78,7 @@ async fn test_search_executor_basic_search() {
   // 这个测试需要预先配置数据源。在实际环境中，这通过 settings 表完成。
   // 这里我们只验证 SearchExecutor 的基本结构是否正确。
 
-  // 验证 SearchExecutor 可以被创建
-  assert!(true, "SearchExecutor 创建成功");
+  // SearchExecutor 成功构建即视为通过（若内部初始化失败会 panic）
 }
 
 #[tokio::test]

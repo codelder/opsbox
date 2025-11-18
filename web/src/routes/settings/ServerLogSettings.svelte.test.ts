@@ -15,13 +15,6 @@ vi.mock('$lib/modules/agent/api', () => ({
   updateServerLogRetention: vi.fn()
 }));
 
-// Mock Alert 组件
-vi.mock('$lib/components/Alert.svelte', () => ({
-  default: vi.fn(() => ({
-    render: () => '<div data-testid="alert"></div>'
-  }))
-}));
-
 import {
   fetchServerLogConfig,
   updateServerLogLevel,
@@ -44,7 +37,7 @@ test('组件渲染 - 显示加载状态', async () => {
   render(ServerLogSettings, {});
 
   const loadingText = await page.getByText('加载中…');
-  expect.element(loadingText).toBeInTheDocument();
+  await expect.element(loadingText).toBeInTheDocument();
 });
 
 test('组件渲染 - 成功加载配置后显示表单', async () => {
@@ -61,15 +54,15 @@ test('组件渲染 - 成功加载配置后显示表单', async () => {
   // 等待配置加载
   await vi.waitFor(async () => {
     const heading = await page.getByText('Server 日志设置');
-    expect.element(heading).toBeInTheDocument();
+    await expect.element(heading).toBeInTheDocument();
   });
 
   // 验证表单元素存在
   const levelSelect = await page.getByRole('combobox');
-  expect.element(levelSelect).toBeInTheDocument();
+  await expect.element(levelSelect).toBeInTheDocument();
 
   const retentionInput = await page.getByRole('spinbutton');
-  expect.element(retentionInput).toBeInTheDocument();
+  await expect.element(retentionInput).toBeInTheDocument();
 
   const logDirInputs = page.getByRole('textbox');
   // Verify log dir input exists and is disabled (it's the third textbox)
@@ -88,7 +81,7 @@ test('表单交互 - 修改日志级别', async () => {
 
   await vi.waitFor(async () => {
     const levelSelect = await page.getByRole('combobox');
-    expect.element(levelSelect).toBeInTheDocument();
+    await expect.element(levelSelect).toBeInTheDocument();
   });
 
   const levelSelect = page.getByRole('combobox');
@@ -111,14 +104,14 @@ test('表单交互 - 修改日志保留数量', async () => {
 
   await vi.waitFor(async () => {
     const retentionInput = await page.getByRole('spinbutton');
-    expect.element(retentionInput).toBeInTheDocument();
+    await expect.element(retentionInput).toBeInTheDocument();
   });
 
   const retentionInput = await page.getByRole('spinbutton');
   await userEvent.clear(retentionInput);
   await userEvent.type(retentionInput, '14');
 
-  expect.element(retentionInput).toHaveValue(14);
+  await expect.element(retentionInput).toHaveValue(14);
 });
 
 test('API 调用 - 保存配置成功', async () => {
@@ -136,7 +129,7 @@ test('API 调用 - 保存配置成功', async () => {
 
   await vi.waitFor(async () => {
     const saveButton = await page.getByRole('button', { name: /保存/ });
-    expect.element(saveButton).toBeInTheDocument();
+    await expect.element(saveButton).toBeInTheDocument();
   });
 
   const saveButton = await page.getByRole('button', { name: /保存/ });
@@ -162,15 +155,15 @@ test('API 调用 - 保存配置失败显示错误', async () => {
 
   await vi.waitFor(async () => {
     const saveButton = await page.getByRole('button', { name: /保存/ });
-    expect.element(saveButton).toBeInTheDocument();
+    await expect.element(saveButton).toBeInTheDocument();
   });
 
   const saveButton = await page.getByRole('button', { name: /保存/ });
   await userEvent.click(saveButton);
 
   await vi.waitFor(async () => {
-    const errorAlert = await page.getByTestId('alert');
-    expect.element(errorAlert).toBeInTheDocument();
+    const errorMessage = await page.getByText('更新失败');
+    await expect.element(errorMessage).toBeInTheDocument();
   });
 });
 
@@ -180,8 +173,8 @@ test('错误处理 - 加载配置失败显示错误', async () => {
   render(ServerLogSettings, {});
 
   await vi.waitFor(async () => {
-    const errorAlert = await page.getByTestId('alert');
-    expect.element(errorAlert).toBeInTheDocument();
+    const errorMessage = await page.getByText('加载配置失败');
+    await expect.element(errorMessage).toBeInTheDocument();
   });
 });
 
@@ -198,13 +191,15 @@ test('表单交互 - 重置按钮重新加载配置', async () => {
 
   await vi.waitFor(async () => {
     const resetButton = await page.getByRole('button', { name: /重置/ });
-    expect.element(resetButton).toBeInTheDocument();
+    await expect.element(resetButton).toBeInTheDocument();
   });
 
   const resetButton = await page.getByRole('button', { name: /重置/ });
   await userEvent.click(resetButton);
 
-  expect(fetchServerLogConfig).toHaveBeenCalledTimes(2); // 初始加载 + 重置
+  await vi.waitFor(() => {
+    expect(fetchServerLogConfig).toHaveBeenCalledTimes(2); // 初始加载 + 重置
+  });
 });
 
 test('表单交互 - 保存时禁用按钮', async () => {
@@ -223,7 +218,7 @@ test('表单交互 - 保存时禁用按钮', async () => {
 
   await vi.waitFor(async () => {
     const saveButton = await page.getByRole('button', { name: /保存/ });
-    expect.element(saveButton).toBeInTheDocument();
+    await expect.element(saveButton).toBeInTheDocument();
   });
 
   const saveButton = await page.getByRole('button', { name: /保存/ });
@@ -232,6 +227,6 @@ test('表单交互 - 保存时禁用按钮', async () => {
   // 保存过程中按钮应该被禁用
   await vi.waitFor(async () => {
     const savingButton = await page.getByRole('button', { name: /保存中/ });
-    expect.element(savingButton).toBeDisabled();
+    await expect.element(savingButton).toBeDisabled();
   });
 });

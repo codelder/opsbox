@@ -184,6 +184,7 @@ pub async fn execute_search(
 
 /// 通用条目流搜索辅助函数
 /// 使用通用处理函数并自动处理消息发送
+#[allow(clippy::too_many_arguments)]
 async fn search_with_entry_stream(
   stream: Box<dyn logseek::service::entry_stream::EntryStream>,
   processor: Arc<SearchProcessor>,
