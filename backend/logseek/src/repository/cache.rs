@@ -58,6 +58,8 @@ impl Cache {
             _ = tokio_time::sleep(interval) => {
               let c = cache();
               let now = Instant::now();
+              let mut total_removed = 0;
+              
               // 清理 keywords
               {
                 let mut m = c.keywords.write().await;
@@ -66,10 +68,12 @@ impl Cache {
                   .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
                   .map(|(k, _)| k.clone())
                   .collect();
+                total_removed += to_remove.len();
                 for k in to_remove {
                   let _ = m.remove(&k);
                 }
               }
+              
               // 清理 files
               {
                 let mut m = c.files.write().await;
@@ -78,9 +82,31 @@ impl Cache {
                   .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
                   .map(|(k, _)| k.clone())
                   .collect();
+                total_removed += to_remove.len();
                 for k in to_remove {
                   let _ = m.remove(&k);
                 }
+              }
+              
+              // 如果清理了缓存条目，触发内存回收
+              if total_removed > 0 {
+                tracing::info!("缓存清理完成: 移除 {} 个条目，触发内存回收", total_removed);
+                
+                // 使用 spawn_blocking 避免阻塞异步运行时
+                tokio::task::spawn_blocking(move || {
+                  // 调用 mimalloc 的内存回收函数
+                  // mi_collect(force: bool) - 强制回收未使用的内存
+                  #[link(name = "mimalloc")]
+                  unsafe extern "C" {
+                    fn mi_collect(force: bool);
+                  }
+                  
+                  unsafe {
+                    // 强制回收内存，将空闲内存返还给操作系统
+                    mi_collect(true);
+                  }
+                  tracing::debug!("内存回收完成");
+                });
               }
             }
             // 收到关闭信号时退出循环
