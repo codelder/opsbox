@@ -21,19 +21,6 @@ jobs:
           node-version: '20'
         continue-on-error: true
 
-      - name: Check Node.js after setup-node
-        run: |
-          echo "Checking Node.js installation after setup-node..."
-          if command -v node &> /dev/null; then
-            echo "✓ Node.js found: $(which node)"
-            node --version
-            npm --version
-          else
-            echo "⚠ Node.js not found in PATH after setup-node"
-            echo "This is expected if setup-node failed or on self-hosted runners"
-            echo "The composite action will handle fallback to system Node.js"
-          fi
-
       - name: Setup Frontend
         uses: ./.github/actions/setup-frontend
 
@@ -46,7 +33,7 @@ jobs:
       # 优化的缓存策略
       - name: Restore build cache
         if: ${{ startsWith(runner.name, 'GitHub Actions') }}
-        uses: actions/cache/restore@v4
+        uses: actions/cache@v4
         with:
           path: backend/target-musl
           key: target-musl-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}
@@ -112,15 +99,6 @@ jobs:
           echo "Cache size after cleanup:"
           du -sh "$TARGET_DIR" || true
 
-      # 只在非 tag 构建时保存缓存（tag 构建是一次性的，不需要缓存）
-      - name: Save build cache
-        if: success() && !startsWith(github.ref, 'refs/tags/') && startsWith(runner.name, 'GitHub Actions')
-        continue-on-error: true  # 缓存失败不影响构建成功
-        timeout-minutes: 1       # 最多等待 1 分钟
-        uses: actions/cache/save@v4
-        with:
-          path: backend/target-musl
-          key: target-musl-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}-${{ github.run_id }}
 
       - name: Package opsbox-server artifact
         run: |
