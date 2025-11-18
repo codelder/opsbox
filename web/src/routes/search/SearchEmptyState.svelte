@@ -57,11 +57,7 @@
     <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
       <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
         <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-          />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
       </div>
       <h3 class="mt-4 text-lg font-semibold text-[var(--text)]">无匹配结果</h3>
@@ -71,11 +67,7 @@
     <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
       <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
         <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-          />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
       </div>
       <h3 class="mt-4 text-xl font-semibold text-[var(--text)]">开始搜索</h3>

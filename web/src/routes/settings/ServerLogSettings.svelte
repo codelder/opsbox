@@ -85,9 +85,7 @@
           class="flex flex-col gap-3 rounded-2xl border border-transparent bg-white/60 p-4 text-sm text-slate-500 shadow-sm shadow-slate-200/40 transition hover:border-slate-200 hover:shadow-slate-200 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:border-slate-700"
         >
           <span>
-            <span
-              class="block text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400"
-            >
+            <span class="block text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400">
               日志级别
             </span>
             <span class="block text-sm leading-relaxed text-slate-600 dark:text-slate-300">
@@ -111,9 +109,7 @@
           class="flex flex-col gap-3 rounded-2xl border border-transparent bg-white/60 p-4 text-sm text-slate-500 shadow-sm shadow-slate-200/40 transition hover:border-slate-200 hover:shadow-slate-200 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:border-slate-700"
         >
           <span>
-            <span
-              class="block text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400"
-            >
+            <span class="block text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400">
               日志保留
             </span>
             <span class="block text-sm leading-relaxed text-slate-600 dark:text-slate-300">
@@ -137,9 +133,7 @@
           class="flex flex-col gap-3 rounded-2xl border border-transparent bg-white/60 p-4 text-sm text-slate-500 shadow-sm shadow-slate-200/40 transition dark:bg-slate-900/60 dark:text-slate-400"
         >
           <span>
-            <span
-              class="block text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400"
-            >
+            <span class="block text-xs font-semibold tracking-[0.2em] text-indigo-500 uppercase dark:text-indigo-400">
               日志路径
             </span>
             <span class="block text-sm leading-relaxed text-slate-600 dark:text-slate-300">

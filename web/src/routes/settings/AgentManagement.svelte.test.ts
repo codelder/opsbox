@@ -20,11 +20,7 @@ vi.mock('$lib/modules/agent/api', () => ({
 }));
 
 import { useAgents } from '$lib/modules/agent';
-import {
-  fetchAgentLogConfig,
-  updateAgentLogLevel,
-  updateAgentLogRetention
-} from '$lib/modules/agent/api';
+import { fetchAgentLogConfig, updateAgentLogLevel, updateAgentLogRetention } from '$lib/modules/agent/api';
 
 const mockAgentsStore = {
   agents: [] as AgentInfo[],

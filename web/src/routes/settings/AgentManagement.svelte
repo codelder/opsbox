@@ -62,7 +62,7 @@
 
   async function toggleLogSettings(agentId: string) {
     expandedLogSettings[agentId] = !expandedLogSettings[agentId];
-    
+
     // 如果展开且还没有加载配置，则加载
     if (expandedLogSettings[agentId] && !agentLogConfigs[agentId]) {
       await loadAgentLogConfig(agentId);
@@ -275,13 +275,17 @@
               {#if expandedLogSettings[a.id]}
                 <div class="mt-4 space-y-3">
                   {#if logConfigError[a.id]}
-                    <div class="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-200">
+                    <div
+                      class="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-200"
+                    >
                       {logConfigError[a.id]}
                     </div>
                   {/if}
 
                   {#if logConfigSuccess[a.id]}
-                    <div class="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">
+                    <div
+                      class="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+                    >
                       {logConfigSuccess[a.id]}
                     </div>
                   {/if}
@@ -348,7 +352,9 @@
                     </div>
 
                     <!-- 提示信息 -->
-                    <div class="rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                    <div
+                      class="rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200"
+                    >
                       <ul class="list-disc space-y-1 pl-4">
                         <li>修改日志级别会立即生效，无需重启 Agent</li>
                         <li>修改日志保留数量会在下次日志滚动时生效</li>
