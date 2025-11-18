@@ -9,7 +9,7 @@ env:
 jobs:
   build-linux:
     name: Build Linux (musl)
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, x86_64]
 
     steps:
       - name: Checkout
