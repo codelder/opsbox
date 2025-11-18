@@ -15,11 +15,7 @@ vi.mock('$lib/modules/agent/api', () => ({
   updateServerLogRetention: vi.fn()
 }));
 
-import {
-  fetchServerLogConfig,
-  updateServerLogLevel,
-  updateServerLogRetention
-} from '$lib/modules/agent/api';
+import { fetchServerLogConfig, updateServerLogLevel, updateServerLogRetention } from '$lib/modules/agent/api';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -210,9 +206,7 @@ test('表单交互 - 保存时禁用按钮', async () => {
   };
 
   vi.mocked(fetchServerLogConfig).mockResolvedValue(mockConfig);
-  vi.mocked(updateServerLogLevel).mockImplementation(
-    () => new Promise((resolve) => setTimeout(resolve, 1000))
-  );
+  vi.mocked(updateServerLogLevel).mockImplementation(() => new Promise((resolve) => setTimeout(resolve, 1000)));
 
   render(ServerLogSettings, {});
 

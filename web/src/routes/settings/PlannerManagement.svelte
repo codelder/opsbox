@@ -137,8 +137,8 @@
     testing = true;
     try {
       // 传递当前编辑的脚本内容（如果存在），这样可以在保存前测试
-      const r = await testPlanner({ 
-        app: app.trim(), 
+      const r = await testPlanner({
+        app: app.trim(),
         q: testQ,
         script: script.trim() || undefined // 如果脚本不为空，传递脚本内容
       });
@@ -355,7 +355,8 @@
             </div>
           {/if}
           <div class="overflow-auto">
-            <pre class="test-output-box max-h-80 rounded border p-3 text-xs break-all whitespace-pre-wrap">{JSON.stringify(
+            <pre
+              class="test-output-box max-h-80 rounded border p-3 text-xs break-all whitespace-pre-wrap">{JSON.stringify(
                 testResult.sources,
                 null,
                 2
