@@ -78,7 +78,10 @@
   const styles = typeStyles[type];
 </script>
 
-<div class="flex items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-sm {styles.container} {className}">
+<div
+  data-testid="alert"
+  class="flex items-start gap-3 rounded-xl border px-4 py-3 text-sm shadow-sm {styles.container} {className}"
+>
   {#if showIcon}
     <svg
       xmlns="http://www.w3.org/2000/svg"

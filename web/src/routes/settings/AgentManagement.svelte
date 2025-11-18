@@ -127,7 +127,11 @@
           id="agent-filter"
           class="w-full rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-3 text-sm text-[var(--text)] shadow-inner shadow-black/5 focus:border-[var(--primary)] focus:ring-4 focus:ring-[var(--ring)] focus:outline-none"
           placeholder="key=value,team=frontend"
-          bind:value={agentsStore.tagFilter}
+          value={agentsStore.tagFilter}
+          oninput={(event) => {
+            const target = event.currentTarget as HTMLInputElement;
+            agentsStore.tagFilter = target.value;
+          }}
           onkeydown={(e) => {
             if (e.key === 'Enter') agentsStore.load();
           }}
@@ -139,8 +143,12 @@
           <input
             type="checkbox"
             class="h-4 w-4"
-            bind:checked={agentsStore.onlineOnly}
-            onchange={() => agentsStore.load()}
+            checked={agentsStore.onlineOnly}
+            onchange={(event) => {
+              const target = event.currentTarget as HTMLInputElement;
+              agentsStore.onlineOnly = target.checked;
+              agentsStore.load();
+            }}
           />
           只看在线
         </label>
@@ -226,11 +234,13 @@
                 <input
                   class="w-36 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-xs text-[var(--text)] shadow-inner shadow-black/5 focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)] focus:outline-none"
                   placeholder="key"
+                  data-testid={`tag-key-${a.id}`}
                   bind:value={newTagKey[a.id]}
                 />
                 <input
                   class="w-44 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-xs text-[var(--text)] shadow-inner shadow-black/5 focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--ring)] focus:outline-none"
                   placeholder="value"
+                  data-testid={`tag-value-${a.id}`}
                   bind:value={newTagValue[a.id]}
                   onkeydown={(e) => {
                     if (e.key === 'Enter') handleAddTag(a.id);

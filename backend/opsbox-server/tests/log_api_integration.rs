@@ -381,7 +381,7 @@ async fn test_concurrent_updates() {
   let repo = LogConfigRepository::new(pool);
   let config = repo.get("server").await.unwrap();
   // 最终级别应该是某个有效级别
-  let valid_levels = vec!["error", "warn", "info", "debug", "trace"];
+  let valid_levels = ["error", "warn", "info", "debug", "trace"];
   assert!(
     valid_levels.contains(&config.level.as_str()),
     "最终日志级别应该是有效的级别，实际为: {}",

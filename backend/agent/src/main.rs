@@ -65,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   // 处理 stop 子命令（优先处理）
   if let Some(Commands::Stop { pid_file, force }) = &args.cmd {
-    handle_stop_command(&pid_file, force);
+    handle_stop_command(pid_file, force);
     return Ok(());
   }
 

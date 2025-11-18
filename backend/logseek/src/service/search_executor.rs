@@ -347,6 +347,7 @@ impl SearchExecutor {
   /// - highlights: 高亮关键字列表
   /// - sid: 搜索会话 ID
   /// - tx: 结果发送通道
+  #[allow(clippy::too_many_arguments)]
   async fn search_entry_stream_source(
     pool: SqlitePool,
     source: Source,
@@ -534,6 +535,7 @@ impl SearchExecutor {
   /// - sid: 搜索会话 ID
   /// - cleaned_query: 清理后的查询字符串
   /// - tx: 结果发送通道
+  #[allow(clippy::too_many_arguments)]
   fn spawn_source_search(
     &self,
     source: Source,
