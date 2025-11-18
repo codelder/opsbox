@@ -80,6 +80,17 @@ pub struct SuccessResponse {
   pub message: String,
 }
 
+/// 构造禁用代理的 HTTP 客户端，保证访问本地 Agent 时不会被系统代理劫持
+fn build_agent_http_client() -> Result<reqwest::Client, (StatusCode, String)> {
+  reqwest::Client::builder().no_proxy().build().map_err(|e| {
+    tracing::error!("创建 Agent HTTP 客户端失败: {}", e);
+    (
+      StatusCode::INTERNAL_SERVER_ERROR,
+      format!("创建 HTTP 客户端失败: {}", e),
+    )
+  })
+}
+
 /// 创建 Agent 管理路由
 pub fn create_routes(manager: Arc<AgentManager>) -> Router {
   Router::new()
@@ -333,7 +344,7 @@ async fn proxy_agent_log_config(
   tracing::debug!("代理请求 Agent 日志配置: agent_id={}, url={}", agent_id, url);
 
   // 4. 转发请求
-  let client = reqwest::Client::new();
+  let client = build_agent_http_client()?;
   let response = client
     .get(&url)
     .timeout(std::time::Duration::from_secs(10))
@@ -397,7 +408,7 @@ async fn proxy_agent_log_level(
   );
 
   // 4. 转发请求
-  let client = reqwest::Client::new();
+  let client = build_agent_http_client()?;
   let response = client
     .put(&url)
     .json(&req)
@@ -463,7 +474,7 @@ async fn proxy_agent_log_retention(
   );
 
   // 4. 转发请求
-  let client = reqwest::Client::new();
+  let client = build_agent_http_client()?;
   let response = client
     .put(&url)
     .json(&req)

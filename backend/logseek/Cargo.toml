@@ -66,6 +66,11 @@ encoding_rs = "0.8"
 # Character encoding detection library (Mozilla's chardetng)
 chardetng = "0.1"
 mimalloc = "0.1.48"
+libmimalloc-sys = { version = "0.1.44", features = ["extended"] }
+
+[features]
+# 是否在缓存清理后调用 mimalloc 的 mi_collect(true) 主动尝试归还空闲内存
+mimalloc-collect = []
 
 [dev-dependencies]
 tempfile = "3"

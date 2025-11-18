@@ -184,8 +184,8 @@ pub fn init(config: LogConfig) -> Result<ReloadHandle, LogError> {
 
   // 创建 Console Layer（带彩色输出）
   if config.enable_console {
-        let console_layer = fmt::layer()
-            .with_timer(timer)
+    let console_layer = fmt::layer()
+      .with_timer(timer)
       .with_target(true)
       .with_thread_ids(false)
       .with_thread_names(false)
@@ -206,8 +206,8 @@ pub fn init(config: LogConfig) -> Result<ReloadHandle, LogError> {
 
       let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-            let file_layer = fmt::layer()
-                .with_timer(timer)
+      let file_layer = fmt::layer()
+        .with_timer(timer)
         .with_writer(non_blocking)
         .with_target(true)
         .with_thread_ids(false)

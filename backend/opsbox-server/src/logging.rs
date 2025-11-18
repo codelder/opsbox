@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use opsbox_core::logging::{init as core_init, LogConfig, LogLevel, ReloadHandle};
+use opsbox_core::logging::{LogConfig, LogLevel, ReloadHandle, init as core_init};
 use std::str::FromStr;
 
 /// 初始化日志系统

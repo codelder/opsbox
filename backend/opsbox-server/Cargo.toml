@@ -15,7 +15,8 @@ tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 opsbox-core = { path = "../opsbox-core" }
 # ✅ 模块化架构：使用 optional dependencies
-logseek = { path = "../logseek", optional = true }
+# 为 logseek 启用 mimalloc-collect 特性，以便在缓存清理后尝试收缩 mimalloc 堆
+logseek = { path = "../logseek", optional = true, features = ["mimalloc-collect"] }
 agent-manager = { path = "../agent-manager", optional = true }
 # 未来可添加更多模块：
 # analytics = { path = "../analytics", optional = true }

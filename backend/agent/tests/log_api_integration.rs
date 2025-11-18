@@ -50,19 +50,22 @@ fn create_test_config(log_dir: std::path::PathBuf, log_retention: usize) -> Arc<
   // 初始化日志系统（只执行一次）并获取 reload handle
   let reload_handle = init_test_logging_once();
 
-  Arc::new(opsbox_agent::AgentConfig::new(
-    "test-agent".to_string(),
-    "Test Agent".to_string(),
-    "http://localhost:4000".to_string(),
-    vec!["/tmp".to_string()],
-    4001,
-    true,
-    30,
-    None,
-    log_dir,
+  use std::sync::Arc as StdArc;
+
+  Arc::new(opsbox_agent::AgentConfig {
+    agent_id: "test-agent".to_string(),
+    agent_name: "Test Agent".to_string(),
+    server_endpoint: "http://localhost:4000".to_string(),
+    search_roots: vec!["/tmp".to_string()],
+    listen_port: 4001,
+    enable_heartbeat: true,
+    heartbeat_interval_secs: 30,
+    worker_threads: None,
+    log_dir: log_dir.clone(),
     log_retention,
-    Some(reload_handle),
-  ))
+    reload_handle: Some(reload_handle.clone()),
+    current_log_level: StdArc::new(std::sync::Mutex::new("info".to_string())),
+  })
 }
 
 /// 创建测试路由
@@ -70,9 +73,9 @@ fn create_test_router(config: Arc<opsbox_agent::AgentConfig>) -> axum::Router {
   use axum::routing::{get, put};
 
   axum::Router::new()
-    .route("/api/v1/log/config", get(opsbox_agent::get_log_config))
-    .route("/api/v1/log/level", put(opsbox_agent::update_log_level))
-    .route("/api/v1/log/retention", put(opsbox_agent::update_log_retention))
+    .route("/api/v1/log/config", get(opsbox_agent::routes::get_log_config))
+    .route("/api/v1/log/level", put(opsbox_agent::routes::update_log_level))
+    .route("/api/v1/log/retention", put(opsbox_agent::routes::update_log_retention))
     .with_state(opsbox_agent::AppState { config })
 }
 
