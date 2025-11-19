@@ -3,6 +3,8 @@
 #[cfg(windows)]
 use crate::config;
 #[cfg(windows)]
+use opsbox_core::logging::{LogConfig, LogLevel};
+#[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
 use std::sync::OnceLock;
@@ -244,6 +246,19 @@ pub fn run_as_service(
   }
 
   tracing::info!("收到停止信号，开始停止 Windows 服务...");
+
+  // 先上报 STOP_PENDING，告知 SCM 正在优雅关闭
+  let _ = status_handle.set_service_status(ServiceStatus {
+    service_type: ServiceType::OWN_PROCESS,
+    current_state: ServiceState::StopPending,
+    controls_accepted: ServiceControlAccept::empty(),
+    exit_code: ServiceExitCode::Win32(0),
+    checkpoint: 1,
+    wait_hint: std::time::Duration::from_secs(60),
+    process_id: None,
+  });
+
+  // 通知业务优雅关闭
   shutdown_notify.notify_waiters();
 
   // 等待主线程完成（最多等待 10 秒）
@@ -521,11 +536,47 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, args: crate::Args
     let service_name = SERVICE_NAME.get().expect("服务名未初始化").clone();
 
     if let Err(e) = run_as_service(&service_name, move |shutdown| {
-      // TODO: 初始化日志 - 将在后续任务中使用 tracing 实现
-      // env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+      // 加载配置并初始化日志系统
+      let mut cfg = config::AgentConfig::from_args(args);
+      let log_config = LogConfig {
+        level: LogLevel::Info,
+        log_dir: cfg.log_dir.clone(),
+        retention_count: cfg.log_retention,
+        enable_console: true,
+        enable_file: true,
+        file_prefix: "opsbox-agent".to_string(),
+      };
 
-      // 加载配置
-      let config = Arc::new(config::AgentConfig::from_args(args));
+      let reload_handle = opsbox_core::logging::init(log_config).map_err(|e| {
+        let msg = format!("日志系统初始化失败: {}", e);
+        tracing::error!("{}", msg);
+        msg
+      })?;
+      cfg.set_reload_handle(reload_handle);
+
+      // 如果设置了 RUST_LOG，记录当前级别
+      if let Ok(rust_log) = std::env::var("RUST_LOG") {
+        let level = rust_log
+          .split(',')
+          .find_map(|s| {
+            let s = s.trim();
+            if let Some((_, level)) = s.split_once('=') {
+              let level = level.trim().to_lowercase();
+              if matches!(level.as_str(), "error" | "warn" | "info" | "debug" | "trace") {
+                return Some(level);
+              }
+            }
+            let s_lower = s.to_lowercase();
+            if matches!(s_lower.as_str(), "error" | "warn" | "info" | "debug" | "trace") {
+              return Some(s_lower);
+            }
+            None
+          })
+          .unwrap_or_else(|| "info".to_string());
+        *cfg.current_log_level.lock().unwrap() = level;
+      }
+
+      let config = Arc::new(cfg);
 
       tracing::info!("OpsBox Agent Windows 服务启动中...");
       tracing::info!("Agent ID: {}", config.agent_id);
