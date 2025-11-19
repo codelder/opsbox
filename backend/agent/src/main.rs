@@ -26,6 +26,7 @@ use tokio::sync::Notify;
 use tracing::{error, info};
 
 use config::{Args, Commands};
+#[cfg(unix)]
 use daemon::{default_pid_file, resolve_pid_path, start_daemon, stop_daemon};
 use routes::create_router;
 use server::{heartbeat_loop, register_to_server};

@@ -524,7 +524,7 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, config: AppConfig
 
     if let Err(e) = run_as_service("OpsBoxService", move |shutdown| {
       // 初始化日志系统
-      crate::logging::init(&cfg);
+      let _ = crate::logging::init(&cfg);
 
       // 初始化网络环境
       crate::network::init_network_env();

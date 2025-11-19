@@ -10,6 +10,7 @@ use axum::{
   body::Body,
   http::{Request, StatusCode},
 };
+use futures::future;
 use opsbox_core::logging::LogLevel;
 use serde_json::json;
 use std::sync::Arc;
@@ -345,7 +346,7 @@ async fn test_concurrent_updates() {
   }
 
   // 等待所有请求完成
-  let results = futures::future::join_all(handles).await;
+  let results = future::join_all(handles).await;
 
   // 验证所有请求都成功
   for result in results {

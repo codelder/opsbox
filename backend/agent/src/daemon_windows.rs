@@ -1,6 +1,8 @@
 //! Windows 服务相关功能（Agent）
 
 #[cfg(windows)]
+use crate::config;
+#[cfg(windows)]
 use std::ffi::OsString;
 #[cfg(windows)]
 use std::sync::OnceLock;
@@ -523,7 +525,7 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, args: crate::Args
       // env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
       // 加载配置
-      let config = Arc::new(crate::AgentConfig::from_args(args));
+      let config = Arc::new(config::AgentConfig::from_args(args));
 
       tracing::info!("OpsBox Agent Windows 服务启动中...");
       tracing::info!("Agent ID: {}", config.agent_id);
