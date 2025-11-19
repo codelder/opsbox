@@ -29,7 +29,7 @@ jobs:
           workflow: build-linux.yml
           commit: ${{ github.sha }}
           name: opsbox-server-linux-x86_64-musl
-          path: artifacts
+          path: artifacts/opsbox-server-linux-x86_64-musl
           if_no_artifact_found: fail
 
       - name: Download opsbox-agent (Linux)
@@ -38,7 +38,7 @@ jobs:
           workflow: build-linux.yml
           commit: ${{ github.sha }}
           name: opsbox-agent-linux-x86_64-musl
-          path: artifacts
+          path: artifacts/opsbox-agent-linux-x86_64-musl
           if_no_artifact_found: fail
 
       - name: Download opsbox-server (Windows)
@@ -47,7 +47,7 @@ jobs:
           workflow: build-windows.yml
           commit: ${{ github.sha }}
           name: opsbox-server-windows-x86_64-msvc
-          path: artifacts
+          path: artifacts/opsbox-server-windows-x86_64-msvc
           if_no_artifact_found: fail
 
       - name: Download opsbox-agent (Windows)
@@ -56,7 +56,7 @@ jobs:
           workflow: build-windows.yml
           commit: ${{ github.sha }}
           name: opsbox-agent-windows-x86_64-msvc
-          path: artifacts
+          path: artifacts/opsbox-agent-windows-x86_64-msvc
           if_no_artifact_found: fail
 
       - name: List downloaded artifacts
