@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use daemon_windows::{handle_install_service, handle_start_service, handle_stop_service, handle_uninstall_service};
 
     if args.install_service {
-      handle_install_service("OpsBoxAgent", "OpsBox Agent");
+      handle_install_service("OpsBoxAgent", "OpsBox Agent", &args);
       return Ok(());
     }
     if args.uninstall_service {

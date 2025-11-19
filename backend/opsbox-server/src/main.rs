@@ -44,7 +44,7 @@ fn main() {
     };
 
     if config.install_service {
-      handle_install_service(SERVICE_NAME, "OpsBox Server");
+      handle_install_service(SERVICE_NAME, "OpsBox Server", &config);
       return;
     }
     if config.uninstall_service {

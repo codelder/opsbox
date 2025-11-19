@@ -293,6 +293,7 @@ pub fn install_service(
   service_name: &str,
   display_name: &str,
   bin_path: &str,
+  extra_args: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
   use std::process::Command;
 
@@ -351,8 +352,12 @@ pub fn install_service(
     }
   }
 
-  // binPath 需要用引号括起来，并且需要包含 --service-mode 参数
-  let bin_path_with_args = format!("\"{}\" --service-mode", bin_path);
+  // binPath 需要用引号括起来，并且需要包含 --service-mode 参数和额外的启动参数
+  let bin_path_with_args = if extra_args.is_empty() {
+    format!("\"{}\" --service-mode", bin_path)
+  } else {
+    format!("\"{}\" {} --service-mode", bin_path, extra_args)
+  };
 
   println!("正在安装服务 '{}'...", service_name);
   let output = Command::new("sc")
@@ -466,9 +471,70 @@ pub fn stop_service(service_name: &str) -> Result<(), Box<dyn std::error::Error>
   Ok(())
 }
 
+/// 将 Args 转换为命令行参数字符串（排除服务管理相关的参数）
+#[cfg(windows)]
+fn args_to_service_args(args: &crate::Args) -> String {
+  use std::fmt::Write;
+  let mut result = String::new();
+
+  // Agent ID
+  if !args.agent_id.is_empty() {
+    let _ = write!(result, "--agent-id \"{}\" ", args.agent_id);
+  }
+
+  // Agent Name
+  if !args.agent_name.is_empty() {
+    let _ = write!(result, "--agent-name \"{}\" ", args.agent_name);
+  }
+
+  // Server Endpoint
+  if !args.server_endpoint.is_empty() {
+    let _ = write!(result, "--server-endpoint \"{}\" ", args.server_endpoint);
+  }
+
+  // Search Roots
+  if !args.search_roots.is_empty() {
+    let _ = write!(result, "--search-roots \"{}\" ", args.search_roots);
+  }
+
+  // Listen Port
+  if args.listen_port != 4001 {
+    let _ = write!(result, "--listen-port {} ", args.listen_port);
+  }
+
+  // Heartbeat
+  if !args.enable_heartbeat || args.no_heartbeat {
+    if args.no_heartbeat {
+      let _ = write!(result, "--no-heartbeat ");
+    }
+  }
+
+  // Heartbeat Interval
+  if args.heartbeat_interval != 30 {
+    let _ = write!(result, "--heartbeat-interval {} ", args.heartbeat_interval);
+  }
+
+  // Worker Threads
+  if let Some(threads) = args.worker_threads {
+    let _ = write!(result, "--worker-threads {} ", threads);
+  }
+
+  // Log Dir
+  if !args.log_dir.is_empty() {
+    let _ = write!(result, "--log-dir \"{}\" ", args.log_dir);
+  }
+
+  // Log Retention
+  if args.log_retention != 7 {
+    let _ = write!(result, "--log-retention {} ", args.log_retention);
+  }
+
+  result.trim().to_string()
+}
+
 /// 处理安装 Windows 服务（高级包装函数）
 #[cfg(windows)]
-pub fn handle_install_service(service_name: &str, display_name: &str) {
+pub fn handle_install_service(service_name: &str, display_name: &str, args: &crate::Args) {
   use std::env;
 
   // 获取当前可执行文件路径
@@ -477,16 +543,23 @@ pub fn handle_install_service(service_name: &str, display_name: &str) {
     .to_string_lossy()
     .to_string();
 
-  if let Err(e) = install_service(service_name, display_name, &exe_path) {
+  // 将 Args 转换为命令行参数字符串
+  let extra_args = args_to_service_args(args);
+
+  if let Err(e) = install_service(service_name, display_name, &exe_path, &extra_args) {
     eprintln!("安装 Windows 服务失败: {}", e);
     std::process::exit(1);
   }
 
   println!("Windows 服务安装成功！");
+  if !extra_args.is_empty() {
+    println!("启动参数: {}", extra_args);
+  }
   println!("使用以下命令管理服务：");
   println!("  启动服务: sc start {}", service_name);
   println!("  停止服务: sc stop {}", service_name);
   println!("  查看状态: sc query {}", service_name);
+  println!("  修改参数: 需要先卸载服务，然后重新安装并指定参数");
 }
 
 /// 处理卸载 Windows 服务（高级包装函数）

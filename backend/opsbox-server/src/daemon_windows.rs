@@ -286,6 +286,7 @@ pub fn install_service(
   service_name: &str,
   display_name: &str,
   bin_path: &str,
+  extra_args: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
   use std::process::Command;
 
@@ -345,7 +346,12 @@ pub fn install_service(
   }
 
   // binPath 需要用引号括起来，并且需要包含 --service-mode 参数
-  let bin_path_with_args = format!("\"{}\" --service-mode", bin_path);
+  let extra_args = extra_args.trim();
+  let bin_path_with_args = if extra_args.is_empty() {
+    format!("\"{}\" --service-mode", bin_path)
+  } else {
+    format!("\"{}\" {} --service-mode", bin_path, extra_args)
+  };
 
   println!("正在安装服务 '{}'...", service_name);
   let output = Command::new("sc")
@@ -459,9 +465,63 @@ pub fn stop_service(service_name: &str) -> Result<(), Box<dyn std::error::Error>
   Ok(())
 }
 
+#[cfg(windows)]
+fn config_to_service_args(cfg: &AppConfig) -> String {
+  use std::fmt::Write;
+
+  let mut result = String::new();
+
+  if let Some(addr) = cfg.addr {
+    let _ = write!(result, "--addr \"{}\" ", addr);
+  } else {
+    let _ = write!(result, "--host \"{}\" ", cfg.host);
+    let _ = write!(result, "--port {} ", cfg.port);
+  }
+
+  if cfg.daemon {
+    let _ = write!(result, "--daemon ");
+  }
+
+  if let Some(level) = &cfg.log_level {
+    let _ = write!(result, "--log-level {} ", level);
+  }
+
+  if cfg.verbose > 0 {
+    for _ in 0..cfg.verbose {
+      let _ = write!(result, "-v ");
+    }
+  }
+
+  if !cfg.log_dir.is_empty() {
+    let _ = write!(result, "--log-dir \"{}\" ", cfg.log_dir);
+  }
+
+  if cfg.log_retention != 7 {
+    let _ = write!(result, "--log-retention {} ", cfg.log_retention);
+  }
+
+  if let Some(db_url) = &cfg.database_url {
+    let _ = write!(result, "--database-url \"{}\" ", db_url);
+  }
+
+  if let Some(max) = cfg.io_max_concurrency {
+    let _ = write!(result, "--io-max-concurrency {} ", max);
+  }
+
+  if let Some(timeout) = cfg.io_timeout_sec {
+    let _ = write!(result, "--io-timeout-sec {} ", timeout);
+  }
+
+  if let Some(retries) = cfg.io_max_retries {
+    let _ = write!(result, "--io-max-retries {} ", retries);
+  }
+
+  result.trim().to_string()
+}
+
 /// 处理安装 Windows 服务（高级包装函数）
 #[cfg(windows)]
-pub fn handle_install_service(service_name: &str, display_name: &str) {
+pub fn handle_install_service(service_name: &str, display_name: &str, cfg: &AppConfig) {
   use std::env;
 
   // 获取当前可执行文件路径
@@ -470,12 +530,17 @@ pub fn handle_install_service(service_name: &str, display_name: &str) {
     .to_string_lossy()
     .to_string();
 
-  if let Err(e) = install_service(service_name, display_name, &exe_path) {
+  let extra_args = config_to_service_args(cfg);
+
+  if let Err(e) = install_service(service_name, display_name, &exe_path, &extra_args) {
     eprintln!("安装 Windows 服务失败: {}", e);
     std::process::exit(1);
   }
 
   println!("Windows 服务安装成功！");
+  if !extra_args.is_empty() {
+    println!("启动参数: {}", extra_args);
+  }
   println!("使用以下命令管理服务：");
   println!("  启动服务: sc start {}", service_name);
   println!("  停止服务: sc stop {}", service_name);
