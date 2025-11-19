@@ -1,0 +1,148 @@
+name: Build Windows
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  RUST_VERSION: '1.90.0'
+
+jobs:
+  build:
+    name: Build Windows
+    runs-on: [self-hosted, Windows, x64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify setup-node action
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+        continue-on-error: true
+
+      - name: Enable pnpm via corepack
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+
+      - name: Restore pnpm cache
+        if: ${{ startsWith(runner.name, 'GitHub Actions') }}
+        uses: actions/cache@v4
+        with:
+          path: $env:LOCALAPPDATA\pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
+
+      - name: Install frontend dependencies
+        shell: pwsh
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: Run frontend tests
+        shell: pwsh
+        run: pnpm --dir web test
+
+      - name: Build frontend
+        shell: pwsh
+        run: pnpm --dir web build
+
+      - name: Setup Rust toolchain
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90.0'
+
+      # 缓存策略（仅在 GitHub 托管 runner 上使用）
+      - name: Restore build cache
+        if: ${{ startsWith(runner.name, 'GitHub Actions') }}
+        uses: actions/cache@v4
+        with:
+          path: backend/target
+          key: target-windows-${{ runner.os }}-${{ env.RUST_VERSION }}-${{ hashFiles('backend/Cargo.lock') }}
+          restore-keys: |
+            target-windows-${{ runner.os }}-${{ env.RUST_VERSION }}-
+            target-windows-${{ runner.os }}-
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          # 运行测试（使用 release 模式，与后续构建共享编译产物）
+          cargo test `
+            --manifest-path backend/Cargo.toml `
+            --release `
+            --all-features
+
+      - name: Build backend
+        shell: pwsh
+        run: |
+          # 构建 release 版本（利用测试阶段的编译缓存）
+          cargo build `
+            --manifest-path backend/Cargo.toml `
+            -p opsbox-server -p opsbox-agent `
+            --release `
+            --locked
+
+      # 只在打标签时打包和上传
+      - name: Package opsbox-server artifact
+        shell: pwsh
+        run: |
+          $OPSBOX_DIR = "dist/opsbox-server-windows-x86_64-msvc"
+          $OPSBOX_BIN = "backend/target/release/opsbox-server.exe"
+          New-Item -ItemType Directory -Force -Path $OPSBOX_DIR | Out-Null
+          
+          # 显示二进制信息
+          Write-Host "Binary size:"
+          Get-Item $OPSBOX_BIN | Select-Object Name, Length, LastWriteTime
+          
+          # 验证二进制类型
+          Write-Host "Binary type:"
+          file $OPSBOX_BIN 2>$null || Get-Item $OPSBOX_BIN | Select-Object Name
+          
+          Copy-Item $OPSBOX_BIN $OPSBOX_DIR/
+          
+          # 添加版本信息
+          $VERSION_FILE = Join-Path $OPSBOX_DIR "VERSION"
+          "${{ github.sha }}" | Out-File -FilePath $VERSION_FILE -Encoding utf8
+          "Target: x86_64-pc-windows-msvc" | Out-File -FilePath $VERSION_FILE -Append -Encoding utf8
+          "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')" | Out-File -FilePath $VERSION_FILE -Append -Encoding utf8
+          "Binary: opsbox-server.exe" | Out-File -FilePath $VERSION_FILE -Append -Encoding utf8
+
+      - name: Package opsbox-agent artifact
+        shell: pwsh
+        run: |
+          $AGENT_DIR = "dist/opsbox-agent-windows-x86_64-msvc"
+          $AGENT_BIN = "backend/target/release/opsbox-agent.exe"
+          New-Item -ItemType Directory -Force -Path $AGENT_DIR | Out-Null
+          
+          # 显示二进制信息
+          Write-Host "Binary size:"
+          Get-Item $AGENT_BIN | Select-Object Name, Length, LastWriteTime
+          
+          # 验证二进制类型
+          Write-Host "Binary type:"
+          file $AGENT_BIN 2>$null || Get-Item $AGENT_BIN | Select-Object Name
+          
+          Copy-Item $AGENT_BIN $AGENT_DIR/
+          
+          # 添加版本信息
+          $VERSION_FILE = Join-Path $AGENT_DIR "VERSION"
+          "${{ github.sha }}" | Out-File -FilePath $VERSION_FILE -Encoding utf8
+          "Target: x86_64-pc-windows-msvc" | Out-File -FilePath $VERSION_FILE -Append -Encoding utf8
+          "Built: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')" | Out-File -FilePath $VERSION_FILE -Append -Encoding utf8
+          "Binary: opsbox-agent.exe" | Out-File -FilePath $VERSION_FILE -Append -Encoding utf8
+
+      - name: Upload opsbox-server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-server-windows-x86_64-msvc
+          path: dist/opsbox-server-windows-x86_64-msvc
+
+      - name: Upload opsbox-agent artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: opsbox-agent-windows-x86_64-msvc
+          path: dist/opsbox-agent-windows-x86_64-msvc
+

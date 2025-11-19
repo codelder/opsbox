@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Extract tag name
+        id: tag
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Tag name: $TAG_NAME"
+
+      - name: Download artifacts from Build Linux
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-linux.yml
+          commit: ${{ github.sha }}
+          name: opsbox-*
+          path: artifacts
+          if_no_artifact_found: fail
+
+      - name: Download artifacts from Build Windows
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-windows.yml
+          commit: ${{ github.sha }}
+          name: opsbox-*
+          path: artifacts
+          if_no_artifact_found: fail
+
+      - name: List downloaded artifacts
+        run: |
+          echo "Downloaded artifacts:"
+          ls -lR artifacts/ || echo "No artifacts found"
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          
+          # 为每个 artifact 创建 tar.gz 包
+          for dir in artifacts/*/; do
+            if [ -d "$dir" ]; then
+              artifact_name=$(basename "$dir")
+              echo "Packaging $artifact_name..."
+              tar -czf "release-files/${artifact_name}.tar.gz" -C "$dir" .
+            fi
+          done
+          
+          echo "Release files:"
+          ls -lh release-files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: release-files/*.tar.gz
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            ## opsbox ${{ steps.tag.outputs.tag }}
+            
+            ### 下载
+            
+            #### Linux (推荐 - 通用静态链接)
+            - [opsbox-server-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-server-linux-x86_64-musl.tar.gz)
+            - [opsbox-agent-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-agent-linux-x86_64-musl.tar.gz)
+            
+            #### Windows
+            - [opsbox-server-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-server-windows-x86_64-msvc.tar.gz)
+            - [opsbox-agent-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-agent-windows-x86_64-msvc.tar.gz)
+
+

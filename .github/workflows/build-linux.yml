@@ -1,15 +1,16 @@
-name: build-linux-reusable
+name: Build Linux
 
 on:
-  workflow_call:
+  push:
+    branches: [ main ]
 
 env:
   RUST_VERSION: '1.90.0'
 
 jobs:
-  build-linux:
+  build:
     name: Build Linux (musl)
-    runs-on: [self-hosted, Linux, x86_64]
+    runs-on: [self-hosted, Linux, x64]
 
     steps:
       - name: Checkout
@@ -21,16 +22,44 @@ jobs:
           node-version: '20'
         continue-on-error: true
 
-      - name: Setup Frontend
-        uses: ./.github/actions/setup-frontend
+      - name: Enable pnpm via corepack
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
 
-      - name: Setup Rust
-        id: rust-setup
-        uses: ./.github/actions/setup-rust
+      - name: Restore pnpm cache
+        if: ${{ startsWith(runner.name, 'GitHub Actions') }}
+        uses: actions/cache@v4
         with:
-          additional-targets: x86_64-unknown-linux-musl
+          path: ~/.pnpm-store
+          key: pnpm-store-${{ runner.os }}-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-${{ runner.os }}-
 
-      # 优化的缓存策略
+      - name: Install frontend dependencies
+        shell: bash
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: Run frontend tests
+        shell: bash
+        run: pnpm --dir web test
+
+      - name: Build frontend
+        shell: bash
+        run: pnpm --dir web build
+
+      - name: Setup Rust toolchain
+        id: rust-toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.90.0'
+
+      - name: Install additional targets
+        shell: bash
+        run: rustup target add x86_64-unknown-linux-musl
+
+      # 缓存策略（仅在 GitHub 托管 runner 上使用）
       - name: Restore build cache
         if: ${{ startsWith(runner.name, 'GitHub Actions') }}
         uses: actions/cache@v4
@@ -75,31 +104,7 @@ jobs:
             --release \
             --locked
 
-      # 清理缓存中的大文件，只保留增量编译需要的文件
-      - name: Clean cache before saving
-        run: |
-          set -x
-          TARGET_DIR="backend/target-musl"
-          
-          # 显示清理前的大小
-          echo "Cache size before cleanup:"
-          du -sh "$TARGET_DIR" || true
-          
-          # 删除不需要缓存的文件
-          find "$TARGET_DIR" -type f -name "*.rlib" -size +10M -delete || true
-          find "$TARGET_DIR" -type f -name "*.rmeta" -delete || true
-          find "$TARGET_DIR" -type d -name "examples" -exec rm -rf {} + || true
-          find "$TARGET_DIR" -type d -name "incremental" -exec rm -rf {} + || true
-          
-          # 保留 release 二进制文件（已经复制到 dist 了）
-          # 但删除其他大的中间文件
-          find "$TARGET_DIR" -type f -size +50M ! -name "opsbox-*" -delete || true
-          
-          # 显示清理后的大小
-          echo "Cache size after cleanup:"
-          du -sh "$TARGET_DIR" || true
-
-
+      # 只在打标签时打包和上传
       - name: Package opsbox-server artifact
         run: |
           set -eux
