@@ -120,7 +120,15 @@ jobs:
           
           # 验证二进制类型
           Write-Host "Binary type:"
-          file $OPSBOX_BIN 2>$null || Get-Item $OPSBOX_BIN | Select-Object Name
+          try {
+            $resolvedPath = Resolve-Path $OPSBOX_BIN
+            $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedPath)
+            Write-Host "  FileDescription: $($versionInfo.FileDescription)"
+            Write-Host "  ProductVersion : $($versionInfo.ProductVersion)"
+            Write-Host "  OriginalName   : $($versionInfo.OriginalFilename)"
+          } catch {
+            Write-Host "  (Fallback) Name: $((Get-Item $OPSBOX_BIN).Name)"
+          }
           
           Copy-Item $OPSBOX_BIN $OPSBOX_DIR/
           
@@ -144,7 +152,15 @@ jobs:
           
           # 验证二进制类型
           Write-Host "Binary type:"
-          file $AGENT_BIN 2>$null || Get-Item $AGENT_BIN | Select-Object Name
+          try {
+            $resolvedPath = Resolve-Path $AGENT_BIN
+            $versionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($resolvedPath)
+            Write-Host "  FileDescription: $($versionInfo.FileDescription)"
+            Write-Host "  ProductVersion : $($versionInfo.ProductVersion)"
+            Write-Host "  OriginalName   : $($versionInfo.OriginalFilename)"
+          } catch {
+            Write-Host "  (Fallback) Name: $((Get-Item $AGENT_BIN).Name)"
+          }
           
           Copy-Item $AGENT_BIN $AGENT_DIR/
           
