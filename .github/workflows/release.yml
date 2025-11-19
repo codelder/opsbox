@@ -23,21 +23,39 @@ jobs:
           echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
           echo "Tag name: $TAG_NAME"
 
-      - name: Download artifacts from Build Linux
+      - name: Download opsbox-server (Linux)
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: build-linux.yml
           commit: ${{ github.sha }}
-          name: opsbox-*
+          name: opsbox-server-linux-x86_64-musl
           path: artifacts
           if_no_artifact_found: fail
 
-      - name: Download artifacts from Build Windows
+      - name: Download opsbox-agent (Linux)
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-linux.yml
+          commit: ${{ github.sha }}
+          name: opsbox-agent-linux-x86_64-musl
+          path: artifacts
+          if_no_artifact_found: fail
+
+      - name: Download opsbox-server (Windows)
         uses: dawidd6/action-download-artifact@v3
         with:
           workflow: build-windows.yml
           commit: ${{ github.sha }}
-          name: opsbox-*
+          name: opsbox-server-windows-x86_64-msvc
+          path: artifacts
+          if_no_artifact_found: fail
+
+      - name: Download opsbox-agent (Windows)
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-windows.yml
+          commit: ${{ github.sha }}
+          name: opsbox-agent-windows-x86_64-msvc
           path: artifacts
           if_no_artifact_found: fail
 
