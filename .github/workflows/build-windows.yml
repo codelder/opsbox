@@ -54,10 +54,27 @@ jobs:
         run: pnpm --dir web build
 
       - name: Setup Rust toolchain
-        id: rust-toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.90.0'
+        shell: pwsh
+        run: |
+          # 检查 rustup 是否已安装
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing rustup..."
+            Invoke-WebRequest -Uri "https://win.rustup.rs/x86_64" -OutFile "$env:TEMP\rustup-init.exe"
+            & "$env:TEMP\rustup-init.exe" -y --default-toolchain none
+            Remove-Item "$env:TEMP\rustup-init.exe" -ErrorAction SilentlyContinue
+          }
+          
+          # 确保 rustup 在 PATH 中
+          $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+          
+          # 安装指定版本的 Rust 工具链（如果尚未安装）
+          rustup toolchain install 1.90.0 --profile minimal
+          rustup default 1.90.0
+          rustup component add rustfmt clippy
+          
+          # 验证安装（此时 cargo 应该已经存在）
+          rustc --version
+          cargo --version
 
       # 缓存策略（仅在 GitHub 托管 runner 上使用）
       - name: Restore build cache
