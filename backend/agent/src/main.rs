@@ -245,20 +245,20 @@ fn handle_daemon_mode(args: &Args) {
   }
   #[cfg(all(not(unix), not(windows)))]
   {
-    if let Some(Commands::Start { daemon, .. }) = &args.cmd {
-      if *daemon {
-        eprintln!("守护进程模式仅在 Unix 系统上支持");
-        std::process::exit(1);
-      }
+    if let Some(Commands::Start { daemon, .. }) = &args.cmd
+      && *daemon
+    {
+      eprintln!("守护进程模式仅在 Unix 系统上支持");
+      std::process::exit(1);
     }
   }
   #[cfg(windows)]
   {
-    if let Some(Commands::Start { daemon, .. }) = &args.cmd {
-      if *daemon {
-        eprintln!("在 Windows 上，请使用 --service-mode 或安装为 Windows 服务");
-        std::process::exit(1);
-      }
+    if let Some(Commands::Start { daemon, .. }) = &args.cmd
+      && *daemon
+    {
+      eprintln!("在 Windows 上，请使用 --service-mode 或安装为 Windows 服务");
+      std::process::exit(1);
     }
   }
 }

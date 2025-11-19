@@ -293,54 +293,54 @@ pub fn install_service(
 
   // 先检查服务是否已存在，如果存在则先删除
   println!("检查服务 '{}' 是否已存在...", service_name);
-  let check_output = Command::new("sc").args(&["query", service_name]).output();
+  let check_output = Command::new("sc").args(["query", service_name]).output();
 
-  if let Ok(output) = check_output {
-    if output.status.success() {
-      println!("服务 '{}' 已存在，先尝试停止并删除...", service_name);
+  if let Ok(output) = check_output
+    && output.status.success()
+  {
+    println!("服务 '{}' 已存在，先尝试停止并删除...", service_name);
 
-      // 尝试停止服务（忽略错误，因为服务可能已经停止）
-      let _ = Command::new("sc").args(&["stop", service_name]).output();
+    // 尝试停止服务（忽略错误，因为服务可能已经停止）
+    let _ = Command::new("sc").args(["stop", service_name]).output();
 
-      // 等待服务停止（最多等待 5 秒）
-      for _ in 0..50 {
-        let status_output = Command::new("sc").args(&["query", service_name]).output();
+    // 等待服务停止（最多等待 5 秒）
+    for _ in 0..50 {
+      let status_output = Command::new("sc").args(["query", service_name]).output();
 
-        if let Ok(so) = status_output {
-          let status_text = String::from_utf8_lossy(&so.stdout);
-          if status_text.contains("STOPPED") || !so.status.success() {
-            break;
-          }
+      if let Ok(so) = status_output {
+        let status_text = String::from_utf8_lossy(&so.stdout);
+        if status_text.contains("STOPPED") || !so.status.success() {
+          break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
       }
+      std::thread::sleep(std::time::Duration::from_millis(100));
+    }
 
-      // 删除服务
-      let delete_output = Command::new("sc").args(&["delete", service_name]).output()?;
+    // 删除服务
+    let delete_output = Command::new("sc").args(["delete", service_name]).output()?;
 
-      if !delete_output.status.success() {
-        let error_msg = String::from_utf8_lossy(&delete_output.stderr);
-        // 如果错误是"指定的服务不存在"或"指定的服务已被标记为删除"，可以继续
-        if !error_msg.contains("1060") && !error_msg.contains("1072") {
-          println!("警告: 删除旧服务时出现错误: {}", error_msg);
-        }
-      } else {
-        println!("旧服务已删除");
+    if !delete_output.status.success() {
+      let error_msg = String::from_utf8_lossy(&delete_output.stderr);
+      // 如果错误是"指定的服务不存在"或"指定的服务已被标记为删除"，可以继续
+      if !error_msg.contains("1060") && !error_msg.contains("1072") {
+        println!("警告: 删除旧服务时出现错误: {}", error_msg);
       }
+    } else {
+      println!("旧服务已删除");
+    }
 
-      // 等待服务完全删除（最多等待 3 秒）
-      // 错误 1072 表示服务正在被删除，需要等待
-      for _ in 0..30 {
-        let check_output = Command::new("sc").args(&["query", service_name]).output();
+    // 等待服务完全删除（最多等待 3 秒）
+    // 错误 1072 表示服务正在被删除，需要等待
+    for _ in 0..30 {
+      let check_output = Command::new("sc").args(["query", service_name]).output();
 
-        if let Ok(co) = check_output {
-          if !co.status.success() {
-            // 服务已不存在，可以继续安装
-            break;
-          }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+      if let Ok(co) = check_output
+        && !co.status.success()
+      {
+        // 服务已不存在，可以继续安装
+        break;
       }
+      std::thread::sleep(std::time::Duration::from_millis(100));
     }
   }
 
@@ -349,7 +349,7 @@ pub fn install_service(
 
   println!("正在安装服务 '{}'...", service_name);
   let output = Command::new("sc")
-    .args(&[
+    .args([
       "create",
       service_name,
       &format!("binPath={}", bin_path_with_args),
@@ -385,7 +385,7 @@ pub fn install_service(
   // 说明：使用 `sc description` 设置服务描述，便于在“服务”管理器中识别
   let description = "OpsBox Server：运维工具箱";
   let desc_output = Command::new("sc")
-    .args(&["description", service_name, description])
+    .args(["description", service_name, description])
     .output();
   match desc_output {
     Ok(o) if o.status.success() => {
@@ -410,13 +410,13 @@ pub fn uninstall_service(service_name: &str) -> Result<(), Box<dyn std::error::E
   use std::process::Command;
 
   // 先停止服务
-  let _ = Command::new("sc").args(&["stop", service_name]).output();
+  let _ = Command::new("sc").args(["stop", service_name]).output();
 
   // 等待服务停止
   std::thread::sleep(std::time::Duration::from_secs(2));
 
   // 删除服务
-  let output = Command::new("sc").args(&["delete", service_name]).output()?;
+  let output = Command::new("sc").args(["delete", service_name]).output()?;
 
   if !output.status.success() {
     let error = String::from_utf8_lossy(&output.stderr);
@@ -432,7 +432,7 @@ pub fn uninstall_service(service_name: &str) -> Result<(), Box<dyn std::error::E
 pub fn start_service(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
   use std::process::Command;
 
-  let output = Command::new("sc").args(&["start", service_name]).output()?;
+  let output = Command::new("sc").args(["start", service_name]).output()?;
 
   if !output.status.success() {
     let error = String::from_utf8_lossy(&output.stderr);
@@ -448,7 +448,7 @@ pub fn start_service(service_name: &str) -> Result<(), Box<dyn std::error::Error
 pub fn stop_service(service_name: &str) -> Result<(), Box<dyn std::error::Error>> {
   use std::process::Command;
 
-  let output = Command::new("sc").args(&["stop", service_name]).output()?;
+  let output = Command::new("sc").args(["stop", service_name]).output()?;
 
   if !output.status.success() {
     let error = String::from_utf8_lossy(&output.stderr);

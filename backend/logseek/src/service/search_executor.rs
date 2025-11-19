@@ -663,6 +663,11 @@ mod tests {
     pool
   }
 
+  /// 将 Windows 风格路径转义为可安全嵌入 Starlark 字面量的字符串
+  fn escape_path_for_starlark(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "\\\\")
+  }
+
   /// 设置测试数据源
   async fn setup_test_sources(pool: &SqlitePool) {
     // 创建一个简单的测试 planner 脚本
@@ -1370,28 +1375,39 @@ SOURCES = []
     let pool = create_test_pool().await;
 
     // 创建一个包含多个数据源的 planner，其中一些路径不存在
-    let mixed_script = r#"
+    let temp_dir = tempfile::tempdir().unwrap();
+    let valid_root = escape_path_for_starlark(temp_dir.path());
+    let invalid_root1 = escape_path_for_starlark(&temp_dir.path().join("missing1"));
+    let invalid_root2 = escape_path_for_starlark(&temp_dir.path().join("missing2"));
+
+    // 准备有效数据源中的文件
+    std::fs::write(temp_dir.path().join("valid.log"), "test line\n").unwrap();
+
+    let mixed_script = format!(
+      r#"
 # 混合有效和无效数据源
 SOURCES = [
-    {
-        "endpoint": {"kind": "local", "root": "/nonexistent/path1"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
+    {{
+        "endpoint": {{"kind": "local", "root": "{}"}},
+        "target": {{"type": "dir", "path": ".", "recursive": True}},
         "display_name": "invalid-source-1",
-    },
-    {
-        "endpoint": {"kind": "local", "root": "/tmp"},
-        "target": {"type": "dir", "path": ".", "recursive": False},
+    }},
+    {{
+        "endpoint": {{"kind": "local", "root": "{}"}},
+        "target": {{"type": "dir", "path": ".", "recursive": False}},
         "display_name": "valid-source",
-    },
-    {
-        "endpoint": {"kind": "local", "root": "/nonexistent/path2"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
+    }},
+    {{
+        "endpoint": {{"kind": "local", "root": "{}"}},
+        "target": {{"type": "dir", "path": ".", "recursive": True}},
         "display_name": "invalid-source-2",
-    }
+    }}
 ]
-"#;
+"#,
+      invalid_root1, valid_root, invalid_root2
+    );
 
-    planners::upsert_script(&pool, "mixed", mixed_script).await.unwrap();
+    planners::upsert_script(&pool, "mixed", &mixed_script).await.unwrap();
     planners::set_default(&pool, Some("mixed")).await.unwrap();
 
     let config = SearchExecutorConfig::default();
@@ -2659,7 +2675,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "real_local", &planner_script)
@@ -2728,7 +2744,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "context_test", &planner_script)
@@ -2785,7 +2801,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "filter_test", &planner_script)
@@ -2843,7 +2859,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "recursive_test", &planner_script)
@@ -2895,7 +2911,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "encoding_test", &planner_script)
@@ -2951,7 +2967,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "boolean_test", &planner_script)
@@ -3005,7 +3021,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "multi_files_test", &planner_script)
@@ -3056,7 +3072,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "highlights_test", &planner_script)
@@ -3120,7 +3136,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "archive_test", &planner_script)
@@ -3170,7 +3186,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "or_test", &planner_script)
@@ -3222,7 +3238,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "not_test", &planner_script)
@@ -3275,7 +3291,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "regex_test", &planner_script)
@@ -3326,7 +3342,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "case_test", &planner_script)
@@ -3378,7 +3394,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "path_test", &planner_script)
@@ -3432,7 +3448,7 @@ SOURCES = [
     }}
 ]
 "#,
-      temp_path.display()
+      escape_path_for_starlark(temp_path)
     );
 
     planners::upsert_script(&pool, "empty_result_test", &planner_script)
