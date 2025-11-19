@@ -41,6 +41,10 @@ jobs:
         shell: pwsh
         run: pnpm --dir web install --frozen-lockfile
 
+      - name: Install Playwright browsers
+        shell: pwsh
+        run: pnpm --dir web exec playwright install --with-deps chromium
+
       - name: Run frontend tests
         shell: pwsh
         run: pnpm --dir web test
