@@ -85,7 +85,7 @@
 </script>
 
 <!-- 页面标题与状态栏 -->
-<div class="min-h-screen bg-[var(--bg)]">
+<div class="min-h-screen bg-(--bg)">
   <div class="mx-auto max-w-[1560px] px-4 py-8">
     <!-- 顶部区域重新设计 -->
     <div class="mb-10">

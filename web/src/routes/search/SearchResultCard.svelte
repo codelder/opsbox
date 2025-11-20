@@ -151,152 +151,52 @@
   }
 </script>
 
-<div
-  class="group overflow-hidden rounded-2xl border border-white/60 bg-white/95 shadow-xl shadow-slate-300/40 backdrop-blur-sm transition-all duration-300 hover:shadow-2xl hover:shadow-slate-400/50 dark:border-gray-700/50 dark:bg-gray-800/80 dark:shadow-gray-900/20 dark:hover:shadow-gray-900/30"
-  data-result-card={index}
->
+<div class="group min-w-0 overflow-hidden" data-result-card={index}>
   <!-- 结果头：文件路径（可折叠）-->
-  <button
-    type="button"
-    class="w-full border-b border-slate-200 bg-gradient-to-r from-slate-50 to-gray-100 px-6 py-6 text-left text-sm text-slate-700 transition-all duration-200 hover:from-slate-100 hover:to-slate-200 focus:ring-2 focus:ring-blue-500/20 focus:outline-none focus:ring-inset dark:border-gray-700/50 dark:from-gray-800/50 dark:to-gray-700/50 dark:text-gray-300 dark:hover:from-gray-700/50 dark:hover:to-gray-600/50"
-    onclick={onToggleCollapse}
-  >
-    <span class="flex w-full flex-col gap-3 md:flex-row md:items-start md:justify-between">
-      <!-- 左侧：标题 + 元信息 -->
-      <span class="min-w-0 flex-1">
-        <!-- 主标题 -->
-        {#if parseTitleAndSource(item.path).title}
-          <span class="mb-2 flex items-start gap-2">
-            <span
-              role="link"
-              tabindex="0"
-              class="group/link cursor-pointer font-mono text-base leading-tight font-semibold text-slate-900 transition-colors duration-200 hover:text-blue-700 md:text-lg lg:text-xl dark:text-gray-100 dark:hover:text-blue-300"
-              title={parseTitleAndSource(item.path).title}
-              onclick={(e) => {
-                e.stopPropagation();
-                const base = '/view';
-                const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
-                window.open(url, '_blank', 'noopener');
-              }}
-              onkeydown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  const base = '/view';
-                  const url = `${base}?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`;
-                  window.open(url, '_blank', 'noopener');
-                }
-              }}
-            >
-              <span class="line-clamp-2 group-hover/link:underline md:line-clamp-1"
-                >{parseTitleAndSource(item.path).title}</span
-              >
-            </span>
-            <svg
-              class="mt-1 h-4 w-4 shrink-0 text-blue-600 opacity-0 transition-opacity duration-200 group-hover/link:opacity-100 dark:text-blue-400"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-              />
-            </svg>
-          </span>
-        {:else}
-          <span class="mb-2">
-            <span class="font-mono text-base leading-tight font-semibold text-slate-900 md:text-lg dark:text-gray-100">
-              {item.path}
-            </span>
-          </span>
-        {/if}
-
-        <!-- 元信息行 -->
-        <span class="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-gray-400">
-          {#if parseTitleAndSource(item.path).source}
-            <span
-              class="inline-flex items-center rounded-md bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-700 ring-1 ring-gray-200 dark:bg-gray-700/50 dark:text-gray-300 dark:ring-gray-600"
-            >
-              <svg class="mr-1 h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M2 6a2 2 0 012-2h5l2 2h5a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
-              </svg>
-              {parseTitleAndSource(item.path).source}
-            </span>
-          {/if}
-
-          {#if item.keywords?.length}
-            <span class="flex flex-wrap items-center gap-1.5">
-              {#each item.keywords.slice(0, 4) as keyword (keyword)}
-                <span
-                  class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-[11px] font-medium text-yellow-800 ring-1 ring-yellow-600/20 dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-500/20"
-                  >{keyword}</span
-                >
-              {/each}
-              {#if item.keywords.length > 4}
-                <span class="text-[11px] text-gray-500 dark:text-gray-400">+{item.keywords.length - 4}</span>
-              {/if}
-            </span>
-          {/if}
-
-          <span
-            class="inline-flex items-center rounded-md bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 ring-1 ring-green-200 dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800"
-          >
-            <svg class="mr-1 h-3 w-3" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4" />
-            </svg>
-            {totalMatches(item)} 行匹配
-          </span>
-
-          {#if item.encoding}
-            <span
-              class="inline-flex items-center rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 ring-1 ring-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800"
-              title="文件编码"
-            >
-              <svg class="mr-1 h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"
-                />
-              </svg>
-              {item.encoding}
-            </span>
-          {/if}
-        </span>
-      </span>
-
-      <!-- 右侧：折叠箭头 -->
-      <span class="mt-2 flex shrink-0 items-center md:mt-0">
-        <span
-          class="flex h-8 w-8 items-center justify-center rounded-full bg-gray-200/60 transition-colors duration-200 group-hover:bg-gray-300/60 dark:bg-gray-600/50 dark:group-hover:bg-gray-500/50"
-        >
-          <svg
-            class="h-4 w-4 text-gray-700 transition-transform duration-200 {isCollapsed
-              ? ''
-              : 'rotate-180'} dark:text-gray-200"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-          </svg>
-        </span>
-      </span>
-    </span>
-  </button>
+  <div class="flex h-10 items-center rounded-t-md border border-gray-300 bg-gray-50 pr-4 pl-2 text-sm text-gray-900">
+    <button
+      class="flex h-6 w-6 items-center justify-center rounded-md text-gray-600"
+      aria-label="Collapse"
+      onclick={onToggleCollapse}
+    >
+      <svg
+        aria-hidden="true"
+        focusable="false"
+        class="octicon octicon-chevron-down"
+        viewBox="0 0 16 16"
+        width="16"
+        height="16"
+        fill="currentColor"
+        display="inline-block"
+        overflow="visible"
+        style="vertical-align:text-bottom"
+      >
+        <path
+          d="M12.78 5.22a.749.749 0 0 1 0 1.06l-4.25 4.25a.749.749 0 0 1-1.06 0L3.22 6.28a.749.749 0 1 1 1.06-1.06L8 8.939l3.72-3.719a.749.749 0 0 1 1.06 0Z"
+        ></path>
+      </svg>
+    </button>
+    <div class="ml-1 flex min-w-0 flex-1 items-center">
+      <div class="flex items-center truncate text-sm font-medium">
+        {parseTitleAndSource(item.path).title}
+      </div>
+      <div class="flex items-center truncate text-sm font-medium">
+        {parseTitleAndSource(item.path).source}
+      </div>
+    </div>
+  </div>
 
   {#if !isCollapsed}
     <!-- 代码块区域 -->
     <div
-      class="overflow-hidden bg-gradient-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
+      class="overflow-hidden bg-linear-to-r from-slate-50 to-white transition-all duration-500 ease-in-out dark:from-gray-900/50 dark:to-gray-800/50"
     >
       {#each visibleLines(item) as ln (index + '-' + ln._ci + '-' + ln._li)}
         <div
           class="group/line grid grid-cols-[80px_1fr] gap-0 font-mono text-sm leading-[24px] transition-colors duration-150 hover:bg-blue-50/40 dark:hover:bg-blue-900/10"
         >
           <div
-            class="border-r border-slate-300 bg-gradient-to-r from-slate-100 to-slate-50 px-4 py-2 text-right font-medium text-slate-600 transition-all duration-150 select-none group-hover/line:from-blue-100 group-hover/line:to-blue-50 group-hover/line:text-blue-700 dark:border-gray-700/60 dark:from-gray-800/80 dark:to-gray-900/80 dark:text-gray-400 dark:group-hover/line:from-blue-900/20 dark:group-hover/line:to-blue-800/20 dark:group-hover/line:text-blue-400"
+            class="border-r border-slate-300 bg-linear-to-r from-slate-100 to-slate-50 px-4 py-2 text-right font-medium text-slate-600 transition-all duration-150 select-none group-hover/line:from-blue-100 group-hover/line:to-blue-50 group-hover/line:text-blue-700 dark:border-gray-700/60 dark:from-gray-800/80 dark:to-gray-900/80 dark:text-gray-400 dark:group-hover/line:from-blue-900/20 dark:group-hover/line:to-blue-800/20 dark:group-hover/line:text-blue-400"
           >
             {ln.no}
           </div>
@@ -353,7 +253,7 @@
     <!-- 展开更多按钮 -->
     {#if totalLines(item) > 7}
       <div
-        class="border-t border-slate-200 bg-gradient-to-r from-slate-100 to-gray-100 px-6 py-4 dark:border-gray-700/50 dark:from-gray-800/80 dark:to-gray-700/80"
+        class="border-t border-slate-200 bg-linear-to-r from-slate-100 to-gray-100 px-6 py-4 dark:border-gray-700/50 dark:from-gray-800/80 dark:to-gray-700/80"
       >
         <button
           class="group inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium text-blue-600 transition-all duration-200 hover:bg-blue-50 hover:text-blue-700 focus:ring-2 focus:ring-blue-500/20 focus:ring-offset-2 focus:ring-offset-gray-50 focus:outline-none dark:text-blue-400 dark:hover:bg-blue-900/20 dark:hover:text-blue-300 dark:focus:ring-offset-gray-800"
