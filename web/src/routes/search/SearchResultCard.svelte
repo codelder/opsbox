@@ -162,7 +162,6 @@
       <svg
         aria-hidden="true"
         focusable="false"
-        class="octicon octicon-chevron-down"
         viewBox="0 0 16 16"
         width="16"
         height="16"
@@ -178,7 +177,16 @@
     </button>
     <div class="ml-1 flex min-w-0 flex-1 items-center">
       <div class="flex items-center truncate text-sm font-medium">
-        {parseTitleAndSource(item.path).title}
+        <div class="block truncate">
+          <a
+            href={`/view?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`}
+            target="_blank"
+            rel="noopener"
+            class="font-mono font-bold hover:underline"
+          >
+            {parseTitleAndSource(item.path).title}
+          </a>
+        </div>
       </div>
       <div class="flex items-center truncate text-sm font-medium">
         {parseTitleAndSource(item.path).source}
