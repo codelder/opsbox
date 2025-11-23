@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpsBoard Icon System</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+            background-color: #f8fafc;
+            color: #0f172a;
+        }
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 1000px;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 2rem;
+            color: #1e293b;
+        }
+        .section {
+            margin-bottom: 3rem;
+        }
+        .section-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #334155;
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 2rem;
+        }
+        .icon-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background: #f1f5f9;
+            transition: all 0.2s;
+        }
+        .icon-card:hover {
+            background: #e2e8f0;
+            transform: translateY(-2px);
+        }
+        .label {
+            font-size: 0.875rem;
+            color: #475569;
+            font-weight: 500;
+        }
+        .sub-label {
+            font-size: 0.75rem;
+            color: #64748b;
+        }
+        svg {
+            color: #334155;
+        }
+        /* Source Colors */
+        .source-agent { color: #2563eb; }
+        .source-s3 { color: #ea580c; }
+        .source-local { color: #059669; }
+        
+        /* Target Colors */
+        .target-tar { color: #7c3aed; }
+        .target-zip { color: #db2777; }
+        .target-dir { color: #0891b2; }
+        
+        /* Brand Color */
+        .brand-logseek { color: #2563eb; }
+        .brand-opsbox { color: #0f172a; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>OpsBoard Icon System</h1>
+        
+        <div class="section">
+            <div class="section-title">App Icon (Line Art)</div>
+            <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+                <!-- OpsBox App Icon -->
+                <div class="icon-card">
+                    <!-- Inlined SVG content from OpsBoxAppIcon.svelte -->
+                    <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="brand-opsbox">
+                        <path d="M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9Z" />
+                        <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        <path d="M10 9v2" />
+                        <path d="M14 9v2" />
+                        <path d="m18.5 5.5-2 2" />
+                        <path d="m20.5 3.5-2 2" />
+                        <path d="M19 3a2 2 0 0 1 2 2l-2 2a2 2 0 0 1-2-2l2-2Z" />
+                        <path d="m5 5 2 2" />
+                        <path d="m4 4 2 2" />
+                        <path d="M12 4v3" />
+                        <path d="M10 4h4" />
+                    </svg>
+                    <span class="label">OpsBox App</span>
+                    <span class="sub-label">OpsBoxAppIcon (Line Art)</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Brand Identity</div>
+            <div class="grid">
+                <!-- OpsBox Logo (Simple) -->
+                <div class="icon-card">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="brand-opsbox">
+                        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+                        <path d="M3.29 7 12 12l8.71-5" />
+                        <path d="M12 22V12" />
+                        <path d="m16 14.5 3 1.7" />
+                        <path d="m16 17.5 3 1.7" />
+                        <path d="m5 16 2.5 1.5" />
+                        <path d="m5 19 4-2.5" />
+                        <circle cx="12" cy="7" r="1.5" fill="currentColor" />
+                    </svg>
+                    <span class="label">OpsBox</span>
+                    <span class="sub-label">OpsBoxLogo</span>
+                </div>
+
+                <!-- LogSeek Icon -->
+                <div class="icon-card">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="brand-logseek">
+                        <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                        <polyline points="14 2 14 8 20 8" />
+                        <line x1="8" y1="13" x2="16" y2="13" />
+                        <line x1="8" y1="17" x2="12" y2="17" />
+                        <path d="m21 21-4.3-4.3" />
+                        <circle cx="10" cy="10" r="4" />
+                    </svg>
+                    <span class="label">LogSeek</span>
+                    <span class="sub-label">LogSeekIcon</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">Data Sources</div>
+            <div class="grid">
+                <!-- Agent -->
+                <div class="icon-card">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="source-agent">
+                        <path d="M12 8V4H8" />
+                        <rect width="16" height="12" x="4" y="8" rx="2" />
+                        <path d="M2 14h2" />
+                        <path d="M20 14h2" />
+                        <path d="M15 13v2" />
+                        <path d="M9 13v2" />
+                    </svg>
+                    <span class="label">Agent</span>
+                    <span class="sub-label">SourceAgentIcon</span>
+                </div>
+
+                <!-- S3 -->
+                <div class="icon-card">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="source-s3">
+                        <path d="M3 6h18" />
+                        <path d="M5 6v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6" />
+                        <path d="M10 6V4a2 2 0 0 1 2-2h0a2 2 0 0 1 2 2v2" />
+                        <path d="M12 11v6" />
+                        <path d="M9 14l3 3 3-3" />
+                    </svg>
+                    <span class="label">S3</span>
+                    <span class="sub-label">SourceS3Icon</span>
+                </div>
+
+                <!-- Local -->
+                <div class="icon-card">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="source-local">
+                        <rect width="20" height="14" x="2" y="3" rx="2" />
+                        <path d="M2 17h20" />
+                        <path d="M2 17v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2" />
+                        <path d="M12 17v2" />
+                    </svg>
+                    <span class="label">Local</span>
+                    <span class="sub-label">SourceLocalIcon</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

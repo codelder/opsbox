@@ -44,51 +44,106 @@
   font-display: swap;
 }
 
-:root {
-  --font-ui:
-    'Google Sans Code', 'Roboto Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
-    'Courier New', monospace;
+@theme {
+  --color-base: var(--background);
+  --color-content: var(--foreground);
+  --color-primary-base: var(--primary);
+  --color-primary-content: var(--primary-foreground);
+  --color-secondary-base: var(--secondary);
+  --color-secondary-content: var(--secondary-foreground);
+  --color-muted-base: var(--muted);
+  --color-muted-content: var(--muted-foreground);
+  --color-accent-base: var(--accent);
+  --color-accent-content: var(--accent-foreground);
+  --color-destructive-base: var(--destructive);
+  --color-line: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar-base: var(--sidebar);
+  --color-sidebar-content: var(--sidebar-foreground);
+  --color-sidebar-primary-base: var(--sidebar-primary);
+  --color-sidebar-primary-content: var(--sidebar-primary-foreground);
+  --color-sidebar-accent-base: var(--sidebar-accent);
+  --color-sidebar-accent-content: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);  
+}
 
-  /* 统一配色（浅色）*/
-  --bg: #ffffff;
-  --text: #0b1220;
-  --muted: #64748b;
-  --surface: #ffffff;
-  --surface-2: #f1f5f9; /* 次级面板/卡片 */
-  /* 辅助变量：用于按钮/控件悬停或按压的浅灰背景（与输入框区分）*/
-  --surface-hover: #eef2f7;
-  /* 次级文字颜色（用于次要按钮、说明文字），保证在浅底上有足够对比 */
-  --text-secondary: #475569;
-  /* 控件默认底色（按钮等），提升与输入框的对比度 */
-  --control-bg: #eef2f7;
-  --border: #e5e7eb;
-  --primary: #2563eb; /* 品牌主色（蓝）*/
-  --primary-foreground: #ffffff;
-  --accent: #7c3aed;
-  --accent-foreground: #ffffff;
-  --ring: rgba(37, 99, 235, 0.35);
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
 }
 
 .dark {
-  /* 统一配色（深色）*/
-  --bg: #0b1220; /* 深海军蓝基底 */
-  --text: #e5e7eb;
-  --muted: #9ca3af;
-  --surface: #111827; /* 主卡片 */
-  --surface-2: #0f172a; /* 次级面板/卡片 */
-  /* 辅助变量：深色下的悬停/按压底色（略亮于主面板以便区分）*/
-  --surface-hover: #1f2937;
-  /* 深色下的次级文字颜色（在深底上可读）*/
-  --text-secondary: #cbd5e1;
-  /* 深色控件默认底色：比主面板更亮，保证与输入框（--surface）有明显区分 */
-  --control-bg: #1f2937;
-  --border: #374151;
-  --primary: #60a5fa;
-  --primary-foreground: #0b1220;
-  --accent: #a78bfa;
-  --accent-foreground: #0b1220;
-  --ring: rgba(96, 165, 250, 0.35);
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
 }
+
+
+
 
 html,
 body {

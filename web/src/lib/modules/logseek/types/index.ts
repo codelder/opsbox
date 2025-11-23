@@ -221,6 +221,7 @@ export interface ViewState {
  * 搜索错误事件（从流中接收）
  */
 export interface SearchErrorEvent {
+  type: 'error';
   source: string; // 错误来源
   message: string; // 错误信息
   recoverable: boolean; // 是否可恢复（是否继续搜索其他源）
@@ -230,6 +231,7 @@ export interface SearchErrorEvent {
  * 搜索完成事件（从流中接收）
  */
 export interface SearchCompleteEvent {
+  type: 'complete';
   source: string; // 完成的来源
   elapsed_ms: number; // 耗时（毫秒）
 }

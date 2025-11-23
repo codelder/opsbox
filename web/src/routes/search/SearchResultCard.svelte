@@ -4,8 +4,13 @@
    * 显示单个搜索结果的文件信息和匹配行
    */
   import type { SearchJsonResult, JsonLine, JsonChunk } from '$lib/modules/logseek';
+  import { base } from '$app/paths';
   import { highlight, snippet } from '$lib/modules/logseek';
   import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import SourceLocalIcon from '$lib/components/icons/SourceLocalIcon.svelte';
+  import SourceAgentIcon from '$lib/components/icons/SourceAgentIcon.svelte';
+  import SourceS3Icon from '$lib/components/icons/SourceS3Icon.svelte';
+  import TargetTarGzIcon from '$lib/components/icons/TargetTarGzIcon.svelte';
 
   interface Props {
     /**
@@ -58,6 +63,10 @@
     onExpandLine
   }: Props = $props();
 
+  let viewUrl = $derived(
+    `/view?${new URLSearchParams({ sid, file: item.path }).toString()}`
+  );
+
   // 行键生成函数
   const lineKey = (fileIdx: number, chunkIdx: number, lineIdx: number) => `${fileIdx}-${chunkIdx}-${lineIdx}`;
 
@@ -101,7 +110,9 @@
     return flattenLines(item).length;
   }
 
-  function visibleLines(item: SearchJsonResult): Array<{ no: number; text: string; _ci: number; _li: number }> {
+  type LineItem = { no: number; text: string; _ci: number; _li: number };
+  
+  function visibleLines(item: SearchJsonResult): LineItem[] {
     const flat = flattenLines(item);
     if (isShowAll) return flat;
     return flat.slice(0, Math.min(7, flat.length));
@@ -149,11 +160,22 @@
     }
     return { title: full };
   }
+
+  const { title, source } = $derived(parseTitleAndSource(item.path));
+
+  function getSourceIcon(src: string | undefined) {
+    if (!src) return null;
+    if (src.includes('local')) return SourceLocalIcon;
+    if (src.includes('agent')) return SourceAgentIcon;
+    if (src.includes('s3')) return SourceS3Icon;
+    if (src.includes('archive')) return TargetTarGzIcon;
+    return null;
+  }
 </script>
 
-<div class="group min-w-0 overflow-hidden" data-result-card={index}>
+<div class="min-w-0 overflow-hidden" data-result-card={index}>
   <!-- 结果头：文件路径（可折叠）-->
-  <div class="flex h-10 items-center rounded-t-md border border-gray-300 bg-gray-50 pr-4 pl-2 text-sm text-gray-900">
+  <div class="flex h-10 items-center rounded-t-md border border-line bg-base text-content pr-4 pl-2 text-sm dark:text-gray-100">
     <button
       class="flex h-6 w-6 items-center justify-center rounded-md text-gray-600"
       aria-label="Collapse"
@@ -179,18 +201,31 @@
       <div class="flex items-center truncate text-sm font-medium">
         <div class="block truncate">
           <a
-            href={`/view?sid=${encodeURIComponent(sid)}&file=${encodeURIComponent(item.path)}`}
+            href={viewUrl}
             target="_blank"
             rel="noopener"
             class="font-mono font-bold hover:underline"
           >
-            {parseTitleAndSource(item.path).title}
+            {title}
           </a>
         </div>
       </div>
-      <div class="flex items-center truncate text-sm font-medium">
-        {parseTitleAndSource(item.path).source}
-      </div>
+    </div>
+    <div class="flex items-center truncate text-sm font-medium text-gray-500">
+      {#if item.keywords?.length}
+        <span class="flex flex-wrap items-center gap-1.5">
+          {#each item.keywords.slice(0, 4) as keyword (keyword)}
+            <span
+              class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-xs font-medium border-amber-200/50 dark:border-amber-800/50 bg-green-50 dark:bg-green-900/30 text-amber-600 dark:text-amber-400"
+            >
+              {keyword}
+            </span>
+          {/each}
+          {#if item.keywords.length > 4}
+            <span class="text-[11px] text-gray-500 dark:text-gray-400">+{item.keywords.length - 4}</span>
+          {/if}
+        </span>
+      {/if}
     </div>
   </div>
 

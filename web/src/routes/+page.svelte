@@ -63,7 +63,7 @@
   }
 </script>
 
-<main class="flex min-h-[100svh] justify-center">
+<main class="flex min-h-svh justify-center">
   <div class="w-240 px-6 pt-28 sm:pt-36 md:pt-44">
     <div class="mx-auto w-full text-center">
       <div class="mb-4 block md:mb-10" id="logo-label">
@@ -76,7 +76,7 @@
           <!-- 搜索图标（仅装饰，不可交互） -->
           <span
             aria-hidden="true"
-            class="pointer-events-none absolute top-1/2 left-4 z-10 -translate-y-1/2 text-[var(--muted)]"
+            class="pointer-events-none absolute top-1/2 left-4 z-10 -translate-y-1/2 text-input"
           >
             <svg
               class="h-6 w-6"
@@ -96,8 +96,7 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="h-16 w-full rounded-3xl border border-[var(--border)] bg-[var(--surface)] pr-28 pl-14 text-sm shadow-sm transition outline-none placeholder:text-[var(--muted)] focus:border-[var(--primary)]
-                   focus:ring-4 focus:ring-[var(--ring)]"
+            class="h-16 w-full rounded-3xl border border-line shadow-sm bg-base pr-28 pl-14 text-sm placeholder:text-input focus:outline-none focus:border-input focus:ring-4 focus:ring-ring"
             id="search"
             name="q"
             placeholder="Try: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
@@ -109,8 +108,8 @@
             type="button"
             class="group/ai absolute top-1/2 right-3 z-20 inline-flex -translate-y-1/2 items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none
             {aiLoading || pressing
-              ? 'bg-[var(--surface)] text-[var(--text)]'
-              : 'bg-[var(--control-bg)] text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text)]'}"
+              ? 'bg-(--surface) text-(--text)'
+              : 'bg-(--control-bg) text-(--text-secondary) hover:bg-(--surface-hover) hover:text-(--text)'}"
             title="按下使用 AI 模式；直接回车为普通模式"
             aria-label="AI 模式按钮"
             aria-pressed={aiLoading || pressing}
