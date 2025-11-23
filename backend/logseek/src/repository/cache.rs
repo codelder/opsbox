@@ -11,13 +11,58 @@ use uuid::Uuid;
 use crate::domain::FileUrl;
 
 #[derive(Debug, Clone)]
+pub struct CompactLines {
+  content: String,
+  line_starts: Vec<usize>,
+}
+
+impl CompactLines {
+  fn from_lines(lines: Vec<String>) -> Self {
+    // 预分配内存：总字符数 + 少量额外空间
+    let total_len: usize = lines.iter().map(|s| s.len()).sum();
+    let mut content = String::with_capacity(total_len);
+    let mut line_starts = Vec::with_capacity(lines.len() + 1);
+
+    for line in lines {
+      line_starts.push(content.len());
+      content.push_str(&line);
+    }
+    line_starts.push(content.len()); // 哨兵，标记最后一个行的结束位置
+
+    Self { content, line_starts }
+  }
+
+  fn get_slice(&self, start: usize, end: usize) -> Vec<String> {
+    let mut res = Vec::with_capacity(end - start + 1);
+    // start 和 end 是 1-based 索引
+    // line_starts 包含 N+1 个元素，索引 0 对应第 1 行的起始
+    for i in start..=end {
+      if i < 1 || i >= self.line_starts.len() {
+        continue;
+      }
+      let s_idx = self.line_starts[i - 1];
+      let e_idx = self.line_starts[i];
+      // 安全切片：虽然我们自己构建的索引应该是安全的，但为了保险起见
+      if let Some(s) = self.content.get(s_idx..e_idx) {
+        res.push(s.to_string());
+      }
+    }
+    res
+  }
+
+  fn len(&self) -> usize {
+    self.line_starts.len().saturating_sub(1)
+  }
+}
+
+#[derive(Debug, Clone)]
 pub struct Entry<T> {
   pub last_touch: Instant,
   pub value: T,
 }
 
 type KeywordsCache = RwLock<HashMap<String, Entry<Vec<String>>>>;
-type FilesCache = RwLock<HashMap<(String, FileUrl), Entry<Vec<String>>>>;
+type FilesCache = RwLock<HashMap<(String, FileUrl), Entry<CompactLines>>>;
 
 #[derive(Debug)]
 pub struct Cache {
@@ -31,10 +76,13 @@ static CLEANER_STARTED: OnceLock<()> = OnceLock::new();
 static CLEANER_CANCEL: OnceLock<CancellationToken> = OnceLock::new();
 
 pub fn cache() -> &'static Cache {
-  GLOBAL.get_or_init(|| Cache {
-    ttl: Duration::from_secs(15 * 60),
-    keywords: RwLock::new(HashMap::new()),
-    files: RwLock::new(HashMap::new()),
+  GLOBAL.get_or_init(|| {
+    Cache::start_cleaner_once();
+    Cache {
+      ttl: Duration::from_secs(1 * 60),
+      keywords: RwLock::new(HashMap::new()),
+      files: RwLock::new(HashMap::new()),
+    }
   })
 }
 
@@ -52,7 +100,8 @@ impl Cache {
       // 使用取消令牌支持优雅关闭后台清理任务
       let token = CLEANER_CANCEL.get_or_init(CancellationToken::new).clone();
       tokio::spawn(async move {
-        let interval = Duration::from_secs(15 * 60);
+        tracing::info!("后台清理任务已启动，清理间隔: 1分钟");
+        let interval = Duration::from_secs(60);
         loop {
           tokio::select! {
             _ = tokio_time::sleep(interval) => {
@@ -88,27 +137,29 @@ impl Cache {
                 }
               }
 
-              // 如果清理了缓存条目，可以尝试触发底层分配器的内存回收
               if total_removed > 0 {
                 tracing::info!("缓存清理完成: 移除 {} 个条目", total_removed);
+              } else {
+                 tracing::info!("缓存清理检查完成，无过期条目");
+              }
 
-                // 仅在启用了 mimalloc-collect 特性且使用 mimalloc 作为分配器的进程中，
-                // 才调用 mimalloc 的 mi_collect(true) 尝试将空闲内存返还给操作系统。
-                #[cfg(feature = "mimalloc-collect")]
-                {
-                  // 使用 spawn_blocking 避免阻塞异步运行时线程
-                  tokio::task::spawn_blocking(move || {
-                    // 直接调用 libmimalloc-sys 提供的 mi_collect FFI
-                    unsafe {
-                      libmimalloc_sys::mi_collect(true);
-                    }
-                    tracing::info!("libmimalloc_sys::mi_collect(true) 调用完成");
-                  });
-                }
+              // 无论是否移除了条目，都尝试触发底层分配器的内存回收
+              // 这对于回收搜索过程中产生的临时内存（如未命中的文件内容）非常重要
+              #[cfg(feature = "mimalloc-collect")]
+              {
+                // 使用 spawn_blocking 避免阻塞异步运行时线程
+                tokio::task::spawn_blocking(move || {
+                  // 直接调用 libmimalloc-sys 提供的 mi_collect FFI
+                  unsafe {
+                    libmimalloc_sys::mi_collect(true);
+                  }
+                  tracing::info!("libmimalloc_sys::mi_collect(true) 调用完成");
+                });
               }
             }
             // 收到关闭信号时退出循环
             _ = token.cancelled() => {
+              tracing::info!("后台清理任务已停止");
               break;
             }
           }
@@ -149,11 +200,15 @@ impl Cache {
       key.1,
       lines.len()
     );
+
+    // 使用 CompactLines 优化存储，减少内存碎片
+    let compact = CompactLines::from_lines(lines);
+
     map.insert(
       key,
       Entry {
         last_touch: Instant::now(),
-        value: lines,
+        value: compact,
       },
     );
     tracing::debug!("🔍 Cache当前大小: {}", map.len());
@@ -187,10 +242,14 @@ impl Cache {
       return None;
     }
     e.last_touch = Instant::now();
+
     let total = e.value.len();
     let s = start.max(1).min(total.max(1));
     let eidx = end.max(s).min(total);
-    let slice = e.value[(s - 1)..eidx].to_vec();
+
+    // 从 CompactLines 中提取切片
+    let slice = e.value.get_slice(s, eidx);
+
     Some((total, slice))
   }
 
