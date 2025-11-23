@@ -63,23 +63,23 @@
   }
 </script>
 
-<main class="flex min-h-svh justify-center">
-  <div class="w-240 px-6 pt-28 sm:pt-36 md:pt-44">
+<main class="flex min-h-svh justify-center bg-background text-foreground">
+  <div class="w-full max-w-5xl px-6 pt-28 sm:pt-36 md:pt-44">
     <div class="mx-auto w-full text-center">
-      <div class="mb-4 block md:mb-10" id="logo-label">
+      <div class="mb-8 block md:mb-12" id="logo-label">
         <LogSeekLogo size="large" asLabel htmlFor="search" />
       </div>
 
-      <!-- 输入框容器（相对定位），左侧为搜索图标；右侧为“AI 模式”按钮（按下生效） -->
+      <!-- 输入框容器 -->
       <form role="search" onsubmit={handleHomeSubmit}>
-        <div class="relative">
-          <!-- 搜索图标（仅装饰，不可交互） -->
+        <div class="relative flex items-center">
+          <!-- 搜索图标 -->
           <span
             aria-hidden="true"
-            class="pointer-events-none absolute top-1/2 left-4 z-10 -translate-y-1/2 text-input"
+            class="pointer-events-none absolute left-4 z-10 text-muted-foreground"
           >
             <svg
-              class="h-6 w-6"
+              class="h-5 w-5"
               stroke="currentColor"
               stroke-linecap="round"
               stroke-linejoin="round"
@@ -96,47 +96,49 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="h-16 w-full rounded-3xl border border-line shadow-sm bg-base pr-28 pl-14 text-sm placeholder:text-input focus:outline-none focus:border-input focus:ring-4 focus:ring-ring"
+            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-base text-foreground shadow-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             id="search"
             name="q"
             placeholder="Try: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
             type="text"
           />
 
-          <!-- 右侧"AI 模式"按钮：点击后临时以 AI 生成查询并检索 -->
-          <button
-            type="button"
-            class="group/ai absolute top-1/2 right-3 z-20 inline-flex -translate-y-1/2 items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none
-            {aiLoading || pressing
-              ? 'bg-(--surface) text-(--text)'
-              : 'bg-(--control-bg) text-(--text-secondary) hover:bg-(--surface-hover) hover:text-(--text)'}"
-            title="按下使用 AI 模式；直接回车为普通模式"
-            aria-label="AI 模式按钮"
-            aria-pressed={aiLoading || pressing}
-            onmousedown={() => (pressing = true)}
-            onmouseup={() => (pressing = false)}
-            onmouseleave={() => (pressing = false)}
-            onclick={handleAiClick}
-            disabled={aiLoading}
-          >
-            <!-- 彩虹流动边框（悬停或 loading 时显示），通过遮罩形成"边框"效果，不影响按钮内容 -->
-            <span
-              class="pointer-events-none absolute z-0 rounded-full transition-opacity duration-300
-              {aiLoading || pressing ? 'opacity-100' : 'opacity-0 group-hover/ai:opacity-100'}"
-              style="inset:-2px;padding:2px;-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;"
-              aria-hidden="true"
+          <!-- 右侧"AI 模式"按钮 -->
+          <div class="absolute right-2 z-20">
+             <button
+              type="button"
+              class="group/ai inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none
+              {aiLoading || pressing
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
+              title="按下使用 AI 模式；直接回车为普通模式"
+              aria-label="AI 模式按钮"
+              aria-pressed={aiLoading || pressing}
+              onmousedown={() => (pressing = true)}
+              onmouseup={() => (pressing = false)}
+              onmouseleave={() => (pressing = false)}
+              onclick={handleAiClick}
+              disabled={aiLoading}
             >
+              <!-- 彩虹流动边框（悬停或 loading 时显示） -->
               <span
-                class="absolute inset-0 rounded-full {aiLoading || pressing ? 'ai-rainbow-ring' : ''}"
-                style="background:conic-gradient(from 0deg, #60a5fa 0deg, #a78bfa 72deg, #f472b6 144deg, #f59e0b 216deg, #34d399 288deg, #60a5fa 360deg);"
-              ></span>
-            </span>
+                class="pointer-events-none absolute z-0 rounded-full transition-opacity duration-300
+                {aiLoading || pressing ? 'opacity-100' : 'opacity-0 group-hover/ai:opacity-100'}"
+                style="inset:-2px;padding:2px;-webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);-webkit-mask-composite:xor;mask-composite:exclude;"
+                aria-hidden="true"
+              >
+                <span
+                  class="absolute inset-0 rounded-full {aiLoading || pressing ? 'ai-rainbow-ring' : ''}"
+                  style="background:conic-gradient(from 0deg, #60a5fa 0deg, #a78bfa 72deg, #f472b6 144deg, #f59e0b 216deg, #34d399 288deg, #60a5fa 360deg);"
+                ></span>
+              </span>
 
-            <span class="relative z-10 inline-flex items-center gap-1.5">
-              <AiModeIcon size={16} />
-              <span>AI 模式</span>
-            </span>
-          </button>
+              <span class="relative z-10 inline-flex items-center gap-1.5">
+                <AiModeIcon size={16} />
+                <span>AI 模式</span>
+              </span>
+            </button>
+          </div>
         </div>
       </form>
 
