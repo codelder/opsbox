@@ -11,10 +11,10 @@
   import LlmManagement from './LlmManagement.svelte';
   import PlannerManagement from './PlannerManagement.svelte';
   import ServerLogSettings from './ServerLogSettings.svelte';
-  
-  import { Tabs, TabsContent, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
-  import { Button } from "$lib/components/ui/button";
-  import { ArrowLeft } from "lucide-svelte";
+
+  import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
+  import { Button } from '$lib/components/ui/button';
+  import { ArrowLeft } from 'lucide-svelte';
 
   // 选项卡状态
   let activeTab = $state<'profiles' | 'agents' | 'planners' | 'llm' | 'server-log'>('profiles');
@@ -62,7 +62,7 @@
       <TabsTrigger value="llm">大模型</TabsTrigger>
       <TabsTrigger value="server-log">Server 日志</TabsTrigger>
     </TabsList>
-    
+
     <div class="mt-6">
       <TabsContent value="profiles">
         <ProfileManagement />

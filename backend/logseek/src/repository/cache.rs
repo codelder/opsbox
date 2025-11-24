@@ -79,7 +79,7 @@ pub fn cache() -> &'static Cache {
   GLOBAL.get_or_init(|| {
     Cache::start_cleaner_once();
     Cache {
-      ttl: Duration::from_secs(1 * 60),
+      ttl: Duration::from_secs(60),
       keywords: RwLock::new(HashMap::new()),
       files: RwLock::new(HashMap::new()),
     }
@@ -244,6 +244,9 @@ impl Cache {
     e.last_touch = Instant::now();
 
     let total = e.value.len();
+    if total == 0 {
+      return Some((0, Vec::new()));
+    }
     let s = start.max(1).min(total.max(1));
     let eidx = end.max(s).min(total);
 

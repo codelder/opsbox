@@ -191,7 +191,7 @@
                 {/if}
                 <div class="min-w-0">
                   <div class="flex flex-wrap items-center gap-2">
-                    <h3 class="truncate text-base font-semibold text-[var(--text)]">{a.name}</h3>
+                    <h3 class="truncate font-semibold text-[var(--text)] text-base">{a.name}</h3>
                     <span class="truncate text-xs text-[var(--muted)]">{a.id}</span>
                     {#if a.version}
                       <span class="rounded-full bg-[var(--surface)] px-2 py-0.5 text-xs text-[var(--muted)]"

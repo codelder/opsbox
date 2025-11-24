@@ -75,7 +75,7 @@
     <!-- 左侧：文件信息 -->
     <div class="min-w-0 flex-1">
       <div class="mb-2">
-        <h2 class="font-mono text-base leading-snug font-semibold break-all text-[var(--text)]">
+        <h2 class="font-mono leading-snug font-semibold break-all text-[var(--text)] text-base">
           {parseTitleAndSource(filePath).title}
         </h2>
         {#if parseTitleAndSource(filePath).source}

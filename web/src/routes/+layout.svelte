@@ -1,6 +1,6 @@
 <script lang="ts">
   import '../app.css';
-  import { ModeWatcher } from "mode-watcher";
+  import { ModeWatcher } from 'mode-watcher';
   import favicon from '$lib/assets/favicon.svg';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import Settings from '$lib/components/Settings.svelte';

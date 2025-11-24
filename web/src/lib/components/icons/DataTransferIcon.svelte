@@ -36,20 +36,20 @@
 
 <div class="inline-flex items-center gap-1.5 {className}" style="font-size: {size}px;">
   <div class="text-blue-600 dark:text-blue-400">
-    <SourceCmp size={size} />
+    <SourceCmp {size} />
   </div>
-  
+
   <!-- Arrow -->
-  <svg 
-    xmlns="http://www.w3.org/2000/svg" 
-    width={size * 0.6} 
-    height={size * 0.6} 
-    viewBox="0 0 24 24" 
-    fill="none" 
-    stroke="currentColor" 
-    stroke-width="2" 
-    stroke-linecap="round" 
-    stroke-linejoin="round" 
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width={size * 0.6}
+    height={size * 0.6}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
     class="text-gray-400"
   >
     <path d="M5 12h14" />
@@ -57,6 +57,6 @@
   </svg>
 
   <div class="text-purple-600 dark:text-purple-400">
-    <TargetCmp size={size} />
+    <TargetCmp {size} />
   </div>
 </div>

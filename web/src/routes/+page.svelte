@@ -74,10 +74,7 @@
       <form role="search" onsubmit={handleHomeSubmit}>
         <div class="relative flex items-center">
           <!-- 搜索图标 -->
-          <span
-            aria-hidden="true"
-            class="pointer-events-none absolute left-4 z-10 text-muted-foreground"
-          >
+          <span aria-hidden="true" class="pointer-events-none absolute left-4 z-10 text-muted-foreground">
             <svg
               class="h-5 w-5"
               stroke="currentColor"
@@ -96,7 +93,7 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-base text-foreground shadow-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-base text-foreground shadow-sm ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             id="search"
             name="q"
             placeholder="Try: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
@@ -105,7 +102,7 @@
 
           <!-- 右侧"AI 模式"按钮 -->
           <div class="absolute right-2 z-20">
-             <button
+            <button
               type="button"
               class="group/ai inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none
               {aiLoading || pressing

@@ -3,7 +3,7 @@
    * 语法提示按钮组组件
    * 提供快捷插入查询语法的按钮
    */
-  import { Button } from "$lib/components/ui/button";
+  import { Button } from '$lib/components/ui/button';
 
   interface Props {
     /**

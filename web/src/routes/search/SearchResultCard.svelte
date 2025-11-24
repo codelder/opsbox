@@ -6,12 +6,20 @@
   import type { SearchJsonResult, JsonLine, JsonChunk } from '$lib/modules/logseek';
   import { highlight, snippet } from '$lib/modules/logseek';
   import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
-  
-  import { Card } from "$lib/components/ui/card";
-  import { Button } from "$lib/components/ui/button";
-  import { Badge } from "$lib/components/ui/badge";
-  import { ChevronRight, ChevronDown, ExternalLink, MoreHorizontal, FileText, Copy, UnfoldVertical } from "lucide-svelte";
-  import { Separator } from "$lib/components/ui/separator";
+
+  import { Card } from '$lib/components/ui/card';
+  import { Button } from '$lib/components/ui/button';
+  import { Badge } from '$lib/components/ui/badge';
+  import {
+    ChevronRight,
+    ChevronDown,
+    ExternalLink,
+    MoreHorizontal,
+    FileText,
+    Copy,
+    UnfoldVertical
+  } from 'lucide-svelte';
+  import { Separator } from '$lib/components/ui/separator';
 
   interface Props {
     /**
@@ -64,21 +72,21 @@
     onExpandLine
   }: Props = $props();
 
-  let viewUrl = $derived(
-    `/view?${new URLSearchParams({ sid, file: item.path }).toString()}`
-  );
+  let viewUrl = $derived(`/view?${new URLSearchParams({ sid, file: item.path }).toString()}`);
 
   // 行键生成函数
   const lineKey = (fileIdx: number, chunkIdx: number, lineIdx: number) => `${fileIdx}-${chunkIdx}-${lineIdx}`;
 
   // 扁平化为行数组
-  function flattenLines(item: SearchJsonResult): Array<{ no: number; text: string; _ci: number; _li: number; isMatch: boolean }> {
+  function flattenLines(
+    item: SearchJsonResult
+  ): Array<{ no: number; text: string; _ci: number; _li: number; isMatch: boolean }> {
     const arr: Array<{ no: number; text: string; _ci: number; _li: number; isMatch: boolean }> = [];
     (item?.chunks || []).forEach((chunk: JsonChunk, ci: number) => {
       (chunk?.lines || []).forEach((ln: JsonLine, li: number) => {
         // Check if this line contains any of the keywords
-        const hasMatch = item.keywords.some(kw => ln.text.includes(kw));
-        arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li, isMatch: hasMatch })
+        const hasMatch = item.keywords.some((kw) => ln.text.includes(kw));
+        arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li, isMatch: hasMatch });
       });
     });
     return arr;
@@ -90,7 +98,7 @@
   }
 
   type LineItem = { no: number; text: string; _ci: number; _li: number; isMatch: boolean };
-  
+
   function visibleLines(item: SearchJsonResult): LineItem[] {
     const flat = flattenLines(item);
     if (isShowAll) return flat;
@@ -111,13 +119,16 @@
   }
 </script>
 
-<Card class="group overflow-hidden rounded-md border-border transition-all hover:border-primary/50" data-result-card={index}>
+<Card
+  class="group overflow-hidden rounded-md border-border transition-all hover:border-primary/50"
+  data-result-card={index}
+>
   <!-- 结果头：仿 GitHub 风格 -->
   <div class="flex items-center justify-between bg-muted/10 px-4 py-2 text-sm">
     <div class="flex items-center gap-2 overflow-hidden">
       <!-- 文件图标 -->
       <FileText class="h-4 w-4 text-muted-foreground" />
-      
+
       <!-- 文件路径 -->
       <a
         href={viewUrl}
@@ -167,7 +178,7 @@
         size="icon"
         class="h-7 w-7 text-muted-foreground hover:text-foreground"
         onclick={onToggleCollapse}
-        title={isCollapsed ? "展开" : "折叠"}
+        title={isCollapsed ? '展开' : '折叠'}
       >
         {#if isCollapsed}
           <ChevronDown class="h-4 w-4" />
@@ -189,7 +200,7 @@
             <tr class="group/line hover:bg-muted/30">
               <!-- 行号 -->
               <td
-                class={`w-[1%] min-w-[3rem] select-none px-3 py-0.5 text-right font-mono text-xs align-top ${ln.isMatch ? 'text-foreground' : 'text-muted-foreground/50'}`}
+                class={`w-[1%] min-w-[3rem] px-3 py-0.5 text-right align-top font-mono text-xs select-none ${ln.isMatch ? 'text-foreground' : 'text-muted-foreground/50'}`}
               >
                 {ln.no}
               </td>
@@ -252,10 +263,12 @@
 <style>
   .code-content-text {
     font-family: var(--font-ui), monospace;
-    font-feature-settings: 'liga' 0, 'calt' 0;
+    font-feature-settings:
+      'liga' 0,
+      'calt' 0;
     font-variant-ligatures: none;
   }
-  
+
   /* 关键词高亮样式（通常由 highlight 函数生成 span.highlight） */
   :global(.highlight) {
     background-color: rgba(253, 224, 71, 0.3); /* yellow-300 with opacity */

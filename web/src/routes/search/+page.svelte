@@ -8,11 +8,11 @@
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import SearchResultCard from './SearchResultCard.svelte';
   import SearchEmptyState from './SearchEmptyState.svelte';
-  
-  import { Input } from "$lib/components/ui/input";
-  import { Button } from "$lib/components/ui/button";
-  import { Search, X, Loader2, Check, ArrowDown } from "lucide-svelte";
-  import { Badge } from "$lib/components/ui/badge";
+
+  import { Input } from '$lib/components/ui/input';
+  import { Button } from '$lib/components/ui/button';
+  import { Search, X, Loader2, Check, ArrowDown } from 'lucide-svelte';
+  import { Badge } from '$lib/components/ui/badge';
 
   // 使用 composable 管理搜索状态
   const searchStore = useSearch();
@@ -110,7 +110,7 @@
           </div>
           <Input
             id="search"
-            class="h-14 rounded-2xl border-input bg-background pl-12 pr-12 text-base text-foreground shadow-lg transition-all hover:shadow-xl focus-visible:ring-primary/50"
+            class="h-14 rounded-2xl border-input bg-background pr-12 pl-12 text-base text-foreground shadow-lg transition-all hover:shadow-xl focus-visible:ring-primary/50"
             disabled={searchStore.loading}
             bind:value={q}
             placeholder="输入查询串或自然语言搜索…"
@@ -197,7 +197,10 @@
         </Button>
       {:else if searchStore.results.length > 0}
         <div class="text-center">
-          <Badge variant="outline" class="bg-green-50 px-4 py-1.5 text-sm text-green-700 dark:bg-green-900/30 dark:text-green-300">
+          <Badge
+            variant="outline"
+            class="bg-green-50 px-4 py-1.5 text-sm text-green-700 dark:bg-green-900/30 dark:text-green-300"
+          >
             <Check class="mr-2 h-4 w-4" />
             已显示所有搜索结果
           </Badge>

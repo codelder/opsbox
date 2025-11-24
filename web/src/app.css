@@ -1,13 +1,16 @@
 @import 'tailwindcss';
+@variant dark (&:where(.dark, .dark *));
 @import 'perfect-scrollbar/css/perfect-scrollbar.css';
 
 /* 自定义 PerfectScrollbar 样式：始终显示竖向滚动条，优化明/暗主题可见性 */
 .ps__rail-y {
   display: block;
   opacity: 0.6;
-  width: 14px; /* 稍宽一些便于点击 */
+  /* 稍宽一些便于点击 */
+  width: 14px;
   right: 0;
 }
+
 .ps:hover > .ps__rail-y,
 .ps--scrolling-y > .ps__rail-y,
 .ps--focus > .ps__rail-y {
@@ -15,13 +18,18 @@
 }
 
 .ps__thumb-y {
-  background-color: #9ca3af; /* slate-400 */
-  width: 10px; /* 拇指宽度 */
-  min-height: 28px; /* 最小高度 */
+  /* slate-400 */
+  background-color: #9ca3af;
+  /* 拇指宽度 */
+  width: 10px;
+  /* 最小高度 */
+  min-height: 28px;
   border-radius: 6px;
 }
+
 .dark .ps__thumb-y {
-  background-color: #64748b; /* slate-500（暗色更深）*/
+  /* slate-500（暗色更深）*/
+  background-color: #64748b;
 }
 
 /* 防止 X 轴误显 */
@@ -34,6 +42,7 @@
   font-style: normal;
   font-display: swap;
 }
+
 @font-face {
   font-family: 'Google Sans Code';
   src: url('/fonts/GoogleSansCode-Italic.woff2') format('woff2');
@@ -70,7 +79,7 @@
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
-  
+
   /* Legacy/Existing mappings to ensure backward compatibility during migration */
   --color-base: var(--background);
   --color-content: var(--foreground);
@@ -117,11 +126,14 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+  /* Blue 600 */
+  --chart-1: oklch(0.546 0.245 262.881);
+  /* Red 600 */
+  --chart-2: oklch(0.577 0.245 27.325);
+  /* Yellow 500 */
+  --chart-3: oklch(0.823 0.12 84.67);
+  /* Green 600 */
+  --chart-4: oklch(0.627 0.194 149.214);
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -153,11 +165,14 @@
   --border: oklch(0.269 0 0);
   --input: oklch(0.269 0 0);
   --ring: oklch(0.439 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+  /* Blue 600 */
+  --chart-1: oklch(0.546 0.245 262.881);
+  /* Red 600 */
+  --chart-2: oklch(0.577 0.245 27.325);
+  /* Yellow 500 */
+  --chart-3: oklch(0.823 0.12 84.67);
+  /* Green 600 */
+  --chart-4: oklch(0.627 0.194 149.214);
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -177,6 +192,7 @@ label[for='search'],
 #logo-label {
   font-family: var(--font-ui), sans-serif;
 }
+
 input#search {
   font-family: var(--font-ui), sans-serif;
 }
@@ -185,48 +201,63 @@ input#search {
 .prose {
   line-height: 1.7;
 }
+
 .prose h1 {
   font-size: 1.5rem;
   font-weight: 700;
   margin: 1.25rem 0 0.75rem;
 }
+
 .prose h2 {
   font-size: 1.25rem;
   font-weight: 700;
   margin: 1rem 0 0.5rem;
 }
+
 .prose h3 {
   font-size: 1.125rem;
   font-weight: 600;
   margin: 0.75rem 0 0.5rem;
 }
+
 .prose p {
   margin: 0.5rem 0;
 }
+
 .prose ul,
 .prose ol {
   margin: 0.5rem 0;
   padding-left: 1.25rem;
 }
+
 .prose ul {
   list-style: disc;
 }
+
 .prose ol {
   list-style: decimal;
 }
+
 .prose code {
-  background: #e2e8f0; /* slate-200，提高对比度 */
-  color: #0f172a; /* slate-900，深色文字 */
+  /* slate-200，提高对比度 */
+  background: #e2e8f0;
+  /* slate-900，深色文字 */
+  color: #0f172a;
   padding: 0.15rem 0.35rem;
   border-radius: 0.25rem;
   font-family: var(--font-ui), monospace;
   font-size: 0.9em;
-  border: 1px solid #cbd5e1; /* slate-300，添加边框增强对比 */
+  /* slate-300，添加边框增强对比 */
+  border: 1px solid #cbd5e1;
 }
+
 .dark .prose code {
-  background: #1e293b; /* slate-800，更亮的背景 */
-  color: #f1f5f9; /* slate-100，更亮的文字 */
-  border: 1px solid #334155; /* slate-700，边框 */
+  /* slate-800，更亮的背景 */
+  background: #1e293b;
+  /* slate-100，更亮的文字 */
+  color: #f1f5f9;
+  /* slate-700，边框 */
+  border: 1px solid #334155;
 }
 
 /* pre 内部的 code 元素：移除边框和背景，避免每行出现横线 */
@@ -238,6 +269,7 @@ input#search {
   color: inherit;
   font-size: inherit;
 }
+
 .dark .prose pre code {
   background: transparent;
   border: none;
@@ -245,21 +277,31 @@ input#search {
 }
 
 .prose pre {
-  background: #e2e8f0; /* slate-200，提高对比度 */
-  color: #0f172a; /* slate-900，深色文字 */
+  /* slate-200，提高对比度 */
+  background: #e2e8f0;
+  /* slate-900，深色文字 */
+  color: #0f172a;
   padding: 0.75rem 1rem;
   border-radius: 0.5rem;
   overflow: auto;
   margin: 0.75rem 0;
-  border: 1px solid #cbd5e1; /* slate-300，添加边框 */
-  white-space: pre; /* 不折行，保持原始格式 */
-  word-wrap: normal; /* 不自动换行 */
-  overflow-x: auto; /* 横向滚动 */
+  /* slate-300，添加边框 */
+  border: 1px solid #cbd5e1;
+  /* 不折行，保持原始格式 */
+  white-space: pre;
+  /* 不自动换行 */
+  word-wrap: normal;
+  /* 横向滚动 */
+  overflow-x: auto;
 }
+
 .dark .prose pre {
-  background: #1e293b; /* slate-800，更亮的背景 */
-  color: #f1f5f9; /* slate-100，更亮的文字 */
-  border: 1px solid #334155; /* slate-700，边框 */
+  /* slate-800，更亮的背景 */
+  background: #1e293b;
+  /* slate-100，更亮的文字 */
+  color: #f1f5f9;
+  /* slate-700，边框 */
+  border: 1px solid #334155;
 }
 
 .prose table {
@@ -267,12 +309,14 @@ input#search {
   margin: 0.75rem 0;
   width: 100%;
 }
+
 .prose th,
 .prose td {
   border: 1px solid #e5e7eb;
   padding: 0.5rem 0.6rem;
   text-align: left;
 }
+
 .dark .prose th,
 .dark .prose td {
   border-color: #374151;
@@ -282,15 +326,18 @@ input#search {
   color: #2563eb;
   text-decoration: underline;
 }
+
 .dark .prose a {
   color: #60a5fa;
 }
+
 .prose blockquote {
   border-left: 4px solid #e5e7eb;
   padding-left: 1rem;
   color: #6b7280;
   margin: 0.75rem 0;
 }
+
 .dark .prose blockquote {
   border-left-color: #374151;
   color: #9ca3af;
@@ -298,12 +345,19 @@ input#search {
 
 /* 测试输出框样式（与帮助代码块一致） */
 .test-output-box {
-  background: #e2e8f0; /* slate-200，与 .prose pre 一致 */
-  color: #0f172a; /* slate-900，深色文字 */
-  border: 1px solid #cbd5e1; /* slate-300，边框 */
+  /* slate-200，与 .prose pre 一致 */
+  background: #e2e8f0;
+  /* slate-900，深色文字 */
+  color: #0f172a;
+  /* slate-300，边框 */
+  border: 1px solid #cbd5e1;
 }
+
 .dark .test-output-box {
-  background: #1e293b; /* slate-800，与 .prose pre 一致 */
-  color: #f1f5f9; /* slate-100，更亮的文字 */
-  border: 1px solid #334155; /* slate-700，边框 */
+  /* slate-800，与 .prose pre 一致 */
+  background: #1e293b;
+  /* slate-100，更亮的文字 */
+  color: #f1f5f9;
+  /* slate-700，边框 */
+  border: 1px solid #334155;
 }

@@ -6,12 +6,12 @@
   import { useProfiles } from '$lib/modules/logseek';
   import type { S3ProfilePayload } from '$lib/modules/logseek';
   import Alert from '$lib/components/Alert.svelte';
-  import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
-  import { Label } from "$lib/components/ui/label";
-  import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "$lib/components/ui/card";
-  import { Plus, Trash2, Edit2, Database, Cloud } from "lucide-svelte";
-  import { Badge } from "$lib/components/ui/badge";
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
+  import { Label } from '$lib/components/ui/label';
+  import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '$lib/components/ui/card';
+  import { Plus, Trash2, Edit2, Database, Cloud } from 'lucide-svelte';
+  import { Badge } from '$lib/components/ui/badge';
 
   const profileStore = useProfiles();
 
@@ -133,9 +133,7 @@
         {:else}
           <div class="grid gap-4">
             {#each profileStore.profiles as profile (profile.profile_name)}
-              <div
-                class="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50"
-              >
+              <div class="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50">
                 <div class="grid gap-1">
                   <div class="flex items-center gap-2">
                     <span class="font-semibold">{profile.profile_name}</span>
@@ -157,7 +155,7 @@
                     <Button
                       variant="ghost"
                       size="icon"
-                      class="text-destructive hover:text-destructive hover:bg-destructive/10"
+                      class="text-destructive hover:bg-destructive/10 hover:text-destructive"
                       onclick={() => handleDelete(profile.profile_name)}
                       disabled={profileStore.deleting}
                     >
@@ -247,9 +245,7 @@
           </div>
         </CardContent>
         <CardFooter class="flex justify-end gap-2">
-          <Button variant="outline" type="button" onclick={cancelEdit} disabled={profileStore.saving}>
-            取消
-          </Button>
+          <Button variant="outline" type="button" onclick={cancelEdit} disabled={profileStore.saving}>取消</Button>
           <Button
             type="submit"
             disabled={profileStore.saving ||

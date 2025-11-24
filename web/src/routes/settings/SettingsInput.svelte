@@ -3,8 +3,8 @@
    * 设置页面输入框组件
    * 统一的输入框样式和布局
    */
-  import { Input } from "$lib/components/ui/input";
-  import { Label } from "$lib/components/ui/label";
+  import { Input } from '$lib/components/ui/input';
+  import { Label } from '$lib/components/ui/label';
 
   interface Props {
     /**
@@ -60,17 +60,9 @@
 </script>
 
 <div class="grid gap-2">
-  <Label class="text-base font-semibold">{label}</Label>
+  <Label class="font-semibold text-base">{label}</Label>
   <p class="text-sm text-muted-foreground">
     {description}
   </p>
-  <Input
-    {placeholder}
-    {type}
-    {disabled}
-    {autocomplete}
-    bind:value
-    oninput={handleInput}
-    class="max-w-md"
-  />
+  <Input {placeholder} {type} {disabled} {autocomplete} bind:value oninput={handleInput} class="max-w-md" />
 </div>
