@@ -14,49 +14,30 @@
     ChevronRight,
     ChevronDown,
     ExternalLink,
-    MoreHorizontal,
     FileText,
     Copy,
-    UnfoldVertical
+    UnfoldVertical,
+    Cloud,
+    Server,
+    HardDrive,
+    Archive,
+    Folder,
+    Hash,
+    FileCode,
+    Database,
+    Tag
   } from 'lucide-svelte';
   import { Separator } from '$lib/components/ui/separator';
 
   interface Props {
-    /**
-     * 搜索结果项
-     */
     item: SearchJsonResult;
-    /**
-     * 结果索引
-     */
     index: number;
-    /**
-     * 会话 ID
-     */
     sid: string;
-    /**
-     * 是否折叠
-     */
     isCollapsed: boolean;
-    /**
-     * 是否显示全部匹配
-     */
     isShowAll: boolean;
-    /**
-     * 已展开的行键集合
-     */
     expandedLines: Set<string>;
-    /**
-     * 切换折叠状态
-     */
     onToggleCollapse: () => void;
-    /**
-     * 切换显示全部匹配
-     */
     onToggleShowAll: () => void;
-    /**
-     * 展开单行
-     */
     onExpandLine: (key: string) => void;
   }
 
@@ -74,6 +55,28 @@
 
   let viewUrl = $derived(`/view?${new URLSearchParams({ sid, file: item.path }).toString()}`);
 
+  // 悬浮提示框状态
+  let showTooltip = $state(false);
+  let tooltipTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // 解析文件URL获取详细元数据
+  let parsedUrl = $derived(parseFileUrl(item.path));
+
+  // 延迟显示tooltip
+  function handleMouseEnter() {
+    tooltipTimer = setTimeout(() => {
+      showTooltip = true;
+    }, 300);
+  }
+
+  function handleMouseLeave() {
+    if (tooltipTimer) {
+      clearTimeout(tooltipTimer);
+      tooltipTimer = null;
+    }
+    showTooltip = false;
+  }
+
   // 行键生成函数
   const lineKey = (fileIdx: number, chunkIdx: number, lineIdx: number) => `${fileIdx}-${chunkIdx}-${lineIdx}`;
 
@@ -84,7 +87,6 @@
     const arr: Array<{ no: number; text: string; _ci: number; _li: number; isMatch: boolean }> = [];
     (item?.chunks || []).forEach((chunk: JsonChunk, ci: number) => {
       (chunk?.lines || []).forEach((ln: JsonLine, li: number) => {
-        // Check if this line contains any of the keywords
         const hasMatch = item.keywords.some((kw) => ln.text.includes(kw));
         arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li, isMatch: hasMatch });
       });
@@ -92,7 +94,7 @@
     return arr;
   }
 
-  // 计算总行数（包括所有上下文行）
+  // 计算总行数
   function totalLines(item: SearchJsonResult): number {
     return flattenLines(item).length;
   }
@@ -105,14 +107,15 @@
     return flat.slice(0, Math.min(7, flat.length));
   }
 
-  // 解析标题与来源标签
-  function parseTitleAndSource(full: string): { title: string; source?: string } {
-    const parsed = parseFileUrl(full);
-    if (!parsed) return { title: full };
-    return { title: full };
+  // 路径处理：尝试拆分目录和文件名
+  function splitPath(path: string) {
+    const parts = path.split('/');
+    const file = parts.pop() || path;
+    const dir = parts.join('/');
+    return { dir, file };
   }
 
-  const { title } = $derived(parseTitleAndSource(item.path));
+  const { dir, file } = $derived(splitPath(item.path));
 
   function copyPath() {
     navigator.clipboard.writeText(item.path);
@@ -120,143 +123,348 @@
 </script>
 
 <Card
-  class="group overflow-hidden rounded-md border-border transition-all hover:border-primary/50"
+  class="group overflow-visible rounded-md border-border bg-card transition-all hover:border-primary/50 dark:border-gray-700 dark:bg-[#0d1117]"
   data-result-card={index}
 >
   <!-- 结果头：仿 GitHub 风格 -->
-  <div class="flex items-center justify-between bg-muted/10 px-4 py-2 text-sm">
-    <div class="flex items-center gap-2 overflow-hidden">
-      <!-- 文件图标 -->
-      <FileText class="h-4 w-4 text-muted-foreground" />
-
-      <!-- 文件路径 -->
-      <a
-        href={viewUrl}
-        target="_blank"
-        rel="noopener"
-        class="truncate font-mono text-sm font-medium text-foreground hover:text-primary hover:underline"
-        title={item.path}
-      >
-        {item.path}
-      </a>
-
-      <!-- 匹配关键词 Badge -->
-      {#if item.keywords?.length}
-        <div class="hidden items-center gap-1.5 sm:flex">
-          {#each item.keywords.slice(0, 3) as keyword (keyword)}
-            <Badge variant="secondary" class="h-5 rounded-full px-2 text-[10px] font-normal text-muted-foreground">
-              {keyword}
-            </Badge>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <!-- 操作按钮组 -->
-    <div class="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-      <Button
-        variant="ghost"
-        size="icon"
-        class="h-7 w-7 text-muted-foreground hover:text-foreground"
-        onclick={copyPath}
-        title="复制路径"
-      >
-        <Copy class="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="h-7 w-7 text-muted-foreground hover:text-foreground"
-        href={viewUrl}
-        target="_blank"
-        title="在新窗口打开"
-      >
-        <ExternalLink class="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon"
-        class="h-7 w-7 text-muted-foreground hover:text-foreground"
+  <div
+    class="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-2 text-sm dark:border-gray-700 dark:bg-[#161b22]"
+  >
+    <div class="flex items-center gap-2 overflow-visible">
+      <button
+        class="text-muted-foreground hover:text-foreground"
         onclick={onToggleCollapse}
         title={isCollapsed ? '展开' : '折叠'}
       >
         {#if isCollapsed}
-          <ChevronDown class="h-4 w-4" />
+          <ChevronRight class="h-4 w-4" />
         {:else}
-          <ChevronRight class="h-4 w-4 rotate-90" />
+          <ChevronDown class="h-4 w-4" />
         {/if}
-      </Button>
+      </button>
+
+      <!-- 文件路径 - 只显示文件名 -->
+      <div class="flex items-center gap-1 font-mono text-sm">
+        <div
+          class="relative flex items-center"
+          role="presentation"
+          onmouseenter={handleMouseEnter}
+          onmouseleave={handleMouseLeave}
+        >
+          <a
+            href={viewUrl}
+            target="_blank"
+            rel="noopener"
+            class="flex items-center font-bold text-foreground hover:underline"
+          >
+            <FileText class="mr-1.5 inline-block h-4 w-4 align-text-bottom text-muted-foreground" />
+            <span class="truncate">{file}</span>
+          </a>
+
+          <!-- 悬浮提示框 - 精美设计 -->
+          {#if showTooltip && parsedUrl}
+            <div
+              class="animate-in fade-in-0 zoom-in-95 pointer-events-auto absolute top-full left-0 z-50 mt-2 w-[420px] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl duration-200"
+            >
+              <!-- 顶部彩色条纹 + 类型标识 -->
+              <div class="relative">
+                {#if parsedUrl.type === 's3'}
+                  <div class="h-1.5 bg-gradient-to-r from-blue-500 via-cyan-500 to-blue-600"></div>
+                {:else if parsedUrl.type === 'tar-entry'}
+                  <div class="h-1.5 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600"></div>
+                {:else if parsedUrl.type === 'agent'}
+                  <div class="h-1.5 bg-gradient-to-r from-purple-500 via-violet-500 to-purple-600"></div>
+                {:else if parsedUrl.type === 'dir-entry'}
+                  <div class="h-1.5 bg-gradient-to-r from-emerald-500 via-green-500 to-emerald-600"></div>
+                {:else}
+                  <div class="h-1.5 bg-gradient-to-r from-green-500 via-emerald-500 to-green-600"></div>
+                {/if}
+              </div>
+
+              <div class="p-4">
+                <!-- 头部：类型图标 + 文件名 + 编码 -->
+                <div class="mb-4 flex items-start gap-3">
+                  <div
+                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {parsedUrl.type === 's3'
+                      ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
+                      : parsedUrl.type === 'tar-entry'
+                        ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
+                        : parsedUrl.type === 'agent'
+                          ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400'
+                          : parsedUrl.type === 'dir-entry'
+                            ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                            : 'bg-green-500/10 text-green-600 dark:text-green-400'}"
+                  >
+                    {#if parsedUrl.type === 's3'}
+                      <Cloud class="h-5 w-5" />
+                    {:else if parsedUrl.type === 'tar-entry'}
+                      <Archive class="h-5 w-5" />
+                    {:else if parsedUrl.type === 'agent'}
+                      <Server class="h-5 w-5" />
+                    {:else if parsedUrl.type === 'dir-entry'}
+                      <Folder class="h-5 w-5" />
+                    {:else}
+                      <HardDrive class="h-5 w-5" />
+                    {/if}
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span class="truncate font-semibold text-foreground">{parsedUrl.displayName}</span>
+                    </div>
+                    <div class="mt-1 flex items-center gap-2">
+                      <span
+                        class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium {parsedUrl.type ===
+                        's3'
+                          ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
+                          : parsedUrl.type === 'tar-entry'
+                            ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
+                            : parsedUrl.type === 'agent'
+                              ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400'
+                              : parsedUrl.type === 'dir-entry'
+                                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                : 'bg-green-500/10 text-green-600 dark:text-green-400'}"
+                      >
+                        {parsedUrl.type === 's3'
+                          ? 'S3 Object'
+                          : parsedUrl.type === 'tar-entry'
+                            ? 'Archive Entry'
+                            : parsedUrl.type === 'agent'
+                              ? 'Agent File'
+                              : parsedUrl.type === 'dir-entry'
+                                ? 'Directory Entry'
+                                : 'Local File'}
+                      </span>
+                      {#if item.encoding}
+                        <span
+                          class="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+                        >
+                          <FileCode class="h-3 w-3" />
+                          {item.encoding}
+                        </span>
+                      {/if}
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 元数据网格 -->
+                <div class="space-y-3">
+                  {#if parsedUrl.type === 's3'}
+                    {@const s3Url = parsedUrl}
+                    <div class="grid grid-cols-2 gap-3">
+                      {#if s3Url.profile}
+                        <div class="rounded-lg bg-muted/40 p-2.5">
+                          <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Database class="h-3 w-3" />
+                            <span>Profile</span>
+                          </div>
+                          <div class="font-mono text-sm text-foreground">{s3Url.profile}</div>
+                        </div>
+                      {/if}
+                      <div class="rounded-lg bg-muted/40 p-2.5">
+                        <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Cloud class="h-3 w-3" />
+                          <span>Bucket</span>
+                        </div>
+                        <div class="font-mono text-sm text-foreground">{s3Url.bucket}</div>
+                      </div>
+                    </div>
+                    <div class="rounded-lg bg-muted/40 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Folder class="h-3 w-3" />
+                        <span>Object Key</span>
+                      </div>
+                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{s3Url.key}</div>
+                    </div>
+                  {:else if parsedUrl.type === 'tar-entry'}
+                    {@const tarUrl = parsedUrl}
+                    <div class="rounded-lg border border-orange-500/20 bg-orange-500/5 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-orange-600 dark:text-orange-400">
+                        <Archive class="h-3 w-3" />
+                        <span>Archive ({tarUrl.compression})</span>
+                      </div>
+                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{tarUrl.baseUrl}</div>
+                    </div>
+                    <div class="rounded-lg bg-muted/40 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <FileText class="h-3 w-3" />
+                        <span>Entry Path</span>
+                      </div>
+                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{tarUrl.entryPath}</div>
+                    </div>
+                  {:else if parsedUrl.type === 'agent'}
+                    {@const agentUrl = parsedUrl}
+                    <div class="rounded-lg border border-purple-500/20 bg-purple-500/5 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400">
+                        <Server class="h-3 w-3" />
+                        <span>Agent ID</span>
+                      </div>
+                      <div class="font-mono text-sm font-medium text-foreground">{agentUrl.agentId}</div>
+                    </div>
+                    <div class="rounded-lg bg-muted/40 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Folder class="h-3 w-3" />
+                        <span>File Path</span>
+                      </div>
+                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{agentUrl.path}</div>
+                    </div>
+                  {:else if parsedUrl.type === 'dir-entry'}
+                    {@const dirUrl = parsedUrl}
+                    <div class="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                        <Folder class="h-3 w-3" />
+                        <span>Base Directory</span>
+                      </div>
+                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{dirUrl.baseUrl}</div>
+                    </div>
+                    <div class="rounded-lg bg-muted/40 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <FileText class="h-3 w-3" />
+                        <span>Relative Path</span>
+                      </div>
+                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{dirUrl.entryPath}</div>
+                    </div>
+                  {:else if parsedUrl.type === 'local'}
+                    {@const localUrl = parsedUrl}
+                    <div class="rounded-lg bg-muted/40 p-2.5">
+                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <HardDrive class="h-3 w-3" />
+                        <span>Local Path</span>
+                      </div>
+                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{localUrl.path}</div>
+                    </div>
+                  {/if}
+                </div>
+
+                <!-- 关键词 -->
+                {#if item.keywords && item.keywords.length > 0}
+                  <div class="mt-4 border-t border-border pt-3">
+                    <div class="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <Tag class="h-3 w-3" />
+                      <span>Matched Keywords</span>
+                      <span
+                        class="ml-auto rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+                        >{item.keywords.length}</span
+                      >
+                    </div>
+                    <div class="flex flex-wrap gap-1.5">
+                      {#each item.keywords as keyword, i}
+                        <span
+                          class="inline-flex items-center gap-1 rounded-md border border-amber-500/20 bg-gradient-to-r from-amber-500/10 to-yellow-500/10 px-2 py-1 font-mono text-xs text-amber-700 dark:text-amber-400"
+                        >
+                          <Hash class="h-3 w-3 opacity-60" />
+                          {keyword}
+                        </span>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+            </div>
+          {/if}
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧元数据和操作 -->
+    <div class="flex items-center gap-4">
+      <!-- 语言/类型标记 -->
+      <div class="hidden items-center gap-2 text-xs text-muted-foreground sm:flex">
+        <span class="flex items-center gap-1">
+          <span class="h-2 w-2 rounded-full bg-yellow-400"></span>
+          {item.encoding || 'UTF-8'}
+        </span>
+      </div>
+
+      <!-- 操作按钮组 -->
+      <div class="flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          class="h-7 w-7 text-muted-foreground hover:text-foreground"
+          onclick={copyPath}
+          title="复制路径"
+        >
+          <Copy class="h-3.5 w-3.5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          class="h-7 w-7 text-muted-foreground hover:text-foreground"
+          href={viewUrl}
+          target="_blank"
+          title="在新窗口打开"
+        >
+          <ExternalLink class="h-3.5 w-3.5" />
+        </Button>
+      </div>
     </div>
   </div>
 
-  <Separator />
-
   {#if !isCollapsed}
     <!-- 代码块区域：仿 GitHub Blob 视图 -->
-    <div class="overflow-x-auto bg-background py-1 text-sm">
+    <div class="overflow-x-auto bg-background py-0 text-sm dark:bg-[#0d1117]">
       <table class="w-full border-collapse">
         <tbody>
           {#each visibleLines(item) as ln (index + '-' + ln._ci + '-' + ln._li)}
-            <tr class="group/line hover:bg-muted/30">
+            <tr class="group/line hover:bg-muted/10">
               <!-- 行号 -->
               <td
-                class={`w-[1%] min-w-[3rem] px-3 py-0.5 text-right align-top font-mono text-xs select-none ${ln.isMatch ? 'text-foreground' : 'text-muted-foreground/50'}`}
+                class="w-[1%] min-w-[50px] px-3 py-0.5 text-right align-top font-mono text-xs select-none {ln.isMatch
+                  ? 'font-semibold text-foreground'
+                  : 'text-muted-foreground/60'}"
               >
                 {ln.no}
               </td>
               <!-- 代码内容 -->
-              <td class="px-4 py-0.5 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap">
-                {#if expandedLines.has(lineKey(index, ln._ci, ln._li))}
-                  <span class="code-content-text">{@html highlight(ln.text, item.keywords)}</span>
-                {:else}
-                  {#key index + '-' + ln._ci + '-' + ln._li + '-snippet'}
-                    {@const sn = snippet(ln.text, item.keywords)}
-                    {#if sn.leftTrunc}
-                      <button
-                        class="mx-1 inline-flex h-4 w-4 items-center justify-center rounded bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+              <td class="px-4 py-0.5 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap text-foreground"
+                >{#if expandedLines.has(lineKey(index, ln._ci, ln._li))}<span class="code-content-text"
+                    >{@html highlight(ln.text, item.keywords)}</span
+                  >{:else}{#key index + '-' + ln._ci + '-' + ln._li + '-snippet'}{@const sn = snippet(
+                      ln.text,
+                      item.keywords
+                    )}{#if sn.leftTrunc}<button
+                        class="mx-0.5 text-muted-foreground hover:text-foreground hover:underline"
                         onclick={() => onExpandLine(lineKey(index, ln._ci, ln._li))}
-                        title="展开"
-                      >
-                        <MoreHorizontal class="h-3 w-3" />
-                      </button>
-                    {/if}
-                    <span class="code-content-text">{@html sn.html}</span>
-                    {#if sn.rightTrunc}
-                      <button
-                        class="mx-1 inline-flex h-4 w-4 items-center justify-center rounded bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                        title="展开">...</button
+                      >{/if}<span class="code-content-text">{@html sn.html}</span>{#if sn.rightTrunc}<button
+                        class="mx-0.5 text-muted-foreground hover:text-foreground hover:underline"
                         onclick={() => onExpandLine(lineKey(index, ln._ci, ln._li))}
-                        title="展开"
-                      >
-                        <MoreHorizontal class="h-3 w-3" />
-                      </button>
-                    {/if}
-                  {/key}
-                {/if}
-              </td>
+                        title="展开">...</button
+                      >{/if}{/key}{/if}</td
+              >
             </tr>
           {/each}
+
+          <!-- 展开更多行 -->
+          {#if totalLines(item) > 7 && !isShowAll}
+            <tr class="border-t border-border bg-muted/5 hover:bg-muted/10">
+              <td colspan="2" class="p-0">
+                <button
+                  class="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  onclick={onToggleShowAll}
+                >
+                  <UnfoldVertical class="h-3.5 w-3.5" />
+                  <span>显示其余 {totalLines(item) - 7} 行匹配项</span>
+                </button>
+              </td>
+            </tr>
+          {/if}
+          {#if isShowAll && totalLines(item) > 7}
+            <tr class="border-t border-border bg-muted/5 hover:bg-muted/10">
+              <td colspan="2" class="p-0">
+                <button
+                  class="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  onclick={onToggleShowAll}
+                >
+                  <ChevronDown class="h-3.5 w-3.5 rotate-180" />
+                  <span>收起</span>
+                </button>
+              </td>
+            </tr>
+          {/if}
         </tbody>
       </table>
     </div>
-
-    <!-- 展开更多按钮 -->
-    {#if totalLines(item) > 7}
-      <div
-        class="flex cursor-pointer items-center justify-start border-t border-border/50 bg-muted/5 px-4 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/10 hover:text-foreground"
-        onclick={onToggleShowAll}
-        role="button"
-        tabindex="0"
-        onkeydown={(e) => e.key === 'Enter' && onToggleShowAll()}
-      >
-        {#if isShowAll}
-          <ChevronDown class="mr-2 h-3.5 w-3.5 rotate-180" />
-          收起
-        {:else}
-          <UnfoldVertical class="mr-2 h-3.5 w-3.5" />
-          显示更多 ({totalLines(item) - 7} 行)
-        {/if}
-      </div>
-    {/if}
   {/if}
 </Card>
 
@@ -269,14 +477,16 @@
     font-variant-ligatures: none;
   }
 
-  /* 关键词高亮样式（通常由 highlight 函数生成 span.highlight） */
+  /* 关键词高亮样式 - 仿 GitHub */
   :global(.highlight) {
-    background-color: rgba(253, 224, 71, 0.3); /* yellow-300 with opacity */
+    background-color: rgba(255, 215, 0, 0.4); /* Light mode yellow */
     color: inherit;
     border-radius: 0.125rem;
-    padding: 0 0.125rem;
+    padding: 0 0.05rem;
+    font-weight: 600;
   }
+
   :global(.dark .highlight) {
-    background-color: rgba(234, 179, 8, 0.3); /* yellow-500 with opacity */
+    background-color: rgba(210, 153, 34, 0.4); /* Dark mode gold */
   }
 </style>

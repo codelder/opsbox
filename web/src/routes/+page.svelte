@@ -93,7 +93,7 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-base text-foreground shadow-sm ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-foreground shadow-sm ring-offset-background placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             id="search"
             name="q"
             placeholder="Try: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
@@ -104,10 +104,7 @@
           <div class="absolute right-2 z-20">
             <button
               type="button"
-              class="group/ai inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none
-              {aiLoading || pressing
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-secondary text-secondary-foreground hover:bg-secondary/80'}"
+              class="group/ai inline-flex items-center rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition-all hover:bg-secondary/80 focus:outline-none"
               title="按下使用 AI 模式；直接回车为普通模式"
               aria-label="AI 模式按钮"
               aria-pressed={aiLoading || pressing}

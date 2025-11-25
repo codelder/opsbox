@@ -1,9 +1,9 @@
 <script lang="ts">
   interface Props {
     /**
-     * Logo 尺寸：'small' | 'medium' | 'large' | 'xlarge'
+     * Logo 尺寸：'xsmall' | 'small' | 'medium' | 'large' | 'xlarge'
      */
-    size?: 'small' | 'medium' | 'large' | 'xlarge';
+    size?: 'xsmall' | 'small' | 'medium' | 'large' | 'xlarge';
     /**
      * 是否显示为标签（label），将 cursor 设为 pointer
      */
@@ -26,6 +26,7 @@
 
   // 尺寸映射
   const sizeClasses = {
+    xsmall: 'text-xl',
     small: 'text-3xl md:text-4xl',
     medium: 'text-4xl md:text-6xl',
     large: 'text-6xl md:text-8xl',
