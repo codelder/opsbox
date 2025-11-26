@@ -93,10 +93,10 @@
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-foreground shadow-sm ring-offset-background placeholder:text-placeholder focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-foreground shadow-sm ring-offset-background placeholder:text-placeholder focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             id="search"
             name="q"
-            placeholder="Try: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
+            placeholder="试一下: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
             type="text"
           />
 

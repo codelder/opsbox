@@ -192,12 +192,18 @@
         // 大小写敏感匹配
         const regex = new RegExp(escapedKeyword, 'g');
         result = result.replace(regex, (match: string) => {
-          return `<mark class="bg-yellow-200/80 py-0.5 rounded-sm text-yellow-900 dark:bg-yellow-400/30 dark:text-yellow-200">${match}</mark>`;
+          return `<mark class="highlight">${match}</mark>`;
         });
       }
     }
 
     return result;
+  }
+
+  // 检测行是否包含关键词（用于高亮行号）
+  function lineHasMatch(text: string): boolean {
+    if (!keywords || keywords.length === 0 || !text) return false;
+    return keywords.some((kw) => kw && text.includes(kw));
   }
 
   // 下载当前视图的完整原始文本（不含行号）
@@ -324,29 +330,29 @@
 </script>
 
 <!-- 页面标题与状态栏 -->
-<div class="h-screen overflow-hidden bg-[var(--bg)]">
-  <div class="mx-auto flex h-full max-w-[1560px] flex-col px-4 py-8">
+<div class="min-h-screen bg-background text-foreground">
+  <div class="mx-auto flex h-screen max-w-[1560px] flex-col px-6 py-6">
     {#if error}
       <div class="mx-auto mb-6 max-w-md">
         <Alert type="error" title="加载出错" message={error} />
       </div>
     {/if}
 
-    <div class="flex min-h-0 flex-1 flex-col gap-10">
+    <div class="flex min-h-0 flex-1 flex-col gap-6">
       <!-- 页面 Logo（卡片外部） -->
       <div class="flex items-center justify-center">
         <LogSeekLogo size="small" hoverable />
       </div>
       <!-- 主内容卡片：文件信息 + 虚拟滚动容器 -->
       <div
-        class="flex flex-1 flex-col overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--surface)] shadow-xl shadow-black/5 transition-all duration-300 hover:shadow-2xl hover:shadow-black/10"
+        class="flex flex-1 flex-col overflow-hidden rounded-md border border-border bg-card transition-all dark:border-gray-700 dark:bg-[#0d1117]"
       >
         <!-- 文件信息标题栏 -->
         <FileHeader filePath={file} {total} loadedLines={end} {keywords} {loading} onDownload={downloadCurrentFile} />
 
         <!-- 虚拟滚动内容区域 -->
         <div
-          class="relative min-h-0 flex-1 overflow-auto bg-transparent transition-all duration-500 ease-in-out"
+          class="relative min-h-0 flex-1 overflow-auto bg-background dark:bg-[#0d1117]"
           bind:this={parentEl}
           onscroll={handleScroll}
         >
@@ -356,23 +362,22 @@
               <!-- 兜底：虚拟器未就绪或总高度未知时，先用正常流渲染已加载的前200行，避免空白 -->
               {#if lines.length > 0}
                 {#each lines as ln (ln.no)}
-                  <div
-                    class="group/line grid grid-cols-[70px_1fr] font-mono text-xs leading-[16px] transition-colors duration-150 hover:bg-blue-50/40 dark:hover:bg-blue-900/10"
-                  >
+                  {@const isMatch = lineHasMatch(ln.text)}
+                  <div class="group/line flex font-mono text-xs leading-relaxed hover:bg-muted/10">
                     <div
-                      class="border-r border-[var(--border)] bg-[var(--surface-2)] px-3 py-0.5 text-right font-medium text-[var(--muted)] transition-all duration-150 select-none group-hover/line:bg-[var(--surface)] group-hover/line:text-[var(--text)]"
+                      class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
+                        ? 'font-semibold text-foreground'
+                        : 'text-muted-foreground/60'}"
                     >
                       {ln.no}
                     </div>
-                    <div
-                      class="code-content bg-[var(--surface)] px-3 py-0.5 break-all whitespace-pre-wrap text-[var(--text)] transition-colors duration-150 group-hover/line:bg-[var(--surface-2)]"
-                    >
+                    <div class="code-content flex-1 px-4 py-0.5 break-all whitespace-pre-wrap text-foreground">
                       {@html highlightKeywords(ln.text)}
                     </div>
                   </div>
                 {/each}
               {:else}
-                <div class="p-3 text-sm text-[var(--muted)]">暂无内容</div>
+                <div class="p-3 text-sm text-muted-foreground">暂无内容</div>
               {/if}
             {:else}
               {#each vItems as item (item.key)}
@@ -383,29 +388,28 @@
                   use:measureVirtualRow
                 >
                   {#if ln}
-                    <div
-                      class="group/line grid grid-cols-[70px_1fr] font-mono text-xs leading-[16px] transition-colors duration-150 hover:bg-blue-50/40 dark:hover:bg-blue-900/10"
-                    >
+                    {@const isMatch = lineHasMatch(ln.text)}
+                    <div class="group/line flex font-mono text-xs leading-relaxed hover:bg-muted/10">
                       <div
-                        class="border-r border-slate-300 bg-gradient-to-r from-slate-100 to-slate-50 px-3 py-0.5 text-right font-medium text-slate-600 transition-all duration-150 select-none group-hover/line:from-blue-100 group-hover/line:to-blue-50 group-hover/line:text-blue-700 dark:border-gray-700/60 dark:from-gray-800/80 dark:to-gray-900/80 dark:text-gray-400 dark:group-hover/line:from-blue-900/20 dark:group-hover/line:to-blue-800/20 dark:group-hover/line:text-blue-400"
+                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
+                          ? 'font-semibold text-foreground'
+                          : 'text-muted-foreground/60'}"
                       >
                         {ln.no}
                       </div>
-                      <div
-                        class="code-content bg-white px-3 py-0.5 break-all whitespace-pre-wrap text-slate-900 transition-colors duration-150 group-hover/line:bg-blue-50/20 group-hover/line:text-slate-950 dark:bg-transparent dark:text-gray-200 dark:group-hover/line:text-gray-100"
-                      >
+                      <div class="code-content flex-1 px-4 py-0.5 break-all whitespace-pre-wrap text-foreground">
                         {@html highlightKeywords(ln.text)}
                       </div>
                     </div>
                   {:else}
                     <!-- 占位行（尚未加载到该行），高度尽量匹配 estimateSize -->
-                    <div class="grid grid-cols-[70px_1fr] font-mono text-xs leading-[16px] opacity-60">
+                    <div class="flex font-mono text-xs leading-relaxed opacity-60">
                       <div
-                        class="border-r border-[var(--border)] bg-[var(--surface-2)] px-3 py-0.5 text-right font-medium text-[var(--muted)] select-none"
+                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium text-muted-foreground select-none"
                       >
                         {item.index + 1}
                       </div>
-                      <div class="code-content bg-[var(--surface)] px-3 py-0.5 text-[var(--muted)]">加载中…</div>
+                      <div class="code-content flex-1 px-4 py-0.5 text-muted-foreground">加载中…</div>
                     </div>
                   {/if}
                 </div>
@@ -420,10 +424,22 @@
 
 <style>
   .code-content {
-    font-family: var(--font-ui);
+    font-family: var(--font-ui), monospace;
     font-feature-settings:
       'liga' 0,
       'calt' 0;
     font-variant-ligatures: none;
+  }
+
+  /* 关键词高亮样式 - 字体颜色高亮 */
+  :global(.highlight) {
+    background: none;
+    color: #d97706; /* amber-600 */
+    font-weight: 600;
+  }
+
+  :global(.dark .highlight) {
+    background: none;
+    color: #fbbf24; /* amber-400 */
   }
 </style>

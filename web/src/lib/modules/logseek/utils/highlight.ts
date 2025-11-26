@@ -25,14 +25,14 @@ export function escapeRegExp(s: string): string {
 }
 
 /**
- * 高亮关键词（使用 <mark> 标签）
+ * 高亮关键词（使用带 class 的 mark 标签）
  */
 export function highlight(line: string, keywords: string[]): string {
   let out = escapeHtml(line);
   const kws = (keywords || []).filter((k) => k && k.length > 0);
   for (const kw of kws) {
     const re = new RegExp(escapeRegExp(kw), 'g');
-    out = out.replace(re, (m) => `<mark>${escapeHtml(m)}</mark>`);
+    out = out.replace(re, (m) => `<mark class="highlight">${escapeHtml(m)}</mark>`);
   }
   return out;
 }

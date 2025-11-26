@@ -169,15 +169,15 @@
               <!-- 顶部彩色条纹 + 类型标识 -->
               <div class="relative">
                 {#if parsedUrl.type === 's3'}
-                  <div class="h-1.5 bg-gradient-to-r from-blue-500 via-cyan-500 to-blue-600"></div>
+                  <div class="h-1.5 bg-linear-to-r from-blue-500 via-cyan-500 to-blue-600"></div>
                 {:else if parsedUrl.type === 'tar-entry'}
-                  <div class="h-1.5 bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600"></div>
+                  <div class="h-1.5 bg-linear-to-r from-orange-500 via-amber-500 to-orange-600"></div>
                 {:else if parsedUrl.type === 'agent'}
-                  <div class="h-1.5 bg-gradient-to-r from-purple-500 via-violet-500 to-purple-600"></div>
+                  <div class="h-1.5 bg-linear-to-r from-purple-500 via-violet-500 to-purple-600"></div>
                 {:else if parsedUrl.type === 'dir-entry'}
-                  <div class="h-1.5 bg-gradient-to-r from-emerald-500 via-green-500 to-emerald-600"></div>
+                  <div class="h-1.5 bg-linear-to-r from-emerald-500 via-green-500 to-emerald-600"></div>
                 {:else}
-                  <div class="h-1.5 bg-gradient-to-r from-green-500 via-emerald-500 to-green-600"></div>
+                  <div class="h-1.5 bg-linear-to-r from-green-500 via-emerald-500 to-green-600"></div>
                 {/if}
               </div>
 
@@ -349,7 +349,7 @@
                     <div class="flex flex-wrap gap-1.5">
                       {#each item.keywords as keyword, i}
                         <span
-                          class="inline-flex items-center gap-1 rounded-md border border-amber-500/20 bg-gradient-to-r from-amber-500/10 to-yellow-500/10 px-2 py-1 font-mono text-xs text-amber-700 dark:text-amber-400"
+                          class="inline-flex items-center gap-1 rounded-md border border-amber-500/20 bg-linear-to-r from-amber-500/10 to-yellow-500/10 px-2 py-1 font-mono text-xs text-amber-700 dark:text-amber-400"
                         >
                           <Hash class="h-3 w-3 opacity-60" />
                           {keyword}
@@ -405,7 +405,19 @@
     <div class="overflow-x-auto bg-background py-0 text-sm dark:bg-[#0d1117]">
       <table class="w-full border-collapse">
         <tbody>
-          {#each visibleLines(item) as ln (index + '-' + ln._ci + '-' + ln._li)}
+          {#each visibleLines(item) as ln, idx (index + '-' + ln._ci + '-' + ln._li)}
+            <!-- 在不同 chunk 之间插入分隔行 -->
+            {#if idx > 0 && visibleLines(item)[idx - 1]._ci !== ln._ci}
+              <tr class="chunk-separator">
+                <td colspan="2" class="h-5 bg-muted/50 dark:bg-muted/60">
+                  <div class="flex h-full items-center justify-center">
+                    <div class="h-px w-full bg-border/60 dark:bg-border/80"></div>
+                    <span class="mx-3 shrink-0 text-[9px] text-muted-foreground/70">⋮</span>
+                    <div class="h-px w-full bg-border/60 dark:bg-border/80"></div>
+                  </div>
+                </td>
+              </tr>
+            {/if}
             <tr class="group/line hover:bg-muted/10">
               <!-- 行号 -->
               <td
@@ -477,16 +489,15 @@
     font-variant-ligatures: none;
   }
 
-  /* 关键词高亮样式 - 仿 GitHub */
+  /* 关键词高亮样式 - 字体颜色高亮 */
   :global(.highlight) {
-    background-color: rgba(255, 215, 0, 0.4); /* Light mode yellow */
-    color: inherit;
-    border-radius: 0.125rem;
-    padding: 0 0.05rem;
+    background: none;
+    color: #d97706; /* amber-600 */
     font-weight: 600;
   }
 
   :global(.dark .highlight) {
-    background-color: rgba(210, 153, 34, 0.4); /* Dark mode gold */
+    background: none;
+    color: #fbbf24; /* amber-400 */
   }
 </style>

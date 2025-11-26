@@ -64,34 +64,34 @@ describe('highlight utils', () => {
   describe('highlight', () => {
     it('应该用 <mark> 标签高亮关键词', () => {
       const result = highlight('hello world', ['hello']);
-      expect(result).toContain('<mark>hello</mark>');
+      expect(result).toContain('<mark class="highlight">hello</mark>');
     });
 
     it('应该高亮多个关键词', () => {
       const result = highlight('hello world hello', ['hello']);
-      expect(result).toBe('<mark>hello</mark> world <mark>hello</mark>');
+      expect(result).toBe('<mark class="highlight">hello</mark> world <mark class="highlight">hello</mark>');
     });
 
     it('应该转义 HTML 特殊字符后再高亮', () => {
       const result = highlight('hello<world>', ['hello']);
-      expect(result).toBe('<mark>hello</mark>&lt;world&gt;');
+      expect(result).toBe('<mark class="highlight">hello</mark>&lt;world&gt;');
     });
 
     it('应该处理多个不同关键词', () => {
       const result = highlight('hello world', ['hello', 'world']);
-      expect(result).toContain('<mark>hello</mark>');
-      expect(result).toContain('<mark>world</mark>');
+      expect(result).toContain('<mark class="highlight">hello</mark>');
+      expect(result).toContain('<mark class="highlight">world</mark>');
     });
 
     it('应该忽略空关键词', () => {
       const result = highlight('hello world', ['', 'hello']);
-      expect(result).toBe('<mark>hello</mark> world');
+      expect(result).toBe('<mark class="highlight">hello</mark> world');
     });
 
     it('应该处理区分大小写', () => {
       const result = highlight('Hello HELLO hello', ['hello']);
-      // 默认不区分大小写（全局匹配）
-      expect(result).toContain('<mark>hello</mark>');
+      // 默认区分大小写（全局匹配）
+      expect(result).toContain('<mark class="highlight">hello</mark>');
     });
 
     it('应该处理空关键词列表', () => {
@@ -111,14 +111,14 @@ describe('highlight utils', () => {
 
     it('应该处理特殊字符在关键词中', () => {
       const result = highlight('price: $100', ['$100']);
-      expect(result).toContain('<mark>$100</mark>');
+      expect(result).toContain('<mark class="highlight">$100</mark>');
     });
   });
 
   describe('snippet', () => {
     it('应该返回完整行当其小于 max 长度', () => {
       const result = snippet('short line', ['line']);
-      expect(result.html).toContain('<mark>line</mark>');
+      expect(result.html).toContain('<mark class="highlight">line</mark>');
       expect(result.leftTrunc).toBe(false);
       expect(result.rightTrunc).toBe(false);
     });
@@ -171,7 +171,7 @@ describe('highlight utils', () => {
     it('应该高亮截取后的关键词', () => {
       const line = 'test keyword here test keyword there';
       const result = snippet(line, ['keyword'], { max: 100 });
-      expect(result.html).toContain('<mark>keyword</mark>');
+      expect(result.html).toContain('<mark class="highlight">keyword</mark>');
     });
   });
 });

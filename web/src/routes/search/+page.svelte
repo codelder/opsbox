@@ -145,6 +145,19 @@
       };
     }
 
+    // Agent 归档文件: tar.gz+agent://agent-id/path/archive.tar.gz:internal/path
+    // 或目录文件: dir+agent://agent-id/base:relative/path
+    if (path.includes('+agent://')) {
+      const match = path.match(/\+agent:\/\/([^/:]+)/);
+      const agentId = match ? match[1] : 'unknown';
+      return {
+        sourceType: 'Agent',
+        subKey: agentId,
+        subLabel: agentId,
+        subType: 'agent'
+      };
+    }
+
     // Agent 文件: agent://agent-id/path/file
     if (path.startsWith('agent://')) {
       const match = path.match(/^agent:\/\/([^/]+)/);
@@ -405,7 +418,7 @@
       <aside class="hidden md:block">
         <div class="sticky top-24 space-y-6">
           <div>
-            <h3 class="mb-3 text-sm font-semibold text-foreground">Filter by</h3>
+            <h3 class="mb-3 text-sm font-semibold text-foreground">筛选</h3>
             <Separator class="mb-4" />
 
             <div class="space-y-1">
@@ -440,7 +453,7 @@
                           ? 'text-primary'
                           : 'text-muted-foreground group-hover:text-foreground'}"
                       />
-                      <span>S3</span>
+                      <span>S3 云存储</span>
                     </div>
                     <Badge
                       variant={selectedSource === 'S3' && !selectedSubItem ? 'default' : 'secondary'}
@@ -507,7 +520,7 @@
                           ? 'text-primary'
                           : 'text-muted-foreground group-hover:text-foreground'}"
                       />
-                      <span>Agent</span>
+                      <span>远程代理</span>
                     </div>
                     <Badge
                       variant={selectedSource === 'Agent' && !selectedSubItem ? 'default' : 'secondary'}
@@ -573,7 +586,7 @@
                           ? 'text-primary'
                           : 'text-muted-foreground group-hover:text-foreground'}"
                       />
-                      <span>Local</span>
+                      <span>本地文件</span>
                     </div>
                     <Badge
                       variant={selectedSource === 'Local' && !selectedSubItem ? 'default' : 'secondary'}
@@ -618,7 +631,7 @@
                 onclick={clearFilters}
               >
                 <X class="h-3 w-3" />
-                <span>Clear filters</span>
+                <span>清除筛选</span>
               </button>
             {/if}
           </div>
@@ -631,21 +644,21 @@
         <div class="mb-4 flex items-center justify-between">
           <h2 class="text-lg font-semibold">
             {#if filteredCount > 0}
-              {filteredCount} results
+              {filteredCount} 个结果
               {#if selectedSource || selectedSubItem}
                 <span class="ml-2 text-sm font-normal text-muted-foreground">
-                  (filtered from {totalCount})
+                  (共 {totalCount} 个)
                 </span>
               {/if}
             {:else if !searchStore.loading && q}
-              0 results
+              0 个结果
             {:else}
-              Search results
+              搜索结果
             {/if}
           </h2>
           <!-- 排序下拉框 (Mock) -->
           <div class="text-sm text-muted-foreground">
-            Sort: <span class="font-medium text-foreground">Best match</span>
+            排序: <span class="font-medium text-foreground">最佳匹配</span>
           </div>
         </div>
 
@@ -698,13 +711,13 @@
             >
               {#if searchStore.loading}
                 <Loader2 class="mr-2 h-4 w-4 animate-spin" />
-                {searchStore.results.length === 0 ? 'Searching...' : 'Loading more...'}
+                {searchStore.results.length === 0 ? '搜索中...' : '加载更多...'}
               {:else}
-                Load more
+                加载更多
               {/if}
             </Button>
           {:else if filteredResults.length > 0}
-            <p class="text-sm text-muted-foreground">All results loaded</p>
+            <p class="text-sm text-muted-foreground">已加载全部结果</p>
           {/if}
         </div>
       </main>
