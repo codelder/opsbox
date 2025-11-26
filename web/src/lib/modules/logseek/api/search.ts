@@ -9,9 +9,10 @@ import { getApiBase, commonHeaders } from './config';
 /**
  * 开始流式搜索（返回 ReadableStream）
  * @param query 查询字符串
+ * @param signal 可选的 AbortSignal，用于取消请求
  * @returns Response 对象，包含 NDJSON 流和会话 ID（响应头 X-Logseek-SID）
  */
-export async function startSearch(query: string): Promise<Response> {
+export async function startSearch(query: string, signal?: AbortSignal): Promise<Response> {
   // 兼容旧名，已统一走 /search.ndjson
   const API_BASE = getApiBase();
   const body: SearchBody = { q: query };
@@ -19,7 +20,8 @@ export async function startSearch(query: string): Promise<Response> {
   const response = await fetch(`${API_BASE}/search.ndjson`, {
     method: 'POST',
     headers: commonHeaders,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 
   if (!response.ok) {
@@ -43,16 +45,18 @@ export function extractSessionId(response: Response): string {
  * 并将结果合并返回。存储源配置在后端管理。
  *
  * @param query 查询字符串
+ * @param signal 可选的 AbortSignal，用于取消请求
  * @returns Response 对象，包含 NDJSON 流和会话 ID（响应头 X-Logseek-SID）
  */
-export async function startUnifiedSearch(query: string): Promise<Response> {
+export async function startUnifiedSearch(query: string, signal?: AbortSignal): Promise<Response> {
   const API_BASE = getApiBase();
   const body: SearchBody = { q: query };
 
   const response = await fetch(`${API_BASE}/search.ndjson`, {
     method: 'POST',
     headers: commonHeaders,
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    signal
   });
 
   if (!response.ok) {

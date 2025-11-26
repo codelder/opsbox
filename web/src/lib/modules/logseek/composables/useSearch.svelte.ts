@@ -40,7 +40,7 @@ export function useSearch() {
 
     try {
       loading = true;
-      const response = await startUnifiedSearch(q);
+      const response = await startUnifiedSearch(q, controller.signal);
       sid = extractSessionId(response);
 
       // 初始化流读取器

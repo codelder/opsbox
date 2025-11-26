@@ -64,7 +64,7 @@
 </script>
 
 <main class="flex min-h-svh justify-center bg-background text-foreground">
-  <div class="w-full max-w-5xl px-6 pt-28 sm:pt-36 md:pt-44">
+  <div class="w-full max-w-6xl px-6 pt-28 sm:pt-36 md:pt-44">
     <div class="mx-auto w-full text-center">
       <div class="mb-8 block md:mb-12" id="logo-label">
         <LogSeekLogo size="large" asLabel htmlFor="search" />

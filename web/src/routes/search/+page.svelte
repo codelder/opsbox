@@ -206,19 +206,6 @@
     };
   }
 
-  function getSourceIcon(type: string) {
-    switch (type) {
-      case 'S3':
-        return Cloud;
-      case 'Agent':
-        return Server;
-      case 'Local':
-        return HardDrive;
-      default:
-        return FileText;
-    }
-  }
-
   function getSubTypeIcon(subType: string) {
     switch (subType) {
       case 'archive':
@@ -415,7 +402,7 @@
   <div class="w-full px-6 py-6">
     <div class="grid grid-cols-1 gap-8 md:grid-cols-[280px_1fr]">
       <!-- 左侧边栏：统计与筛选 -->
-      <aside class="hidden md:block">
+      <aside class="hidden border-r border-border pr-6 md:block">
         <div class="sticky top-24 space-y-6">
           <div>
             <h3 class="mb-3 text-sm font-semibold text-foreground">筛选</h3>
@@ -656,10 +643,6 @@
               搜索结果
             {/if}
           </h2>
-          <!-- 排序下拉框 (Mock) -->
-          <div class="text-sm text-muted-foreground">
-            排序: <span class="font-medium text-foreground">最佳匹配</span>
-          </div>
         </div>
 
         <div class="space-y-4">
