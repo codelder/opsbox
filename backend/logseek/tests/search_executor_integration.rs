@@ -118,7 +118,13 @@ async fn test_cache_functionality() {
   assert_eq!(cached_keywords, Some(keywords));
 
   // 测试文件行缓存
-  let file_url = logseek::domain::file_url::FileUrl::local("/test.log");
+  let file_url = logseek::domain::file_url::FileUrl::new(
+    logseek::domain::file_url::EndpointType::Local,
+    "localhost",
+    logseek::domain::file_url::TargetType::Dir,
+    "test.log",
+    None,
+  );
   let lines = vec!["line 1".to_string(), "line 2".to_string()];
   c.put_lines(&sid, &file_url, lines.clone()).await;
 
@@ -138,6 +144,7 @@ async fn test_search_event_types() {
     lines: vec!["error line".to_string()],
     merged: vec![(0, 1)],
     encoding: None,
+    source_type: logseek::service::search::EntrySourceType::default(),
   });
 
   let error_event = SearchEvent::Error {
@@ -239,6 +246,7 @@ async fn test_multi_source_event_collection() {
           lines: vec![format!("error from source {}", i)],
           merged: vec![(0, 1)],
           encoding: None,
+          source_type: logseek::service::search::EntrySourceType::default(),
         }))
         .await;
 

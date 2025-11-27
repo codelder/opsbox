@@ -32,7 +32,10 @@ export interface SearchJsonResult {
    * - 本地文件: `file:///path/to/file.log`
    * - S3 对象（默认配置）: `s3://bucket/path/to/file`
    * - S3 对象（指定配置）: `s3://profile:bucket/path/to/file`
-   * - Tar 压缩包内文件: `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
+   * - Tar.gz 压缩包内文件: `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
+   * - Tar 压缩包内文件: `tar+file:///path/archive.tar:entry/path`
+   * - 纯 Gzip 压缩文件: `gz+s3://bucket/file.log.gz:file.log`
+   * - 目录内文件: `dir+file:///base/path:relative/file.log`
    * - Agent 远程文件: `agent://server-01/var/log/app.log`
    */
   path: string;

@@ -615,6 +615,21 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   Ok(Some((lines, merged, detected_encoding)))
 }
 
+/// 条目来源类型（用于序列化传输）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntrySourceType {
+  /// 普通文件
+  #[default]
+  File,
+  /// tar 归档内的条目
+  Tar,
+  /// tar.gz 归档内的条目
+  TarGz,
+  /// 纯 gzip 压缩文件
+  Gz,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
   pub path: String,
@@ -622,6 +637,9 @@ pub struct SearchResult {
   pub merged: Vec<(usize, usize)>,
   /// 文件编码（如果不是 UTF-8，则包含编码名称，如 "GBK"）
   pub encoding: Option<String>,
+  /// 条目来源类型
+  #[serde(default)]
+  pub source_type: EntrySourceType,
 }
 
 impl SearchResult {
@@ -631,7 +649,13 @@ impl SearchResult {
       lines,
       merged,
       encoding,
+      source_type: EntrySourceType::default(),
     }
+  }
+
+  pub fn with_source_type(mut self, source_type: EntrySourceType) -> Self {
+    self.source_type = source_type;
+    self
   }
 }
 
@@ -1826,6 +1850,7 @@ foo lower
       lines: vec!["test line".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      source_type: EntrySourceType::default(),
     };
 
     let send_result = processor.send_result(result, &tx).await;
@@ -1870,6 +1895,7 @@ foo lower
       lines: vec!["line1".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      source_type: EntrySourceType::default(),
     };
 
     let cloned = result.clone();
@@ -1886,6 +1912,7 @@ foo lower
       lines: vec!["line".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      source_type: EntrySourceType::default(),
     });
 
     match success {

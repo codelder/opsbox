@@ -107,28 +107,18 @@
     return flat.slice(0, Math.min(7, flat.length));
   }
 
-  // 路径处理：尝试拆分目录和文件名
-  function splitPath(path: string) {
-    const parts = path.split('/');
-    const file = parts.pop() || path;
-    const dir = parts.join('/');
-    return { dir, file };
-  }
-
-  const { dir, file } = $derived(splitPath(item.path));
-
   function copyPath() {
     navigator.clipboard.writeText(item.path);
   }
 </script>
 
 <Card
-  class="group overflow-visible rounded-md border-border bg-card transition-all hover:border-primary/50 dark:border-gray-700 dark:bg-[#0d1117]"
+  class="border-border bg-card hover:border-primary/50 group overflow-visible rounded-md transition-all dark:border-gray-700 dark:bg-[#0d1117]"
   data-result-card={index}
 >
   <!-- 结果头：仿 GitHub 风格 -->
   <div
-    class="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-2 text-sm dark:border-gray-700 dark:bg-[#161b22]"
+    class="border-border bg-muted/30 flex items-center justify-between border-b px-4 py-2 text-sm dark:border-gray-700 dark:bg-[#161b22]"
   >
     <div class="flex items-center gap-2 overflow-visible">
       <button
@@ -155,29 +145,29 @@
             href={viewUrl}
             target="_blank"
             rel="noopener"
-            class="flex items-center font-bold text-foreground hover:underline"
+            class="text-foreground flex items-center font-bold hover:underline"
           >
-            <FileText class="mr-1.5 inline-block h-4 w-4 align-text-bottom text-muted-foreground" />
-            <span class="truncate">{file}</span>
+            <FileText class="text-muted-foreground mr-1.5 inline-block h-4 w-4 align-text-bottom" />
+            <span class="truncate">{parsedUrl ? parsedUrl.displayName : item.path}</span>
           </a>
 
           <!-- 悬浮提示框 - 精美设计 -->
           {#if showTooltip && parsedUrl}
             <div
-              class="animate-in fade-in-0 zoom-in-95 pointer-events-auto absolute top-full left-0 z-50 mt-2 w-[420px] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl duration-200"
+              class="animate-in fade-in-0 zoom-in-95 border-border bg-popover pointer-events-auto absolute left-0 top-full z-50 mt-2 w-[420px] overflow-hidden rounded-xl border shadow-2xl duration-200"
             >
               <!-- 顶部彩色条纹 + 类型标识 -->
               <div class="relative">
-                {#if parsedUrl.type === 's3'}
-                  <div class="h-1.5 bg-linear-to-r from-blue-500 via-cyan-500 to-blue-600"></div>
-                {:else if parsedUrl.type === 'tar-entry'}
-                  <div class="h-1.5 bg-linear-to-r from-orange-500 via-amber-500 to-orange-600"></div>
-                {:else if parsedUrl.type === 'agent'}
-                  <div class="h-1.5 bg-linear-to-r from-purple-500 via-violet-500 to-purple-600"></div>
-                {:else if parsedUrl.type === 'dir-entry'}
-                  <div class="h-1.5 bg-linear-to-r from-emerald-500 via-green-500 to-emerald-600"></div>
+                {#if parsedUrl.endpointType === 's3'}
+                  <div class="bg-linear-to-r h-1.5 from-blue-500 via-cyan-500 to-blue-600"></div>
+                {:else if parsedUrl.targetType === 'archive'}
+                  <div class="bg-linear-to-r h-1.5 from-orange-500 via-amber-500 to-orange-600"></div>
+                {:else if parsedUrl.endpointType === 'agent'}
+                  <div class="bg-linear-to-r h-1.5 from-purple-500 via-violet-500 to-purple-600"></div>
+                {:else if parsedUrl.targetType === 'dir'}
+                  <div class="bg-linear-to-r h-1.5 from-emerald-500 via-green-500 to-emerald-600"></div>
                 {:else}
-                  <div class="h-1.5 bg-linear-to-r from-green-500 via-emerald-500 to-green-600"></div>
+                  <div class="bg-linear-to-r h-1.5 from-green-500 via-emerald-500 to-green-600"></div>
                 {/if}
               </div>
 
@@ -185,23 +175,24 @@
                 <!-- 头部：类型图标 + 文件名 + 编码 -->
                 <div class="mb-4 flex items-start gap-3">
                   <div
-                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {parsedUrl.type === 's3'
+                    class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {parsedUrl.endpointType ===
+                    's3'
                       ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                      : parsedUrl.type === 'tar-entry'
+                      : parsedUrl.targetType === 'archive'
                         ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
-                        : parsedUrl.type === 'agent'
+                        : parsedUrl.endpointType === 'agent'
                           ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400'
-                          : parsedUrl.type === 'dir-entry'
+                          : parsedUrl.targetType === 'dir'
                             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                             : 'bg-green-500/10 text-green-600 dark:text-green-400'}"
                   >
-                    {#if parsedUrl.type === 's3'}
+                    {#if parsedUrl.endpointType === 's3'}
                       <Cloud class="h-5 w-5" />
-                    {:else if parsedUrl.type === 'tar-entry'}
+                    {:else if parsedUrl.targetType === 'archive'}
                       <Archive class="h-5 w-5" />
-                    {:else if parsedUrl.type === 'agent'}
+                    {:else if parsedUrl.endpointType === 'agent'}
                       <Server class="h-5 w-5" />
-                    {:else if parsedUrl.type === 'dir-entry'}
+                    {:else if parsedUrl.targetType === 'dir'}
                       <Folder class="h-5 w-5" />
                     {:else}
                       <HardDrive class="h-5 w-5" />
@@ -209,34 +200,34 @@
                   </div>
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
-                      <span class="truncate font-semibold text-foreground">{parsedUrl.displayName}</span>
+                      <span class="text-foreground truncate font-semibold">{parsedUrl.displayName}</span>
                     </div>
                     <div class="mt-1 flex items-center gap-2">
                       <span
-                        class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium {parsedUrl.type ===
+                        class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium {parsedUrl.endpointType ===
                         's3'
                           ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                          : parsedUrl.type === 'tar-entry'
+                          : parsedUrl.targetType === 'archive'
                             ? 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
-                            : parsedUrl.type === 'agent'
+                            : parsedUrl.endpointType === 'agent'
                               ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400'
-                              : parsedUrl.type === 'dir-entry'
+                              : parsedUrl.targetType === 'dir'
                                 ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                                 : 'bg-green-500/10 text-green-600 dark:text-green-400'}"
                       >
-                        {parsedUrl.type === 's3'
+                        {parsedUrl.endpointType === 's3'
                           ? 'S3 Object'
-                          : parsedUrl.type === 'tar-entry'
+                          : parsedUrl.targetType === 'archive'
                             ? 'Archive Entry'
-                            : parsedUrl.type === 'agent'
+                            : parsedUrl.endpointType === 'agent'
                               ? 'Agent File'
-                              : parsedUrl.type === 'dir-entry'
+                              : parsedUrl.targetType === 'dir'
                                 ? 'Directory Entry'
                                 : 'Local File'}
                       </span>
                       {#if item.encoding}
                         <span
-                          class="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+                          class="bg-muted text-muted-foreground inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium"
                         >
                           <FileCode class="h-3 w-3" />
                           {item.encoding}
@@ -248,108 +239,114 @@
 
                 <!-- 元数据网格 -->
                 <div class="space-y-3">
-                  {#if parsedUrl.type === 's3'}
-                    {@const s3Url = parsedUrl}
+                  {#if parsedUrl.endpointType === 's3'}
+                    {@const parts = parsedUrl.endpointId.split(':')}
+                    {@const profile = parts.length > 1 ? parts[0] : ''}
+                    {@const bucket = parts.length > 1 ? parts[1] : parts[0]}
                     <div class="grid grid-cols-2 gap-3">
-                      {#if s3Url.profile}
-                        <div class="rounded-lg bg-muted/40 p-2.5">
-                          <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      {#if profile}
+                        <div class="bg-muted/40 rounded-lg p-2.5">
+                          <div class="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
                             <Database class="h-3 w-3" />
                             <span>Profile</span>
                           </div>
-                          <div class="font-mono text-sm text-foreground">{s3Url.profile}</div>
+                          <div class="text-foreground font-mono text-sm">{profile}</div>
                         </div>
                       {/if}
-                      <div class="rounded-lg bg-muted/40 p-2.5">
-                        <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div class="bg-muted/40 rounded-lg p-2.5">
+                        <div class="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
                           <Cloud class="h-3 w-3" />
                           <span>Bucket</span>
                         </div>
-                        <div class="font-mono text-sm text-foreground">{s3Url.bucket}</div>
+                        <div class="text-foreground font-mono text-sm">{bucket}</div>
                       </div>
                     </div>
-                    <div class="rounded-lg bg-muted/40 p-2.5">
-                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <div class="bg-muted/40 rounded-lg p-2.5">
+                      <div class="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
                         <Folder class="h-3 w-3" />
                         <span>Object Key</span>
                       </div>
-                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{s3Url.key}</div>
+                      <div class="text-foreground break-all font-mono text-xs leading-relaxed">{parsedUrl.path}</div>
                     </div>
-                  {:else if parsedUrl.type === 'tar-entry'}
-                    {@const tarUrl = parsedUrl}
+                  {:else if parsedUrl.targetType === 'archive'}
                     <div class="rounded-lg border border-orange-500/20 bg-orange-500/5 p-2.5">
                       <div class="mb-1 flex items-center gap-1.5 text-xs text-orange-600 dark:text-orange-400">
                         <Archive class="h-3 w-3" />
-                        <span>Archive ({tarUrl.compression})</span>
+                        <span>Archive</span>
                       </div>
-                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{tarUrl.baseUrl}</div>
+                      <div class="text-foreground break-all font-mono text-xs leading-relaxed">{parsedUrl.path}</div>
                     </div>
-                    <div class="rounded-lg bg-muted/40 p-2.5">
-                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <FileText class="h-3 w-3" />
-                        <span>Entry Path</span>
+                    {#if parsedUrl.entryPath}
+                      <div class="bg-muted/40 rounded-lg p-2.5">
+                        <div class="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
+                          <FileText class="h-3 w-3" />
+                          <span>Entry Path</span>
+                        </div>
+                        <div class="text-foreground break-all font-mono text-xs leading-relaxed">
+                          {parsedUrl.entryPath}
+                        </div>
                       </div>
-                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{tarUrl.entryPath}</div>
-                    </div>
-                  {:else if parsedUrl.type === 'agent'}
-                    {@const agentUrl = parsedUrl}
+                    {/if}
+                  {:else if parsedUrl.endpointType === 'agent'}
                     <div class="rounded-lg border border-purple-500/20 bg-purple-500/5 p-2.5">
                       <div class="mb-1 flex items-center gap-1.5 text-xs text-purple-600 dark:text-purple-400">
                         <Server class="h-3 w-3" />
                         <span>Agent ID</span>
                       </div>
-                      <div class="font-mono text-sm font-medium text-foreground">{agentUrl.agentId}</div>
+                      <div class="text-foreground font-mono text-sm font-medium">{parsedUrl.endpointId}</div>
                     </div>
-                    <div class="rounded-lg bg-muted/40 p-2.5">
-                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <div class="bg-muted/40 rounded-lg p-2.5">
+                      <div class="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
                         <Folder class="h-3 w-3" />
                         <span>File Path</span>
                       </div>
-                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{agentUrl.path}</div>
+                      <div class="text-foreground break-all font-mono text-xs leading-relaxed">{parsedUrl.path}</div>
                     </div>
-                  {:else if parsedUrl.type === 'dir-entry'}
-                    {@const dirUrl = parsedUrl}
+                  {:else if parsedUrl.targetType === 'dir'}
                     <div class="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5">
                       <div class="mb-1 flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
                         <Folder class="h-3 w-3" />
                         <span>Base Directory</span>
                       </div>
-                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{dirUrl.baseUrl}</div>
+                      <div class="text-foreground break-all font-mono text-xs leading-relaxed">
+                        {parsedUrl.path.split('/').slice(0, -1).join('/') || '/'}
+                      </div>
                     </div>
-                    <div class="rounded-lg bg-muted/40 p-2.5">
-                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <div class="bg-muted/40 rounded-lg p-2.5">
+                      <div class="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
                         <FileText class="h-3 w-3" />
                         <span>Relative Path</span>
                       </div>
-                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{dirUrl.entryPath}</div>
+                      <div class="text-foreground break-all font-mono text-xs leading-relaxed">
+                        {parsedUrl.displayName}
+                      </div>
                     </div>
-                  {:else if parsedUrl.type === 'local'}
-                    {@const localUrl = parsedUrl}
-                    <div class="rounded-lg bg-muted/40 p-2.5">
-                      <div class="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  {:else if parsedUrl.endpointType === 'local'}
+                    <div class="bg-muted/40 rounded-lg p-2.5">
+                      <div class="text-muted-foreground mb-1 flex items-center gap-1.5 text-xs">
                         <HardDrive class="h-3 w-3" />
                         <span>Local Path</span>
                       </div>
-                      <div class="font-mono text-xs leading-relaxed break-all text-foreground">{localUrl.path}</div>
+                      <div class="text-foreground break-all font-mono text-xs leading-relaxed">{parsedUrl.path}</div>
                     </div>
                   {/if}
                 </div>
 
                 <!-- 关键词 -->
                 {#if item.keywords && item.keywords.length > 0}
-                  <div class="mt-4 border-t border-border pt-3">
-                    <div class="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <div class="border-border mt-4 border-t pt-3">
+                    <div class="text-muted-foreground mb-2 flex items-center gap-1.5 text-xs font-medium">
                       <Tag class="h-3 w-3" />
                       <span>Matched Keywords</span>
                       <span
-                        class="ml-auto rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+                        class="bg-primary/10 text-primary ml-auto rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
                         >{item.keywords.length}</span
                       >
                     </div>
                     <div class="flex flex-wrap gap-1.5">
                       {#each item.keywords as keyword, i}
                         <span
-                          class="inline-flex items-center gap-1 rounded-md border border-amber-500/20 bg-linear-to-r from-amber-500/10 to-yellow-500/10 px-2 py-1 font-mono text-xs text-amber-700 dark:text-amber-400"
+                          class="bg-linear-to-r inline-flex items-center gap-1 rounded-md border border-amber-500/20 from-amber-500/10 to-yellow-500/10 px-2 py-1 font-mono text-xs text-amber-700 dark:text-amber-400"
                         >
                           <Hash class="h-3 w-3 opacity-60" />
                           {keyword}
@@ -368,7 +365,7 @@
     <!-- 右侧元数据和操作 -->
     <div class="flex items-center gap-4">
       <!-- 语言/类型标记 -->
-      <div class="hidden items-center gap-2 text-xs text-muted-foreground sm:flex">
+      <div class="text-muted-foreground hidden items-center gap-2 text-xs sm:flex">
         <span class="flex items-center gap-1">
           <span class="h-2 w-2 rounded-full bg-yellow-400"></span>
           {item.encoding || 'UTF-8'}
@@ -380,7 +377,7 @@
         <Button
           variant="ghost"
           size="icon"
-          class="h-7 w-7 text-muted-foreground hover:text-foreground"
+          class="text-muted-foreground hover:text-foreground h-7 w-7"
           onclick={copyPath}
           title="复制路径"
         >
@@ -389,7 +386,7 @@
         <Button
           variant="ghost"
           size="icon"
-          class="h-7 w-7 text-muted-foreground hover:text-foreground"
+          class="text-muted-foreground hover:text-foreground h-7 w-7"
           href={viewUrl}
           target="_blank"
           title="在新窗口打开"
@@ -402,18 +399,18 @@
 
   {#if !isCollapsed}
     <!-- 代码块区域：仿 GitHub Blob 视图 -->
-    <div class="overflow-x-auto bg-background py-0 text-sm dark:bg-[#0d1117]">
+    <div class="bg-background overflow-x-auto py-0 text-sm dark:bg-[#0d1117]">
       <table class="w-full border-collapse">
         <tbody>
           {#each visibleLines(item) as ln, idx (index + '-' + ln._ci + '-' + ln._li)}
             <!-- 在不同 chunk 之间插入分隔行 -->
             {#if idx > 0 && visibleLines(item)[idx - 1]._ci !== ln._ci}
               <tr class="chunk-separator">
-                <td colspan="2" class="h-5 bg-muted/50 dark:bg-muted/60">
+                <td colspan="2" class="bg-muted/50 dark:bg-muted/60 h-5">
                   <div class="flex h-full items-center justify-center">
-                    <div class="h-px w-full bg-border/60 dark:bg-border/80"></div>
-                    <span class="mx-3 shrink-0 text-[9px] text-muted-foreground/70">⋮</span>
-                    <div class="h-px w-full bg-border/60 dark:bg-border/80"></div>
+                    <div class="bg-border/60 dark:bg-border/80 h-px w-full"></div>
+                    <span class="text-muted-foreground/70 mx-3 shrink-0 text-[9px]">⋮</span>
+                    <div class="bg-border/60 dark:bg-border/80 h-px w-full"></div>
                   </div>
                 </td>
               </tr>
@@ -421,25 +418,25 @@
             <tr class="group/line hover:bg-muted/10">
               <!-- 行号 -->
               <td
-                class="w-[1%] min-w-[50px] px-3 py-0.5 text-right align-top font-mono text-xs select-none {ln.isMatch
-                  ? 'font-semibold text-foreground'
+                class="w-[1%] min-w-[50px] select-none px-3 py-0.5 text-right align-top font-mono text-xs {ln.isMatch
+                  ? 'text-foreground font-semibold'
                   : 'text-muted-foreground/60'}"
               >
                 {ln.no}
               </td>
               <!-- 代码内容 -->
-              <td class="px-4 py-0.5 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap text-foreground"
+              <td class="text-foreground whitespace-pre-wrap break-all px-4 py-0.5 font-mono text-xs leading-relaxed"
                 >{#if expandedLines.has(lineKey(index, ln._ci, ln._li))}<span class="code-content-text"
                     >{@html highlight(ln.text, item.keywords)}</span
                   >{:else}{#key index + '-' + ln._ci + '-' + ln._li + '-snippet'}{@const sn = snippet(
                       ln.text,
                       item.keywords
                     )}{#if sn.leftTrunc}<button
-                        class="mx-0.5 text-muted-foreground hover:text-foreground hover:underline"
+                        class="text-muted-foreground hover:text-foreground mx-0.5 hover:underline"
                         onclick={() => onExpandLine(lineKey(index, ln._ci, ln._li))}
                         title="展开">...</button
                       >{/if}<span class="code-content-text">{@html sn.html}</span>{#if sn.rightTrunc}<button
-                        class="mx-0.5 text-muted-foreground hover:text-foreground hover:underline"
+                        class="text-muted-foreground hover:text-foreground mx-0.5 hover:underline"
                         onclick={() => onExpandLine(lineKey(index, ln._ci, ln._li))}
                         title="展开">...</button
                       >{/if}{/key}{/if}</td
@@ -449,10 +446,10 @@
 
           <!-- 展开更多行 -->
           {#if totalLines(item) > 7 && !isShowAll}
-            <tr class="border-t border-border bg-muted/5 hover:bg-muted/10">
+            <tr class="border-border bg-muted/5 hover:bg-muted/10 border-t">
               <td colspan="2" class="p-0">
                 <button
-                  class="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  class="text-muted-foreground hover:text-foreground flex w-full items-center gap-2 px-4 py-2 text-xs transition-colors"
                   onclick={onToggleShowAll}
                 >
                   <UnfoldVertical class="h-3.5 w-3.5" />
@@ -462,10 +459,10 @@
             </tr>
           {/if}
           {#if isShowAll && totalLines(item) > 7}
-            <tr class="border-t border-border bg-muted/5 hover:bg-muted/10">
+            <tr class="border-border bg-muted/5 hover:bg-muted/10 border-t">
               <td colspan="2" class="p-0">
                 <button
-                  class="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  class="text-muted-foreground hover:text-foreground flex w-full items-center gap-2 px-4 py-2 text-xs transition-colors"
                   onclick={onToggleShowAll}
                 >
                   <ChevronDown class="h-3.5 w-3.5 rotate-180" />

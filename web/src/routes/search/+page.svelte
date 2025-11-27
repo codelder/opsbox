@@ -111,112 +111,20 @@
 
   // ============ 路径解析逻辑 ============
 
-  // 解析路径，提取数据源类型和二级分类key
-  interface ParsedPath {
-    sourceType: 'S3' | 'Agent' | 'Local';
-    subKey: string; // 二级菜单的key
-    subLabel: string; // 二级菜单的显示名称
-    subType: 'archive' | 'dir' | 'agent'; // 二级类型
-  }
+  import { parseFileUrl, type ParsedFileUrl } from '$lib/modules/logseek/utils/fileUrl';
 
-  function parsePath(path: string): ParsedPath {
-    // S3 归档文件: tar.gz+s3://profile:bucket/path/archive.tar.gz:internal/path
-    if (path.includes('+s3://') && path.includes('.tar.gz')) {
-      const match = path.match(/\+s3:\/\/[^/]+\/(.+?\.tar\.gz)/);
-      const archiveName = match ? match[1].split('/').pop() || path : path;
-      return {
-        sourceType: 'S3',
-        subKey: archiveName,
-        subLabel: archiveName,
-        subType: 'archive'
-      };
-    }
+  // ... (imports)
 
-    // 普通 S3 文件: s3://profile:bucket/path/file
-    if (path.startsWith('s3://')) {
-      // 提取 bucket 作为二级分类
-      const match = path.match(/^s3:\/\/([^/]+)/);
-      const bucket = match ? match[1] : 'default';
-      return {
-        sourceType: 'S3',
-        subKey: bucket,
-        subLabel: bucket,
-        subType: 'dir'
-      };
-    }
+  // ============ 路径解析逻辑 ============
 
-    // Agent 归档文件: tar.gz+agent://agent-id/path/archive.tar.gz:internal/path
-    // 或目录文件: dir+agent://agent-id/base:relative/path
-    if (path.includes('+agent://')) {
-      const match = path.match(/\+agent:\/\/([^/:]+)/);
-      const agentId = match ? match[1] : 'unknown';
-      return {
-        sourceType: 'Agent',
-        subKey: agentId,
-        subLabel: agentId,
-        subType: 'agent'
-      };
-    }
+  // 适配旧的 ParsedPath 接口以保持兼容，或者直接更新使用处
+  // 这里我们更新 sourceTree 的逻辑来适配 ParsedFileUrl
 
-    // Agent 文件: agent://agent-id/path/file
-    if (path.startsWith('agent://')) {
-      const match = path.match(/^agent:\/\/([^/]+)/);
-      const agentId = match ? match[1] : 'unknown';
-      return {
-        sourceType: 'Agent',
-        subKey: agentId,
-        subLabel: agentId,
-        subType: 'agent'
-      };
-    }
-
-    // 本地目录文件: dir+file:///base/path:relative/file 或 file:///path/file
-    if (path.startsWith('dir+file://')) {
-      const match = path.match(/^dir\+file:\/\/([^:]+)/);
-      const dirPath = match ? match[1] : '/';
-      return {
-        sourceType: 'Local',
-        subKey: dirPath,
-        subLabel: dirPath,
-        subType: 'dir'
-      };
-    }
-
-    // 普通本地文件: file:///path/file
-    if (path.startsWith('file://')) {
-      // 提取目录路径作为二级分类
-      const filePath = path.replace('file://', '');
-      const parts = filePath.split('/');
-      parts.pop(); // 移除文件名
-      const dirPath = parts.join('/') || '/';
-      return {
-        sourceType: 'Local',
-        subKey: dirPath,
-        subLabel: dirPath,
-        subType: 'dir'
-      };
-    }
-
-    // 默认当作本地文件
-    return {
-      sourceType: 'Local',
-      subKey: '/',
-      subLabel: '/',
-      subType: 'dir'
-    };
-  }
-
-  function getSubTypeIcon(subType: string) {
-    switch (subType) {
-      case 'archive':
-        return Archive;
-      case 'agent':
-        return Server;
-      case 'dir':
-        return Folder;
-      default:
-        return FileText;
-    }
+  function getSubTypeIcon(parsed: ParsedFileUrl) {
+    if (parsed.targetType === 'archive') return Archive;
+    if (parsed.endpointType === 'agent') return Server;
+    if (parsed.endpointType === 's3') return Cloud;
+    return Folder; // Local dir
   }
 
   // ============ 统计逻辑 ============
@@ -225,7 +133,7 @@
   interface SourceNode {
     type: 'S3' | 'Agent' | 'Local';
     count: number;
-    children: Map<string, { label: string; count: number; subType: string }>;
+    children: Map<string, { label: string; count: number; subType: ParsedFileUrl }>;
   }
 
   let sourceTree = $derived.by(() => {
@@ -236,18 +144,46 @@
     };
 
     for (const res of searchStore.results) {
-      const parsed = parsePath(res.path);
-      const node = tree[parsed.sourceType];
+      const parsed = parseFileUrl(res.path);
+      if (!parsed) continue;
+
+      let sourceType: 'S3' | 'Agent' | 'Local' = 'Local';
+      if (parsed.endpointType === 's3') sourceType = 'S3';
+      else if (parsed.endpointType === 'agent') sourceType = 'Agent';
+
+      const node = tree[sourceType];
       node.count += 1;
 
-      const existing = node.children.get(parsed.subKey);
+      // Determine subKey and label based on type
+      let subKey = '';
+      let subLabel = '';
+
+      if (parsed.endpointType === 's3') {
+        // S3: group by bucket (part of endpointId: profile:bucket)
+        const parts = parsed.endpointId.split(':');
+        subKey = parts.length > 1 ? parts[1] : parts[0];
+        subLabel = subKey;
+      } else if (parsed.endpointType === 'agent') {
+        // Agent: group by agentId
+        subKey = parsed.endpointId;
+        subLabel = subKey;
+      } else {
+        // Local: group by parent directory
+        // path is /path/to/file or /path/to/archive
+        const pathParts = parsed.path.split('/');
+        pathParts.pop(); // remove filename
+        subKey = pathParts.join('/') || '/';
+        subLabel = subKey;
+      }
+
+      const existing = node.children.get(subKey);
       if (existing) {
         existing.count += 1;
       } else {
-        node.children.set(parsed.subKey, {
-          label: parsed.subLabel,
+        node.children.set(subKey, {
+          label: subLabel,
           count: 1,
-          subType: parsed.subType
+          subType: parsed
         });
       }
     }
@@ -260,9 +196,29 @@
   // 筛选后的结果
   let filteredResults = $derived.by(() => {
     return searchStore.results.filter((res) => {
-      const parsed = parsePath(res.path);
-      if (selectedSource && parsed.sourceType !== selectedSource) return false;
-      if (selectedSubItem && parsed.subKey !== selectedSubItem) return false;
+      const parsed = parseFileUrl(res.path);
+      if (!parsed) return false;
+
+      let sourceType: 'S3' | 'Agent' | 'Local' = 'Local';
+      if (parsed.endpointType === 's3') sourceType = 'S3';
+      else if (parsed.endpointType === 'agent') sourceType = 'Agent';
+
+      if (selectedSource && sourceType !== selectedSource) return false;
+
+      if (selectedSubItem) {
+        let subKey = '';
+        if (parsed.endpointType === 's3') {
+          const parts = parsed.endpointId.split(':');
+          subKey = parts.length > 1 ? parts[1] : parts[0];
+        } else if (parsed.endpointType === 'agent') {
+          subKey = parsed.endpointId;
+        } else {
+          const pathParts = parsed.path.split('/');
+          pathParts.pop();
+          subKey = pathParts.join('/') || '/';
+        }
+        if (subKey !== selectedSubItem) return false;
+      }
       return true;
     });
   });
@@ -324,10 +280,10 @@
   }
 </script>
 
-<div class="min-h-screen bg-background text-foreground">
+<div class="bg-background text-foreground min-h-screen">
   <!-- 顶部导航栏 -->
   <header
-    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
+    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b backdrop-blur"
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- Logo -->
@@ -338,12 +294,12 @@
       <!-- 搜索框 -->
       <form class="ml-4 flex-1" onsubmit={handleSubmit}>
         <div class="group relative flex items-center">
-          <div class="pointer-events-none absolute left-3 z-10 text-muted-foreground">
+          <div class="text-muted-foreground pointer-events-none absolute left-3 z-10">
             <Search class="h-4 w-4" />
           </div>
           <Input
             id="search"
-            class="h-9 rounded-md border-input bg-muted/50 pr-9 pl-9 text-sm text-foreground shadow-none transition-all hover:bg-muted focus-visible:bg-background focus-visible:ring-1 focus-visible:ring-primary"
+            class="border-input bg-muted/50 text-foreground hover:bg-muted focus-visible:bg-background focus-visible:ring-primary h-9 rounded-md pl-9 pr-9 text-sm shadow-none transition-all focus-visible:ring-1"
             disabled={searchStore.loading}
             bind:value={q}
             placeholder="搜索..."
@@ -351,13 +307,13 @@
           />
           {#if searchStore.loading}
             <div class="absolute right-3 z-10">
-              <Loader2 class="h-3.5 w-3.5 animate-spin text-primary" />
+              <Loader2 class="text-primary h-3.5 w-3.5 animate-spin" />
             </div>
           {:else if q}
             <Button
               variant="ghost"
               size="icon"
-              class="absolute right-1 z-10 h-7 w-7 text-muted-foreground hover:text-foreground"
+              class="text-muted-foreground hover:text-foreground absolute right-1 z-10 h-7 w-7"
               onclick={() => {
                 q = '';
                 searchStore.cleanup();
@@ -376,7 +332,7 @@
         <a
           href="/settings"
           aria-label="打开设置"
-          class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
+          class="inline-flex h-9 w-9 select-none items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur hover:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -402,10 +358,10 @@
   <div class="w-full px-6 py-6">
     <div class="grid grid-cols-1 gap-8 md:grid-cols-[280px_1fr]">
       <!-- 左侧边栏：统计与筛选 -->
-      <aside class="hidden border-r border-border pr-6 md:block">
+      <aside class="border-border hidden border-r pr-6 md:block">
         <div class="sticky top-24 space-y-6">
           <div>
-            <h3 class="mb-3 text-sm font-semibold text-foreground">筛选</h3>
+            <h3 class="text-foreground mb-3 text-sm font-semibold">筛选</h3>
             <Separator class="mb-4" />
 
             <div class="space-y-1">
@@ -414,7 +370,7 @@
                 <div class="flex items-center">
                   <!-- 展开/收起按钮 -->
                   <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
+                    class="text-muted-foreground hover:bg-muted/50 hover:text-foreground flex h-6 w-6 items-center justify-center rounded {sourceTree
                       .S3.count === 0
                       ? 'invisible'
                       : ''}"
@@ -430,7 +386,7 @@
                   <button
                     class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
                       'S3' && !selectedSubItem
-                      ? 'bg-primary/10 font-medium text-primary'
+                      ? 'bg-primary/10 text-primary font-medium'
                       : 'text-foreground hover:bg-muted/50'}"
                     onclick={() => selectSource('S3')}
                   >
@@ -450,13 +406,13 @@
                 </div>
                 <!-- 二级菜单 -->
                 {#if expandedSources.has('S3') && sourceTree.S3.children.size > 0}
-                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
+                  <div class="border-border ml-6 mt-1 space-y-0.5 border-l pl-2">
                     {#each Array.from(sourceTree.S3.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
                       {@const SubIcon = getSubTypeIcon(subInfo.subType)}
                       {@const isSubSelected = selectedSource === 'S3' && selectedSubItem === subKey}
                       <button
                         class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 font-medium text-primary'
+                          ? 'bg-primary/10 text-primary font-medium'
                           : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
                         onclick={() => selectSubItem('S3', subKey)}
                         title={subInfo.label}
@@ -469,7 +425,7 @@
                         </div>
                         <span
                           class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'font-medium text-primary'
+                            ? 'text-primary font-medium'
                             : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
                         >
                       </button>
@@ -482,7 +438,7 @@
               <div>
                 <div class="flex items-center">
                   <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
+                    class="text-muted-foreground hover:bg-muted/50 hover:text-foreground flex h-6 w-6 items-center justify-center rounded {sourceTree
                       .Agent.count === 0
                       ? 'invisible'
                       : ''}"
@@ -497,7 +453,7 @@
                   <button
                     class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
                       'Agent' && !selectedSubItem
-                      ? 'bg-primary/10 font-medium text-primary'
+                      ? 'bg-primary/10 text-primary font-medium'
                       : 'text-foreground hover:bg-muted/50'}"
                     onclick={() => selectSource('Agent')}
                   >
@@ -516,13 +472,13 @@
                   </button>
                 </div>
                 {#if expandedSources.has('Agent') && sourceTree.Agent.children.size > 0}
-                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
+                  <div class="border-border ml-6 mt-1 space-y-0.5 border-l pl-2">
                     {#each Array.from(sourceTree.Agent.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
                       {@const SubIcon = getSubTypeIcon(subInfo.subType)}
                       {@const isSubSelected = selectedSource === 'Agent' && selectedSubItem === subKey}
                       <button
                         class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 font-medium text-primary'
+                          ? 'bg-primary/10 text-primary font-medium'
                           : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
                         onclick={() => selectSubItem('Agent', subKey)}
                         title={subInfo.label}
@@ -535,7 +491,7 @@
                         </div>
                         <span
                           class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'font-medium text-primary'
+                            ? 'text-primary font-medium'
                             : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
                         >
                       </button>
@@ -548,7 +504,7 @@
               <div>
                 <div class="flex items-center">
                   <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
+                    class="text-muted-foreground hover:bg-muted/50 hover:text-foreground flex h-6 w-6 items-center justify-center rounded {sourceTree
                       .Local.count === 0
                       ? 'invisible'
                       : ''}"
@@ -563,7 +519,7 @@
                   <button
                     class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
                       'Local' && !selectedSubItem
-                      ? 'bg-primary/10 font-medium text-primary'
+                      ? 'bg-primary/10 text-primary font-medium'
                       : 'text-foreground hover:bg-muted/50'}"
                     onclick={() => selectSource('Local')}
                   >
@@ -582,13 +538,13 @@
                   </button>
                 </div>
                 {#if expandedSources.has('Local') && sourceTree.Local.children.size > 0}
-                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
+                  <div class="border-border ml-6 mt-1 space-y-0.5 border-l pl-2">
                     {#each Array.from(sourceTree.Local.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
                       {@const SubIcon = getSubTypeIcon(subInfo.subType)}
                       {@const isSubSelected = selectedSource === 'Local' && selectedSubItem === subKey}
                       <button
                         class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 font-medium text-primary'
+                          ? 'bg-primary/10 text-primary font-medium'
                           : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
                         onclick={() => selectSubItem('Local', subKey)}
                         title={subInfo.label}
@@ -601,7 +557,7 @@
                         </div>
                         <span
                           class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'font-medium text-primary'
+                            ? 'text-primary font-medium'
                             : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
                         >
                       </button>
@@ -614,7 +570,7 @@
             <!-- 清除筛选按钮 -->
             {#if selectedSource || selectedSubItem}
               <button
-                class="mt-4 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                class="border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground mt-4 flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors"
                 onclick={clearFilters}
               >
                 <X class="h-3 w-3" />
@@ -633,7 +589,7 @@
             {#if filteredCount > 0}
               {filteredCount} 个结果
               {#if selectedSource || selectedSubItem}
-                <span class="ml-2 text-sm font-normal text-muted-foreground">
+                <span class="text-muted-foreground ml-2 text-sm font-normal">
                   (共 {totalCount} 个)
                 </span>
               {/if}
@@ -661,8 +617,8 @@
               />
             {:else}
               <!-- 兼容其他对象：兜底显示 -->
-              <div class="rounded border bg-card p-3 text-card-foreground">
-                <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
+              <div class="bg-card text-card-foreground rounded border p-3">
+                <pre class="whitespace-pre-wrap break-all text-sm leading-relaxed">{JSON.stringify(item, null, 2)}</pre>
               </div>
             {/if}
           {/each}
@@ -700,7 +656,7 @@
               {/if}
             </Button>
           {:else if filteredResults.length > 0}
-            <p class="text-sm text-muted-foreground">已加载全部结果</p>
+            <p class="text-muted-foreground text-sm">已加载全部结果</p>
           {/if}
         </div>
       </main>

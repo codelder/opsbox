@@ -291,7 +291,13 @@ mod tests {
   async fn test_cache_put_and_get_file_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
     c.put_lines(&sid, &file_url, lines.clone()).await;
@@ -306,7 +312,13 @@ mod tests {
   #[tokio::test]
   async fn test_cache_get_file_lines_missing() {
     let c = cache();
-    let file_url = FileUrl::local("/non-existent-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "non-existent-file.log",
+      None,
+    );
     let result = c.get_lines_slice("non-existent-sid", &file_url, 1, 10).await;
     assert_eq!(result, None);
   }
@@ -343,8 +355,20 @@ mod tests {
   async fn test_cache_multiple_files_same_sid() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url1 = FileUrl::local("/file1.log");
-    let file_url2 = FileUrl::local("/file2.log");
+    let file_url1 = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "file1.log",
+      None,
+    );
+    let file_url2 = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "file2.log",
+      None,
+    );
 
     c.put_lines(&sid, &file_url1, vec!["a".to_string()]).await;
     c.put_lines(&sid, &file_url2, vec!["b".to_string()]).await;
@@ -361,7 +385,13 @@ mod tests {
     let c = cache();
     let sid1 = format!("test-sid-1-{}", Uuid::new_v4());
     let sid2 = format!("test-sid-2-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/shared-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "shared-file.log",
+      None,
+    );
 
     c.put_lines(&sid1, &file_url, vec!["content1".to_string()]).await;
     c.put_lines(&sid2, &file_url, vec!["content2".to_string()]).await;
@@ -377,7 +407,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines: Vec<String> = (1..=10).map(|i| format!("line {}", i)).collect();
 
     c.put_lines(&sid, &file_url, lines).await;
@@ -397,7 +433,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice_out_of_bounds() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
     c.put_lines(&sid, &file_url, lines).await;
@@ -507,7 +549,13 @@ mod tests {
   async fn test_cache_get_lines_slice_boundary_conditions() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines: Vec<String> = (1..=5).map(|i| format!("line {}", i)).collect();
 
     c.put_lines(&sid, &file_url, lines).await;
@@ -549,7 +597,13 @@ mod tests {
   async fn test_cache_empty_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/empty-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "empty-file.log",
+      None,
+    );
 
     // 存储空行列表
     c.put_lines(&sid, &file_url, vec![]).await;
@@ -592,7 +646,13 @@ mod tests {
   async fn test_cache_special_characters_in_file_id() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/path/to/file-with-特殊字符.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "path/to/file-with-特殊字符.log",
+      None,
+    );
 
     c.put_lines(&sid, &file_url, vec!["line 1".to_string()]).await;
 

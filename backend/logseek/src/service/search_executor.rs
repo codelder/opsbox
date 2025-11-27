@@ -305,6 +305,7 @@ impl SearchExecutor {
         lines: res.lines.clone(),
         merged: res.merged,
         encoding: res.encoding.clone(),
+        source_type: res.source_type,
       });
 
       if tx.send(success_event).await.is_err() {

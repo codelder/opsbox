@@ -19,12 +19,28 @@ fn entry_concurrency() -> usize {
 use super::search::{SearchEvent, SearchProcessor};
 use opsbox_core::SqlitePool;
 
+/// 条目来源类型
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum EntrySource {
+  /// 普通文件（目录遍历或单文件）
+  #[default]
+  File,
+  /// tar 归档内的条目
+  Tar,
+  /// tar.gz 归档内的条目
+  TarGz,
+  /// 纯 gzip 压缩文件（非 tar 归档）
+  Gz,
+}
+
 /// 条目元数据（目录相对路径或归档内路径）
 #[derive(Clone, Debug)]
 pub struct EntryMeta {
   pub path: String,
   pub size: Option<u64>,
   pub is_compressed: bool,
+  /// 条目来源类型
+  pub source: EntrySource,
 }
 
 /// 统一的“条目流”抽象：每次产出 (EntryMeta, Reader)
@@ -105,6 +121,7 @@ impl EntryStream for FsEntryStream {
             path: rel,
             size: None,
             is_compressed: false,
+            source: EntrySource::File,
           };
           return Ok(Some((meta, Box::new(reader))));
         }
@@ -151,6 +168,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> 
             path,
             size: None,
             is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
+            source: EntrySource::TarGz,
           };
           return Ok(Some((meta, Box::new(reader))));
         }
@@ -416,6 +434,7 @@ impl EntryStream for MultiFileEntryStream {
       path: name,
       size: None,
       is_compressed: false,
+      source: EntrySource::File,
     };
     Ok(Some((meta, Box::new(reader))))
   }
@@ -676,6 +695,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
             path,
             size: None,
             is_compressed: true,
+            source: EntrySource::Tar,
           };
           return Ok(Some((meta, Box::new(reader))));
         }
@@ -714,6 +734,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipEntryStream<R> {
         path: self.name.clone(),
         size: None,
         is_compressed: self.is_compressed,
+        source: EntrySource::Gz,
       };
       Ok(Some((meta, Box::new(rd))))
     } else {
