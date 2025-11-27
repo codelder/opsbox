@@ -30,7 +30,7 @@ export function parseFileUrl(urlStr: string): ParsedFileUrl | null {
     if (!['local', 'agent', 's3'].includes(endpointType)) return null;
 
     // Path segments: /<endpoint_id>/<target_type>/<path...>
-    const segments = url.pathname.split('/').filter(s => s.length > 0);
+    const segments = url.pathname.split('/').filter((s) => s.length > 0);
     if (segments.length < 2) return null;
 
     const endpointId = decodeURIComponent(segments[0]);

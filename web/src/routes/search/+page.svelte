@@ -280,10 +280,10 @@
   }
 </script>
 
-<div class="bg-background text-foreground min-h-screen">
+<div class="min-h-screen bg-background text-foreground">
   <!-- 顶部导航栏 -->
   <header
-    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b backdrop-blur"
+    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- Logo -->
@@ -294,12 +294,12 @@
       <!-- 搜索框 -->
       <form class="ml-4 flex-1" onsubmit={handleSubmit}>
         <div class="group relative flex items-center">
-          <div class="text-muted-foreground pointer-events-none absolute left-3 z-10">
+          <div class="pointer-events-none absolute left-3 z-10 text-muted-foreground">
             <Search class="h-4 w-4" />
           </div>
           <Input
             id="search"
-            class="border-input bg-muted/50 text-foreground hover:bg-muted focus-visible:bg-background focus-visible:ring-primary h-9 rounded-md pl-9 pr-9 text-sm shadow-none transition-all focus-visible:ring-1"
+            class="h-9 rounded-md border-input bg-muted/50 pr-9 pl-9 text-sm text-foreground shadow-none transition-all hover:bg-muted focus-visible:bg-background focus-visible:ring-1 focus-visible:ring-primary"
             disabled={searchStore.loading}
             bind:value={q}
             placeholder="搜索..."
@@ -307,13 +307,13 @@
           />
           {#if searchStore.loading}
             <div class="absolute right-3 z-10">
-              <Loader2 class="text-primary h-3.5 w-3.5 animate-spin" />
+              <Loader2 class="h-3.5 w-3.5 animate-spin text-primary" />
             </div>
           {:else if q}
             <Button
               variant="ghost"
               size="icon"
-              class="text-muted-foreground hover:text-foreground absolute right-1 z-10 h-7 w-7"
+              class="absolute right-1 z-10 h-7 w-7 text-muted-foreground hover:text-foreground"
               onclick={() => {
                 q = '';
                 searchStore.cleanup();
@@ -332,7 +332,7 @@
         <a
           href="/settings"
           aria-label="打开设置"
-          class="inline-flex h-9 w-9 select-none items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur hover:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
+          class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -358,10 +358,10 @@
   <div class="w-full px-6 py-6">
     <div class="grid grid-cols-1 gap-8 md:grid-cols-[280px_1fr]">
       <!-- 左侧边栏：统计与筛选 -->
-      <aside class="border-border hidden border-r pr-6 md:block">
+      <aside class="hidden border-r border-border pr-6 md:block">
         <div class="sticky top-24 space-y-6">
           <div>
-            <h3 class="text-foreground mb-3 text-sm font-semibold">筛选</h3>
+            <h3 class="mb-3 text-sm font-semibold text-foreground">筛选</h3>
             <Separator class="mb-4" />
 
             <div class="space-y-1">
@@ -370,7 +370,7 @@
                 <div class="flex items-center">
                   <!-- 展开/收起按钮 -->
                   <button
-                    class="text-muted-foreground hover:bg-muted/50 hover:text-foreground flex h-6 w-6 items-center justify-center rounded {sourceTree
+                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
                       .S3.count === 0
                       ? 'invisible'
                       : ''}"
@@ -386,7 +386,7 @@
                   <button
                     class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
                       'S3' && !selectedSubItem
-                      ? 'bg-primary/10 text-primary font-medium'
+                      ? 'bg-primary/10 font-medium text-primary'
                       : 'text-foreground hover:bg-muted/50'}"
                     onclick={() => selectSource('S3')}
                   >
@@ -406,13 +406,13 @@
                 </div>
                 <!-- 二级菜单 -->
                 {#if expandedSources.has('S3') && sourceTree.S3.children.size > 0}
-                  <div class="border-border ml-6 mt-1 space-y-0.5 border-l pl-2">
+                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
                     {#each Array.from(sourceTree.S3.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
                       {@const SubIcon = getSubTypeIcon(subInfo.subType)}
                       {@const isSubSelected = selectedSource === 'S3' && selectedSubItem === subKey}
                       <button
                         class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 text-primary font-medium'
+                          ? 'bg-primary/10 font-medium text-primary'
                           : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
                         onclick={() => selectSubItem('S3', subKey)}
                         title={subInfo.label}
@@ -425,7 +425,7 @@
                         </div>
                         <span
                           class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'text-primary font-medium'
+                            ? 'font-medium text-primary'
                             : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
                         >
                       </button>
@@ -438,7 +438,7 @@
               <div>
                 <div class="flex items-center">
                   <button
-                    class="text-muted-foreground hover:bg-muted/50 hover:text-foreground flex h-6 w-6 items-center justify-center rounded {sourceTree
+                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
                       .Agent.count === 0
                       ? 'invisible'
                       : ''}"
@@ -453,7 +453,7 @@
                   <button
                     class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
                       'Agent' && !selectedSubItem
-                      ? 'bg-primary/10 text-primary font-medium'
+                      ? 'bg-primary/10 font-medium text-primary'
                       : 'text-foreground hover:bg-muted/50'}"
                     onclick={() => selectSource('Agent')}
                   >
@@ -472,13 +472,13 @@
                   </button>
                 </div>
                 {#if expandedSources.has('Agent') && sourceTree.Agent.children.size > 0}
-                  <div class="border-border ml-6 mt-1 space-y-0.5 border-l pl-2">
+                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
                     {#each Array.from(sourceTree.Agent.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
                       {@const SubIcon = getSubTypeIcon(subInfo.subType)}
                       {@const isSubSelected = selectedSource === 'Agent' && selectedSubItem === subKey}
                       <button
                         class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 text-primary font-medium'
+                          ? 'bg-primary/10 font-medium text-primary'
                           : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
                         onclick={() => selectSubItem('Agent', subKey)}
                         title={subInfo.label}
@@ -491,7 +491,7 @@
                         </div>
                         <span
                           class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'text-primary font-medium'
+                            ? 'font-medium text-primary'
                             : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
                         >
                       </button>
@@ -504,7 +504,7 @@
               <div>
                 <div class="flex items-center">
                   <button
-                    class="text-muted-foreground hover:bg-muted/50 hover:text-foreground flex h-6 w-6 items-center justify-center rounded {sourceTree
+                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
                       .Local.count === 0
                       ? 'invisible'
                       : ''}"
@@ -519,7 +519,7 @@
                   <button
                     class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
                       'Local' && !selectedSubItem
-                      ? 'bg-primary/10 text-primary font-medium'
+                      ? 'bg-primary/10 font-medium text-primary'
                       : 'text-foreground hover:bg-muted/50'}"
                     onclick={() => selectSource('Local')}
                   >
@@ -538,13 +538,13 @@
                   </button>
                 </div>
                 {#if expandedSources.has('Local') && sourceTree.Local.children.size > 0}
-                  <div class="border-border ml-6 mt-1 space-y-0.5 border-l pl-2">
+                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
                     {#each Array.from(sourceTree.Local.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
                       {@const SubIcon = getSubTypeIcon(subInfo.subType)}
                       {@const isSubSelected = selectedSource === 'Local' && selectedSubItem === subKey}
                       <button
                         class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 text-primary font-medium'
+                          ? 'bg-primary/10 font-medium text-primary'
                           : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
                         onclick={() => selectSubItem('Local', subKey)}
                         title={subInfo.label}
@@ -557,7 +557,7 @@
                         </div>
                         <span
                           class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'text-primary font-medium'
+                            ? 'font-medium text-primary'
                             : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
                         >
                       </button>
@@ -570,7 +570,7 @@
             <!-- 清除筛选按钮 -->
             {#if selectedSource || selectedSubItem}
               <button
-                class="border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground mt-4 flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors"
+                class="mt-4 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
                 onclick={clearFilters}
               >
                 <X class="h-3 w-3" />
@@ -589,7 +589,7 @@
             {#if filteredCount > 0}
               {filteredCount} 个结果
               {#if selectedSource || selectedSubItem}
-                <span class="text-muted-foreground ml-2 text-sm font-normal">
+                <span class="ml-2 text-sm font-normal text-muted-foreground">
                   (共 {totalCount} 个)
                 </span>
               {/if}
@@ -617,8 +617,8 @@
               />
             {:else}
               <!-- 兼容其他对象：兜底显示 -->
-              <div class="bg-card text-card-foreground rounded border p-3">
-                <pre class="whitespace-pre-wrap break-all text-sm leading-relaxed">{JSON.stringify(item, null, 2)}</pre>
+              <div class="rounded border bg-card p-3 text-card-foreground">
+                <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
               </div>
             {/if}
           {/each}
@@ -656,7 +656,7 @@
               {/if}
             </Button>
           {:else if filteredResults.length > 0}
-            <p class="text-muted-foreground text-sm">已加载全部结果</p>
+            <p class="text-sm text-muted-foreground">已加载全部结果</p>
           {/if}
         </div>
       </main>

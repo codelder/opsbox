@@ -54,24 +54,24 @@
       {/if}
     </div>
   {:else if type === 'no-results'}
-    <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
-      <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
-        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div class="rounded-2xl bg-(--surface) p-8 shadow-lg ring-1 ring-(--border)">
+      <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-(--surface-2)">
+        <svg class="h-8 w-8 text-(--muted)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
       </div>
-      <h3 class="mt-4 text-lg font-semibold text-[var(--text)]">无匹配结果</h3>
-      <p class="mt-2 text-sm text-[var(--muted)]">尝试使用不同的关键词或更广泛的搜索词汇</p>
+      <h3 class="mt-4 text-lg font-semibold text-(--text)">无匹配结果</h3>
+      <p class="mt-2 text-sm text-(--muted)">尝试使用不同的关键词或更广泛的搜索词汇</p>
     </div>
   {:else if type === 'initial'}
-    <div class="rounded-2xl bg-[var(--surface)] p-8 shadow-lg ring-1 ring-[var(--border)]">
-      <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-[var(--surface-2)]">
-        <svg class="h-8 w-8 text-[var(--muted)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <div class="rounded-2xl bg-(--surface) p-8 shadow-lg ring-1 ring-(--border)">
+      <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-(--surface-2)">
+        <svg class="h-8 w-8 text-(--muted)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
       </div>
-      <h3 class="mt-4 text-xl font-semibold text-[var(--text)]">开始搜索</h3>
-      <p class="mt-2 text-sm text-[var(--muted)]">在上方输入框中输入关键词或自然语言查询，开始搜索日志</p>
+      <h3 class="mt-4 text-xl font-semibold text-(--text)">开始搜索</h3>
+      <p class="mt-2 text-sm text-(--muted)">在上方输入框中输入关键词或自然语言查询，开始搜索日志</p>
     </div>
   {/if}
 </div>

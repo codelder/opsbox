@@ -331,7 +331,7 @@
 </script>
 
 <!-- 页面标题与状态栏 -->
-<div class="bg-background text-foreground min-h-screen">
+<div class="min-h-screen bg-background text-foreground">
   <div class="mx-auto flex h-screen max-w-[1560px] flex-col px-6 py-6">
     {#if error}
       <div class="mx-auto mb-6 max-w-md">
@@ -346,14 +346,14 @@
       </div>
       <!-- 主内容卡片：文件信息 + 虚拟滚动容器 -->
       <div
-        class="border-border bg-card flex flex-1 flex-col overflow-hidden rounded-md border transition-all dark:border-gray-700 dark:bg-[#0d1117]"
+        class="flex flex-1 flex-col overflow-hidden rounded-md border border-border bg-card transition-all dark:border-gray-700 dark:bg-[#0d1117]"
       >
         <!-- 文件信息标题栏 -->
         <FileHeader filePath={file} {total} loadedLines={end} {keywords} {loading} onDownload={downloadCurrentFile} />
 
         <!-- 虚拟滚动内容区域 -->
         <div
-          class="bg-background relative min-h-0 flex-1 overflow-auto dark:bg-[#0d1117]"
+          class="relative min-h-0 flex-1 overflow-auto bg-background dark:bg-[#0d1117]"
           bind:this={parentEl}
           onscroll={handleScroll}
         >
@@ -364,21 +364,21 @@
               {#if lines.length > 0}
                 {#each lines as ln (ln.no)}
                   {@const isMatch = lineHasMatch(ln.text)}
-                  <div class="group/line hover:bg-muted/10 flex font-mono text-xs leading-relaxed">
+                  <div class="group/line flex font-mono text-xs leading-relaxed hover:bg-muted/10">
                     <div
-                      class="w-[50px] shrink-0 select-none px-3 py-0.5 text-right font-medium {isMatch
-                        ? 'text-foreground font-semibold'
+                      class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
+                        ? 'font-semibold text-foreground'
                         : 'text-muted-foreground/60'}"
                     >
                       {ln.no}
                     </div>
-                    <div class="code-content text-foreground flex-1 whitespace-pre-wrap break-all px-4 py-0.5">
+                    <div class="code-content flex-1 px-4 py-0.5 break-all whitespace-pre-wrap text-foreground">
                       {@html highlightKeywords(ln.text)}
                     </div>
                   </div>
                 {/each}
               {:else}
-                <div class="text-muted-foreground p-3 text-sm">暂无内容</div>
+                <div class="p-3 text-sm text-muted-foreground">暂无内容</div>
               {/if}
             {:else}
               {#each vItems as item (item.key)}
@@ -390,15 +390,15 @@
                 >
                   {#if ln}
                     {@const isMatch = lineHasMatch(ln.text)}
-                    <div class="group/line hover:bg-muted/10 flex font-mono text-xs leading-relaxed">
+                    <div class="group/line flex font-mono text-xs leading-relaxed hover:bg-muted/10">
                       <div
-                        class="w-[50px] shrink-0 select-none px-3 py-0.5 text-right font-medium {isMatch
-                          ? 'text-foreground font-semibold'
+                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
+                          ? 'font-semibold text-foreground'
                           : 'text-muted-foreground/60'}"
                       >
                         {ln.no}
                       </div>
-                      <div class="code-content text-foreground flex-1 whitespace-pre-wrap break-all px-4 py-0.5">
+                      <div class="code-content flex-1 px-4 py-0.5 break-all whitespace-pre-wrap text-foreground">
                         {@html highlightKeywords(ln.text)}
                       </div>
                     </div>
@@ -406,11 +406,11 @@
                     <!-- 占位行（尚未加载到该行），高度尽量匹配 estimateSize -->
                     <div class="flex font-mono text-xs leading-relaxed opacity-60">
                       <div
-                        class="text-muted-foreground w-[50px] shrink-0 select-none px-3 py-0.5 text-right font-medium"
+                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium text-muted-foreground select-none"
                       >
                         {item.index + 1}
                       </div>
-                      <div class="code-content text-muted-foreground flex-1 px-4 py-0.5">加载中…</div>
+                      <div class="code-content flex-1 px-4 py-0.5 text-muted-foreground">加载中…</div>
                     </div>
                   {/if}
                 </div>
