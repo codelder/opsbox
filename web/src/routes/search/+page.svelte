@@ -14,17 +14,20 @@
   import { Button } from '$lib/components/ui/button';
   import {
     Search,
-    X,
+    ChevronDown,
+    ChevronRight,
     Loader2,
-    HardDrive,
+    X,
+    Filter,
     Cloud,
     Server,
+    HardDrive,
     Archive,
-    FileText,
     Folder,
-    ChevronRight,
-    ChevronDown
+    FileText,
+    Database
   } from 'lucide-svelte';
+  import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
   import { Badge } from '$lib/components/ui/badge';
   import { Separator } from '$lib/components/ui/separator';
 
@@ -35,16 +38,249 @@
   let q = $state('');
 
   // 当前选中的筛选器
-  let selectedSource = $state<string | null>(null); // 'S3' | 'Agent' | 'Local'
-  let selectedSubItem = $state<string | null>(null); // 二级菜单的key（归档名/目录/agentId）
+  // 当前选中的路径（从根节点开始的路径数组）
+  // Level 0: Endpoint Type (S3, Agent, Local)
+  // Level 1: Endpoint ID (Profile:Bucket, AgentID, Hostname)
+  // Level 2+: Path segments (Dir, Archive, Inner Path)
+  let selectedPath = $state<string[]>([]);
 
-  // 展开状态
-  const expandedSources = new SvelteSet<string>();
+  // 树节点结构
+  interface TreeNode {
+    key: string;
+    label: string;
+    count: number;
+    fullPath: string[];
+    children: Map<string, TreeNode>;
+    type: 'endpoint_type' | 'endpoint_id' | 'dir' | 'archive' | 'file';
+    icon?: any;
+    url: string; // Added URL field
+  }
+
+  // 构建资源树
+  let sourceTree = $derived.by(() => {
+    const tree: Record<string, TreeNode> = {
+      S3: {
+        key: 'S3',
+        label: 'S3 云存储',
+        count: 0,
+        fullPath: ['S3'],
+        children: new Map(),
+        type: 'endpoint_type',
+        icon: Cloud,
+        url: 'ls://s3'
+      },
+      Agent: {
+        key: 'Agent',
+        label: '远程代理',
+        count: 0,
+        fullPath: ['Agent'],
+        children: new Map(),
+        type: 'endpoint_type',
+        icon: Server,
+        url: 'ls://agent'
+      },
+      Local: {
+        key: 'Local',
+        label: '本地文件',
+        count: 0,
+        fullPath: ['Local'],
+        children: new Map(),
+        type: 'endpoint_type',
+        icon: HardDrive,
+        url: 'ls://local'
+      }
+    };
+
+    for (const res of searchStore.results) {
+      const parsed = parseFileUrl(res.path);
+      if (!parsed) continue;
+
+      // 1. Endpoint Type
+      let typeKey = 'Local';
+      if (parsed.endpointType === 's3') typeKey = 'S3';
+      else if (parsed.endpointType === 'agent') typeKey = 'Agent';
+
+      const typeNode = tree[typeKey];
+      typeNode.count++;
+
+      // 2. Endpoint ID
+      let idNode = typeNode.children.get(parsed.endpointId);
+      if (!idNode) {
+        idNode = {
+          key: parsed.endpointId,
+          label: parsed.endpointId,
+          count: 0,
+          fullPath: [typeKey, parsed.endpointId],
+          children: new Map(),
+          type: 'endpoint_id',
+          icon: typeKey === 'S3' ? Database : typeKey === 'Agent' ? Server : HardDrive,
+          url: `ls://${parsed.endpointType}/${parsed.endpointId}`
+        };
+        typeNode.children.set(parsed.endpointId, idNode);
+      }
+      idNode.count++;
+
+      // 3. Path Segments
+      const pathSegments = parsed.path.split('/').filter((p: string) => p);
+      let currentParent = idNode;
+      let currentPathStr = '';
+
+      for (let i = 0; i < pathSegments.length; i++) {
+        const segment = pathSegments[i];
+        const isLastSegment = i === pathSegments.length - 1;
+        const isArchiveFile = parsed.targetType === 'archive' && isLastSegment;
+
+        currentPathStr += (currentPathStr ? '/' : '') + segment;
+
+        if (isLastSegment && !isArchiveFile) {
+          continue;
+        }
+
+        let child = currentParent.children.get(segment);
+        if (!child) {
+          const nodeTargetType = isArchiveFile ? 'archive' : 'dir';
+          const nodeUrl = `ls://${parsed.endpointType}/${parsed.endpointId}/${nodeTargetType}/${currentPathStr}`;
+
+          child = {
+            key: segment,
+            label: segment,
+            count: 0,
+            fullPath: [...currentParent.fullPath, segment],
+            children: new Map(),
+            type: isArchiveFile ? 'archive' : 'dir',
+            icon: isArchiveFile ? Archive : Folder,
+            url: nodeUrl
+          };
+          currentParent.children.set(segment, child);
+        }
+        child.count++;
+        currentParent = child;
+      }
+
+      // 4. Archive Entry Path
+      if (parsed.targetType === 'archive' && parsed.entryPath) {
+        const entrySegments = parsed.entryPath.split('/').filter((p: string) => p);
+        let currentEntryPathStr = '';
+
+        for (let i = 0; i < entrySegments.length - 1; i++) {
+          const segment = entrySegments[i];
+          currentEntryPathStr += (currentEntryPathStr ? '/' : '') + segment;
+
+          let child = currentParent.children.get(segment);
+          if (!child) {
+            const nodeUrl = `ls://${parsed.endpointType}/${parsed.endpointId}/archive/${parsed.path}?entry=${currentEntryPathStr}`;
+
+            child = {
+              key: segment,
+              label: segment,
+              count: 0,
+              fullPath: [...currentParent.fullPath, segment],
+              children: new Map(),
+              type: 'dir',
+              icon: Folder,
+              url: nodeUrl
+            };
+            currentParent.children.set(segment, child);
+          }
+          child.count++;
+          currentParent = child;
+        }
+      }
+    }
+
+    return tree;
+  });
+
+  // 压缩树节点（Skip Single Child）
+  // 规则：
+  // 1. Endpoint Type (Level 0) 不压缩，始终显示
+  // 2. Endpoint ID (Level 1) 如果只有一个，则跳过（直接显示下一级）
+  // 3. Dir/Archive (Level 2+) 如果只有一个子节点且数量相同，合并显示
+  function getRenderTree(root: Record<string, TreeNode>): TreeNode[] {
+    // 直接返回根节点，压缩逻辑移至渲染层 (renderStackedLevel)
+    return Object.values(root);
+  }
+
+  let renderTree = $derived(getRenderTree(sourceTree));
+
+  // 筛选逻辑
+  let filteredResults = $derived.by(() => {
+    if (selectedPath.length === 0) return searchStore.results;
+
+    return searchStore.results.filter((res) => {
+      const parsed = parseFileUrl(res.path);
+      if (!parsed) return false;
+
+      // 1. Check Endpoint Type
+      let typeKey = 'Local';
+      if (parsed.endpointType === 's3') typeKey = 'S3';
+      else if (parsed.endpointType === 'agent') typeKey = 'Agent';
+
+      if (selectedPath.length > 0 && selectedPath[0] !== typeKey) return false;
+      if (selectedPath.length === 1) return true;
+
+      // 2. Check Endpoint ID
+      // 注意：如果 Endpoint ID 被跳过了（因为只有一个），selectedPath 中可能不包含它？
+      // 不，selectedPath 存储的是 UI 上点击的路径。
+      // 如果 UI 上跳过了 Endpoint ID，那么 selectedPath[1] 直接就是 Dir/Archive。
+      // 我们需要根据 sourceTree 的结构来还原匹配逻辑。
+      // 更好的方法是：selectedPath 存储的是 TreeNode 的 fullPath。
+      // 无论 UI 怎么压缩，fullPath 都是完整的真实路径。
+
+      // 让我们重新定义 selectedPath：它存储的是用户点击的那个节点的 fullPath。
+      // 当用户点击一个“压缩节点”时，我们使用该节点的 fullPath。
+      // 压缩节点的 fullPath 指向的是最深层的那个节点。
+
+      // 验证 fullPath 匹配
+      // fullPath: ['S3', 'prod:bucket', 'dir1', 'dir2']
+      // res parts: type, id, path segments...
+
+      const resPathParts = [typeKey, parsed.endpointId];
+      const pathSegments = parsed.path.split('/').filter((p: string) => p);
+
+      resPathParts.push(...pathSegments);
+
+      if (parsed.targetType === 'archive' && parsed.entryPath) {
+        resPathParts.push(...parsed.entryPath.split('/').filter((p: string) => p));
+      }
+
+      // 检查 resPathParts 是否以 selectedPath 开头
+      if (resPathParts.length < selectedPath.length) return false;
+
+      for (let i = 0; i < selectedPath.length; i++) {
+        // 归档文件特殊处理：如果是 archive 类型，不需要完全匹配，只要前缀匹配即可
+        // 比如 selectedPath 到了 archive.tar.gz，那么 archive.tar.gz/inner 也是匹配的
+        if (resPathParts[i] !== selectedPath[i]) return false;
+      }
+
+      return true;
+    });
+  });
+
+  let filteredCount = $derived(filteredResults.length);
+
+  // ============ 辅助函数 ============
+
+  // 格式化数字显示
+  function formatCount(count: number): string {
+    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+    if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
+    return count.toString();
+  }
+
+  // 截断长路径显示
+  function truncatePath(path: string, maxLen: number = 30): string {
+    if (path.length <= maxLen) return path;
+    return '...' + path.slice(-maxLen + 3);
+  }
+
+  // ============ 结果列表交互逻辑 ============
 
   // 每个结果的 UI 状态（折叠、展开所有匹配、单行展开）
   const collapsedFiles = new SvelteSet<number>();
   const expandedAllMatches = new SvelteSet<number>();
   const expandedLines = new SvelteSet<string>();
+
   function isFileCollapsed(i: number) {
     return collapsedFiles.has(i);
   }
@@ -83,6 +319,17 @@
     expandedLines.add(key);
   }
 
+  // 清除所有筛选状态
+  function clearFilters() {
+    selectedPath = [];
+  }
+
+  // 开始新搜索（清除筛选状态并执行搜索）
+  function startSearch(query: string) {
+    clearFilters();
+    searchStore.search(query);
+  }
+
   // 从地址栏读取 ?q=，并在客户端启动搜索
   let searchInit = $state(false);
   $effect(() => {
@@ -91,7 +338,7 @@
     const params = new URL(window.location.href).searchParams;
     const initial = (params.get('q') || '').trim();
     q = initial;
-    if (initial) searchStore.search(initial);
+    if (initial) startSearch(initial);
   });
 
   // 卸载清理
@@ -106,179 +353,72 @@
     e.preventDefault();
     const next = q.trim();
     if (!next) return;
-    searchStore.search(next);
+    startSearch(next);
   }
 
-  // ============ 路径解析逻辑 ============
-
-  import { parseFileUrl, type ParsedFileUrl } from '$lib/modules/logseek/utils/fileUrl';
-
-  // ... (imports)
-
-  // ============ 路径解析逻辑 ============
-
-  // 适配旧的 ParsedPath 接口以保持兼容，或者直接更新使用处
-  // 这里我们更新 sourceTree 的逻辑来适配 ParsedFileUrl
-
-  function getSubTypeIcon(parsed: ParsedFileUrl) {
-    if (parsed.targetType === 'archive') return Archive;
-    if (parsed.endpointType === 'agent') return Server;
-    if (parsed.endpointType === 's3') return Cloud;
-    return Folder; // Local dir
-  }
-
-  // ============ 统计逻辑 ============
-
-  // 树形统计结构
-  interface SourceNode {
-    type: 'S3' | 'Agent' | 'Local';
-    count: number;
-    children: Map<string, { label: string; count: number; subType: ParsedFileUrl }>;
-  }
-
-  let sourceTree = $derived.by(() => {
-    const tree: Record<string, SourceNode> = {
-      S3: { type: 'S3', count: 0, children: new Map() },
-      Agent: { type: 'Agent', count: 0, children: new Map() },
-      Local: { type: 'Local', count: 0, children: new Map() }
-    };
-
-    for (const res of searchStore.results) {
-      const parsed = parseFileUrl(res.path);
-      if (!parsed) continue;
-
-      let sourceType: 'S3' | 'Agent' | 'Local' = 'Local';
-      if (parsed.endpointType === 's3') sourceType = 'S3';
-      else if (parsed.endpointType === 'agent') sourceType = 'Agent';
-
-      const node = tree[sourceType];
-      node.count += 1;
-
-      // Determine subKey and label based on type
-      let subKey = '';
-      let subLabel = '';
-
-      if (parsed.endpointType === 's3') {
-        // S3: group by bucket (part of endpointId: profile:bucket)
-        const parts = parsed.endpointId.split(':');
-        subKey = parts.length > 1 ? parts[1] : parts[0];
-        subLabel = subKey;
-      } else if (parsed.endpointType === 'agent') {
-        // Agent: group by agentId
-        subKey = parsed.endpointId;
-        subLabel = subKey;
-      } else {
-        // Local: group by parent directory
-        // path is /path/to/file or /path/to/archive
-        const pathParts = parsed.path.split('/');
-        pathParts.pop(); // remove filename
-        subKey = pathParts.join('/') || '/';
-        subLabel = subKey;
-      }
-
-      const existing = node.children.get(subKey);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        node.children.set(subKey, {
-          label: subLabel,
-          count: 1,
-          subType: parsed
-        });
-      }
-    }
-
-    return tree;
-  });
-
+  // ============ 侧边栏交互逻辑 ============
   let totalCount = $derived(searchStore.results.length);
 
-  // 筛选后的结果
-  let filteredResults = $derived.by(() => {
-    return searchStore.results.filter((res) => {
-      const parsed = parseFileUrl(res.path);
-      if (!parsed) return false;
+  // 交互逻辑
+  function toggleSelection(node: TreeNode) {
+    // 检查是否已经选中（是当前选中路径的前缀）
+    const isSelected = isPathSelected(node.fullPath);
+    const isExactMatch =
+      selectedPath.length === node.fullPath.length && selectedPath.every((p, i) => p === node.fullPath[i]);
 
-      let sourceType: 'S3' | 'Agent' | 'Local' = 'Local';
-      if (parsed.endpointType === 's3') sourceType = 'S3';
-      else if (parsed.endpointType === 'agent') sourceType = 'Agent';
-
-      if (selectedSource && sourceType !== selectedSource) return false;
-
-      if (selectedSubItem) {
-        let subKey = '';
-        if (parsed.endpointType === 's3') {
-          const parts = parsed.endpointId.split(':');
-          subKey = parts.length > 1 ? parts[1] : parts[0];
-        } else if (parsed.endpointType === 'agent') {
-          subKey = parsed.endpointId;
-        } else {
-          const pathParts = parsed.path.split('/');
-          pathParts.pop();
-          subKey = pathParts.join('/') || '/';
-        }
-        if (subKey !== selectedSubItem) return false;
+    if (isExactMatch) {
+      // 如果完全匹配，说明是取消选中 -> 选中父节点
+      // 如果是根节点，清空
+      if (node.fullPath.length <= 1) {
+        selectedPath = [];
+      } else {
+        // 这里的逻辑有点复杂，因为 UI 树和 逻辑树 不一致。
+        // 简单处理：点击已选中的 -> 取消选中（回到空）或者回到上一级？
+        // 通常侧边栏行为：点击高亮，再次点击取消。
+        selectedPath = [];
       }
-      return true;
-    });
-  });
-
-  let filteredCount = $derived(filteredResults.length);
-
-  // ============ 交互逻辑 ============
-
-  // 切换一级菜单展开/收起
-  function toggleSourceExpand(source: string) {
-    if (expandedSources.has(source)) {
-      expandedSources.delete(source);
     } else {
-      expandedSources.add(source);
+      // 选中新节点
+      selectedPath = node.fullPath;
     }
   }
 
-  // 选择一级菜单（筛选）
-  function selectSource(source: string) {
-    if (selectedSource === source && !selectedSubItem) {
-      // 再次点击取消选中
-      selectedSource = null;
-    } else {
-      selectedSource = source;
-      selectedSubItem = null;
-      // 自动展开
-      expandedSources.add(source);
+  function isPathSelected(path: string[]) {
+    if (selectedPath.length < path.length) return false;
+    for (let i = 0; i < path.length; i++) {
+      if (selectedPath[i] !== path[i]) return false;
+    }
+    return true;
+  }
+
+  // 侧边栏宽度调整
+  let sidebarWidth = $state(280);
+  let isResizing = $state(false);
+
+  function startResizing(e: MouseEvent) {
+    isResizing = true;
+    e.preventDefault();
+    document.body.style.cursor = 'col-resize';
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (!isResizing) return;
+    const newWidth = Math.max(200, Math.min(e.clientX - 24, 600));
+    sidebarWidth = newWidth;
+  }
+
+  function stopResizing() {
+    if (isResizing) {
+      isResizing = false;
+      document.body.style.cursor = '';
     }
   }
 
-  // 选择二级菜单（筛选）
-  function selectSubItem(source: string, subKey: string) {
-    if (selectedSource === source && selectedSubItem === subKey) {
-      // 再次点击取消选中
-      selectedSubItem = null;
-    } else {
-      selectedSource = source;
-      selectedSubItem = subKey;
-    }
-  }
-
-  // 清除所有筛选
-  function clearFilters() {
-    selectedSource = null;
-    selectedSubItem = null;
-  }
-
-  // 格式化数字显示
-  function formatCount(count: number): string {
-    if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
-    if (count >= 1000) return `${(count / 1000).toFixed(1)}k`;
-    return count.toString();
-  }
-
-  // 截断长路径显示
-  function truncatePath(path: string, maxLen: number = 30): string {
-    if (path.length <= maxLen) return path;
-    return '...' + path.slice(-maxLen + 3);
-  }
+  // 动态计算路径截断长度
+  let pathTruncateLength = $derived(Math.max(10, Math.floor((sidebarWidth - 110) / 7.5)));
 </script>
+
+<svelte:window onmousemove={handleMouseMove} onmouseup={stopResizing} />
 
 <div class="min-h-screen bg-background text-foreground">
   <!-- 顶部导航栏 -->
@@ -355,228 +495,90 @@
     </div>
   </header>
 
-  <div class="w-full px-6 py-6">
-    <div class="grid grid-cols-1 gap-8 md:grid-cols-[280px_1fr]">
+  <div class="min-h-[calc(100vh-4rem)] w-full px-6 py-6">
+    <div
+      class="grid grid-cols-1 gap-8 md:grid-cols-[var(--sidebar-width)_1fr] md:items-start"
+      style="--sidebar-width: {sidebarWidth}px"
+    >
       <!-- 左侧边栏：统计与筛选 -->
-      <aside class="hidden border-r border-border pr-6 md:block">
-        <div class="sticky top-24 space-y-6">
+      <aside class="group/sidebar relative hidden h-full border-r border-border pr-6 md:block">
+        <!-- 拖动把手 -->
+        <button
+          type="button"
+          class="absolute top-0 -right-1 z-10 h-full w-2 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20"
+          onmousedown={startResizing}
+          aria-label="调整侧边栏宽度"
+        ></button>
+        <div class="sticky top-24 -mr-2 max-h-[calc(100vh-8rem)] space-y-6 overflow-y-auto pr-2">
           <div>
             <h3 class="mb-3 text-sm font-semibold text-foreground">筛选</h3>
             <Separator class="mb-4" />
 
-            <div class="space-y-1">
-              <!-- S3 -->
-              <div>
-                <div class="flex items-center">
-                  <!-- 展开/收起按钮 -->
-                  <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
-                      .S3.count === 0
-                      ? 'invisible'
-                      : ''}"
-                    onclick={() => toggleSourceExpand('S3')}
-                  >
-                    {#if expandedSources.has('S3')}
-                      <ChevronDown class="h-3.5 w-3.5" />
-                    {:else}
-                      <ChevronRight class="h-3.5 w-3.5" />
-                    {/if}
-                  </button>
-                  <!-- 一级菜单项 -->
-                  <button
-                    class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
-                      'S3' && !selectedSubItem
-                      ? 'bg-primary/10 font-medium text-primary'
-                      : 'text-foreground hover:bg-muted/50'}"
-                    onclick={() => selectSource('S3')}
-                  >
-                    <div class="flex items-center gap-2">
-                      <Cloud
-                        class="h-4 w-4 {selectedSource === 'S3'
-                          ? 'text-primary'
-                          : 'text-muted-foreground group-hover:text-foreground'}"
-                      />
-                      <span>S3 云存储</span>
-                    </div>
-                    <Badge
-                      variant={selectedSource === 'S3' && !selectedSubItem ? 'default' : 'secondary'}
-                      class="rounded-full px-2 py-0.5 text-xs font-medium">{formatCount(sourceTree.S3.count)}</Badge
-                    >
-                  </button>
-                </div>
-                <!-- 二级菜单 -->
-                {#if expandedSources.has('S3') && sourceTree.S3.children.size > 0}
-                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
-                    {#each Array.from(sourceTree.S3.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
-                      {@const SubIcon = getSubTypeIcon(subInfo.subType)}
-                      {@const isSubSelected = selectedSource === 'S3' && selectedSubItem === subKey}
+            {#snippet renderStackedLevel(nodes: TreeNode[], depth: number)}
+              <!-- 
+                如果当前层级只有一个节点，且不是根层级（depth > 0），
+                则跳过该层级，直接渲染子节点。
+                这满足了"如果只剩一个筛选项则跳过"的需求。
+              -->
+              {#if nodes.length === 0}
+                <!-- 空节点，不渲染任何内容 -->
+              {:else if depth > 0 && nodes.length === 1 && nodes[0].children.size > 0}
+                {@render renderStackedLevel(
+                  Array.from(nodes[0].children.values()).sort((a, b) => b.count - a.count),
+                  depth + 1
+                )}
+              {:else}
+                <div class="space-y-0.5">
+                  {#each nodes as node (node.key)}
+                    {@const isPathActive = isPathSelected(node.fullPath)}
+                    {@const isExactActive =
+                      selectedPath.length === node.fullPath.length &&
+                      selectedPath.every((p, i) => p === node.fullPath[i])}
+
+                    <!-- 
+                      Level 0 (Endpoint Type) 始终显示。
+                      其他层级只有 count > 0 才显示。
+                    -->
+                    {#if depth === 0 || node.count > 0}
                       <button
-                        class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
+                        class="group flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {isPathActive
                           ? 'bg-primary/10 font-medium text-primary'
-                          : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
-                        onclick={() => selectSubItem('S3', subKey)}
-                        title={subInfo.label}
+                          : 'text-foreground hover:bg-muted/50'}"
+                        onclick={() => toggleSelection(node)}
+                        title={node.url}
                       >
                         <div class="flex items-center gap-2 overflow-hidden">
-                          <SubIcon
-                            class="h-3.5 w-3.5 shrink-0 {isSubSelected ? 'text-primary' : 'text-muted-foreground'}"
-                          />
-                          <span class="truncate text-xs">{truncatePath(subInfo.label, 25)}</span>
+                          {#if node.icon}
+                            <node.icon
+                              class="h-4 w-4 shrink-0 {isPathActive
+                                ? 'text-primary'
+                                : 'text-muted-foreground group-hover:text-foreground'}"
+                            />
+                          {/if}
+                          <span class="truncate">{truncatePath(node.label, pathTruncateLength)}</span>
                         </div>
-                        <span
-                          class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'font-medium text-primary'
-                            : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
+                        <Badge
+                          variant={isExactActive ? 'default' : 'secondary'}
+                          class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium">{formatCount(node.count)}</Badge
                         >
                       </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-
-              <!-- Agent -->
-              <div>
-                <div class="flex items-center">
-                  <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
-                      .Agent.count === 0
-                      ? 'invisible'
-                      : ''}"
-                    onclick={() => toggleSourceExpand('Agent')}
-                  >
-                    {#if expandedSources.has('Agent')}
-                      <ChevronDown class="h-3.5 w-3.5" />
-                    {:else}
-                      <ChevronRight class="h-3.5 w-3.5" />
                     {/if}
-                  </button>
-                  <button
-                    class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
-                      'Agent' && !selectedSubItem
-                      ? 'bg-primary/10 font-medium text-primary'
-                      : 'text-foreground hover:bg-muted/50'}"
-                    onclick={() => selectSource('Agent')}
-                  >
-                    <div class="flex items-center gap-2">
-                      <Server
-                        class="h-4 w-4 {selectedSource === 'Agent'
-                          ? 'text-primary'
-                          : 'text-muted-foreground group-hover:text-foreground'}"
-                      />
-                      <span>远程代理</span>
-                    </div>
-                    <Badge
-                      variant={selectedSource === 'Agent' && !selectedSubItem ? 'default' : 'secondary'}
-                      class="rounded-full px-2 py-0.5 text-xs font-medium">{formatCount(sourceTree.Agent.count)}</Badge
-                    >
-                  </button>
+                  {/each}
                 </div>
-                {#if expandedSources.has('Agent') && sourceTree.Agent.children.size > 0}
-                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
-                    {#each Array.from(sourceTree.Agent.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
-                      {@const SubIcon = getSubTypeIcon(subInfo.subType)}
-                      {@const isSubSelected = selectedSource === 'Agent' && selectedSubItem === subKey}
-                      <button
-                        class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 font-medium text-primary'
-                          : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
-                        onclick={() => selectSubItem('Agent', subKey)}
-                        title={subInfo.label}
-                      >
-                        <div class="flex items-center gap-2 overflow-hidden">
-                          <SubIcon
-                            class="h-3.5 w-3.5 shrink-0 {isSubSelected ? 'text-primary' : 'text-muted-foreground'}"
-                          />
-                          <span class="truncate text-xs">{truncatePath(subInfo.label, 25)}</span>
-                        </div>
-                        <span
-                          class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'font-medium text-primary'
-                            : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
-                        >
-                      </button>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
 
-              <!-- Local -->
-              <div>
-                <div class="flex items-center">
-                  <button
-                    class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/50 hover:text-foreground {sourceTree
-                      .Local.count === 0
-                      ? 'invisible'
-                      : ''}"
-                    onclick={() => toggleSourceExpand('Local')}
-                  >
-                    {#if expandedSources.has('Local')}
-                      <ChevronDown class="h-3.5 w-3.5" />
-                    {:else}
-                      <ChevronRight class="h-3.5 w-3.5" />
-                    {/if}
-                  </button>
-                  <button
-                    class="group flex flex-1 items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {selectedSource ===
-                      'Local' && !selectedSubItem
-                      ? 'bg-primary/10 font-medium text-primary'
-                      : 'text-foreground hover:bg-muted/50'}"
-                    onclick={() => selectSource('Local')}
-                  >
-                    <div class="flex items-center gap-2">
-                      <HardDrive
-                        class="h-4 w-4 {selectedSource === 'Local'
-                          ? 'text-primary'
-                          : 'text-muted-foreground group-hover:text-foreground'}"
-                      />
-                      <span>本地文件</span>
-                    </div>
-                    <Badge
-                      variant={selectedSource === 'Local' && !selectedSubItem ? 'default' : 'secondary'}
-                      class="rounded-full px-2 py-0.5 text-xs font-medium">{formatCount(sourceTree.Local.count)}</Badge
-                    >
-                  </button>
-                </div>
-                {#if expandedSources.has('Local') && sourceTree.Local.children.size > 0}
-                  <div class="mt-1 ml-6 space-y-0.5 border-l border-border pl-2">
-                    {#each Array.from(sourceTree.Local.children.entries()).sort((a, b) => b[1].count - a[1].count) as [subKey, subInfo]}
-                      {@const SubIcon = getSubTypeIcon(subInfo.subType)}
-                      {@const isSubSelected = selectedSource === 'Local' && selectedSubItem === subKey}
-                      <button
-                        class="group flex w-full items-center justify-between rounded-md px-2 py-1 text-sm transition-colors {isSubSelected
-                          ? 'bg-primary/10 font-medium text-primary'
-                          : 'text-muted-foreground hover:bg-muted/30 hover:text-foreground'}"
-                        onclick={() => selectSubItem('Local', subKey)}
-                        title={subInfo.label}
-                      >
-                        <div class="flex items-center gap-2 overflow-hidden">
-                          <SubIcon
-                            class="h-3.5 w-3.5 shrink-0 {isSubSelected ? 'text-primary' : 'text-muted-foreground'}"
-                          />
-                          <span class="truncate text-xs">{truncatePath(subInfo.label, 25)}</span>
-                        </div>
-                        <span
-                          class="ml-2 shrink-0 text-xs {isSubSelected
-                            ? 'font-medium text-primary'
-                            : 'text-muted-foreground'}">{formatCount(subInfo.count)}</span
-                        >
-                      </button>
-                    {/each}
-                  </div>
+                <!-- 查找当前层级中被选中的节点（作为路径一部分的节点），渲染其子节点 -->
+                {@const activeNode = nodes.find((n) => isPathSelected(n.fullPath))}
+                {#if activeNode && activeNode.children.size > 0}
+                  <Separator class="my-4" />
+                  {@render renderStackedLevel(
+                    Array.from(activeNode.children.values()).sort((a, b) => b.count - a.count),
+                    depth + 1
+                  )}
                 {/if}
-              </div>
-            </div>
+              {/if}
+            {/snippet}
 
-            <!-- 清除筛选按钮 -->
-            {#if selectedSource || selectedSubItem}
-              <button
-                class="mt-4 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                onclick={clearFilters}
-              >
-                <X class="h-3 w-3" />
-                <span>清除筛选</span>
-              </button>
-            {/if}
+            {@render renderStackedLevel(renderTree, 0)}
           </div>
         </div>
       </aside>
@@ -588,10 +590,8 @@
           <h2 class="text-lg font-semibold">
             {#if filteredCount > 0}
               {filteredCount} 个结果
-              {#if selectedSource || selectedSubItem}
-                <span class="ml-2 text-sm font-normal text-muted-foreground">
-                  (共 {totalCount} 个)
-                </span>
+              {#if selectedPath.length > 0}
+                <span class="ml-2 text-sm font-normal text-muted-foreground"> (已筛选) </span>
               {/if}
             {:else if !searchStore.loading && q}
               0 个结果
@@ -629,7 +629,7 @@
               type="error"
               errorMessage={searchStore.error}
               onRetry={() => {
-                if (q) searchStore.search(q);
+                if (q) startSearch(q);
               }}
             />
           {:else if !searchStore.loading && filteredResults.length === 0 && q && !searchStore.hasMore && !searchStore.error}
@@ -640,25 +640,27 @@
         </div>
 
         <!-- 分页控制按钮 -->
-        <div class="mt-8 flex items-center justify-center">
-          {#if searchStore.hasMore}
-            <Button
-              variant="outline"
-              class="w-full max-w-xs shadow-sm"
-              onclick={() => searchStore.loadMore()}
-              disabled={searchStore.loading}
-            >
-              {#if searchStore.loading}
-                <Loader2 class="mr-2 h-4 w-4 animate-spin" />
-                {searchStore.results.length === 0 ? '搜索中...' : '加载更多...'}
-              {:else}
-                加载更多
-              {/if}
-            </Button>
-          {:else if filteredResults.length > 0}
-            <p class="text-sm text-muted-foreground">已加载全部结果</p>
-          {/if}
-        </div>
+        {#if q}
+          <div class="mt-8 flex items-center justify-center">
+            {#if searchStore.hasMore}
+              <Button
+                variant="outline"
+                class="w-full max-w-xs shadow-sm"
+                onclick={() => searchStore.loadMore()}
+                disabled={searchStore.loading}
+              >
+                {#if searchStore.loading}
+                  <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+                  {searchStore.results.length === 0 ? '搜索中...' : '加载更多...'}
+                {:else}
+                  加载更多
+                {/if}
+              </Button>
+            {:else if filteredResults.length > 0}
+              <p class="text-sm text-muted-foreground">已加载全部结果</p>
+            {/if}
+          </div>
+        {/if}
       </main>
     </div>
   </div>

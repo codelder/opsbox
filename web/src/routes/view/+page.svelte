@@ -1,7 +1,7 @@
 <script lang="ts">
   /**
-   * 文件查看页面（重构版）
-   * 使用 LogSeek 模块的 API 客户端和工具函数
+   * 文件查看页面（GitHub 风格重构版）
+   * 文件内容查看器（虚拟滚动）
    */
   import { onMount, onDestroy } from 'svelte';
   import { createVirtualizer } from '@tanstack/svelte-virtual';
@@ -12,9 +12,16 @@
   import Alert from '$lib/components/Alert.svelte';
   import FileHeader from './FileHeader.svelte';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import { Button } from '$lib/components/ui/button';
+  import { FileText, ChevronLeft, Settings, Loader2, ChevronRight } from 'lucide-svelte';
 
-  let file = $state('');
+  // URL 参数
   let sid = $state('');
+  let initialFile = $state('');
+
+  // 当前查看的文件
+  let currentFile = $state('');
   let total = $state(0);
   let end = $state(0);
   let keywords = $state<string[]>([]);
@@ -24,19 +31,15 @@
 
   // 虚拟滚动容器引用
   let parentEl = $state<HTMLDivElement | null>(null);
-  // 统一行高预估，供虚拟器与兜底高度计算复用
-  // 行样式为 text-[13px] + leading-[20px] + py-1，综合约 32px
-  const EST_ROW = 32;
+  const EST_ROW = 20;
   const rowVirtualizer = createVirtualizer({
-    count: 0, // 初始值为 0，会在下面的 $effect 中响应式更新为实际的 total
-    getScrollElement: () => parentEl, // 滚动容器（初始为 null，下面用 setOptions 保持同步）
-    estimateSize: () => EST_ROW, // 预估单行高度(px)
-    overscan: 20, // 预加载额外行，平衡性能与滚动流畅度
-    // 启用真实高度测量，避免底部出现多余空白或无法触底
+    count: 0,
+    getScrollElement: () => parentEl,
+    estimateSize: () => EST_ROW,
+    overscan: 50,
     measureElement: (el: HTMLElement) => el.getBoundingClientRect().height
   });
 
-  // 确保在 parentEl 绑定后，虚拟器获得滚动容器引用
   $effect(() => {
     if (!browser) return;
     try {
@@ -51,10 +54,8 @@
   });
 
   type VirtualItem = { index: number; start: number; key: string | number | bigint };
-  // 虚拟项缓存，避免在模板中使用 {@const}
   const vItems: VirtualItem[] = $derived(browser ? $rowVirtualizer.getVirtualItems() : []);
 
-  // 统一调度虚拟器测量
   function scheduleVirtualUpdate() {
     if (!browser) return;
     requestAnimationFrame(() => {
@@ -66,7 +67,6 @@
     });
   }
 
-  // 滚动触底兜底（即使虚拟器未就绪也能触发加载更多）
   function handleScroll() {
     if (!browser || loading || !parentEl) return;
     const el = parentEl;
@@ -75,86 +75,88 @@
     }
   }
 
-  // 根据 index 取对应行（未加载则返回 null）
   function getLineByIndex(idx0: number): { no: number; text: string } | null {
-    const lineNo = idx0 + 1; // TanStack 使用 0-based，这里转为 1-based 行号
+    const lineNo = idx0 + 1;
     const rec = lines[lineNo - 1];
-    // 放宽校验，若数组存在对应项则直接返回，避免因行号不匹配导致空白
     return rec ?? null;
   }
 
-  // 轻量行高测量，消除折行遮挡问题
   function measureVirtualRow(node: HTMLElement) {
     if (!browser) return {};
     const virtualizer = get(rowVirtualizer);
     if (!virtualizer) return {};
 
-    let frame = -1;
-    const schedule = () => {
-      if (frame !== -1) cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        try {
-          virtualizer.measureElement?.(node);
-        } catch {
-          // 忽略测量元素错误
-        }
-      });
-    };
+    const ro = new ResizeObserver(() => {
+      virtualizer.measureElement(node);
+    });
 
-    schedule();
+    ro.observe(node);
 
     return {
-      update: () => schedule(),
       destroy: () => {
-        if (frame !== -1) cancelAnimationFrame(frame);
+        ro.disconnect();
       }
     };
   }
 
-  // 接近底部自动加载更多
   $effect(() => {
     if (!browser) return;
     const items = $rowVirtualizer.getVirtualItems();
     if (items.length && total > 0 && !loading) {
-      const maxIndex = items[items.length - 1].index; // 0-based
-      const maxLineNo = maxIndex + 1; // 1-based
+      const maxIndex = items[items.length - 1].index;
+      const maxLineNo = maxIndex + 1;
       if (maxLineNo > end - 50 && end < total) {
-        // 当视口接近已加载末尾 50 行内时，触发加载更多
         loadMore();
       }
     }
   });
 
   async function fetchRange(s: number, e: number) {
-    return await fetchViewCache(sid, file, s, e);
+    return await fetchViewCache(sid, currentFile, s, e);
   }
 
-  async function loadInitial() {
+  async function loadFileContent(filePath: string) {
+    if (filePath === currentFile) return; // 已经是当前文件
+
     try {
+      currentFile = filePath;
       loading = true;
-      // 第一步：获取总行数与文件信息（轻量请求）
+      error = null;
+      lines = [];
+      total = 0;
+      end = 0;
+
+      // 获取文件元数据
       const meta = await fetchRange(1, 1);
-      file = meta.file;
       total = meta.total;
 
       if (total <= 0) {
-        // 无内容
         end = 0;
         lines = [];
         return;
       }
 
-      // 第二步：一次性加载全部行
+      // 加载全部内容
       const full = await fetchRange(1, total);
       end = full.end;
       keywords = full.keywords || [];
       lines = full.lines || [];
 
-      // 数据填充后强制重新测量，确保总高度与内容精确匹配
       scheduleVirtualUpdate();
+
+      // 滚动到顶部
+      if (browser && parentEl) {
+        parentEl.scrollTop = 0;
+        try {
+          const v = get(rowVirtualizer);
+          v?.scrollToIndex?.(0);
+        } catch {
+          // 忽略滚动错误
+        }
+      }
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
-      error = err.message || '加载失败';
+      error = err.message || '加载文件失败';
     } finally {
       loading = false;
     }
@@ -178,7 +180,6 @@
     }
   }
 
-  // 关键词高亮函数（使用 LogSeek 模块的工具函数）
   function highlightKeywords(text: string): string {
     if (!keywords || keywords.length === 0 || !text) {
       return escapeHtml(text);
@@ -186,11 +187,9 @@
 
     let result = escapeHtml(text);
 
-    // 对每个关键词进行高亮处理
     for (const keyword of keywords) {
       if (keyword && keyword.trim()) {
         const escapedKeyword = escapeRegExp(keyword.trim());
-        // 大小写敏感匹配
         const regex = new RegExp(escapedKeyword, 'g');
         result = result.replace(regex, (match: string) => {
           return `<mark class="highlight">${match}</mark>`;
@@ -201,13 +200,11 @@
     return result;
   }
 
-  // 检测行是否包含关键词（用于高亮行号）
   function lineHasMatch(text: string): boolean {
     if (!keywords || keywords.length === 0 || !text) return false;
     return keywords.some((kw) => kw && text.includes(kw));
   }
 
-  // 下载当前视图的完整原始文本（不含行号）
   function downloadCurrentFile() {
     try {
       if (!lines || lines.length === 0) return;
@@ -216,8 +213,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      // 提取文件名并清理非法字符
-      const fileName = getDisplayName(file).replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
+      const fileName = getDisplayName(currentFile).replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
       a.download = fileName;
       document.body.appendChild(a);
       a.click();
@@ -231,38 +227,20 @@
 
   onMount(() => {
     const params = new URL(window.location.href).searchParams;
-    file = (params.get('file') || '').trim();
+    initialFile = (params.get('file') || '').trim();
     sid = (params.get('sid') || '').trim();
-    if (!file) {
-      error = '缺少 file 参数';
-      return;
-    }
+
     if (!sid) {
       error = '缺少 sid 参数';
       return;
     }
-    loadInitial();
 
-    // 首屏渲染后，确保虚拟器定位到起始行，避免初次 items 为空
-    // 等一帧再滚动，确保容器与虚拟器完成初始化
-    if (browser) {
-      requestAnimationFrame(() => {
-        try {
-          const v = get(rowVirtualizer);
-          v?.scrollToIndex?.(0);
-        } catch {
-          // 忽略滚动初始化错误
-        }
-      });
+    // 如果有初始文件，加载它
+    if (initialFile) {
+      loadFileContent(initialFile);
     }
 
-    // 使用原生滚动条时，确保容器允许滚动
-    const el = parentEl;
-    if (browser && el) {
-      el.style.overflow = el.style.overflow || 'auto';
-      el.style.position = el.style.position || 'relative';
-    }
-
+    // 键盘快捷键
     const handleKeydown = (event: KeyboardEvent) => {
       if (!browser) return;
       const el = parentEl;
@@ -326,71 +304,72 @@
   });
 
   onDestroy(() => {
-    // 当前使用原生滚动条，无需销毁额外实例
+    // 清理
   });
 </script>
 
-<!-- 页面标题与状态栏 -->
-<div class="min-h-screen bg-background text-foreground">
-  <div class="mx-auto flex h-screen max-w-[1560px] flex-col px-6 py-6">
-    {#if error}
-      <div class="mx-auto mb-6 max-w-md">
-        <Alert type="error" title="加载出错" message={error} />
-      </div>
-    {/if}
+<div class="flex h-screen flex-col bg-background text-foreground">
+  <!-- 顶部导航栏 -->
+  <header
+    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
+  >
+    <div class="flex h-16 w-full items-center gap-4 px-6">
+      <!-- 左侧：Logo -->
+      <a href="/" class="flex items-center gap-2 transition-opacity hover:opacity-80">
+        <LogSeekLogo size="small" />
+      </a>
 
-    <div class="flex min-h-0 flex-1 flex-col gap-6">
-      <!-- 页面 Logo（卡片外部） -->
-      <div class="flex items-center justify-center">
-        <LogSeekLogo size="small" hoverable />
-      </div>
-      <!-- 主内容卡片：文件信息 + 虚拟滚动容器 -->
-      <div
-        class="flex flex-1 flex-col overflow-hidden rounded-md border border-border bg-card transition-all dark:border-gray-700 dark:bg-[#0d1117]"
-      >
-        <!-- 文件信息标题栏 -->
-        <FileHeader filePath={file} {total} loadedLines={end} {keywords} {loading} onDownload={downloadCurrentFile} />
+      <!-- 中间：占位 -->
+      <div class="flex-1 px-4"></div>
 
-        <!-- 虚拟滚动内容区域 -->
-        <div
-          class="relative min-h-0 flex-1 overflow-auto bg-background dark:bg-[#0d1117]"
-          bind:this={parentEl}
-          onscroll={handleScroll}
+      <!-- 右侧：操作区 -->
+      <div class="flex items-center gap-2">
+        <a
+          href="/settings"
+          aria-label="打开设置"
+          class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
         >
-          <!-- 始终渲染 spacer：若虚拟器未就绪，使用兜底总高度，确保可滚动区域存在 -->
-          <div style="height: {$rowVirtualizer.getTotalSize()}px; width: 100%; position: relative;">
-            {#if vItems.length === 0}
-              <!-- 兜底：虚拟器未就绪或总高度未知时，先用正常流渲染已加载的前200行，避免空白 -->
-              {#if lines.length > 0}
-                {#each lines as ln (ln.no)}
-                  {@const isMatch = lineHasMatch(ln.text)}
-                  <div class="group/line flex font-mono text-xs leading-relaxed hover:bg-muted/10">
-                    <div
-                      class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
-                        ? 'font-semibold text-foreground'
-                        : 'text-muted-foreground/60'}"
-                    >
-                      {ln.no}
-                    </div>
-                    <div class="code-content flex-1 px-4 py-0.5 break-all whitespace-pre-wrap text-foreground">
-                      {@html highlightKeywords(ln.text)}
-                    </div>
-                  </div>
-                {/each}
-              {:else}
-                <div class="p-3 text-sm text-muted-foreground">暂无内容</div>
-              {/if}
-            {:else}
-              {#each vItems as item (item.key)}
-                {@const ln = getLineByIndex(item.index)}
-                <div
-                  style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({item.start}px);"
-                  data-index={item.index}
-                  use:measureVirtualRow
-                >
-                  {#if ln}
+          <Settings class="h-5 w-5" />
+        </a>
+        <ThemeToggle />
+      </div>
+    </div>
+  </header>
+
+  <!-- 主内容区域 -->
+  <div class="flex min-h-0 flex-1">
+    <!-- 文件内容 -->
+    <main class="flex min-w-0 flex-1 flex-col">
+      {#if error}
+        <div class="p-6">
+          <Alert type="error" title="加载出错" message={error} />
+        </div>
+      {/if}
+
+      {#if currentFile}
+        <div class="flex min-h-0 flex-1 flex-col">
+          <!-- 文件信息标题栏 -->
+          <FileHeader
+            filePath={currentFile}
+            {total}
+            loadedLines={end}
+            {keywords}
+            {loading}
+            onDownload={downloadCurrentFile}
+          />
+
+          <!-- 虚拟滚动内容区域 -->
+          <div
+            class="relative min-h-0 flex-1 overflow-auto bg-background dark:bg-[#0d1117]"
+            bind:this={parentEl}
+            onscroll={handleScroll}
+          >
+            <div style="height: {$rowVirtualizer.getTotalSize()}px; width: 100%; position: relative;">
+              {#if vItems.length === 0}
+                {#if lines.length > 0}
+                  {#each lines as ln (ln.no)}
                     {@const isMatch = lineHasMatch(ln.text)}
-                    <div class="group/line flex font-mono text-xs leading-relaxed hover:bg-muted/10">
+                    <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
                       <div
                         class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
                           ? 'font-semibold text-foreground'
@@ -398,28 +377,68 @@
                       >
                         {ln.no}
                       </div>
-                      <div class="code-content flex-1 px-4 py-0.5 break-all whitespace-pre-wrap text-foreground">
+                      <div class="code-content flex-1 px-4 break-all whitespace-pre-wrap text-foreground">
                         {@html highlightKeywords(ln.text)}
                       </div>
                     </div>
-                  {:else}
-                    <!-- 占位行（尚未加载到该行），高度尽量匹配 estimateSize -->
-                    <div class="flex font-mono text-xs leading-relaxed opacity-60">
-                      <div
-                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium text-muted-foreground select-none"
-                      >
-                        {item.index + 1}
+                  {/each}
+                {:else}
+                  <div class="flex h-full items-center justify-center p-10">
+                    {#if loading}
+                      <div class="flex flex-col items-center gap-2 text-muted-foreground">
+                        <Loader2 class="h-8 w-8 animate-spin" />
+                        <span class="text-sm">加载中...</span>
                       </div>
-                      <div class="code-content flex-1 px-4 py-0.5 text-muted-foreground">加载中…</div>
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            {/if}
+                    {:else}
+                      <div class="text-sm text-muted-foreground">暂无内容</div>
+                    {/if}
+                  </div>
+                {/if}
+              {:else}
+                {#each vItems as item (item.key)}
+                  {@const ln = getLineByIndex(item.index)}
+                  <div
+                    style="position: absolute; top: 0; left: 0; width: 100%; transform: translateY({item.start}px);"
+                    data-index={item.index}
+                    use:measureVirtualRow
+                  >
+                    {#if ln}
+                      {@const isMatch = lineHasMatch(ln.text)}
+                      <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
+                        <div
+                          class="w-[50px] shrink-0 px-3 text-right font-medium select-none {isMatch
+                            ? 'font-semibold text-foreground'
+                            : 'text-muted-foreground/60'}"
+                        >
+                          {ln.no}
+                        </div>
+                        <div class="code-content flex-1 px-4 break-all whitespace-pre-wrap text-foreground">
+                          {@html highlightKeywords(ln.text)}
+                        </div>
+                      </div>
+                    {:else}
+                      <div class="flex font-mono text-xs leading-relaxed opacity-60">
+                        <div class="w-[50px] shrink-0 px-3 text-right font-medium text-muted-foreground select-none">
+                          {item.index + 1}
+                        </div>
+                        <div class="code-content flex-1 px-4 text-muted-foreground">加载中…</div>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+            </div>
           </div>
         </div>
-      </div>
-    </div>
+      {:else}
+        <div class="flex flex-1 items-center justify-center">
+          <div class="text-center">
+            <FileText class="mx-auto h-12 w-12 text-muted-foreground/50" />
+            <p class="mt-4 text-sm text-muted-foreground">没有文件可查看</p>
+          </div>
+        </div>
+      {/if}
+    </main>
   </div>
 </div>
 
@@ -432,15 +451,14 @@
     font-variant-ligatures: none;
   }
 
-  /* 关键词高亮样式 - 字体颜色高亮 */
   :global(.highlight) {
     background: none;
-    color: #d97706; /* amber-600 */
+    color: #d97706;
     font-weight: 600;
   }
 
   :global(.dark .highlight) {
     background: none;
-    color: #fbbf24; /* amber-400 */
+    color: #fbbf24;
   }
 </style>

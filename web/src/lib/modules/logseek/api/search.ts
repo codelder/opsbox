@@ -79,3 +79,20 @@ export async function startUnifiedSearch(query: string, signal?: AbortSignal): P
 
   return response;
 }
+
+/**
+ * 清理搜索会话缓存
+ * @param sid 会话 ID
+ */
+export function deleteSearchSession(sid: string): void {
+  if (!sid) return;
+  const API_BASE = getApiBase();
+  // 使用 keepalive 确保在页面卸载时请求能发送成功
+  fetch(`${API_BASE}/search/session/${sid}`, {
+    method: 'DELETE',
+    keepalive: true,
+    headers: commonHeaders
+  }).catch((err) => {
+    console.warn(`[LogSeek] 清理会话失败 sid=${sid}:`, err);
+  });
+}

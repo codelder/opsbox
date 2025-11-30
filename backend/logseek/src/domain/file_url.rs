@@ -101,13 +101,10 @@ impl fmt::Display for FileUrl {
 
     let mut url = Url::parse("ls://placeholder").map_err(|_| fmt::Error)?;
     url.set_host(Some(endpoint_type_str)).map_err(|_| fmt::Error)?;
-    
+
     // We use path segments to ensure proper encoding
-    let mut path_segments = vec![
-      self.endpoint_id.as_str(),
-      target_type_str,
-    ];
-    
+    let mut path_segments = vec![self.endpoint_id.as_str(), target_type_str];
+
     // Split the path into segments to avoid double encoding slashes if we just pushed the whole string
     // But wait, if we split by '/', we might break paths that actually contain encoded slashes?
     // For simplicity in this implementation, we assume `path` is a standard path string separated by '/'.
@@ -116,8 +113,12 @@ impl fmt::Display for FileUrl {
         path_segments.push(segment);
       }
     }
-    
-    url.path_segments_mut().map_err(|_| fmt::Error)?.clear().extend(path_segments);
+
+    url
+      .path_segments_mut()
+      .map_err(|_| fmt::Error)?
+      .clear()
+      .extend(path_segments);
 
     if let Some(entry) = &self.entry_path {
       url.query_pairs_mut().append_pair("entry", entry);
@@ -132,7 +133,7 @@ impl FromStr for FileUrl {
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     let url = Url::parse(s)?;
-    
+
     if url.scheme() != "ls" {
       return Err(FileUrlError::UnsupportedScheme(url.scheme().to_string()));
     }
@@ -146,10 +147,13 @@ impl FromStr for FileUrl {
     };
 
     let mut segments = url.path_segments().ok_or(FileUrlError::MissingField("path"))?;
-    
-    let endpoint_id = segments.next().ok_or(FileUrlError::MissingField("endpoint_id"))?.to_string();
+
+    let endpoint_id = segments
+      .next()
+      .ok_or(FileUrlError::MissingField("endpoint_id"))?
+      .to_string();
     let target_type_str = segments.next().ok_or(FileUrlError::MissingField("target_type"))?;
-    
+
     let target_type = match target_type_str {
       "dir" => TargetType::Dir,
       "archive" => TargetType::Archive,
@@ -159,8 +163,10 @@ impl FromStr for FileUrl {
     // The rest of the segments form the path
     let path_parts: Vec<&str> = segments.collect();
     let path = path_parts.join("/"); // Reconstruct path
+    // Note: paths are stored without leading slash to ensure consistency with Display
 
-    let entry_path = url.query_pairs()
+    let entry_path = url
+      .query_pairs()
       .find(|(k, _)| k == "entry")
       .map(|(_, v)| v.to_string());
 
@@ -228,43 +234,52 @@ pub fn build_file_url_for_result_with_source_type(
       } else {
         join_root_path(&base_path, path)
       };
-      
+
       // For Dir target, the result is a file inside this dir
       // So path = full_path / rel_path
-      let final_path = join_root_path(&full_path, rel_path);
-      
-      let url = FileUrl::new(
-        endpoint_type,
-        endpoint_id,
-        TargetType::Dir,
-        final_path,
-        None,
-      );
+      let mut final_path = join_root_path(&full_path, rel_path);
+
+      // For Local and Agent Dir, remove leading slash to ensure consistency
+      // Display implementation splits by '/' and filters empty, which loses leading slash
+      // So we store paths without leading slash to match what FromStr will parse
+      if (endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent) && final_path.starts_with('/') {
+        final_path = final_path.strip_prefix('/').unwrap_or(&final_path).to_string();
+      }
+
+      let url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
       Some((url.clone(), url.to_string()))
     }
     Target::Files { .. } => {
       // For Files target, rel_path is likely the full path or relative to root?
       // In original logic: root/rel_path
-      let final_path = join_root_path(&base_path, rel_path);
-      let url = FileUrl::new(
-        endpoint_type,
-        endpoint_id,
-        TargetType::Dir,
-        final_path,
-        None,
-      );
+      let mut final_path = join_root_path(&base_path, rel_path);
+
+      // For Local and Agent Dir, remove leading slash to ensure consistency
+      if (endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent) && final_path.starts_with('/') {
+        final_path = final_path.strip_prefix('/').unwrap_or(&final_path).to_string();
+      }
+
+      let url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
       Some((url.clone(), url.to_string()))
     }
     Target::Archive { path } => {
       // Archive target.
       // If Endpoint is S3, path is the object key.
       // If Endpoint is Local/Agent, path is relative to root/subpath.
-      
-      let archive_path = if endpoint_type == EndpointType::S3 {
+
+      let mut archive_path = if endpoint_type == EndpointType::S3 {
         path.clone()
       } else {
         join_root_path(&base_path, path)
       };
+
+      // Remove leading slash to ensure consistency with FileUrl Display/FromStr behavior
+      // Display splits by '/' and filters empty segments, which loses leading slash
+      // So we store paths without leading slash to match what FromStr will parse
+      if (endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent) && archive_path.starts_with('/')
+      {
+        archive_path = archive_path.strip_prefix('/').unwrap_or(&archive_path).to_string();
+      }
 
       let url = FileUrl::new(
         endpoint_type,
@@ -317,7 +332,10 @@ mod tests {
     );
     // Note: URL encoding might affect the output string, e.g. ':' in host might be allowed or encoded?
     // In ls:// scheme, host is "s3". "prod:logs-bucket" is the first path segment.
-    assert_eq!(url.to_string(), "ls://s3/prod:logs-bucket/archive/2023/10/data.tar.gz?entry=internal%2Fservice.log");
+    assert_eq!(
+      url.to_string(),
+      "ls://s3/prod:logs-bucket/archive/2023/10/data.tar.gz?entry=internal%2Fservice.log"
+    );
   }
 
   #[test]

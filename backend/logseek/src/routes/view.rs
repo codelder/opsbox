@@ -11,6 +11,7 @@ use axum::{
   extract::Query,
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
+use serde::Deserialize;
 use tracing::debug;
 
 /// 查看缓存中的文件内容
@@ -90,6 +91,50 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
     "keywords": keywords,
     "lines": out_lines,
   });
+  let body = serde_json::to_vec(&obj).unwrap_or_else(|_| b"{}".to_vec());
+  HttpResponse::builder()
+    .status(200)
+    .header(
+      CONTENT_TYPE,
+      HeaderValue::from_static("application/json; charset=utf-8"),
+    )
+    .body(Body::from(body))
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
+}
+
+/// 获取会话的文件列表参数
+#[derive(Debug, Deserialize)]
+pub struct FileListParams {
+  pub sid: String,
+}
+
+/// 获取会话的所有文件列表
+pub async fn get_file_list_json(Query(params): Query<FileListParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
+  tracing::debug!("file-list-request: sid={}", params.sid);
+
+  // 从缓存中获取文件列表
+  let file_urls = match simple_cache().get_file_list(&params.sid).await {
+    Some(files) => files,
+    None => {
+      tracing::warn!("file-list-not-found: sid={}", params.sid);
+      return Err(LogSeekApiError::Repository(RepositoryError::NotFound(format!(
+        "Session not found or expired: sid={}",
+        params.sid
+      ))));
+    }
+  };
+
+  // 转换为字符串列表
+  let files: Vec<String> = file_urls.iter().map(|url| url.to_string()).collect();
+
+  tracing::debug!("file-list-found: sid={} count={}", params.sid, files.len());
+
+  let obj = serde_json::json!({
+    "sid": params.sid,
+    "files": files,
+    "count": files.len(),
+  });
+
   let body = serde_json::to_vec(&obj).unwrap_or_else(|_| b"{}".to_vec());
   HttpResponse::builder()
     .status(200)

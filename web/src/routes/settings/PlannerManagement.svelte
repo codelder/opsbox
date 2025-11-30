@@ -9,6 +9,13 @@
     setDefaultPlanner,
     type PlannerMeta
   } from '$lib/modules/logseek';
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
+  import { Label } from '$lib/components/ui/label';
+  import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '$lib/components/ui/card';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Separator } from '$lib/components/ui/separator';
+  import { Plus, Edit2, Trash2, Check, PlayCircle, HelpCircle, X } from 'lucide-svelte';
 
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -197,187 +204,182 @@
   {/if}
 
   {#if !editing}
-    <section class="rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
-      <div class="flex items-center justify-between border-b border-slate-200 p-6 dark:border-slate-800">
-        <div>
-          <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">规划脚本</h2>
-          <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">为不同业务(app:xxx)配置 Starlark 脚本</p>
+    <Card class="border-border/40 dark:border-gray-700/50">
+      <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
+        <div class="space-y-1">
+          <CardTitle>规划脚本</CardTitle>
+          <CardDescription>为不同业务(app:xxx)配置 Starlark 脚本</CardDescription>
         </div>
-        <button
-          class="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white dark:bg-indigo-500"
-          onclick={startNew}>新建脚本</button
-        >
-      </div>
-      <div class="p-6">
+        <Button onclick={startNew} size="sm">
+          <Plus class="mr-2 h-4 w-4" />
+          新建脚本
+        </Button>
+      </CardHeader>
+      <CardContent>
         {#if loading}
-          <div class="text-center text-sm text-slate-500 dark:text-slate-400">加载中…</div>
+          <div class="py-8 text-center text-sm text-muted-foreground">加载中…</div>
         {:else if items.length === 0}
           <div
-            class="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center dark:border-slate-700 dark:bg-slate-900/50"
+            class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/40 py-12 text-center dark:border-gray-700/50"
           >
-            暂无脚本，点击“新建脚本”添加
+            <p class="text-sm text-muted-foreground">暂无脚本，点击"新建脚本"添加</p>
           </div>
         {:else}
-          <div class="space-y-3">
+          <div class="grid gap-4">
             {#each items as it (it.app)}
               <div
-                class="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50"
+                class="flex items-center justify-between rounded-lg border border-border/40 p-4 transition-colors hover:bg-muted/50 dark:border-gray-700/50"
               >
-                <div class="flex-1">
+                <div class="grid gap-1">
                   <div class="flex items-center gap-2">
-                    <h3 class="font-semibold text-slate-900 dark:text-slate-100">{it.app}</h3>
+                    <span class="font-semibold">{it.app}</span>
                     {#if defaultApp === it.app}
-                      <span
-                        class="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300"
-                        title="默认规划脚本"
-                      >
-                        默认
-                      </span>
+                      <Badge variant="default" class="text-xs" title="默认规划脚本">默认</Badge>
                     {/if}
                   </div>
-                  <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <p class="text-xs text-muted-foreground">
                     更新于 {new Date(it.updated_at * 1000).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}
                   </p>
                 </div>
                 <div class="flex items-center gap-2">
                   {#if defaultApp !== it.app}
-                    <button
-                      class="rounded-lg px-3 py-1.5 text-sm text-indigo-600 hover:bg-indigo-100 dark:text-indigo-400 dark:hover:bg-indigo-900/30"
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      class="text-muted-foreground"
                       onclick={() => handleSetDefault(it.app)}
                       title="设为默认规划脚本"
                     >
                       设为默认
-                    </button>
+                    </Button>
                   {/if}
-                  <button
-                    class="rounded-lg px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-200 dark:text-slate-300 dark:hover:bg-slate-700"
-                    onclick={() => startEdit(it.app)}>编辑</button
+                  <Button variant="ghost" size="icon" onclick={() => startEdit(it.app)}>
+                    <Edit2 class="h-4 w-4" />
+                    <span class="sr-only">编辑</span>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onclick={() => remove(it.app)}
                   >
-                  <button
-                    class="rounded-lg px-3 py-1.5 text-sm text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900/30"
-                    onclick={() => remove(it.app)}>删除</button
-                  >
+                    <Trash2 class="h-4 w-4" />
+                    <span class="sr-only">删除</span>
+                  </Button>
                 </div>
               </div>
             {/each}
           </div>
         {/if}
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   {:else}
-    <section class="rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
-      <div class="border-b border-slate-200 p-6 dark:border-slate-800">
-        <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
-          {editingApp ? `编辑脚本：${editingApp}` : '新建脚本'}
-        </h2>
-      </div>
-      <form class="space-y-4 p-6" onsubmit={submit}>
-        <div>
-          <label for="planner-app" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-            >业务标识（app）</label
-          >
-          <input
-            id="planner-app"
-            class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-            bind:value={app}
-            placeholder="例如：bbip"
-            disabled={!!editingApp || saving}
-            required
-          />
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">查询中使用 app:&#123;app&#125; 选择脚本</p>
-        </div>
-        <div>
-          <label for="planner-script" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-            >Starlark 脚本</label
-          >
-          <textarea
-            id="planner-script"
-            class="mt-1 block h-80 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-            bind:value={script}
-            spellcheck={false}
-          ></textarea>
-        </div>
-        <div class="flex justify-between gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
-          <div class="flex items-center gap-2">
-            <input
-              class="w-96 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-              placeholder="输入完整查询 q（可含 app:/dt:/fdt:/tdt:）"
-              bind:value={testQ}
+    <Card class="border-border/40 dark:border-gray-700/50">
+      <CardHeader>
+        <CardTitle>{editingApp ? `编辑脚本：${editingApp}` : '新建脚本'}</CardTitle>
+      </CardHeader>
+      <form onsubmit={submit}>
+        <CardContent class="space-y-4">
+          <div class="space-y-2">
+            <Label for="planner-app">业务标识（app）</Label>
+            <Input
+              id="planner-app"
+              bind:value={app}
+              placeholder="例如：bbip"
+              disabled={!!editingApp || saving}
+              required
             />
-            <button
-              type="button"
-              class="rounded-xl bg-slate-600 px-4 py-2 text-sm font-semibold text-white disabled:bg-slate-300 dark:bg-slate-500"
-              onclick={runTest}
-              disabled={testing || !app.trim()}>测试</button
-            >
-            <button
-              type="button"
-              class="rounded-xl bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-              onclick={() => loadHelp()}>{showHelp ? '关闭帮助' : '帮助'}</button
-            >
+            <p class="text-xs text-muted-foreground">查询中使用 app:&#123;app&#125; 选择脚本</p>
           </div>
-          <div class="flex items-center gap-3">
-            <button
-              type="button"
-              class="rounded-xl px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-              onclick={cancelEdit}
-              disabled={saving}>取消</button
-            >
-            <button
-              type="submit"
-              class="rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white disabled:bg-indigo-300 dark:bg-indigo-500"
-              disabled={saving || !app.trim()}>保存</button
-            >
+          <div class="space-y-2">
+            <Label for="planner-script">Starlark 脚本</Label>
+            <textarea
+              id="planner-script"
+              class="flex min-h-80 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+              bind:value={script}
+              spellcheck={false}
+            ></textarea>
           </div>
-        </div>
+
+          <Separator />
+
+          <div class="space-y-2">
+            <Label for="test-query">测试脚本</Label>
+            <div class="flex gap-2">
+              <Input
+                id="test-query"
+                class="flex-1"
+                placeholder="输入完整查询 q（可含 app:/dt:/fdt:/tdt:）"
+                bind:value={testQ}
+              />
+              <Button type="button" variant="secondary" onclick={runTest} disabled={testing || !app.trim()}>
+                <PlayCircle class="mr-2 h-4 w-4" />
+                {testing ? '测试中…' : '测试'}
+              </Button>
+              <Button type="button" variant="outline" onclick={() => loadHelp()}>
+                <HelpCircle class="mr-2 h-4 w-4" />
+                {showHelp ? '关闭帮助' : '帮助'}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+        <CardFooter class="flex justify-end gap-2">
+          <Button variant="outline" type="button" onclick={cancelEdit} disabled={saving}>取消</Button>
+          <Button type="submit" disabled={saving || !app.trim()}>
+            {saving ? '保存中…' : '保存'}
+          </Button>
+        </CardFooter>
       </form>
 
       {#if testError}
-        <div class="mt-4"><Alert type="error" message={testError} /></div>
+        <div class="px-6 pb-4"><Alert type="error" message={testError} /></div>
       {/if}
       {#if testResult}
-        <section
-          class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-700 dark:bg-slate-800/50"
-        >
-          <div class="mb-2 text-slate-700 dark:text-slate-200">
-            清理后查询：<code class="rounded bg-slate-200 px-1 py-0.5 text-xs dark:bg-slate-700"
-              >{testResult.cleaned_query}</code
-            >
-          </div>
-          {#if testResult.debug_logs && testResult.debug_logs.length > 0}
-            <div class="mb-4">
-              <h4 class="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">调试日志（print 输出）：</h4>
-              <div class="test-output-box max-h-40 overflow-auto rounded border p-3 text-xs">
-                {#each testResult.debug_logs as log}
-                  <div class="mb-1 font-mono">{log}</div>
-                {/each}
+        <div class="px-6 pb-6">
+          <Card class="border-border/40 dark:border-gray-700/50">
+            <CardContent class="space-y-3 p-4">
+              <div class="text-sm">
+                <span class="text-muted-foreground">清理后查询：</span>
+                <code class="ml-2 rounded bg-muted px-2 py-1 font-mono text-xs">{testResult.cleaned_query}</code>
               </div>
-            </div>
-          {/if}
-          <div class="overflow-auto">
-            <pre
-              class="test-output-box max-h-80 rounded border p-3 text-xs break-all whitespace-pre-wrap">{JSON.stringify(
-                testResult.sources,
-                null,
-                2
-              )}</pre>
-          </div>
-        </section>
+              {#if testResult.debug_logs && testResult.debug_logs.length > 0}
+                <div>
+                  <h4 class="mb-2 text-sm font-medium">调试日志（print 输出）：</h4>
+                  <div class="max-h-40 overflow-auto rounded border bg-muted/30 p-3">
+                    {#each testResult.debug_logs as log}
+                      <div class="mb-1 font-mono text-xs">{log}</div>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+              <div class="overflow-auto">
+                <pre
+                  class="max-h-80 rounded border bg-muted/30 p-3 font-mono text-xs break-all whitespace-pre-wrap">{JSON.stringify(
+                    testResult.sources,
+                    null,
+                    2
+                  )}</pre>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       {/if}
 
       {#if showHelp}
-        <section
-          class="mt-6 rounded-3xl border border-slate-200 bg-white p-6 text-sm shadow-lg dark:border-slate-800 dark:bg-slate-900"
-        >
-          {#if helpLoading}
-            <div class="text-slate-500 dark:text-slate-400">加载帮助文档中…</div>
-          {:else if helpError}
-            <Alert type="error" message={helpError} />
-          {:else}
-            <div class="prose dark:prose-invert max-w-none">{@html helpHtml}</div>
-          {/if}
-        </section>
+        <div class="px-6 pb-6">
+          <Card class="border-border/40 dark:border-gray-700/50">
+            <CardContent class="p-6">
+              {#if helpLoading}
+                <div class="text-sm text-muted-foreground">加载帮助文档中…</div>
+              {:else if helpError}
+                <Alert type="error" message={helpError} />
+              {:else}
+                <div class="prose prose-sm dark:prose-invert max-w-none">{@html helpHtml}</div>
+              {/if}
+            </CardContent>
+          </Card>
+        </div>
       {/if}
-    </section>
+    </Card>
   {/if}
 </div>

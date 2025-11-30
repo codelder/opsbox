@@ -132,3 +132,18 @@ pub async fn stream_search(
   let stream = convert_to_ndjson_stream(result_rx, highlights);
   build_ndjson_response(stream, sid)
 }
+
+/// 清理搜索会话缓存
+pub async fn delete_search_session(
+  axum::extract::Path(sid): axum::extract::Path<String>,
+) -> Result<HttpResponse<Body>, LogSeekApiError> {
+  tracing::info!("[Search] 清理会话缓存: sid={}", sid);
+  crate::repository::cache::cache().remove_sid(&sid).await;
+
+  HttpResponse::builder().status(200).body(Body::empty()).map_err(|e| {
+    LogSeekApiError::Service(crate::service::ServiceError::ProcessingError(format!(
+      "构建响应失败: {}",
+      e
+    )))
+  })
+}

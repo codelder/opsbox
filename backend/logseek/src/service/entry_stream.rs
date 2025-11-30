@@ -139,6 +139,7 @@ impl EntryStream for FsEntryStream {
 /// tar.gz 条目流（基于 AsyncRead 输入）
 pub struct TarGzEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<R>>>>,
+  consecutive_errors: usize,
 }
 
 impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
@@ -147,16 +148,23 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
     let gz = GzipDecoder::new(BufReader::new(reader));
     let archive = async_tar::Archive::new(gz.compat());
     let entries = archive.entries()?; // 注意：entries 拥有 archive
-    Ok(Self { entries })
+    Ok(Self {
+      entries,
+      consecutive_errors: 0,
+    })
   }
 }
 
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    const MAX_CONSECUTIVE_ERRORS: usize = 100;
+
     loop {
       match self.entries.next().await {
         Some(Ok(entry)) => {
+          // 成功读取条目，重置错误计数器
+          self.consecutive_errors = 0;
           let raw = entry
             .path()
             .ok()
@@ -173,8 +181,25 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> 
           return Ok(Some((meta, Box::new(reader))));
         }
         Some(Err(e)) => {
-          // 记录错误但继续处理下一个条目（使用debug级别避免日志泛滥）
-          tracing::debug!("跳过损坏的 tar.gz 条目: {}", e);
+          self.consecutive_errors += 1;
+          // 记录错误但继续处理下一个条目
+          tracing::warn!(
+            "跳过损坏的 tar.gz 条目: {} (连续错误: {}/{})",
+            e,
+            self.consecutive_errors,
+            MAX_CONSECUTIVE_ERRORS
+          );
+
+          // 如果连续错误超过阈值，停止处理以避免死循环
+          if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+            return Err(io::Error::new(
+              io::ErrorKind::InvalidData,
+              format!(
+                "tar.gz 文件损坏严重，连续 {} 个条目读取失败，停止处理",
+                MAX_CONSECUTIVE_ERRORS
+              ),
+            ));
+          }
           continue;
         }
         None => return Ok(None),
@@ -667,6 +692,7 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
 
 pub struct TarEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<BufReader<R>>>,
+  consecutive_errors: usize,
 }
 
 impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
@@ -674,16 +700,23 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
     let br = BufReader::new(reader);
     let archive = async_tar::Archive::new(br.compat());
     let entries = archive.entries()?;
-    Ok(Self { entries })
+    Ok(Self {
+      entries,
+      consecutive_errors: 0,
+    })
   }
 }
 
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    const MAX_CONSECUTIVE_ERRORS: usize = 100;
+
     loop {
       match self.entries.next().await {
         Some(Ok(entry)) => {
+          // 成功读取条目，重置错误计数器
+          self.consecutive_errors = 0;
           let raw = entry
             .path()
             .ok()
@@ -700,8 +733,25 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
           return Ok(Some((meta, Box::new(reader))));
         }
         Some(Err(e)) => {
+          self.consecutive_errors += 1;
           // 记录错误但继续处理下一个条目
-          tracing::warn!("跳过损坏的 tar 条目: {}", e);
+          tracing::warn!(
+            "跳过损坏的 tar 条目: {} (连续错误: {}/{})",
+            e,
+            self.consecutive_errors,
+            MAX_CONSECUTIVE_ERRORS
+          );
+
+          // 如果连续错误超过阈值，停止处理以避免死循环
+          if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+            return Err(io::Error::new(
+              io::ErrorKind::InvalidData,
+              format!(
+                "tar 文件损坏严重，连续 {} 个条目读取失败，停止处理",
+                MAX_CONSECUTIVE_ERRORS
+              ),
+            ));
+          }
           continue;
         }
         None => return Ok(None),

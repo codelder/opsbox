@@ -4,7 +4,7 @@
  */
 
 import type { SearchJsonResult } from '../types';
-import { extractSessionId, startUnifiedSearch } from '../api';
+import { extractSessionId, startUnifiedSearch, deleteSearchSession } from '../api';
 import { useStreamReader } from './useStreamReader.svelte';
 
 /**
@@ -28,6 +28,11 @@ export function useSearch() {
     // 取消之前的搜索
     if (controller) {
       controller.abort();
+    }
+
+    // 如果有旧的 sid，清理后端缓存
+    if (sid) {
+      deleteSearchSession(sid);
     }
 
     // 重置状态
@@ -116,10 +121,32 @@ export function useSearch() {
    */
   function cleanup(): void {
     cancel();
+    if (sid) {
+      deleteSearchSession(sid);
+    }
     results = [];
     error = null;
     sid = '';
   }
+
+  // 监听页面关闭/刷新事件，确保清理后端会话
+  $effect(() => {
+    const handlePageHide = () => {
+      if (sid) {
+        deleteSearchSession(sid);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', handlePageHide);
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pagehide', handlePageHide);
+      }
+    };
+  });
 
   return {
     // 状态

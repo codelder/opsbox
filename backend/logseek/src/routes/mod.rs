@@ -23,7 +23,12 @@ pub fn router(db_pool: SqlitePool) -> Router {
   Router::new()
     // 搜索路由（多存储源并行搜索）
     .route("/search.ndjson", axum::routing::post(search::stream_search))
+    .route(
+      "/search/session/{sid}",
+      axum::routing::delete(search::delete_search_session),
+    )
     .route("/view.cache.json", axum::routing::get(view::view_cache_json))
+    .route("/view.files.json", axum::routing::get(view::get_file_list_json))
     .route(
       "/settings/s3",
       axum::routing::get(s3::get_s3_settings).post(s3::save_s3_settings),

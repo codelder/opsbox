@@ -111,7 +111,7 @@
 
   <!-- Profile 列表 -->
   {#if !isEditing}
-    <Card>
+    <Card class="border-border/40 dark:border-gray-700/50">
       <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
         <div class="space-y-1">
           <CardTitle>S3 Profile 配置</CardTitle>
@@ -126,14 +126,18 @@
         {#if profileStore.loading}
           <div class="py-8 text-center text-sm text-muted-foreground">加载中…</div>
         {:else if profileStore.profiles.length === 0}
-          <div class="flex flex-col items-center justify-center rounded-lg border border-dashed py-12 text-center">
+          <div
+            class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/40 py-12 text-center dark:border-gray-700/50"
+          >
             <Database class="h-10 w-10 text-muted-foreground/50" />
             <p class="mt-4 text-sm text-muted-foreground">暂无配置，点击"新建 Profile"添加</p>
           </div>
         {:else}
           <div class="grid gap-4">
             {#each profileStore.profiles as profile (profile.profile_name)}
-              <div class="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50">
+              <div
+                class="flex items-center justify-between rounded-lg border border-border/40 p-4 transition-colors hover:bg-muted/50 dark:border-gray-700/50"
+              >
                 <div class="grid gap-1">
                   <div class="flex items-center gap-2">
                     <span class="font-semibold">{profile.profile_name}</span>
@@ -172,7 +176,7 @@
     </Card>
   {:else}
     <!-- 编辑表单 -->
-    <Card>
+    <Card class="border-border/40 dark:border-gray-700/50">
       <CardHeader>
         <CardTitle>{editingProfile ? `编辑 Profile: ${editingProfile.profile_name}` : '新建 Profile'}</CardTitle>
       </CardHeader>
