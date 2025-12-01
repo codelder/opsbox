@@ -849,13 +849,13 @@ beta only
     let input = r#"Foo upper
 foo lower
 "#;
-    // 字面量大小写敏感
+    // 字面量不区分大小写（默认行为）
     let hit_lower = grep_with_q(input, "foo", 0).await;
-    assert!(hit_lower.is_some());
+    assert!(hit_lower.is_some(), "小写 'foo' 应该匹配 'Foo' 和 'foo'");
     let hit_upper = grep_with_q(input, "Foo", 0).await;
-    assert!(hit_upper.is_some());
-    let miss_mixed = grep_with_q(input, "fOo", 0).await;
-    assert!(miss_mixed.is_none());
+    assert!(hit_upper.is_some(), "大写 'Foo' 应该匹配 'Foo' 和 'foo'");
+    let hit_mixed = grep_with_q(input, "fOo", 0).await;
+    assert!(hit_mixed.is_some(), "混合大小写 'fOo' 应该匹配 'Foo' 和 'foo'");
   }
 
   // === look-around 支持测试（依赖 fancy-regex 动态选择） ===
@@ -1032,10 +1032,15 @@ foo lower
 
   #[tokio::test]
   async fn grep_mixed_case_in_phrase() {
-    let input = "Connection Reset By Peer\n";
-    // 短语匹配是否大小写敏感
-    let res = grep_with_q(input, "\"Connection Reset\"", 0).await;
-    assert!(res.is_some());
+    let input = "Connection Reset By Peer\nconnection reset by peer\n";
+    // 短语（引号内）区分大小写
+    let res_exact = grep_with_q(input, "\"Connection Reset\"", 0).await;
+    assert!(res_exact.is_some(), "精确匹配 'Connection Reset' 应该成功");
+    let res_lower = grep_with_q(input, "\"connection reset\"", 0).await;
+    assert!(res_lower.is_some(), "精确匹配 'connection reset' 应该成功");
+    // 区分大小写：大小写不匹配应该失败
+    let res_mismatch = grep_with_q("Connection Reset By Peer\n", "\"connection Reset\"", 0).await;
+    assert!(res_mismatch.is_none(), "大小写不匹配的短语应该失败");
   }
 
   #[tokio::test]

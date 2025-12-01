@@ -5,7 +5,6 @@
 use crate::api::{LogSeekApiError, models::SearchBody};
 use crate::service::search::SearchEvent;
 use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
-use crate::utils::renderer::render_json_chunks;
 use axum::{
   body::Body,
   extract::{Json, State},
@@ -39,7 +38,7 @@ fn serialize_event(value: &serde_json::Value) -> Option<Bytes> {
 /// 将 SearchEvent 流转换为 NDJSON 字节流
 fn convert_to_ndjson_stream(
   mut rx: mpsc::Receiver<SearchEvent>,
-  highlights: Vec<String>,
+  highlights: Vec<crate::query::KeywordHighlight>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
   async_stream::stream! {
     let mut event_count = 0;
@@ -56,7 +55,7 @@ fn convert_to_ndjson_stream(
 
       let json_value = match event {
         SearchEvent::Success(res) => {
-          let json_obj = render_json_chunks(
+          let json_obj = crate::utils::renderer::render_json_chunks(
             &res.path,
             res.merged.clone(),
             res.lines.clone(),
@@ -125,9 +124,8 @@ pub async fn stream_search(
   let executor = SearchExecutor::new(pool, config);
   let (result_rx, sid) = executor.search(&body.q, ctx).await?;
 
-  let highlights = crate::query::Query::parse_github_like(&body.q)
-    .map(|spec| spec.highlights)
-    .unwrap_or_default();
+  let query = crate::query::Query::parse_github_like(&body.q).unwrap_or_default();
+  let highlights = query.highlights.clone();
 
   let stream = convert_to_ndjson_stream(result_rx, highlights);
   build_ndjson_response(stream, sid)
