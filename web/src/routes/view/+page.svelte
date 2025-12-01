@@ -8,6 +8,8 @@
   import { get } from 'svelte/store';
   import { browser } from '$app/environment';
   import { fetchViewCache, escapeHtml, escapeRegExp } from '$lib/modules/logseek';
+  import { highlight } from '$lib/modules/logseek/utils/highlight';
+  import type { KeywordInfo } from '$lib/modules/logseek/types';
   import { getDisplayName } from '$lib/modules/logseek/utils/fileUrl';
   import Alert from '$lib/components/Alert.svelte';
   import FileHeader from './FileHeader.svelte';
@@ -185,19 +187,9 @@
       return escapeHtml(text);
     }
 
-    let result = escapeHtml(text);
-
-    for (const keyword of keywords) {
-      if (keyword && keyword.trim()) {
-        const escapedKeyword = escapeRegExp(keyword.trim());
-        const regex = new RegExp(escapedKeyword, 'g');
-        result = result.replace(regex, (match: string) => {
-          return `<mark class="highlight">${match}</mark>`;
-        });
-      }
-    }
-
-    return result;
+    // 将 keywords 字符串数组转换为 KeywordInfo 数组（默认都是 Literal，不区分大小写）
+    const keywordInfos: KeywordInfo[] = keywords.map((kw) => ({ type: 'literal', text: kw }));
+    return highlight(text, keywordInfos);
   }
 
   function lineHasMatch(text: string): boolean {

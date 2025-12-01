@@ -93,7 +93,10 @@
 
       for (let li = 0; li < lines.length && processedCount < maxLinesToProcess; li++) {
         const ln = lines[li];
-        const hasMatch = keywords.some((kw) => ln.text.includes(kw));
+        const hasMatch = keywords.some((kw) => {
+          const kwText = kw.text.toLowerCase();
+          return ln.text.toLowerCase().includes(kwText);
+        });
         arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li, isMatch: hasMatch });
         processedCount++;
       }
@@ -266,8 +269,8 @@
               </div>
 
               <!-- 关键词 -->
-              {#if (item.keywords || []).filter((k) => !k.includes(':')).length > 0}
-                {@const displayKeywords = (item.keywords || []).filter((k) => !k.includes(':'))}
+              {#if (item.keywords || []).filter((k) => !k.text.includes(':')).length > 0}
+                {@const displayKeywords = (item.keywords || []).filter((k) => !k.text.includes(':'))}
                 <div class="mt-4 border-t border-border pt-3">
                   <div class="mb-2 text-xs font-medium text-muted-foreground">Matched Keywords</div>
                   <div class="flex flex-wrap gap-1.5">
@@ -275,7 +278,7 @@
                       <span
                         class="inline-flex items-center rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
                       >
-                        {keyword}
+                        {keyword.text}
                       </span>
                     {/each}
                   </div>

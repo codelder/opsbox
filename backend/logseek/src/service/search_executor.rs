@@ -130,13 +130,15 @@ impl SearchExecutor {
   /// 生成搜索会话 ID 并缓存关键字
   ///
   /// # 参数
-  /// - highlights: 高亮关键字列表
+  /// - highlights: 高亮关键字列表（带类型信息）
   ///
   /// # 返回
   /// - String: 搜索会话 ID (sid)
-  async fn generate_sid_and_cache_keywords(&self, highlights: Vec<String>) -> String {
+  async fn generate_sid_and_cache_keywords(&self, highlights: Vec<crate::query::KeywordHighlight>) -> String {
     let sid = new_sid();
-    simple_cache().put_keywords(&sid, highlights).await;
+    // 提取文本用于缓存（view 页面使用）
+    let keywords: Vec<String> = highlights.iter().map(|h| h.text.clone()).collect();
+    simple_cache().put_keywords(&sid, keywords).await;
     sid
   }
 
@@ -153,7 +155,7 @@ impl SearchExecutor {
     source: Source,
     cleaned_query: String,
     ctx: usize,
-    _highlights: Vec<String>,
+    _highlights: Vec<crate::query::KeywordHighlight>,
     sid: String,
     tx: mpsc::Sender<SearchEvent>,
   ) {
@@ -355,7 +357,7 @@ impl SearchExecutor {
     spec: Arc<Query>,
     ctx: usize,
     encoding_qualifier: Option<String>,
-    _highlights: Vec<String>,
+    _highlights: Vec<crate::query::KeywordHighlight>,
     sid: String,
     tx: mpsc::Sender<SearchEvent>,
   ) {
@@ -532,7 +534,7 @@ impl SearchExecutor {
   /// - spec: 查询规范
   /// - ctx: 上下文行数
   /// - encoding_qualifier: 编码限定词
-  /// - highlights: 高亮关键字列表
+  /// - highlights: 高亮关键字列表（带类型信息）
   /// - sid: 搜索会话 ID
   /// - cleaned_query: 清理后的查询字符串
   /// - tx: 结果发送通道
@@ -543,7 +545,7 @@ impl SearchExecutor {
     spec: Arc<Query>,
     ctx: usize,
     encoding_qualifier: Option<String>,
-    highlights: Vec<String>,
+    highlights: Vec<crate::query::KeywordHighlight>,
     sid: String,
     cleaned_query: String,
     tx: mpsc::Sender<SearchEvent>,
@@ -823,7 +825,16 @@ SOURCES = [
     let config = SearchExecutorConfig::default();
     let executor = SearchExecutor::new(pool, config);
 
-    let highlights = vec!["error".to_string(), "warning".to_string()];
+    let highlights: Vec<crate::query::KeywordHighlight> = vec![
+      crate::query::KeywordHighlight {
+        text: "error".to_string(),
+        is_phrase: false,
+      },
+      crate::query::KeywordHighlight {
+        text: "warning".to_string(),
+        is_phrase: false,
+      },
+    ];
     let sid = executor.generate_sid_and_cache_keywords(highlights).await;
 
     // 验证 sid 不为空

@@ -3,7 +3,7 @@
  * 提供文本转义、高亮和智能截断功能
  */
 
-import type { SnippetResult, SnippetOptions } from '../types';
+import type { SnippetResult, SnippetOptions, KeywordInfo } from '../types';
 
 /**
  * 转义 HTML 特殊字符
@@ -26,12 +26,20 @@ export function escapeRegExp(s: string): string {
 
 /**
  * 高亮关键词（使用带 class 的 mark 标签）
+ * @param line 要高亮的文本行
+ * @param keywords 带类型信息的关键词列表
  */
-export function highlight(line: string, keywords: string[]): string {
+export function highlight(line: string, keywords: KeywordInfo[]): string {
   let out = escapeHtml(line);
-  const kws = (keywords || []).filter((k) => k && k.length > 0);
-  for (const kw of kws) {
-    const re = new RegExp(escapeRegExp(kw), 'g');
+
+  for (const kwInfo of keywords) {
+    const kw = kwInfo.text;
+    if (!kw || kw.length === 0) continue;
+
+    const escapedKw = escapeRegExp(kw);
+    // Literal: 不区分大小写，Phrase: 区分大小写
+    const flags = kwInfo.type === 'literal' ? 'gi' : 'g';
+    const re = new RegExp(escapedKw, flags);
     out = out.replace(re, (m) => `<mark class="highlight">${escapeHtml(m)}</mark>`);
   }
   return out;
@@ -40,10 +48,14 @@ export function highlight(line: string, keywords: string[]): string {
 /**
  * 智能截断长行，优先保留首次命中关键字
  * @param line 原始行文本
- * @param keywords 关键词列表
+ * @param keywords 带类型信息的关键词列表
  * @param opts 选项：max=最大长度，context=关键词周围上下文长度
  */
-export function snippet(line: string, keywords: string[], opts: SnippetOptions = {}): SnippetResult {
+export function snippet(
+  line: string,
+  keywords: KeywordInfo[],
+  opts: SnippetOptions = {}
+): SnippetResult {
   const max = opts.max ?? 540;
   const ctx = opts.context ?? 230;
 
@@ -51,13 +63,14 @@ export function snippet(line: string, keywords: string[], opts: SnippetOptions =
     return { html: highlight(line, keywords), leftTrunc: false, rightTrunc: false };
   }
 
-  const kws = (keywords || []).filter((k) => k && k.length > 0);
+  const kws = keywords.map((k) => k.text).filter((k) => k && k.length > 0);
+
   let firstIdx = -1;
   let firstLen = 0;
 
-  // 查找首个关键词位置
+  // 查找首个关键词位置（不区分大小写查找）
   for (const kw of kws) {
-    const idx = line.indexOf(kw);
+    const idx = line.toLowerCase().indexOf(kw.toLowerCase());
     if (idx !== -1 && (firstIdx === -1 || idx < firstIdx)) {
       firstIdx = idx;
       firstLen = kw.length;
