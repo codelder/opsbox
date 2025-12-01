@@ -22,6 +22,13 @@ export interface JsonChunk {
 }
 
 /**
+ * 关键词信息（带类型）
+ */
+export type KeywordInfo =
+  | { type: 'literal'; text: string }
+  | { type: 'phrase'; text: string };
+
+/**
  * 搜索结果（NDJSON 流中的单个文件结果）
  */
 export interface SearchJsonResult {
@@ -39,7 +46,7 @@ export interface SearchJsonResult {
    * - Agent 远程文件: `agent://server-01/var/log/app.log`
    */
   path: string;
-  keywords: string[];
+  keywords: KeywordInfo[]; // 带类型信息的关键词列表
   chunks: JsonChunk[];
   /**
    * 文件编码名称（如 "UTF-8"、"GBK"）

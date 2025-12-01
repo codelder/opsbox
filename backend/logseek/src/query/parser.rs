@@ -55,7 +55,7 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
   let expr = parser.parse_expr(&mut terms)?;
 
   // Build highlights from positive atoms
-  let mut highlights: Vec<String> = Vec::new();
+  let mut highlights: Vec<super::KeywordHighlight> = Vec::new();
   if let Some(ref e) = expr {
     let mut indices = Vec::new();
     super::collect_positive_atoms(e, false, &mut indices);
@@ -63,7 +63,11 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
     indices.dedup();
     for &i in &indices {
       if let Some(s) = terms[i].display_text() {
-        highlights.push(s);
+        let is_phrase = matches!(terms[i], super::Term::Phrase(_));
+        highlights.push(super::KeywordHighlight {
+          text: s,
+          is_phrase,
+        });
       }
     }
   }
@@ -346,9 +350,10 @@ mod tests {
   #[test]
   fn highlights_positive_atoms_only() {
     let spec = parse_github_like("(\"hello world\" OR foo) /ERR\\d+/").expect("parse");
-    assert!(spec.highlights.contains(&"hello world".to_string()));
-    assert!(spec.highlights.contains(&"foo".to_string()));
-    assert_eq!(spec.highlights.iter().filter(|s| s.starts_with("ERR")).count(), 0);
+    let texts: Vec<&str> = spec.highlights.iter().map(|h| h.text.as_str()).collect();
+    assert!(texts.contains(&"hello world"));
+    assert!(texts.contains(&"foo"));
+    assert_eq!(texts.iter().filter(|s| s.starts_with("ERR")).count(), 0);
   }
 
   #[test]

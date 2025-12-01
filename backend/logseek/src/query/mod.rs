@@ -42,7 +42,13 @@ pub enum Term {
 impl Term {
   pub fn matches(&self, line: &str) -> bool {
     match self {
-      Term::Literal(s) => line.contains(s),
+      // Literal: 默认不区分大小写
+      Term::Literal(s) => {
+        let line_lower = line.to_lowercase();
+        let s_lower = s.to_lowercase();
+        line_lower.contains(&s_lower)
+      }
+      // Phrase: 引号内的短语区分大小写
       Term::Phrase(p) => line.contains(p),
       Term::RegexStd(r) => r.is_match(line),
       Term::RegexFancy(r) => r.is_match(line).unwrap_or(false),
@@ -89,12 +95,18 @@ impl PathFilter {
   }
 }
 
+#[derive(Debug, Clone)]
+pub struct KeywordHighlight {
+  pub text: String,
+  pub is_phrase: bool, // true 表示 Phrase（区分大小写），false 表示 Literal（不区分大小写）
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Query {
   pub terms: Vec<Term>,
   pub expr: Option<Expr>,
   pub path_filter: PathFilter,
-  pub highlights: Vec<String>, // 前端用于高亮显示的字符串
+  pub highlights: Vec<KeywordHighlight>, // 带类型信息的高亮列表
 }
 
 impl Query {
@@ -109,7 +121,14 @@ impl Query {
       let atoms: Vec<Expr> = (0..terms.len()).map(Expr::Atom).collect();
       Some(Expr::And(atoms))
     };
-    let highlights: Vec<String> = keywords.iter().filter(|s| !s.is_empty()).cloned().collect();
+    let highlights: Vec<KeywordHighlight> = keywords
+      .iter()
+      .filter(|s| !s.is_empty())
+      .map(|s| KeywordHighlight {
+        text: s.clone(),
+        is_phrase: false, // from_keywords 都是 Literal
+      })
+      .collect();
     Self {
       terms,
       expr,
