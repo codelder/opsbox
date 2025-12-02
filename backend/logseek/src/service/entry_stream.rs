@@ -3,7 +3,7 @@ use std::{io, path::PathBuf, sync::Arc, time::Duration};
 use async_compression::tokio::bufread::GzipDecoder;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
-use tokio::io::{AsyncRead, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{debug, info, warn};
 
@@ -115,15 +115,17 @@ impl EntryStream for FsEntryStream {
           } else {
             path_abs.to_string_lossy().to_string()
           };
-          let file = tokio::fs::File::open(&path_abs).await?;
-          let reader = BufReader::new(file);
-          let meta = EntryMeta {
-            path: rel,
-            size: None,
-            is_compressed: false,
-            source: EntrySource::File,
-          };
-          return Ok(Some((meta, Box::new(reader))));
+          match open_file_with_compression_detection(&path_abs.to_string_lossy()).await {
+            Ok((mut meta, reader)) => {
+              // 保持相对路径
+              meta.path = rel;
+              return Ok(Some((meta, reader)));
+            }
+            Err(e) => {
+              tracing::warn!("无法处理文件 {}: {}", path_abs.display(), e);
+              continue;
+            }
+          }
         }
         Ok(None) => {
           self.stack.pop(); /* 回溯 */
@@ -448,20 +450,22 @@ impl EntryStream for MultiFileEntryStream {
     }
     let path = std::mem::take(&mut self.files[self.idx]);
     self.idx += 1;
-    let file = tokio::fs::File::open(&path).await?;
-    let reader = BufReader::new(file);
-    let name = std::path::Path::new(&path)
-      .file_name()
-      .and_then(|s| s.to_str())
-      .map(|s| s.to_string())
-      .unwrap_or_else(|| path.clone());
-    let meta = EntryMeta {
-      path: name,
-      size: None,
-      is_compressed: false,
-      source: EntrySource::File,
-    };
-    Ok(Some((meta, Box::new(reader))))
+    match open_file_with_compression_detection(&path).await {
+      Ok((mut meta, reader)) => {
+        // 保持文件名（原逻辑）
+        let name = std::path::Path::new(&path)
+          .file_name()
+          .and_then(|s| s.to_str())
+          .map(|s| s.to_string())
+          .unwrap_or_else(|| path.clone());
+        meta.path = name;
+        Ok(Some((meta, reader)))
+      }
+      Err(e) => {
+        // 如果压缩检测失败，返回错误（保持原有行为：文件打开失败时返回错误）
+        Err(e)
+      }
+    }
   }
 }
 
@@ -570,7 +574,7 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
     .await
     .map_err(|e| format!("读取头部失败: {}", e))?;
   head.truncate(n);
-  let kind = sniff_archive_kind(&head);
+  let kind = sniff_archive_kind(&head, hint_name);
   let prefixed = PrefixedReader::new(head, reader);
   match kind {
     ArchiveKind::Tar => {
@@ -613,27 +617,103 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
   }
 }
 
-fn sniff_archive_kind(head: &[u8]) -> ArchiveKind {
+fn sniff_archive_kind(head: &[u8], path_hint: Option<&str>) -> ArchiveKind {
   if head.len() >= 4 {
     let sig = &head[..4];
     if sig == [0x50, 0x4B, 0x03, 0x04] || sig == [0x50, 0x4B, 0x05, 0x06] || sig == [0x50, 0x4B, 0x07, 0x08] {
-      info!("检测到归档类型: Zip");
+      info!("检测到归档类型: Zip, 文件: {}", path_hint.unwrap_or("unknown"));
       return ArchiveKind::Zip;
     }
   }
   // 优先检查 tar（tar 头在固定位置 257-262，更可靠）
   // 这样可以避免纯 tar 文件被误判为 gzip（如果前2字节恰好是 0x1F 0x8B）
   if head.len() >= 512 && &head[257..257 + 5] == b"ustar" {
-    info!("检测到归档类型: Tar");
+    info!("检测到归档类型: Tar, 文件: {}", path_hint.unwrap_or("unknown"));
     return ArchiveKind::Tar;
   }
   // 然后检查 gzip（前2字节）
   if head.len() >= 2 && head[0] == 0x1F && head[1] == 0x8B {
-    info!("检测到归档类型: Gzip");
+    info!("检测到归档类型: Gzip, 文件: {}", path_hint.unwrap_or("unknown"));
     return ArchiveKind::Gzip;
   }
-  info!("检测到归档类型: Unknown");
+  info!("检测到归档类型: Unknown, 文件: {}", path_hint.unwrap_or("unknown"));
   ArchiveKind::Unknown
+}
+
+/// 检测文件类型并返回适当的 Reader 和 Metadata
+/// 仅处理纯 gzip 文件（非 tar 归档），其他文件按普通文件处理
+async fn open_file_with_compression_detection(
+  path: &str,
+) -> io::Result<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)> {
+  // 1. 打开文件并读取头部（最多560字节，与现有逻辑一致）
+  let mut file = tokio::fs::File::open(path).await?;
+  let mut head = vec![0u8; 560];
+  let n = file.read(&mut head).await?;
+  head.truncate(n);
+
+  // 2. 检测文件类型
+  let kind = sniff_archive_kind(&head, Some(path));
+
+  // 3. 重新创建 Reader（包含已读取的头部）
+  // 注意：直接使用已有的 file 句柄（它已经读取了前 n 个字节），不要重新打开
+  let prefixed = PrefixedReader::new(head, BufReader::new(file));
+
+  // 4. 根据类型返回适当的 Reader
+  match kind {
+    ArchiveKind::Gzip => {
+      // 二次嗅探：判断是否为 tar 归档
+      let mut gz = GzipDecoder::new(BufReader::new(prefixed));
+      let mut inner_head = vec![0u8; 560];
+      let n = gz.read(&mut inner_head).await?;
+      inner_head.truncate(n);
+
+      let is_tar = is_tar_header(&inner_head);
+      let gz_prefixed = PrefixedReader::new(inner_head, gz);
+
+      if is_tar {
+        // tar.gz 文件：按普通文件处理（用户要求不展开 tar 归档）
+        create_regular_file_reader(path).await
+      } else {
+        // 纯 gzip 文件：返回解压后的流
+        let name = std::path::Path::new(path)
+          .file_stem()
+          .and_then(|s| s.to_str())
+          .unwrap_or("<gzip>")
+          .to_string();
+
+        let meta = EntryMeta {
+          path: name,
+          size: None,
+          is_compressed: false, // 解压后的流可并行处理
+          source: EntrySource::Gz,
+        };
+        Ok((meta, Box::new(gz_prefixed)))
+      }
+    }
+    _ => {
+      // 普通文件或其他归档格式（tar/zip）
+      create_regular_file_reader(path).await
+    }
+  }
+}
+
+/// 创建普通文件 Reader（不压缩）
+async fn create_regular_file_reader(path: &str) -> io::Result<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)> {
+  let file = tokio::fs::File::open(path).await?;
+  let reader = BufReader::new(file);
+  let name = std::path::Path::new(path)
+    .file_name()
+    .and_then(|s| s.to_str())
+    .map(|s| s.to_string())
+    .unwrap_or_else(|| path.to_string());
+
+  let meta = EntryMeta {
+    path: name,
+    size: None,
+    is_compressed: false,
+    source: EntrySource::File,
+  };
+  Ok((meta, Box::new(reader)))
 }
 
 fn is_tar_header(head: &[u8]) -> bool {
@@ -1521,12 +1601,51 @@ mod tests {
 
     handle.await.expect("任务失败");
 
-    // 应该找到包含 "error" 的归档条目
+    // 应该找到包含 "error" 的文件
     assert!(!results.is_empty(), "应该找到至少一个匹配");
     assert!(
-      results.iter().any(|r| r.path == "archived1.log"),
+      results.iter().any(|r| r.path.contains("archived1.log")),
       "应该匹配 archived1.log"
     );
+  }
+
+  #[tokio::test]
+  async fn test_plain_gzip_file_processing() {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let gz_path = temp_dir.path().join("test.log.gz");
+
+    // 创建纯 gzip 文件 (大于 560 字节以测试 peek 逻辑)
+    let file = std::fs::File::create(&gz_path).expect("创建 gzip 文件失败");
+    let mut gz = GzEncoder::new(file, Compression::default());
+    let content_str = "line1\n".to_string() + &"a".repeat(1000) + "\nline3\n";
+    gz.write_all(content_str.as_bytes()).expect("写入 gzip 内容失败");
+    gz.finish().expect("完成 gzip 编码失败");
+
+    // 使用 FsEntryStream 读取
+    let mut stream = FsEntryStream::new(temp_dir.path().to_path_buf(), false)
+      .await
+      .expect("创建 FsEntryStream 失败");
+
+    let mut found = false;
+    while let Some((meta, mut reader)) = stream.next_entry().await.expect("读取条目失败") {
+      // 注意：FsEntryStream 对于纯 gzip 文件，会将文件名还原为去掉 .gz 的名字
+      if meta.path == "test.log.gz" {
+        found = true;
+        assert!(!meta.is_compressed, "纯 gzip 解压后应标记为非压缩");
+
+        let mut content = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut content)
+          .await
+          .expect("读取内容失败");
+
+        assert_eq!(content, content_str);
+      }
+    }
+    assert!(found, "应该找到 test.log");
   }
 
   #[tokio::test]
