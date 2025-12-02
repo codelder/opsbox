@@ -8,7 +8,7 @@ use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -400,14 +400,17 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
   if sample.is_empty() {
     return true;
   }
-  // 包含 null 字节的文件通常不是文本文件
-  if sample.contains(&0) {
-    return false;
-  }
 
   // 先检查 UTF-8，因为 UTF-8 可能包含多字节字符（如 emoji），可打印字符比例可能较低
+  // 有效的 UTF-8 包含 null 字符 (0x00) 也是合法的文本
   if std::str::from_utf8(sample).is_ok() {
     return true;
+  }
+
+  // 如果不是有效的 UTF-8，再检查 null 字节
+  // 包含 null 字节的文件通常不是文本文件（除非是 UTF-16 等其他编码）
+  if sample.contains(&0) {
+    return false;
   }
 
   // 计算可打印字符比例
@@ -468,9 +471,53 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
 
   // 检查是否为文本文件
   if !is_probably_text_bytes(&sample) {
-    debug!("文件不是文本格式，跳过搜索");
+    info!("文件不是文本格式，跳过搜索");
+
+    // 添加详细诊断信息
+    info!("文本检测诊断信息 - 样本大小: {} 字节", sample.len());
+
+    if sample.is_empty() {
+      info!("样本为空，但 is_probably_text_bytes 应返回 true（代码逻辑异常）");
+    }
+
+    // 检查是否包含 null 字节
+    let has_null = sample.contains(&0);
+    info!("是否包含 null 字节: {}", has_null);
+
+    // 检查是否为有效的 UTF-8
+    let utf8_result = std::str::from_utf8(&sample);
+    match utf8_result {
+      Ok(_) => info!("UTF-8 验证: 有效"),
+      Err(e) => info!("UTF-8 验证失败，有效部分: {} 字节", e.valid_up_to()),
+    }
+
+    // 计算可打印字符比例
+    let printable = sample
+      .iter()
+      .filter(|b| matches!(**b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
+      .count();
+    let ratio = if sample.is_empty() {
+      0.0
+    } else {
+      printable as f32 / sample.len() as f32
+    };
+    info!("可打印字符比例: {:.2}% ({}/{})", ratio * 100.0, printable, sample.len());
+
+    // 使用 chardetng 检测编码并获取置信度
+    let mut detector = EncodingDetector::new();
+    detector.feed(&sample, true);
+    let (encoding, confidence) = detector.guess_assess(None, true);
+    info!("chardetng 检测编码: {}，置信度: {}", encoding.name(), confidence);
+
+    // 检查常见非文本模式
+    if sample.len() > 4 {
+      info!("样本前 4 字节: {:02X?}", &sample[..4.min(sample.len())]);
+    }
+
     return Ok(None);
   }
+
+  info!("文本检测通过，样本大小: {} 字节", sample.len());
 
   // 检测编码：如果指定了 encoding 限定词，使用指定的编码；否则自动检测
   let (encoding, encoding_name) = if let Some(enc_name) = encoding_qualifier {
