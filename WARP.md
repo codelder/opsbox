@@ -15,7 +15,7 @@ Project overview
 Toolchains and prerequisites
 - Rust: pinned via rust-toolchain.toml to 1.90.0 with clippy and rustfmt components.
 - Node: prefer Node 22. Use pnpm via corepack. If you manage Node with nvm: nvm use 22.
-- pnpm: enable through corepack (corepack enable; corepack prepare pnpm@10.17.1 --activate) or install pnpm globally.
+- pnpm: enable through corepack (corepack enable; corepack prepare pnpm@10.23.0 --activate) or install pnpm globally.
 
 Common commands
 - Set repo root (useful when not in project root)
@@ -130,28 +130,28 @@ Conventions and notes
 
 Performance benchmarking (NDJSON)
 - Purpose: measure end-to-end throughput and observe the adaptive CPU guard while streaming NDJSON from S3/MinIO.
-- Script: scripts/bench-ndjson.sh
+- Script: scripts/test/bench-ndjson.sh
   - What it does:
-    - Restarts opsbox-server with given CPU concurrency limit
-    - Runs a 120s test at CPU=16 and exports adaptive logs to a CSV in $HOME
-    - Runs 30s tests at CPU=8,12,16 and prints a Markdown summary (lines, duration, avg tput)
+    - Restarts opsbox-server with a given IO/S3 concurrency limit
+    - Runs a long test at conc=16 (default LONG_SECS=120) and optionally exports adaptive logs to a CSV in $HOME
+    - Runs shorter tests at conc=8,12,16 (default SHORT_SECS=30) and prints a Markdown summary (lines, duration, avg tput)
   - Usage (macOS/Linux):
-    - bash $ROOT/scripts/bench-ndjson.sh
-    - JEMALLOC_AGGRESSIVE=1 bash $ROOT/scripts/bench-ndjson.sh  # enable jemalloc aggressive reclaim preset
-  - Tunables via env vars:
-    - QUERY_JSON (default: {"q":"error fdt:20250816 tdt:20250819"})
+    - bash $ROOT/scripts/test/bench-ndjson.sh
+    - JEMALLOC_AGGRESSIVE=1 bash $ROOT/scripts/test/bench-ndjson.sh  # enable jemalloc aggressive reclaim preset
+  - Tunables via env vars (see scripts/README.md and the script header for details):
+    - QUERY_JSON (default: {"q":"error fdt:20250816 tdt:20250822"})
     - ADDR (default: 127.0.0.1:4000)
-    - WORKER_THREADS (default: 16)
     - S3_MAX_CONC (default: 12)
-    - STREAM_CH_CAP (default: 256)
-    - MINIO_TIMEOUT (default: 60)
-    - MINIO_RETRIES (default: 5)
-    - CPU_SERIES (default: 8,12,16)
+    - S3_TIMEOUT (default: 60)
+    - S3_RETRIES (default: 5)
+    - CONC_SERIES (default: 8,12,16)
+    - LONG_SECS (default: 120)
+    - SHORT_SECS (default: 30)
     - JEMALLOC_AGGRESSIVE: if set to 1/true/yes and MALLOC_CONF is unset, applies MALLOC_CONF=background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0
     - MALLOC_CONF: if set, takes precedence for jemalloc tuning (e.g., background_thread:true,dirty_decay_ms:100,muzzy_decay_ms:100)
     - BIN_PATH, LOG_PATH to override binary/log locations
 - Output:
-  - CSV: ~/adaptive_120s_cpu16.csv (columns: time_iso,target,effective,err_rate_percent,tp_per_s)
+  - CSV: ~/adaptive_${LONG_SECS}s_conc16.csv by default (e.g., ~/adaptive_120s_conc16.csv; columns: time_iso,target,effective,err_rate_percent,tp_per_s)
   - Markdown table printed to terminal summarizing lines/duration/avg throughput
 - For local debugging of API without embedding UI, run frontend dev server with proxy and run opsbox-server in dev.
-- Updated: The streaming API path is /api/v1/logseek/search.ndjson. The opsbox-server CLI flags are --s3-max-concurrency, --s3-timeout-sec, and --s3-max-retries. The bench script has been updated accordingly.
+- The streaming API path is /api/v1/logseek/search.ndjson. The opsbox-server CLI exposes IO tuning flags --io-max-concurrency, --io-timeout-sec, and --io-max-retries; use these (or corresponding env vars LOGSEEK_IO_MAX_CONCURRENCY/LOGSEEK_IO_TIMEOUT_SEC/LOGSEEK_IO_MAX_RETRIES) when running opsbox-server directly.
