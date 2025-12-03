@@ -28,7 +28,7 @@ impl From<io::Error> for SearchError {
   }
 }
 
-use crate::query::Query;
+use crate::query::{PathFilter, Query};
 
 // ============================================================================
 // 配置和辅助类型（已简化：删除未使用的旧配置/统计结构）
@@ -86,7 +86,7 @@ impl SearchProcessor {
   ///
   /// - extra 为 None 时，行为与 should_process_path 完全一致
   /// - extra 为 Some 时，先检查 extra.is_allowed(path)，若不通过则直接拒绝
-  pub fn should_process_path_with(&self, path: &str, extra: Option<&crate::query::PathFilter>) -> bool {
+  pub fn should_process_path_with(&self, path: &str, extra: Option<&PathFilter>) -> bool {
     if let Some(f) = extra
       && !f.is_allowed(path)
     {
@@ -198,6 +198,15 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   Some(detected_encoding)
 }
 
+/// 自动检测编码并返回 `(Encoding, 编码名称字符串)`，同时输出调试日志
+fn auto_detect_encoding(sample: &[u8]) -> Option<(&'static Encoding, String)> {
+  detect_encoding(sample).map(|enc| {
+    let name = enc.name().to_string();
+    debug!("自动检测到编码: {}", name);
+    (enc, name)
+  })
+}
+
 /// 读取 UTF-8 编码的文件行
 async fn read_lines_utf8<R: AsyncRead + Unpin>(
   buf_reader: &mut BufReader<R>,
@@ -285,13 +294,44 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
   Ok(lines)
 }
 
+/// 将完整缓冲区按指定编码解码为按行分割的字符串向量
+fn decode_buffer_to_lines(encoding: &'static Encoding, buffer: &[u8], warn_prefix: &str) -> Vec<String> {
+  let mut lines: Vec<String> = Vec::new();
+
+  // 解码整个缓冲区
+  let (decoded, _, had_errors) = encoding.decode(buffer);
+
+  if had_errors {
+    warn!("{warn_prefix}解码过程中遇到错误，但继续处理");
+  }
+
+  // 按行分割
+  for line in decoded.lines() {
+    lines.push(line.to_string());
+  }
+
+  // 处理最后一行（可能没有换行符）
+  let decoded_str = decoded.as_ref();
+  if !decoded_str.ends_with('\n')
+    && !decoded_str.ends_with('\r')
+    && let Some(last_line) = decoded_str.lines().last()
+    && !last_line.is_empty()
+  {
+    // 如果最后一行已经在 lines 中，不需要重复添加
+    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
+      lines.push(last_line.to_string());
+    }
+  }
+
+  lines
+}
+
 /// 读取 UTF-16 编码的文件行（LE 或 BE）
 async fn read_lines_utf16<R: AsyncRead + Unpin>(
   buf_reader: &mut BufReader<R>,
   encoding: &'static Encoding,
   sample: Vec<u8>,
 ) -> Result<Vec<String>, SearchError> {
-  let mut lines: Vec<String> = Vec::new();
   let mut buffer = Vec::new();
 
   // 处理样本（跳过 BOM，如果存在）
@@ -318,32 +358,7 @@ async fn read_lines_utf16<R: AsyncRead + Unpin>(
     buffer.pop(); // 移除最后一个字节
   }
 
-  // 解码整个缓冲区
-  let (decoded, _, had_errors) = encoding.decode(&buffer);
-
-  if had_errors {
-    warn!("UTF-16 解码过程中遇到错误，但继续处理");
-  }
-
-  // 按行分割
-  for line in decoded.lines() {
-    lines.push(line.to_string());
-  }
-
-  // 处理最后一行（可能没有换行符）
-  let decoded_str = decoded.as_ref();
-  if !decoded_str.ends_with('\n')
-    && !decoded_str.ends_with('\r')
-    && let Some(last_line) = decoded_str.lines().last()
-    && !last_line.is_empty()
-  {
-    // 如果最后一行已经在 lines 中，不需要重复添加
-    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
-      lines.push(last_line.to_string());
-    }
-  }
-
-  Ok(lines)
+  Ok(decode_buffer_to_lines(encoding, &buffer, "UTF-16 "))
 }
 
 /// 读取非 UTF-8 编码的文件行（如 GBK）
@@ -352,7 +367,6 @@ async fn read_lines_with_encoding<R: AsyncRead + Unpin>(
   encoding: &'static Encoding,
   sample: Vec<u8>,
 ) -> Result<Vec<String>, SearchError> {
-  let mut lines: Vec<String> = Vec::new();
   let mut buffer = Vec::new();
 
   // 处理样本
@@ -368,32 +382,7 @@ async fn read_lines_with_encoding<R: AsyncRead + Unpin>(
     buffer.extend_from_slice(&temp_buf[..n]);
   }
 
-  // 解码整个缓冲区
-  let (decoded, _, had_errors) = encoding.decode(&buffer);
-
-  if had_errors {
-    warn!("解码过程中遇到错误，但继续处理");
-  }
-
-  // 按行分割
-  for line in decoded.lines() {
-    lines.push(line.to_string());
-  }
-
-  // 处理最后一行（可能没有换行符）
-  let decoded_str = decoded.as_ref();
-  if !decoded_str.ends_with('\n')
-    && !decoded_str.ends_with('\r')
-    && let Some(last_line) = decoded_str.lines().last()
-    && !last_line.is_empty()
-  {
-    // 如果最后一行已经在 lines 中，不需要重复添加
-    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
-      lines.push(last_line.to_string());
-    }
-  }
-
-  Ok(lines)
+  Ok(decode_buffer_to_lines(encoding, &buffer, ""))
 }
 
 fn is_probably_text_bytes(sample: &[u8]) -> bool {
@@ -442,7 +431,7 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
 
 pub async fn grep_context<R: AsyncRead + Unpin>(
   reader: &mut R,
-  spec: &crate::query::Query,
+  spec: &Query,
   context_lines: usize,
   encoding_qualifier: Option<&str>,
 ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>, Option<String>)>, SearchError> {
@@ -545,12 +534,8 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
       None => {
         warn!("无法识别的编码名称: {}，回退到自动检测", enc_name);
         // 回退到自动检测
-        match detect_encoding(&sample) {
-          Some(enc) => {
-            let name = enc.name().to_string();
-            debug!("自动检测到编码: {}", name);
-            (enc, name)
-          }
+        match auto_detect_encoding(&sample) {
+          Some((enc, name)) => (enc, name),
           None => {
             debug!("无法确定文件编码，跳过搜索");
             return Ok(None);
@@ -560,12 +545,8 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     }
   } else {
     // 未指定编码，自动检测
-    match detect_encoding(&sample) {
-      Some(enc) => {
-        let name = enc.name().to_string();
-        debug!("自动检测到编码: {}", name);
-        (enc, name)
-      }
+    match auto_detect_encoding(&sample) {
+      Some((enc, name)) => (enc, name),
       None => {
         debug!("无法确定文件编码，跳过搜索");
         return Ok(None);
@@ -746,8 +727,11 @@ pub enum SearchEvent {
 mod tests {
   use super::*;
   use crate::query::Query;
-  use std::pin::Pin;
-  use std::task::{Context, Poll};
+  use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+  };
   use tokio::io::{AsyncRead, ReadBuf};
 
   // 用于测试的内存 AsyncRead 实现
@@ -764,7 +748,7 @@ mod tests {
     }
   }
   impl AsyncRead for MemReader {
-    fn poll_read(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_read(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
       let remaining = self.buf.len().saturating_sub(self.pos);
       if remaining == 0 {
         return Poll::Ready(Ok(()));
@@ -970,7 +954,8 @@ foo lower
   #[test]
   fn test_is_text_contains_null() {
     let bytes = b"hello\x00world";
-    assert!(!is_probably_text_bytes(bytes));
+    // 合法 UTF-8 中允许包含 NUL 字节，此时仍视为文本
+    assert!(is_probably_text_bytes(bytes));
   }
 
   #[test]
@@ -1413,16 +1398,15 @@ foo lower
 
   // 测试辅助：运行基于 tar.gz 字节的搜索并收集所有结果
   async fn run_tar_search_bytes(tar_gz: Vec<u8>, spec: &Query, ctx: usize) -> Vec<SearchResult> {
+    use crate::service::entry_stream::{EntryStreamProcessor, TarGzEntryStream};
     use futures::io::Cursor;
     use tokio::sync::mpsc;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let cursor = Cursor::new(tar_gz).compat();
-    let mut stream = crate::service::entry_stream::TarGzEntryStream::new(cursor)
-      .await
-      .unwrap();
+    let mut stream = TarGzEntryStream::new(cursor).await.unwrap();
     let proc = Arc::new(SearchProcessor::new(Arc::new(spec.clone()), ctx));
-    let mut esp = crate::service::entry_stream::EntryStreamProcessor::new(proc);
+    let mut esp = EntryStreamProcessor::new(proc);
     let (tx, mut rx) = mpsc::channel::<SearchEvent>(64);
 
     let handle = tokio::spawn(async move {
@@ -1441,8 +1425,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_basic() {
-    use crate::query::Query;
-
     // 创建包含两个文件的 tar.gz
     let tar_gz = create_test_tar_gz(vec![
       ("file1.log", "line1\nerror found here\nline3\n"),
@@ -1465,8 +1447,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_no_match() {
-    use crate::query::Query;
-
     // 创建不包含目标字符串的文件
     let tar_gz = create_test_tar_gz(vec![
       ("file1.log", "line1\nline2\nline3\n"),
@@ -1483,8 +1463,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_with_context() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![("file1.log", "line1\nline2\nerror here\nline4\nline5\n")]);
 
     let spec = Query::parse_github_like("error").unwrap();
@@ -1501,8 +1479,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_multiple_matches_in_one_file() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![("file1.log", "error1\nline2\nline3\nerror2\nline5\n")]);
 
     let spec = Query::parse_github_like("error").unwrap();
@@ -1517,8 +1493,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_regex_pattern() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![("file1.log", "error123\nline2\nwarn456\n")]);
 
     // 使用正则匹配 error 或 warn
@@ -1534,8 +1508,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_empty_tar() {
-    use crate::query::Query;
-
     // 创建空的 tar.gz
     let tar_gz = create_test_tar_gz(vec![]);
 
@@ -1549,9 +1521,7 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_binary_file_skipped() {
-    use crate::query::Query;
-
-    // 创建包含二进制内容的文件
+    // 创建包含 NUL 字节的文件（在 UTF-8 视角下仍可能是文本）
     let binary_content = "\x00\x01\x02\x03error\x04\x05\x06";
     let tar_gz = create_test_tar_gz(vec![
       ("binary.dat", binary_content),
@@ -1562,15 +1532,15 @@ foo lower
 
     let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
-    // 验证：二进制文件被跳过，只有文本文件
-    assert_eq!(results.len(), 1);
-    assert!(results[0].path.contains("text.log"));
+    // 现在策略：只要是合法 UTF-8（即便包含 NUL），也视为文本并参与搜索
+    // 因此应当返回两个结果：binary.dat 与 text.log
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().any(|r| r.path.contains("binary.dat")));
+    assert!(results.iter().any(|r| r.path.contains("text.log")));
   }
 
   #[tokio::test]
   async fn test_search_trait_many_files() {
-    use crate::query::Query;
-
     // 创建多个文件
     let mut files = Vec::new();
     for i in 0..10 {
@@ -1594,8 +1564,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_complex_query() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![
       ("file1.log", "error and warning\nline2\n"),
       ("file2.log", "only error here\nline2\n"),
@@ -1614,8 +1582,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_path_with_directory() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![
       ("logs/app/file1.log", "error in app\n"),
       ("logs/system/file2.log", "error in system\n"),
@@ -1840,7 +1806,7 @@ foo lower
 
   #[test]
   fn test_search_error_from_io_error() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+    let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
     let search_err: SearchError = io_err.into();
 
     match search_err {
@@ -1873,13 +1839,9 @@ foo lower
 
     // 创建一个会失败的 reader
     struct FailingReader;
-    impl tokio::io::AsyncRead for FailingReader {
-      fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        _buf: &mut tokio::io::ReadBuf<'_>,
-      ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Err(std::io::Error::other("read error")))
+    impl AsyncRead for FailingReader {
+      fn poll_read(self: Pin<&mut Self>, _cx: &mut Context<'_>, _buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Err(io::Error::other("read error")))
       }
     }
 

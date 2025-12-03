@@ -4,6 +4,9 @@
 
 import { describe, it, expect } from 'vitest';
 import { escapeHtml, escapeRegExp, highlight, snippet } from './highlight';
+import type { KeywordInfo } from '../types';
+
+const kw = (list: string[]): KeywordInfo[] => list.map((text) => ({ type: 'literal', text }));
 
 describe('highlight utils', () => {
   describe('escapeHtml', () => {
@@ -63,61 +66,61 @@ describe('highlight utils', () => {
 
   describe('highlight', () => {
     it('应该用 <mark> 标签高亮关键词', () => {
-      const result = highlight('hello world', ['hello']);
+      const result = highlight('hello world', kw(['hello']));
       expect(result).toContain('<mark class="highlight">hello</mark>');
     });
 
     it('应该高亮多个关键词', () => {
-      const result = highlight('hello world hello', ['hello']);
+      const result = highlight('hello world hello', kw(['hello']));
       expect(result).toBe('<mark class="highlight">hello</mark> world <mark class="highlight">hello</mark>');
     });
 
     it('应该转义 HTML 特殊字符后再高亮', () => {
-      const result = highlight('hello<world>', ['hello']);
+      const result = highlight('hello<world>', kw(['hello']));
       expect(result).toBe('<mark class="highlight">hello</mark>&lt;world&gt;');
     });
 
     it('应该处理多个不同关键词', () => {
-      const result = highlight('hello world', ['hello', 'world']);
+      const result = highlight('hello world', kw(['hello', 'world']));
       expect(result).toContain('<mark class="highlight">hello</mark>');
       expect(result).toContain('<mark class="highlight">world</mark>');
     });
 
     it('应该忽略空关键词', () => {
-      const result = highlight('hello world', ['', 'hello']);
+      const result = highlight('hello world', kw(['', 'hello']));
       expect(result).toBe('<mark class="highlight">hello</mark> world');
     });
 
     it('应该处理区分大小写', () => {
-      const result = highlight('Hello HELLO hello', ['hello']);
+      const result = highlight('Hello HELLO hello', kw(['hello']));
       // 默认区分大小写（全局匹配）
       expect(result).toContain('<mark class="highlight">hello</mark>');
     });
 
     it('应该处理空关键词列表', () => {
-      const result = highlight('hello world', []);
+      const result = highlight('hello world', kw([]));
       expect(result).toBe('hello world');
     });
 
     it('应该处理普通文本', () => {
-      const result = highlight('hello world', ['xyz']);
+      const result = highlight('hello world', kw(['xyz']));
       expect(result).toBe('hello world');
     });
 
     it('应该处理空字符串', () => {
-      const result = highlight('', ['hello']);
+      const result = highlight('', kw(['hello']));
       expect(result).toBe('');
     });
 
     it('应该处理特殊字符在关键词中', () => {
-      const result = highlight('price: $100', ['$100']);
+      const result = highlight('price: $100', kw(['$100']));
       expect(result).toContain('<mark class="highlight">$100</mark>');
     });
   });
 
   describe('snippet', () => {
     it('应该返回完整行当其小于 max 长度', () => {
-      const result = snippet('short line', ['line']);
+      const result = snippet('short line', kw(['line']));
       expect(result.html).toContain('<mark class="highlight">line</mark>');
       expect(result.leftTrunc).toBe(false);
       expect(result.rightTrunc).toBe(false);
@@ -125,52 +128,52 @@ describe('highlight utils', () => {
 
     it('应该截断长行并保留关键词', () => {
       const longLine = 'a'.repeat(1000);
-      const result = snippet(longLine, ['test'], { max: 100 });
+      const result = snippet(longLine, kw(['test']), { max: 100 });
       expect(result.html.length).toBeLessThanOrEqual(200); // 转义后可能更长
     });
 
     it('应该在关键词周围截取内容', () => {
       const line = 'prefix ' + 'x'.repeat(200) + ' keyword ' + 'y'.repeat(200) + ' suffix';
-      const result = snippet(line, ['keyword'], { max: 100, context: 50 });
+      const result = snippet(line, kw(['keyword']), { max: 100, context: 50 });
       expect(result.html).toContain('keyword');
     });
 
     it('应该在无关键词时从开头截取', () => {
       const longLine = 'a'.repeat(1000);
-      const result = snippet(longLine, [], { max: 50 });
+      const result = snippet(longLine, kw([]), { max: 50 });
       expect(result.leftTrunc).toBe(false);
       expect(result.rightTrunc).toBe(true);
     });
 
     it('应该标记左截断', () => {
       const line = 'prefix ' + 'x'.repeat(300) + ' keyword';
-      const result = snippet(line, ['keyword'], { max: 50, context: 20 });
+      const result = snippet(line, kw(['keyword']), { max: 50, context: 20 });
       expect(result.leftTrunc).toBe(true);
     });
 
     it('应该标记右截断', () => {
       const line = 'keyword ' + 'x'.repeat(300);
-      const result = snippet(line, ['keyword'], { max: 50, context: 20 });
+      const result = snippet(line, kw(['keyword']), { max: 50, context: 20 });
       expect(result.rightTrunc).toBe(true);
     });
 
     it('应该使用默认 max 和 context 选项', () => {
       const line = 'a'.repeat(1000);
-      const result = snippet(line, []);
+      const result = snippet(line, kw([]));
       expect(result.html).toBeDefined();
       expect(result.rightTrunc).toBe(true);
     });
 
     it('应该对齐截取边界避免从单词中间开始', () => {
       const line = 'prefix with space keyword more text';
-      const result = snippet(line, ['keyword'], { max: 20, context: 5 });
+      const result = snippet(line, kw(['keyword']), { max: 20, context: 5 });
       // 应该尝试在空白处对齐
       expect(result.html).toBeDefined();
     });
 
     it('应该高亮截取后的关键词', () => {
       const line = 'test keyword here test keyword there';
-      const result = snippet(line, ['keyword'], { max: 100 });
+      const result = snippet(line, kw(['keyword']), { max: 100 });
       expect(result.html).toContain('<mark class="highlight">keyword</mark>');
     });
   });

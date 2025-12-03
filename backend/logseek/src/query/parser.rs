@@ -64,10 +64,7 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
     for &i in &indices {
       if let Some(s) = terms[i].display_text() {
         let is_phrase = matches!(terms[i], super::Term::Phrase(_));
-        highlights.push(super::KeywordHighlight {
-          text: s,
-          is_phrase,
-        });
+        highlights.push(super::KeywordHighlight { text: s, is_phrase });
       }
     }
   }
