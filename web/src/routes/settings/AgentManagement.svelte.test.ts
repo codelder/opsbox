@@ -423,8 +423,9 @@ test('过滤功能 - 只看在线', async () => {
 
   render(AgentManagement, {});
 
-  const onlineOnlyCheckbox = await page.getByRole('checkbox', { name: /只看在线/ });
-  await userEvent.click(onlineOnlyCheckbox);
+  // Switch 组件在 DOM 中通常是 role="switch"，这里按可访问性语义查找
+  const onlineOnlySwitch = await page.getByRole('switch', { name: /只看在线/ });
+  await userEvent.click(onlineOnlySwitch);
 
   expect(mockAgentsStore.onlineOnly).toBe(true);
   expect(mockAgentsStore.load).toHaveBeenCalled();
