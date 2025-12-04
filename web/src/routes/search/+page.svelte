@@ -7,6 +7,7 @@
   import { useSearch } from '$lib/modules/logseek';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import Settings from '$lib/components/Settings.svelte';
   import SearchResultCard from './SearchResultCard.svelte';
   import SearchEmptyState from './SearchEmptyState.svelte';
 
@@ -420,10 +421,10 @@
 
 <svelte:window onmousemove={handleMouseMove} onmouseup={stopResizing} />
 
-<div class="min-h-screen bg-background text-foreground">
+<div class="bg-background text-foreground min-h-screen">
   <!-- 顶部导航栏 -->
   <header
-    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
+    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b backdrop-blur"
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- Logo -->
@@ -434,12 +435,12 @@
       <!-- 搜索框 -->
       <form class="ml-4 flex-1" onsubmit={handleSubmit}>
         <div class="group relative flex items-center">
-          <div class="pointer-events-none absolute left-3 z-10 text-muted-foreground">
+          <div class="text-muted-foreground pointer-events-none absolute left-3 z-10">
             <Search class="h-4 w-4" />
           </div>
           <Input
             id="search"
-            class="h-9 rounded-md border-input bg-muted/50 pr-9 pl-9 text-sm text-foreground shadow-none transition-all hover:bg-muted focus-visible:bg-background focus-visible:ring-1 focus-visible:ring-primary"
+            class="border-input bg-muted/50 text-foreground hover:bg-muted focus-visible:bg-background focus-visible:ring-primary h-9 rounded-md pl-9 pr-9 text-sm shadow-none transition-all focus-visible:ring-1"
             disabled={searchStore.loading}
             bind:value={q}
             placeholder="搜索..."
@@ -447,13 +448,13 @@
           />
           {#if searchStore.loading}
             <div class="absolute right-3 z-10">
-              <Loader2 class="h-3.5 w-3.5 animate-spin text-primary" />
+              <Loader2 class="text-primary h-3.5 w-3.5 animate-spin" />
             </div>
           {:else if q}
             <Button
               variant="ghost"
               size="icon"
-              class="absolute right-1 z-10 h-7 w-7 text-muted-foreground hover:text-foreground"
+              class="text-muted-foreground hover:text-foreground absolute right-1 z-10 h-7 w-7"
               onclick={() => {
                 q = '';
                 searchStore.cleanup();
@@ -469,27 +470,7 @@
 
       <!-- 右侧操作区 -->
       <div class="ml-auto flex items-center gap-2">
-        <a
-          href="/settings"
-          aria-label="打开设置"
-          class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
-        >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            class="h-5 w-5"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543-.89 3.31.876 2.42 2.42a1.724 1.724 0 0 0 1.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 0 0-1.066 2.573c.89 1.543-.876 3.31-2.42 2.42a1.724 1.724 0 0 0-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 0 0-2.573-1.066c-1.543.89-3.31-.876-2.42-2.42a1.724 1.724 0 0 0-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 0 0 1.066-2.573c-.89-1.543.876-3.31 2.42-2.42.996.575 2.245.021 2.572-1.065z"
-            />
-            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z" />
-          </svg>
-        </a>
+        <Settings />
         <ThemeToggle />
       </div>
     </div>
@@ -501,21 +482,21 @@
       style="--sidebar-width: {sidebarWidth}px"
     >
       <!-- 左侧边栏：统计与筛选 -->
-      <aside class="group/sidebar relative hidden h-full border-r border-border pr-6 md:block">
+      <aside class="group/sidebar border-border relative hidden h-full border-r pr-6 md:block">
         <!-- 拖动把手 -->
         <button
           type="button"
-          class="absolute top-0 -right-1 z-10 h-full w-2 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20"
+          class="hover:bg-primary/20 absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize border-0 bg-transparent p-0 transition-colors"
           onmousedown={startResizing}
           aria-label="调整侧边栏宽度"
         ></button>
         <div class="sticky top-24 -mr-2 max-h-[calc(100vh-8rem)] space-y-6 overflow-y-auto pr-2">
           <div>
-            <h3 class="mb-3 text-sm font-semibold text-foreground">筛选</h3>
+            <h3 class="text-foreground mb-3 text-sm font-semibold">筛选</h3>
             <Separator class="mb-4" />
 
             {#snippet renderStackedLevel(nodes: TreeNode[], depth: number)}
-              <!-- 
+              <!--
                 如果当前层级只有一个节点，且不是根层级（depth > 0），
                 则跳过该层级，直接渲染子节点。
                 这满足了"如果只剩一个筛选项则跳过"的需求。
@@ -535,14 +516,14 @@
                       selectedPath.length === node.fullPath.length &&
                       selectedPath.every((p, i) => p === node.fullPath[i])}
 
-                    <!-- 
+                    <!--
                       Level 0 (Endpoint Type) 始终显示。
                       其他层级只有 count > 0 才显示。
                     -->
                     {#if depth === 0 || node.count > 0}
                       <button
                         class="group flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors {isPathActive
-                          ? 'bg-primary/10 font-medium text-primary'
+                          ? 'bg-primary/10 text-primary font-medium'
                           : 'text-foreground hover:bg-muted/50'}"
                         onclick={() => toggleSelection(node)}
                         title={node.url}
@@ -591,7 +572,7 @@
             {#if filteredCount > 0}
               {filteredCount} 个结果
               {#if selectedPath.length > 0}
-                <span class="ml-2 text-sm font-normal text-muted-foreground"> (已筛选) </span>
+                <span class="text-muted-foreground ml-2 text-sm font-normal"> (已筛选) </span>
               {/if}
             {:else if !searchStore.loading && q}
               0 个结果
@@ -617,8 +598,8 @@
               />
             {:else}
               <!-- 兼容其他对象：兜底显示 -->
-              <div class="rounded border bg-card p-3 text-card-foreground">
-                <pre class="text-sm leading-relaxed break-all whitespace-pre-wrap">{JSON.stringify(item, null, 2)}</pre>
+              <div class="bg-card text-card-foreground rounded border p-3">
+                <pre class="whitespace-pre-wrap break-all text-sm leading-relaxed">{JSON.stringify(item, null, 2)}</pre>
               </div>
             {/if}
           {/each}
@@ -657,7 +638,7 @@
                 {/if}
               </Button>
             {:else if filteredResults.length > 0}
-              <p class="text-sm text-muted-foreground">已加载全部结果</p>
+              <p class="text-muted-foreground text-sm">已加载全部结果</p>
             {/if}
           </div>
         {/if}
