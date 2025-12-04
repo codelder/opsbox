@@ -15,8 +15,9 @@
   import FileHeader from './FileHeader.svelte';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import Settings from '$lib/components/Settings.svelte';
   import { Button } from '$lib/components/ui/button';
-  import { FileText, ChevronLeft, Settings, Loader2, ChevronRight } from 'lucide-svelte';
+  import { FileText, ChevronLeft, Loader2, ChevronRight } from 'lucide-svelte';
 
   // URL 参数
   let sid = $state('');
@@ -300,10 +301,10 @@
   });
 </script>
 
-<div class="flex h-screen flex-col bg-background text-foreground">
+<div class="bg-background text-foreground flex h-screen flex-col">
   <!-- 顶部导航栏 -->
   <header
-    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
+    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b backdrop-blur"
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- 左侧：Logo -->
@@ -316,13 +317,7 @@
 
       <!-- 右侧：操作区 -->
       <div class="flex items-center gap-2">
-        <a
-          href="/settings"
-          aria-label="打开设置"
-          class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
-        >
-          <Settings class="h-5 w-5" />
-        </a>
+        <Settings />
         <ThemeToggle />
       </div>
     </div>
@@ -352,7 +347,7 @@
 
           <!-- 虚拟滚动内容区域 -->
           <div
-            class="relative min-h-0 flex-1 overflow-auto bg-background dark:bg-[#0d1117]"
+            class="bg-background relative min-h-0 flex-1 overflow-auto dark:bg-[#0d1117]"
             bind:this={parentEl}
             onscroll={handleScroll}
           >
@@ -361,15 +356,15 @@
                 {#if lines.length > 0}
                   {#each lines as ln (ln.no)}
                     {@const isMatch = lineHasMatch(ln.text)}
-                    <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
+                    <div class="group/line hover:bg-muted/10 flex font-mono text-xs leading-5">
                       <div
-                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
-                          ? 'font-semibold text-foreground'
+                        class="w-[50px] shrink-0 select-none px-3 py-0.5 text-right font-medium {isMatch
+                          ? 'text-foreground font-semibold'
                           : 'text-muted-foreground/60'}"
                       >
                         {ln.no}
                       </div>
-                      <div class="code-content flex-1 px-4 break-all whitespace-pre-wrap text-foreground">
+                      <div class="code-content text-foreground flex-1 whitespace-pre-wrap break-all px-4">
                         {@html highlightKeywords(ln.text)}
                       </div>
                     </div>
@@ -377,12 +372,12 @@
                 {:else}
                   <div class="flex h-full items-center justify-center p-10">
                     {#if loading}
-                      <div class="flex flex-col items-center gap-2 text-muted-foreground">
+                      <div class="text-muted-foreground flex flex-col items-center gap-2">
                         <Loader2 class="h-8 w-8 animate-spin" />
                         <span class="text-sm">加载中...</span>
                       </div>
                     {:else}
-                      <div class="text-sm text-muted-foreground">暂无内容</div>
+                      <div class="text-muted-foreground text-sm">暂无内容</div>
                     {/if}
                   </div>
                 {/if}
@@ -396,24 +391,24 @@
                   >
                     {#if ln}
                       {@const isMatch = lineHasMatch(ln.text)}
-                      <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
+                      <div class="group/line hover:bg-muted/10 flex font-mono text-xs leading-5">
                         <div
-                          class="w-[50px] shrink-0 px-3 text-right font-medium select-none {isMatch
-                            ? 'font-semibold text-foreground'
+                          class="w-[50px] shrink-0 select-none px-3 text-right font-medium {isMatch
+                            ? 'text-foreground font-semibold'
                             : 'text-muted-foreground/60'}"
                         >
                           {ln.no}
                         </div>
-                        <div class="code-content flex-1 px-4 break-all whitespace-pre-wrap text-foreground">
+                        <div class="code-content text-foreground flex-1 whitespace-pre-wrap break-all px-4">
                           {@html highlightKeywords(ln.text)}
                         </div>
                       </div>
                     {:else}
                       <div class="flex font-mono text-xs leading-relaxed opacity-60">
-                        <div class="w-[50px] shrink-0 px-3 text-right font-medium text-muted-foreground select-none">
+                        <div class="text-muted-foreground w-[50px] shrink-0 select-none px-3 text-right font-medium">
                           {item.index + 1}
                         </div>
-                        <div class="code-content flex-1 px-4 text-muted-foreground">加载中…</div>
+                        <div class="code-content text-muted-foreground flex-1 px-4">加载中…</div>
                       </div>
                     {/if}
                   </div>
@@ -425,8 +420,8 @@
       {:else}
         <div class="flex flex-1 items-center justify-center">
           <div class="text-center">
-            <FileText class="mx-auto h-12 w-12 text-muted-foreground/50" />
-            <p class="mt-4 text-sm text-muted-foreground">没有文件可查看</p>
+            <FileText class="text-muted-foreground/50 mx-auto h-12 w-12" />
+            <p class="text-muted-foreground mt-4 text-sm">没有文件可查看</p>
           </div>
         </div>
       {/if}
