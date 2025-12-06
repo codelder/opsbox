@@ -272,51 +272,6 @@
     return '...' + path.slice(-maxLen + 3);
   }
 
-  // ============ 结果列表交互逻辑 ============
-
-  // 每个结果的 UI 状态（折叠、展开所有匹配、单行展开）
-  const collapsedFiles = new SvelteSet<number>();
-  const expandedAllMatches = new SvelteSet<number>();
-  const expandedLines = new SvelteSet<string>();
-
-  function isFileCollapsed(i: number) {
-    return collapsedFiles.has(i);
-  }
-  function toggleFileCollapsed(i: number) {
-    if (collapsedFiles.has(i)) collapsedFiles.delete(i);
-    else collapsedFiles.add(i);
-  }
-  function isFileShowAll(i: number) {
-    return expandedAllMatches.has(i);
-  }
-  function toggleFileShowAll(i: number) {
-    const wasExpanded = expandedAllMatches.has(i);
-    if (wasExpanded) {
-      expandedAllMatches.delete(i);
-      // 收起时，延迟滚动以等待DOM更新
-      setTimeout(() => {
-        const cardElement = document.querySelector(`[data-result-card="${i}"]`);
-        if (cardElement) {
-          cardElement.scrollIntoView({
-            behavior: 'smooth',
-            block: 'start',
-            inline: 'nearest'
-          });
-          // 添加临时高亮效果
-          cardElement.classList.add('highlight-card');
-          setTimeout(() => {
-            cardElement.classList.remove('highlight-card');
-          }, 2000);
-        }
-      }, 100);
-    } else {
-      expandedAllMatches.add(i);
-    }
-  }
-  function expandLine(key: string) {
-    expandedLines.add(key);
-  }
-
   // 清除所有筛选状态
   function clearFilters() {
     selectedPath = [];
@@ -582,17 +537,7 @@
         <div class="space-y-4">
           {#each filteredResults as item, i (item.path + '-' + i)}
             {#if item && item.path && item.chunks}
-              <SearchResultCard
-                {item}
-                index={i}
-                sid={searchStore.sid}
-                isCollapsed={isFileCollapsed(i)}
-                isShowAll={isFileShowAll(i)}
-                {expandedLines}
-                onToggleCollapse={() => toggleFileCollapsed(i)}
-                onToggleShowAll={() => toggleFileShowAll(i)}
-                onExpandLine={expandLine}
-              />
+              <SearchResultCard {item} index={i} sid={searchStore.sid} />
             {:else}
               <!-- 兼容其他对象：兜底显示 -->
               <div class="bg-card text-card-foreground rounded border p-3">
