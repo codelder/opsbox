@@ -27,24 +27,12 @@
     item: SearchJsonResult;
     index: number;
     sid: string;
-    isCollapsed: boolean;
-    isShowAll: boolean;
-    expandedLines: Set<string>;
-    onToggleCollapse: () => void;
-    onToggleShowAll: () => void;
-    onExpandLine: (key: string) => void;
   }
 
   let {
     item,
     index,
-    sid,
-    isCollapsed,
-    isShowAll,
-    expandedLines,
-    onToggleCollapse,
-    onToggleShowAll,
-    onExpandLine
+    sid
   }: Props = $props();
 
   // Svelte 5 类型导出
@@ -55,6 +43,11 @@
   // 悬浮提示框状态
   let showTooltip = $state(false);
   let tooltipTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // 组件内部状态
+  let isCollapsed = $state(false);
+  let isShowAll = $state(false);
+  let expandedLines = $state(new Set<string>());
 
   // 解析文件URL获取详细元数据
   let parsedUrl = $derived(parseFileUrl(item.path));
@@ -72,6 +65,38 @@
       tooltipTimer = null;
     }
     showTooltip = false;
+  }
+
+  // 组件内部交互函数
+  function toggleCollapse() {
+    isCollapsed = !isCollapsed;
+  }
+
+  function toggleShowAll() {
+    const wasExpanded = isShowAll;
+    isShowAll = !wasExpanded;
+    // 收起时，延迟滚动以等待DOM更新
+    if (wasExpanded) {
+      setTimeout(() => {
+        const cardElement = document.querySelector(`[data-result-card="${index}"]`);
+        if (cardElement) {
+          cardElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+            inline: 'nearest'
+          });
+          // 添加临时高亮效果
+          cardElement.classList.add('highlight-card');
+          setTimeout(() => {
+            cardElement.classList.remove('highlight-card');
+          }, 2000);
+        }
+      }, 100);
+    }
+  }
+
+  function expandLine(key: string) {
+    expandedLines = new Set([...expandedLines, key]);
   }
 
   // 行键生成函数
@@ -145,7 +170,7 @@
     <div class="flex items-center gap-2 overflow-visible">
       <button
         class="text-muted-foreground hover:text-foreground"
-        onclick={onToggleCollapse}
+        onclick={toggleCollapse}
         title={isCollapsed ? '展开' : '折叠'}
       >
         {#if isCollapsed}
@@ -364,11 +389,11 @@
                       item.keywords
                     )}{#if sn.leftTrunc}<button
                         class="mx-0.5 text-muted-foreground hover:text-foreground hover:underline"
-                        onclick={() => onExpandLine(lineKey(index, ln._ci, ln._li))}
+                        onclick={() => expandLine(lineKey(index, ln._ci, ln._li))}
                         title="展开">...</button
                       >{/if}<span class="code-content-text">{@html sn.html}</span>{#if sn.rightTrunc}<button
                         class="mx-0.5 text-muted-foreground hover:text-foreground hover:underline"
-                        onclick={() => onExpandLine(lineKey(index, ln._ci, ln._li))}
+                        onclick={() => expandLine(lineKey(index, ln._ci, ln._li))}
                         title="展开">...</button
                       >{/if}{/key}{/if}</td
               >
@@ -381,7 +406,7 @@
               <td colspan="2" class="p-0">
                 <button
                   class="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                  onclick={onToggleShowAll}
+                  onclick={toggleShowAll}
                 >
                   <UnfoldVertical class="h-3.5 w-3.5" />
                   <span>显示其余 {totalLinesCount - 7} 行匹配项</span>
@@ -394,7 +419,7 @@
               <td colspan="2" class="p-0">
                 <button
                   class="flex w-full items-center gap-2 px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                  onclick={onToggleShowAll}
+                  onclick={toggleShowAll}
                 >
                   <ChevronDown class="h-3.5 w-3.5 rotate-180" />
                   <span>收起</span>
