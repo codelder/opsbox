@@ -31,15 +31,68 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
+  // 分块加载相关状态
+  const CHUNK_SIZE = 1000;
+  const MAX_CONCURRENT_CHUNKS = 3; // 最大并发加载块数
+  let loadedChunks = $state<Set<number>>(new Set());
+  let loadingChunks = $state<Set<number>>(new Set());
+  let pendingChunkLoads = $state<Set<number>>(new Set()); // 等待加载的块
+  let lastChunkCheckTime = $state(0);
+
+  // 高亮缓存
+  const highlightCache = new Map<string, string>();
+  let cachedKeywordsHash = '';
+
   // 虚拟滚动容器引用
   let parentEl = $state<HTMLDivElement | null>(null);
-  const EST_ROW = 20;
+  const EST_ROW_HEIGHT = 20; // 估算行高
+  const INITIAL_LOAD_SIZE = 1000;
+
+  // 延迟测量队列 - 批量处理避免同步布局阻塞
+  let measureQueue: HTMLElement[] = [];
+  let measureScheduled = false;
+
+  function scheduleMeasure() {
+    if (measureScheduled || measureQueue.length === 0) return;
+    measureScheduled = true;
+
+    // 使用 requestIdleCallback 在浏览器空闲时批量测量，避免阻塞滚动
+    const callback = () => {
+      measureScheduled = false;
+      if (measureQueue.length === 0) return;
+
+      const virtualizer = get(rowVirtualizer);
+      if (!virtualizer) {
+        measureQueue = [];
+        return;
+      }
+
+      // 批量测量所有排队的元素
+      const elements = measureQueue.splice(0, measureQueue.length);
+      for (const el of elements) {
+        if (el.isConnected) {
+          virtualizer.measureElement(el);
+        }
+      }
+    };
+
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(callback, { timeout: 500 });
+    } else {
+      setTimeout(callback, 100);
+    }
+  }
+
+  function queueMeasure(el: HTMLElement) {
+    measureQueue.push(el);
+    scheduleMeasure();
+  }
+
   const rowVirtualizer = createVirtualizer({
     count: 0,
     getScrollElement: () => parentEl,
-    estimateSize: () => EST_ROW,
-    overscan: 50,
-    measureElement: (el: HTMLElement) => el.getBoundingClientRect().height
+    estimateSize: () => EST_ROW_HEIGHT,
+    overscan: 5
   });
 
   $effect(() => {
@@ -58,22 +111,115 @@
   type VirtualItem = { index: number; start: number; key: string | number | bigint };
   const vItems: VirtualItem[] = $derived(browser ? $rowVirtualizer.getVirtualItems() : []);
 
+  // 触发虚拟器更新
   function scheduleVirtualUpdate() {
-    if (!browser) return;
-    requestAnimationFrame(() => {
-      try {
-        get(rowVirtualizer)?.measure?.();
-      } catch {
-        // 忽略测量错误
-      }
-    });
+    // 虚拟器会自动响应 count 变化，这里触发一次测量调度
+    scheduleMeasure();
   }
 
+  // 滚动防抖相关
+  let scrollDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastScrollTop = 0;
+  const SCROLL_THRESHOLD = 50; // 滚动至少50px才检查
+  const SCROLL_DEBOUNCE_MS = 300; // 滚动停止后300ms再检查
+
   function handleScroll() {
-    if (!browser || loading || !parentEl) return;
+    if (!browser || !parentEl) return;
     const el = parentEl;
-    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200 && end < total) {
-      loadMore();
+
+    // 检查是否接近底部 - 使用估算高度避免读取scrollHeight（性能优化）
+    if (total > 0) {
+      const estimatedScrollHeight = total * EST_ROW_HEIGHT;
+      if (el.scrollTop + el.clientHeight >= estimatedScrollHeight - 200 && end < total && !loading) {
+        loadMore();
+      }
+    }
+
+    // 检查滚动距离是否超过阈值
+    const scrollDelta = Math.abs(el.scrollTop - lastScrollTop);
+    if (scrollDelta < SCROLL_THRESHOLD) {
+      return; // 滚动距离太小，跳过检查
+    }
+    lastScrollTop = el.scrollTop;
+
+    // 使用防抖：清除之前的定时器，设置新的定时器
+    if (scrollDebounceTimer) {
+      clearTimeout(scrollDebounceTimer);
+    }
+    scrollDebounceTimer = setTimeout(() => {
+      scrollDebounceTimer = null;
+      checkVisibleChunks();
+    }, SCROLL_DEBOUNCE_MS);
+  }
+
+  function checkVisibleChunks() {
+    if (!browser || !total) return;
+
+    // 限制检查频率，至少间隔200ms（增加间隔以减少调用频率）
+    const now = Date.now();
+    if (now - lastChunkCheckTime < 200) {
+      return;
+    }
+    lastChunkCheckTime = now;
+
+    try {
+      // 使用 get() 获取虚拟器，避免响应式触发
+      const virtualizer = get(rowVirtualizer);
+      if (!virtualizer) return;
+
+      const items = virtualizer.getVirtualItems();
+      if (!items.length) return;
+
+      // 收集虚拟items中涉及的所有块索引
+      const neededChunks = new Set<number>();
+      for (const item of items) {
+        const lineNo = item.index + 1;
+        const chunkIndex = getChunkIndex(lineNo);
+        neededChunks.add(chunkIndex);
+      }
+
+      // 更新待加载块列表
+      for (const chunkIndex of neededChunks) {
+        if (!loadedChunks.has(chunkIndex) && !loadingChunks.has(chunkIndex) && !pendingChunkLoads.has(chunkIndex)) {
+          pendingChunkLoads.add(chunkIndex);
+        }
+      }
+
+      // 处理待加载块
+      processPendingChunks();
+    } catch (e) {
+      // 忽略错误
+    }
+  }
+
+  function processPendingChunks() {
+    if (!browser || !total) return;
+
+    // 检查当前正在加载的块数量
+    const currentLoadingCount = loadingChunks.size;
+    if (currentLoadingCount >= MAX_CONCURRENT_CHUNKS) {
+      return; // 已达到最大并发数
+    }
+
+    // 计算还可以加载多少个块
+    const remainingSlots = MAX_CONCURRENT_CHUNKS - currentLoadingCount;
+    if (remainingSlots <= 0) return;
+
+    // 从待加载列表中取出最前面的几个块
+    const chunksToLoad: number[] = [];
+    for (const chunkIndex of pendingChunkLoads) {
+      if (chunksToLoad.length >= remainingSlots) break;
+
+      // 再次检查是否已经加载或正在加载（避免竞态条件）
+      if (!loadedChunks.has(chunkIndex) && !loadingChunks.has(chunkIndex)) {
+        chunksToLoad.push(chunkIndex);
+      }
+    }
+
+    // 加载选中的块
+    for (const chunkIndex of chunksToLoad) {
+      pendingChunkLoads.delete(chunkIndex);
+      loadChunk(chunkIndex);
     }
   }
 
@@ -83,38 +229,99 @@
     return rec ?? null;
   }
 
+  // 延迟测量 action - 不立即测量，而是加入队列批量处理
   function measureVirtualRow(node: HTMLElement) {
     if (!browser) return {};
-    const virtualizer = get(rowVirtualizer);
-    if (!virtualizer) return {};
 
-    const ro = new ResizeObserver(() => {
-      virtualizer.measureElement(node);
-    });
-
-    ro.observe(node);
+    // 加入测量队列，而不是立即测量
+    queueMeasure(node);
 
     return {
       destroy: () => {
-        ro.disconnect();
+        // 从队列中移除（如果还在的话）
+        const idx = measureQueue.indexOf(node);
+        if (idx >= 0) {
+          measureQueue.splice(idx, 1);
+        }
       }
     };
   }
 
-  $effect(() => {
-    if (!browser) return;
-    const items = $rowVirtualizer.getVirtualItems();
-    if (items.length && total > 0 && !loading) {
-      const maxIndex = items[items.length - 1].index;
-      const maxLineNo = maxIndex + 1;
-      if (maxLineNo > end - 50 && end < total) {
-        loadMore();
-      }
-    }
-  });
-
   async function fetchRange(s: number, e: number) {
     return await fetchViewCache(sid, currentFile, s, e);
+  }
+
+  // 计算行号所属的块索引
+  function getChunkIndex(lineNo: number): number {
+    return Math.floor((lineNo - 1) / CHUNK_SIZE);
+  }
+
+  // 计算块索引对应的行范围
+  function getChunkRange(chunkIndex: number): { start: number; end: number } {
+    const start = chunkIndex * CHUNK_SIZE + 1;
+    const end = Math.min((chunkIndex + 1) * CHUNK_SIZE, total);
+    return { start, end };
+  }
+
+  // 处理已加载的块数据，更新 lines 数组
+  function processLoadedChunk(start: number, _dataEnd: number, chunkLines: { no: number; text: string }[]) {
+    for (const line of chunkLines) {
+      lines[line.no - 1] = line;
+    }
+    const chunkIndex = getChunkIndex(start);
+    loadedChunks.add(chunkIndex);
+    loadingChunks.delete(chunkIndex);
+    pendingChunkLoads.delete(chunkIndex); // 确保从待加载列表中移除
+
+    // 更新 end 为已加载的最大行号
+    const maxLoadedLine = Math.max(...chunkLines.map((l) => l.no));
+    if (maxLoadedLine > end) {
+      end = maxLoadedLine;
+    }
+  }
+
+  // 加载指定块索引
+  async function loadChunk(chunkIndex: number) {
+    if (loadedChunks.has(chunkIndex) || loadingChunks.has(chunkIndex)) {
+      pendingChunkLoads.delete(chunkIndex); // 清理待加载列表
+      return;
+    }
+
+    // 检查并发限制
+    if (loadingChunks.size >= MAX_CONCURRENT_CHUNKS) {
+      // 达到并发上限，加入待加载队列
+      if (!pendingChunkLoads.has(chunkIndex)) {
+        pendingChunkLoads.add(chunkIndex);
+      }
+      return;
+    }
+
+    loadingChunks.add(chunkIndex);
+    pendingChunkLoads.delete(chunkIndex); // 开始加载时从待加载列表中移除
+
+    try {
+      const { start, end: chunkEnd } = getChunkRange(chunkIndex);
+      const data = await fetchRange(start, chunkEnd);
+
+      // 如果是第一个块，保存关键词
+      if (chunkIndex === 0 && data.keywords && data.keywords.length > 0) {
+        keywords = data.keywords;
+      }
+
+      processLoadedChunk(start, chunkEnd, data.lines || []);
+      scheduleVirtualUpdate();
+
+      // 加载完成后检查是否有待处理的块
+      processPendingChunks();
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      error = err.message || `加载块 ${chunkIndex} 失败`;
+      loadingChunks.delete(chunkIndex);
+      pendingChunkLoads.delete(chunkIndex); // 错误时也清理
+
+      // 错误后也检查待处理块
+      processPendingChunks();
+    }
   }
 
   async function loadFileContent(filePath: string) {
@@ -127,6 +334,12 @@
       lines = [];
       total = 0;
       end = 0;
+      loadedChunks = new Set();
+      loadingChunks = new Set();
+      pendingChunkLoads = new Set();
+      lastChunkCheckTime = 0;
+      highlightCache.clear();
+      cachedKeywordsHash = '';
 
       // 获取文件元数据
       const meta = await fetchRange(1, 1);
@@ -138,11 +351,8 @@
         return;
       }
 
-      // 加载全部内容
-      const full = await fetchRange(1, total);
-      end = full.end;
-      keywords = full.keywords || [];
-      lines = full.lines || [];
+      // 加载第一个块
+      await loadChunk(0);
 
       scheduleVirtualUpdate();
 
@@ -166,20 +376,12 @@
 
   async function loadMore() {
     if (end >= total) return;
-    try {
-      loading = true;
-      const nextS = end + 1;
-      const nextE = Math.min(nextS + 999, total);
-      const data = await fetchRange(nextS, nextE);
-      end = data.end;
-      lines = [...lines, ...(data.lines || [])];
-      scheduleVirtualUpdate();
-    } catch (e: unknown) {
-      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
-      error = err.message || '加载更多失败';
-    } finally {
-      loading = false;
-    }
+
+    const nextLine = end + 1;
+    const chunkIndex = getChunkIndex(nextLine);
+
+    // 调用 loadChunk，它会处理并发限制和队列
+    loadChunk(chunkIndex);
   }
 
   function highlightKeywords(text: string): string {
@@ -187,9 +389,26 @@
       return escapeHtml(text);
     }
 
+    // 检查关键词是否变化，清空缓存
+    const currentKeywordsHash = keywords.join('|');
+    if (currentKeywordsHash !== cachedKeywordsHash) {
+      highlightCache.clear();
+      cachedKeywordsHash = currentKeywordsHash;
+    }
+
+    // 检查缓存
+    const cacheKey = text;
+    if (highlightCache.has(cacheKey)) {
+      return highlightCache.get(cacheKey)!;
+    }
+
     // 将 keywords 字符串数组转换为 KeywordInfo 数组（默认都是 Literal，不区分大小写）
     const keywordInfos: KeywordInfo[] = keywords.map((kw) => ({ type: 'literal', text: kw }));
-    return highlight(text, keywordInfos);
+    const result = highlight(text, keywordInfos);
+
+    // 缓存结果
+    highlightCache.set(cacheKey, result);
+    return result;
   }
 
   function lineHasMatch(text: string): boolean {
@@ -200,6 +419,17 @@
   function downloadCurrentFile() {
     try {
       if (!lines || lines.length === 0) return;
+
+      // 如果文件没有完全加载，提示用户
+      if (end < total) {
+        const confirmed = confirm(
+          `文件较大，当前只加载了 ${end}/${total} 行。\n` +
+            `点击"确定"下载已加载部分，或"取消"返回。\n` +
+            `要下载完整文件，请滚动到底部加载全部内容后再下载。`
+        );
+        if (!confirmed) return;
+      }
+
       const content = lines.map((ln) => ln?.text ?? '').join('\n');
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -296,7 +526,14 @@
   });
 
   onDestroy(() => {
-    // 清理
+    // 清理滚动防抖计时器
+    if (scrollDebounceTimer) {
+      clearTimeout(scrollDebounceTimer);
+      scrollDebounceTimer = null;
+    }
+    // 清理测量队列
+    measureQueue = [];
+    measureScheduled = false;
   });
 </script>
 
