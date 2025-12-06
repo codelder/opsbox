@@ -52,6 +52,9 @@
     onInput
   }: Props = $props();
 
+  // Svelte 5 类型导出
+  export type { Props };
+
   function handleInput(e: Event) {
     const target = e.target as HTMLInputElement;
     value = target.value;

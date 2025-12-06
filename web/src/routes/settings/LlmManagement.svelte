@@ -12,7 +12,7 @@
   import { Label } from '$lib/components/ui/label';
   import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '$lib/components/ui/card';
   import { Badge } from '$lib/components/ui/badge';
-  import { Plus, Edit2, Trash2, Check, Loader2, RefreshCw } from 'lucide-svelte';
+  import { Plus, Edit2, Trash2, Check, LoaderCircle, RefreshCw } from 'lucide-svelte';
 
   const store = useLlmBackends();
 
@@ -327,7 +327,7 @@
                   type="button"
                 >
                   {#if modelsLoading}
-                    <Loader2 class="mr-1 h-3 w-3 animate-spin" />
+                    <LoaderCircle class="mr-1 h-3 w-3 animate-spin" />
                   {:else}
                     <RefreshCw class="mr-1 h-3 w-3" />
                   {/if}
