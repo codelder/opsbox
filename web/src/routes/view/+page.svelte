@@ -7,7 +7,7 @@
   import { createVirtualizer } from '@tanstack/svelte-virtual';
   import { get } from 'svelte/store';
   import { browser } from '$app/environment';
-  import { fetchViewCache, escapeHtml, escapeRegExp } from '$lib/modules/logseek';
+  import { fetchViewCache, escapeHtml } from '$lib/modules/logseek';
   import { highlight } from '$lib/modules/logseek/utils/highlight';
   import type { KeywordInfo } from '$lib/modules/logseek/types';
   import { getDisplayName } from '$lib/modules/logseek/utils/fileUrl';
@@ -16,8 +16,7 @@
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import Settings from '$lib/components/Settings.svelte';
-  import { Button } from '$lib/components/ui/button';
-  import { FileText, ChevronLeft, Loader2, ChevronRight } from 'lucide-svelte';
+  import { FileText, LoaderCircle } from 'lucide-svelte';
 
   // URL 参数
   let sid = $state('');
@@ -373,7 +372,7 @@
                   <div class="flex h-full items-center justify-center p-10">
                     {#if loading}
                       <div class="text-muted-foreground flex flex-col items-center gap-2">
-                        <Loader2 class="h-8 w-8 animate-spin" />
+                        <LoaderCircle class="h-8 w-8 animate-spin" />
                         <span class="text-sm">加载中...</span>
                       </div>
                     {:else}

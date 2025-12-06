@@ -5,6 +5,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   server: {
+    host: '0.0.0.0', // 允许外部访问
+    port: 5173, // 明确指定端口
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:4000',

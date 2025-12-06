@@ -10,6 +10,7 @@
   import AiModeIcon from '$lib/components/AiModeIcon.svelte';
   import Settings from '$lib/components/Settings.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+  import { Search } from 'lucide-svelte';
 
   // 工具函数：将片段插入到输入框光标位置
   let inputEl: HTMLInputElement | null = null;
@@ -81,19 +82,7 @@
         <div class="relative flex items-center">
           <!-- 搜索图标 -->
           <span aria-hidden="true" class="text-muted-foreground pointer-events-none absolute left-4 z-10">
-            <svg
-              class="h-5 w-5"
-              stroke="currentColor"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              fill="none"
-              stroke-width="2"
-              viewBox="0 0 24 24"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <circle cx="11" cy="11" r="8"></circle>
-              <line x1="21" x2="16.65" y1="21" y2="16.65"></line>
-            </svg>
+            <Search class="h-5 w-5" />
           </span>
 
           <input

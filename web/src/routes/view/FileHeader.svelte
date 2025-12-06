@@ -37,6 +37,9 @@
 
   let { filePath, total, loadedLines, keywords = [], loading = false, onDownload }: Props = $props();
 
+  // Svelte 5 类型导出
+  export type { Props };
+
   // 统一解析标题与来源
   function parseFileInfo(full: string) {
     if (!full) return { title: '未知文件', icon: FileText, metadata: [] };
@@ -95,20 +98,20 @@
 
 <!-- 标题栏 - 两行布局 -->
 <div
-  class="sticky top-0 z-10 flex items-center gap-4 border-b border-border bg-background/95 px-6 py-3 shadow-sm backdrop-blur-sm"
+  class="border-border bg-background/95 sticky top-0 z-10 flex items-center gap-4 border-b px-6 py-3 shadow-sm backdrop-blur-sm"
 >
   <!-- 左侧：两行内容 -->
   <div class="flex min-w-0 flex-1 flex-col gap-2">
     <!-- 第一行：文件名 -->
     <div class="flex items-center gap-3">
-      <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+      <div class="bg-primary/10 text-primary flex h-8 w-8 shrink-0 items-center justify-center rounded-md">
         {#if fileInfo.icon}
           {@const Icon = fileInfo.icon}
           <Icon class="h-4 w-4" />
         {/if}
       </div>
       <h1
-        class="min-w-0 flex-1 font-semibold break-all text-base"
+        class="min-w-0 flex-1 break-all text-base font-semibold"
         style="color: hsl(var(--foreground));"
         title={filePath}
       >
@@ -120,7 +123,7 @@
     <div class="flex flex-wrap items-center gap-3 text-xs">
       <!-- 路径信息 -->
       {#if fileInfo.metadata.length > 0}
-        <div class="flex flex-wrap items-center gap-1.5 text-muted-foreground">
+        <div class="text-muted-foreground flex flex-wrap items-center gap-1.5">
           {#each fileInfo.metadata as meta, i}
             {@const commonClass = 'bg-muted/40 text-muted-foreground border-border/40 hover:bg-muted/60'}
             {@const colorClasses = {
@@ -139,7 +142,7 @@
                 {@const MetaIcon = meta.icon}
                 <MetaIcon class="h-3 w-3 shrink-0" />
               {/if}
-              <span class="font-mono text-[11px] break-all">{meta.label}</span>
+              <span class="break-all font-mono text-[11px]">{meta.label}</span>
             </div>
             {#if i < fileInfo.metadata.length - 1}
               <span class="text-muted-foreground/40">/</span>
@@ -152,7 +155,7 @@
       {#if total > 0}
         <div class="flex items-center gap-1.5">
           <div class="h-1.5 w-1.5 rounded-full bg-blue-500"></div>
-          <span class="font-medium text-foreground">{total.toLocaleString()}</span>
+          <span class="text-foreground font-medium">{total.toLocaleString()}</span>
           <span class="text-muted-foreground">行</span>
           {#if loadedLines < total}
             <span class="text-muted-foreground/60">·</span>
@@ -174,7 +177,7 @@
               </Badge>
             {/each}
             {#if keywords.length > 3}
-              <span class="text-xs text-muted-foreground">+{keywords.length - 3}</span>
+              <span class="text-muted-foreground text-xs">+{keywords.length - 3}</span>
             {/if}
           </div>
         </div>

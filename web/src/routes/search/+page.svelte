@@ -15,18 +15,15 @@
   import { Button } from '$lib/components/ui/button';
   import {
     Search,
-    ChevronDown,
-    ChevronRight,
-    Loader2,
+    LoaderCircle,
     X,
-    Filter,
     Cloud,
     Server,
     HardDrive,
     Archive,
     Folder,
-    FileText,
-    Database
+    Database,
+    CircleCheckBig
   } from 'lucide-svelte';
   import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
   import { Badge } from '$lib/components/ui/badge';
@@ -448,7 +445,7 @@
           />
           {#if searchStore.loading}
             <div class="absolute right-3 z-10">
-              <Loader2 class="text-primary h-3.5 w-3.5 animate-spin" />
+              <LoaderCircle class="text-primary h-3.5 w-3.5 animate-spin" />
             </div>
           {:else if q}
             <Button
@@ -625,20 +622,22 @@
           <div class="mt-8 flex items-center justify-center">
             {#if searchStore.hasMore}
               <Button
-                variant="outline"
                 class="w-full max-w-xs shadow-sm"
                 onclick={() => searchStore.loadMore()}
                 disabled={searchStore.loading}
               >
                 {#if searchStore.loading}
-                  <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+                  <LoaderCircle class="mr-2 h-4 w-4 animate-spin" />
                   {searchStore.results.length === 0 ? '搜索中...' : '加载更多...'}
                 {:else}
                   加载更多
                 {/if}
               </Button>
             {:else if filteredResults.length > 0}
-              <p class="text-muted-foreground text-sm">已加载全部结果</p>
+              <div class="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                <CircleCheckBig class="h-4 w-4" />
+                <span>已加载全部结果</span>
+              </div>
             {/if}
           </div>
         {/if}

@@ -47,6 +47,9 @@
     onExpandLine
   }: Props = $props();
 
+  // Svelte 5 类型导出
+  export type { Props };
+
   let viewUrl = $derived(`/view?${new URLSearchParams({ sid, file: item.path }).toString()}`);
 
   // 悬浮提示框状态
