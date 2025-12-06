@@ -145,3 +145,78 @@ pub async fn get_file_list_json(Query(params): Query<FileListParams>) -> Result<
     .body(Body::from(body))
     .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
 }
+
+/// 下载完整文件内容
+pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
+  tracing::debug!(
+    "download-request: sid={} file={}",
+    params.sid,
+    params.file
+  );
+
+  // 解析 FileUrl
+  let file_url: FileUrl = match params.file.parse() {
+    Ok(url) => url,
+    Err(e) => {
+      tracing::warn!(
+        "download-parse-error: sid={} file={} error={:?}",
+        params.sid,
+        params.file,
+        e
+      );
+      return Err(LogSeekApiError::Domain(e));
+    }
+  };
+
+  // 从缓存获取完整文件内容
+  let (total, lines) = match simple_cache()
+    .get_lines_slice(
+      &params.sid,
+      &file_url,
+      1, // 从第1行开始
+      usize::MAX, // 到最大行（内部会限制到total）
+    )
+    .await
+  {
+    Some(v) => {
+      tracing::debug!(
+        "✅ 下载缓存命中: sid={}, file_url={}, total={}, lines_len={}",
+        params.sid,
+        file_url,
+        v.0,
+        v.1.len()
+      );
+      v
+    }
+    None => {
+      tracing::debug!("❌ 下载缓存未命中: sid={}, file_url={}", params.sid, file_url);
+      return Err(LogSeekApiError::Repository(RepositoryError::NotFound(format!(
+        "Cache not found or expired for sid={}, file={}",
+        params.sid, file_url
+      ))));
+    }
+  };
+
+  // 验证行数是否匹配total
+  if lines.len() != total {
+    tracing::warn!(
+      "download-line-count-mismatch: sid={} file={} total={} actual={}",
+      params.sid,
+      params.file,
+      total,
+      lines.len()
+    );
+  }
+
+  // 将行拼接为文本，每行以换行符分隔
+  let content = lines.join("\n");
+
+  HttpResponse::builder()
+    .status(200)
+    .header(
+      CONTENT_TYPE,
+      HeaderValue::from_static("text/plain; charset=utf-8"),
+    )
+    .body(Body::from(content))
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建下载响应失败: {}", e))))
+}

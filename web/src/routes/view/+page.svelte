@@ -7,10 +7,10 @@
   import { createVirtualizer } from '@tanstack/svelte-virtual';
   import { get } from 'svelte/store';
   import { browser } from '$app/environment';
-  import { fetchViewCache, escapeHtml } from '$lib/modules/logseek';
+  import { fetchViewCache, fetchViewDownload, escapeHtml } from '$lib/modules/logseek';
   import { highlight } from '$lib/modules/logseek/utils/highlight';
   import type { KeywordInfo } from '$lib/modules/logseek/types';
-  import { getDisplayName } from '$lib/modules/logseek/utils/fileUrl';
+  import { getDisplayName, parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
   import Alert from '$lib/components/Alert.svelte';
   import FileHeader from './FileHeader.svelte';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
@@ -416,31 +416,154 @@
     return keywords.some((kw) => kw && text.includes(kw));
   }
 
-  function downloadCurrentFile() {
+  async function loadRemainingLinesForDownload(): Promise<{no: number; text: string}[]> {
+    if (!total || end >= total) return [];
+
+    const remainingLines: {no: number; text: string}[] = [];
+    const originalLoading = loading;
+    const originalError = error;
+
+    loading = true;
+    error = null;
+
+    try {
+      // 以块为单位加载剩余行
+      let currentStart = end + 1;
+      while (currentStart <= total) {
+        const chunkEnd = Math.min(currentStart + CHUNK_SIZE - 1, total);
+        const data = await fetchRange(currentStart, chunkEnd);
+
+        if (data.lines && data.lines.length > 0) {
+          remainingLines.push(...data.lines);
+        }
+
+        currentStart = chunkEnd + 1;
+      }
+
+      return remainingLines;
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      error = err.message || '加载剩余行失败';
+      throw e;
+    } finally {
+      loading = originalLoading;
+      if (!error) error = originalError;
+    }
+  }
+
+  async function loadFullFileLines(): Promise<{no: number; text: string}[]> {
+    if (!total) return [];
+
+    const allLines: {no: number; text: string}[] = [];
+    const originalLoading = loading;
+    const originalError = error;
+
+    loading = true;
+    error = null;
+
+    try {
+      // 从第1行开始加载整个文件
+      let currentStart = 1;
+      while (currentStart <= total) {
+        const chunkEnd = Math.min(currentStart + CHUNK_SIZE - 1, total);
+        const data = await fetchRange(currentStart, chunkEnd);
+
+        if (data.lines && data.lines.length > 0) {
+          allLines.push(...data.lines);
+        }
+
+        currentStart = chunkEnd + 1;
+      }
+
+      return allLines;
+    } catch (e: unknown) {
+      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
+      error = err.message || '加载完整文件失败';
+      throw e;
+    } finally {
+      loading = originalLoading;
+      if (!error) error = originalError;
+    }
+  }
+
+  async function downloadCurrentFile() {
     try {
       if (!lines || lines.length === 0) return;
 
-      // 如果文件没有完全加载，提示用户
+      let downloadFullFile = false;
+
+      // 如果文件没有完全加载，询问用户选择
       if (end < total) {
-        const confirmed = confirm(
+        const choice = confirm(
           `文件较大，当前只加载了 ${end}/${total} 行。\n` +
-            `点击"确定"下载已加载部分，或"取消"返回。\n` +
-            `要下载完整文件，请滚动到底部加载全部内容后再下载。`
+            `点击"确定"下载完整文件（直接从后端缓存下载），或"取消"仅下载已加载部分。`
         );
-        if (!confirmed) return;
+        if (choice) {
+          downloadFullFile = true;
+        }
       }
 
-      const content = lines.map((ln) => ln?.text ?? '').join('\n');
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      const fileName = getDisplayName(currentFile).replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      if (downloadFullFile) {
+        // 使用后端下载端点获取完整文件
+        const response = await fetchViewDownload(sid, currentFile);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+
+        // 使用 parseFileUrl 获取正确的文件名（支持 archive entry path）
+        let fileName = 'log.txt';
+        const parsed = parseFileUrl(currentFile);
+        if (parsed) {
+          fileName = parsed.displayName;
+        } else {
+          // 回退到 getDisplayName
+          fileName = getDisplayName(currentFile);
+        }
+        // 清理文件名中的非法字符
+        fileName = fileName.replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
+
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      } else {
+        // 仅使用已加载行（前端拼接）
+        const linesMap = new Map<number, string>();
+        // 收集已加载行（跳过稀疏数组中的空位）
+        for (const line of lines) {
+          if (line) linesMap.set(line.no, line.text);
+        }
+        // 构建行数组，按行号排序
+        const sortedLineNumbers = Array.from(linesMap.keys()).sort((a, b) => a - b);
+        const allLines = sortedLineNumbers.map(no => ({ no, text: linesMap.get(no)! }));
+
+        // 构建文件内容
+        const content = allLines.map((ln) => ln.text).join('\n');
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+
+        // 使用 parseFileUrl 获取正确的文件名（支持 archive entry path）
+        let fileName = 'log.txt';
+        const parsed = parseFileUrl(currentFile);
+        if (parsed) {
+          fileName = parsed.displayName;
+        } else {
+          // 回退到 getDisplayName
+          fileName = getDisplayName(currentFile);
+        }
+        // 清理文件名中的非法字符
+        fileName = fileName.replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
+
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      }
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
       error = err.message || '下载失败';

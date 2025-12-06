@@ -28,6 +28,7 @@ pub fn router(db_pool: SqlitePool) -> Router {
       axum::routing::delete(search::delete_search_session),
     )
     .route("/view.cache.json", axum::routing::get(view::view_cache_json))
+    .route("/view/download", axum::routing::get(view::download_file))
     .route("/view.files.json", axum::routing::get(view::get_file_list_json))
     .route(
       "/settings/s3",
