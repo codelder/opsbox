@@ -29,11 +29,7 @@
     sid: string;
   }
 
-  let {
-    item,
-    index,
-    sid
-  }: Props = $props();
+  let { item, index, sid }: Props = $props();
 
   // Svelte 5 类型导出
   export type { Props };

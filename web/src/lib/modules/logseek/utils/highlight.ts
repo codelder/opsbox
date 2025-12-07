@@ -51,11 +51,7 @@ export function highlight(line: string, keywords: KeywordInfo[]): string {
  * @param keywords 带类型信息的关键词列表
  * @param opts 选项：max=最大长度，context=关键词周围上下文长度
  */
-export function snippet(
-  line: string,
-  keywords: KeywordInfo[],
-  opts: SnippetOptions = {}
-): SnippetResult {
+export function snippet(line: string, keywords: KeywordInfo[], opts: SnippetOptions = {}): SnippetResult {
   const max = opts.max ?? 540;
   const ctx = opts.context ?? 230;
 
