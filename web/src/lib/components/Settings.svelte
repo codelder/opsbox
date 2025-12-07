@@ -9,7 +9,7 @@
 <button
   type="button"
   aria-label="打开设置"
-  class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
+  class="inline-flex h-10 w-10 items-center justify-center rounded-full bg-white/80 text-gray-900 shadow-sm backdrop-blur select-none hover:bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-800"
   onclick={handleClick}
 >
   <svg
@@ -18,7 +18,7 @@
     fill="none"
     stroke="currentColor"
     stroke-width="1.5"
-    class="h-5 w-5"
+    class="h-[1.2rem] w-[1.2rem]"
   >
     <path
       stroke-linecap="round"

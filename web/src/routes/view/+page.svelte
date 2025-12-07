@@ -30,7 +30,7 @@
   let lines = $state<{ no: number; text: string }[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
-  let fontSize = $state('base');
+  let fontSize = $state('sm');
 
   // 字体大小类映射
   let fontSizeClass = $state('text-base whitespace-pre-wrap');
@@ -69,7 +69,7 @@
       case 'lg':
         return 24;
       case 'xl':
-        return 26;
+        return 28;
       default:
         return 20;
     }
@@ -589,7 +589,7 @@
 <div class="bg-background text-foreground flex h-screen flex-col">
   <!-- 顶部导航栏 -->
   <header
-    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b backdrop-blur"
+    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b text-lg backdrop-blur"
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- 左侧：Logo -->
@@ -643,15 +643,15 @@
                 {#if lines.length > 0}
                   {#each lines as ln (ln.no)}
                     {@const isMatch = lineHasMatch(ln.text)}
-                    <div class="group/line hover:bg-muted/10 flex font-mono leading-5">
+                    <div class="group/line hover:bg-muted/10 flex font-mono leading-5 {fontSizeClass}">
                       <div
-                        class="w-[50px] shrink-0 select-none px-3 py-0.5 text-right font-medium text-xs {isMatch
+                        class="w-[50px] shrink-0 select-none px-3 py-0.5 text-right {fontSizeClass} font-medium {isMatch
                           ? 'text-foreground font-semibold'
                           : 'text-muted-foreground/60'}"
                       >
                         {ln.no}
                       </div>
-                      <div class="code-content text-foreground flex-1 break-all px-4 {fontSizeClass}">
+                      <div class="code-content text-foreground flex-1 break-all px-4">
                         {@html highlightKeywords(ln.text)}
                       </div>
                     </div>
@@ -678,15 +678,15 @@
                   >
                     {#if ln}
                       {@const isMatch = lineHasMatch(ln.text)}
-                      <div class="group/line hover:bg-muted/10 flex font-mono leading-5">
+                      <div class="group/line hover:bg-muted/10 flex font-mono {fontSizeClass}">
                         <div
-                          class="w-[50px] shrink-0 select-none px-3 text-right font-medium text-xs {isMatch
+                          class="w-[100px] shrink-0 select-none px-3 text-right font-medium {isMatch
                             ? 'text-foreground font-semibold'
                             : 'text-muted-foreground/60'}"
                         >
                           {ln.no}
                         </div>
-                        <div class="code-content text-foreground flex-1 break-all px-4 {fontSizeClass}">
+                        <div class="code-content text-foreground flex-1 break-all px-4">
                           {@html highlightKeywords(ln.text)}
                         </div>
                       </div>
@@ -718,11 +718,12 @@
 
 <style>
   .code-content {
-    font-family: var(--font-ui), monospace;
+    font-family: 'Maple Mono NF CN', var(--font-ui), monospace;
     font-feature-settings:
       'liga' 0,
       'calt' 0;
     font-variant-ligatures: none;
+    font-weight: 200;
   }
 
   :global(.highlight) {
