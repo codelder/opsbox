@@ -32,39 +32,33 @@
   let error = $state<string | null>(null);
   let fontSize = $state('base');
 
-  // 处理字体大小变化
-  function handleFontSizeChange(newSize: string) {
-    fontSize = newSize;
-    // 可选：保存到本地存储
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem('logseek_view_fontsize', newSize);
-      } catch (e) {
-        // 忽略本地存储错误
-      }
-    }
-  }
-
   // 字体大小类映射
-  const fontSizeClass = $derived(() => {
+  let fontSizeClass = $state('text-base whitespace-pre-wrap');
+
+  $effect(() => {
     switch (fontSize) {
       case 'xs':
-        return 'text-xs whitespace-pre-wrap';
+        fontSizeClass = 'text-xs whitespace-pre-wrap';
+        break;
       case 'sm':
-        return 'text-sm whitespace-pre-wrap';
+        fontSizeClass = 'text-sm whitespace-pre-wrap';
+        break;
       case 'base':
-        return 'text-base whitespace-pre-wrap';
+        fontSizeClass = 'text-base whitespace-pre-wrap';
+        break;
       case 'lg':
-        return 'text-lg whitespace-pre-wrap';
+        fontSizeClass = 'text-lg whitespace-pre-wrap';
+        break;
       case 'xl':
-        return 'text-xl whitespace-pre-wrap';
+        fontSizeClass = 'text-xl whitespace-pre-wrap';
+        break;
       default:
-        return 'text-base whitespace-pre-wrap';
+        fontSizeClass = 'text-base whitespace-pre-wrap';
     }
   });
 
   // 根据字体大小估算行高
-  const estimatedRowHeight = $derived(() => {
+  const estimatedRowHeight = $derived.by(() => {
     switch (fontSize) {
       case 'xs':
         return 18;
@@ -80,6 +74,10 @@
         return 20;
     }
   });
+
+  function handleFontSizeChange(newSize: string) {
+    fontSize = newSize;
+  }
 
   // 分块加载相关状态
   const CHUNK_SIZE = 1000;
@@ -464,119 +462,34 @@
     return keywords.some((kw) => kw && text.includes(kw));
   }
 
-  async function loadFullFileLines(): Promise<{ no: number; text: string }[]> {
-    if (!total) return [];
-
-    const allLines: { no: number; text: string }[] = [];
-    const originalLoading = loading;
-    const originalError = error;
-
-    loading = true;
-    error = null;
-
-    try {
-      // 从第1行开始加载整个文件
-      let currentStart = 1;
-      while (currentStart <= total) {
-        const chunkEnd = Math.min(currentStart + CHUNK_SIZE - 1, total);
-        const data = await fetchRange(currentStart, chunkEnd);
-
-        if (data.lines && data.lines.length > 0) {
-          allLines.push(...data.lines);
-        }
-
-        currentStart = chunkEnd + 1;
-      }
-
-      return allLines;
-    } catch (e: unknown) {
-      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
-      error = err.message || '加载完整文件失败';
-      throw e;
-    } finally {
-      loading = originalLoading;
-      if (!error) error = originalError;
-    }
-  }
-
   async function downloadCurrentFile() {
     try {
       if (!lines || lines.length === 0) return;
 
-      let downloadFullFile = false;
+      // 使用后端下载端点获取完整文件
+      const response = await fetchViewDownload(sid, currentFile);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
 
-      // 如果文件没有完全加载，询问用户选择
-      if (end < total) {
-        const choice = confirm(
-          `文件较大，当前只加载了 ${end}/${total} 行。\n` +
-            `点击"确定"下载完整文件（直接从后端缓存下载），或"取消"仅下载已加载部分。`
-        );
-        if (choice) {
-          downloadFullFile = true;
-        }
-      }
-
-      if (downloadFullFile) {
-        // 使用后端下载端点获取完整文件
-        const response = await fetchViewDownload(sid, currentFile);
-        const blob = await response.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-
-        // 使用 parseFileUrl 获取正确的文件名（支持 archive entry path）
-        let fileName = 'log.txt';
-        const parsed = parseFileUrl(currentFile);
-        if (parsed) {
-          fileName = parsed.displayName;
-        } else {
-          // 回退到 getDisplayName
-          fileName = getDisplayName(currentFile);
-        }
-        // 清理文件名中的非法字符
-        fileName = fileName.replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
-
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+      // 使用 parseFileUrl 获取正确的文件名（支持 archive entry path）
+      let fileName = 'log.txt';
+      const parsed = parseFileUrl(currentFile);
+      if (parsed) {
+        fileName = parsed.displayName;
       } else {
-        // 仅使用已加载行（前端拼接）
-        const linesMap = new Map<number, string>();
-        // 收集已加载行（跳过稀疏数组中的空位）
-        for (const line of lines) {
-          if (line) linesMap.set(line.no, line.text);
-        }
-        // 构建行数组，按行号排序
-        const sortedLineNumbers = Array.from(linesMap.keys()).sort((a, b) => a - b);
-        const allLines = sortedLineNumbers.map((no) => ({ no, text: linesMap.get(no)! }));
-
-        // 构建文件内容
-        const content = allLines.map((ln) => ln.text).join('\n');
-        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-
-        // 使用 parseFileUrl 获取正确的文件名（支持 archive entry path）
-        let fileName = 'log.txt';
-        const parsed = parseFileUrl(currentFile);
-        if (parsed) {
-          fileName = parsed.displayName;
-        } else {
-          // 回退到 getDisplayName
-          fileName = getDisplayName(currentFile);
-        }
-        // 清理文件名中的非法字符
-        fileName = fileName.replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
-
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(url);
+        // 回退到 getDisplayName
+        fileName = getDisplayName(currentFile);
       }
+      // 清理文件名中的非法字符
+      fileName = fileName.replace(/[\\/:*?"<>|]+/g, '_') || 'log.txt';
+
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     } catch (e: unknown) {
       const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
       error = err.message || '下载失败';
@@ -591,18 +504,6 @@
     if (!sid) {
       error = '缺少 sid 参数';
       return;
-    }
-
-    // 从本地存储加载字体大小设置
-    if (typeof window !== 'undefined') {
-      try {
-        const savedFontSize = localStorage.getItem('logseek_view_fontsize');
-        if (savedFontSize && ['xs', 'sm', 'base', 'lg', 'xl'].includes(savedFontSize)) {
-          fontSize = savedFontSize;
-        }
-      } catch (e) {
-        // 忽略本地存储错误
-      }
     }
 
     // 如果有初始文件，加载它
@@ -685,10 +586,10 @@
   });
 </script>
 
-<div class="flex h-screen flex-col bg-background text-foreground">
+<div class="bg-background text-foreground flex h-screen flex-col">
   <!-- 顶部导航栏 -->
   <header
-    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
+    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b backdrop-blur"
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- 左侧：Logo -->
@@ -733,7 +634,7 @@
 
           <!-- 虚拟滚动内容区域 -->
           <div
-            class="relative min-h-0 flex-1 overflow-auto bg-background dark:bg-[#0d1117]"
+            class="bg-background relative min-h-0 flex-1 overflow-auto dark:bg-[#0d1117]"
             bind:this={parentEl}
             onscroll={handleScroll}
           >
@@ -742,15 +643,15 @@
                 {#if lines.length > 0}
                   {#each lines as ln (ln.no)}
                     {@const isMatch = lineHasMatch(ln.text)}
-                    <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
+                    <div class="group/line hover:bg-muted/10 flex font-mono leading-5">
                       <div
-                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
-                          ? 'font-semibold text-foreground'
+                        class="w-[50px] shrink-0 select-none px-3 py-0.5 text-right font-medium text-xs {isMatch
+                          ? 'text-foreground font-semibold'
                           : 'text-muted-foreground/60'}"
                       >
                         {ln.no}
                       </div>
-                      <div class="code-content min-w-0 flex-1 px-4 break-all text-foreground {fontSizeClass}">
+                      <div class="code-content text-foreground flex-1 break-all px-4 {fontSizeClass}">
                         {@html highlightKeywords(ln.text)}
                       </div>
                     </div>
@@ -758,12 +659,12 @@
                 {:else}
                   <div class="flex h-full items-center justify-center p-10">
                     {#if loading}
-                      <div class="flex flex-col items-center gap-2 text-muted-foreground">
+                      <div class="text-muted-foreground flex flex-col items-center gap-2">
                         <LoaderCircle class="h-8 w-8 animate-spin" />
                         <span class="text-sm">加载中...</span>
                       </div>
                     {:else}
-                      <div class="text-sm text-muted-foreground">暂无内容</div>
+                      <div class="text-muted-foreground text-sm">暂无内容</div>
                     {/if}
                   </div>
                 {/if}
@@ -777,24 +678,24 @@
                   >
                     {#if ln}
                       {@const isMatch = lineHasMatch(ln.text)}
-                      <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
+                      <div class="group/line hover:bg-muted/10 flex font-mono leading-5">
                         <div
-                          class="w-[50px] shrink-0 px-3 text-right font-medium select-none {isMatch
-                            ? 'font-semibold text-foreground'
+                          class="w-[50px] shrink-0 select-none px-3 text-right font-medium text-xs {isMatch
+                            ? 'text-foreground font-semibold'
                             : 'text-muted-foreground/60'}"
                         >
                           {ln.no}
                         </div>
-                        <div class="code-content min-w-0 flex-1 px-4 break-all text-foreground {fontSizeClass}">
+                        <div class="code-content text-foreground flex-1 break-all px-4 {fontSizeClass}">
                           {@html highlightKeywords(ln.text)}
                         </div>
                       </div>
                     {:else}
                       <div class="flex font-mono text-xs leading-relaxed opacity-60">
-                        <div class="w-[50px] shrink-0 px-3 text-right font-medium text-muted-foreground select-none">
+                        <div class="text-muted-foreground w-[50px] shrink-0 select-none px-3 text-right font-medium">
                           {item.index + 1}
                         </div>
-                        <div class="code-content flex-1 px-4 text-muted-foreground">加载中…</div>
+                        <div class="code-content text-muted-foreground flex-1 px-4">加载中…</div>
                       </div>
                     {/if}
                   </div>
@@ -806,8 +707,8 @@
       {:else}
         <div class="flex flex-1 items-center justify-center">
           <div class="text-center">
-            <FileText class="mx-auto h-12 w-12 text-muted-foreground/50" />
-            <p class="mt-4 text-sm text-muted-foreground">没有文件可查看</p>
+            <FileText class="text-muted-foreground/50 mx-auto h-12 w-12" />
+            <p class="text-muted-foreground mt-4 text-sm">没有文件可查看</p>
           </div>
         </div>
       {/if}
