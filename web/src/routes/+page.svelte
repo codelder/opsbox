@@ -66,10 +66,10 @@
   }
 </script>
 
-<main class="bg-background text-foreground flex min-h-full justify-center">
+<main class="flex min-h-full justify-center bg-background text-foreground">
   <!-- 固定位置的设置和主题切换按钮 -->
-  <div class="fixed left-3 top-3 z-50"><Settings /></div>
-  <div class="fixed right-3 top-3 z-50"><ThemeToggle /></div>
+  <div class="fixed top-3 left-3 z-50"><Settings /></div>
+  <div class="fixed top-3 right-3 z-50"><ThemeToggle /></div>
 
   <div class="w-full max-w-6xl px-6 pt-28 sm:pt-36 md:pt-44">
     <div class="mx-auto w-full text-center">
@@ -81,14 +81,14 @@
       <form role="search" onsubmit={handleHomeSubmit}>
         <div class="relative flex items-center">
           <!-- 搜索图标 -->
-          <span aria-hidden="true" class="text-muted-foreground pointer-events-none absolute left-4 z-10">
+          <span aria-hidden="true" class="pointer-events-none absolute left-4 z-10 text-muted-foreground">
             <Search class="h-5 w-5" />
           </span>
 
           <input
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="border-input bg-background text-foreground ring-offset-background placeholder:text-placeholder focus:ring-ring flex h-14 w-full rounded-full border px-12 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-foreground shadow-sm ring-offset-background placeholder:text-placeholder focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             id="search"
             name="q"
             placeholder="试一下: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
@@ -99,7 +99,7 @@
           <div class="absolute right-2 z-20">
             <button
               type="button"
-              class="group/ai bg-secondary text-secondary-foreground hover:bg-secondary/80 inline-flex items-center rounded-full px-3 py-1.5 text-xs font-medium transition-all focus:outline-none"
+              class="group/ai inline-flex items-center rounded-full bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition-all hover:bg-secondary/80 focus:outline-none"
               title="按下使用 AI 模式；直接回车为普通模式"
               aria-label="AI 模式按钮"
               aria-pressed={aiLoading || pressing}

@@ -30,6 +30,56 @@
   let lines = $state<{ no: number; text: string }[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
+  let fontSize = $state('base');
+
+  // 处理字体大小变化
+  function handleFontSizeChange(newSize: string) {
+    fontSize = newSize;
+    // 可选：保存到本地存储
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('logseek_view_fontsize', newSize);
+      } catch (e) {
+        // 忽略本地存储错误
+      }
+    }
+  }
+
+  // 字体大小类映射
+  const fontSizeClass = $derived(() => {
+    switch (fontSize) {
+      case 'xs':
+        return 'text-xs whitespace-pre-wrap';
+      case 'sm':
+        return 'text-sm whitespace-pre-wrap';
+      case 'base':
+        return 'text-base whitespace-pre-wrap';
+      case 'lg':
+        return 'text-lg whitespace-pre-wrap';
+      case 'xl':
+        return 'text-xl whitespace-pre-wrap';
+      default:
+        return 'text-base whitespace-pre-wrap';
+    }
+  });
+
+  // 根据字体大小估算行高
+  const estimatedRowHeight = $derived(() => {
+    switch (fontSize) {
+      case 'xs':
+        return 18;
+      case 'sm':
+        return 20;
+      case 'base':
+        return 22;
+      case 'lg':
+        return 24;
+      case 'xl':
+        return 26;
+      default:
+        return 20;
+    }
+  });
 
   // 分块加载相关状态
   const CHUNK_SIZE = 1000;
@@ -45,8 +95,6 @@
 
   // 虚拟滚动容器引用
   let parentEl = $state<HTMLDivElement | null>(null);
-  const EST_ROW_HEIGHT = 20; // 估算行高
-  const INITIAL_LOAD_SIZE = 1000;
 
   // 延迟测量队列 - 批量处理避免同步布局阻塞
   let measureQueue: HTMLElement[] = [];
@@ -91,7 +139,7 @@
   const rowVirtualizer = createVirtualizer({
     count: 0,
     getScrollElement: () => parentEl,
-    estimateSize: () => EST_ROW_HEIGHT,
+    estimateSize: () => estimatedRowHeight,
     overscan: 5
   });
 
@@ -129,7 +177,7 @@
 
     // 检查是否接近底部 - 使用估算高度避免读取scrollHeight（性能优化）
     if (total > 0) {
-      const estimatedScrollHeight = total * EST_ROW_HEIGHT;
+      const estimatedScrollHeight = total * estimatedRowHeight;
       if (el.scrollTop + el.clientHeight >= estimatedScrollHeight - 200 && end < total && !loading) {
         loadMore();
       }
@@ -416,45 +464,10 @@
     return keywords.some((kw) => kw && text.includes(kw));
   }
 
-  async function loadRemainingLinesForDownload(): Promise<{no: number; text: string}[]> {
-    if (!total || end >= total) return [];
-
-    const remainingLines: {no: number; text: string}[] = [];
-    const originalLoading = loading;
-    const originalError = error;
-
-    loading = true;
-    error = null;
-
-    try {
-      // 以块为单位加载剩余行
-      let currentStart = end + 1;
-      while (currentStart <= total) {
-        const chunkEnd = Math.min(currentStart + CHUNK_SIZE - 1, total);
-        const data = await fetchRange(currentStart, chunkEnd);
-
-        if (data.lines && data.lines.length > 0) {
-          remainingLines.push(...data.lines);
-        }
-
-        currentStart = chunkEnd + 1;
-      }
-
-      return remainingLines;
-    } catch (e: unknown) {
-      const err = e && typeof e === 'object' ? (e as { message?: string }) : {};
-      error = err.message || '加载剩余行失败';
-      throw e;
-    } finally {
-      loading = originalLoading;
-      if (!error) error = originalError;
-    }
-  }
-
-  async function loadFullFileLines(): Promise<{no: number; text: string}[]> {
+  async function loadFullFileLines(): Promise<{ no: number; text: string }[]> {
     if (!total) return [];
 
-    const allLines: {no: number; text: string}[] = [];
+    const allLines: { no: number; text: string }[] = [];
     const originalLoading = loading;
     const originalError = error;
 
@@ -537,7 +550,7 @@
         }
         // 构建行数组，按行号排序
         const sortedLineNumbers = Array.from(linesMap.keys()).sort((a, b) => a - b);
-        const allLines = sortedLineNumbers.map(no => ({ no, text: linesMap.get(no)! }));
+        const allLines = sortedLineNumbers.map((no) => ({ no, text: linesMap.get(no)! }));
 
         // 构建文件内容
         const content = allLines.map((ln) => ln.text).join('\n');
@@ -578,6 +591,18 @@
     if (!sid) {
       error = '缺少 sid 参数';
       return;
+    }
+
+    // 从本地存储加载字体大小设置
+    if (typeof window !== 'undefined') {
+      try {
+        const savedFontSize = localStorage.getItem('logseek_view_fontsize');
+        if (savedFontSize && ['xs', 'sm', 'base', 'lg', 'xl'].includes(savedFontSize)) {
+          fontSize = savedFontSize;
+        }
+      } catch (e) {
+        // 忽略本地存储错误
+      }
     }
 
     // 如果有初始文件，加载它
@@ -660,10 +685,10 @@
   });
 </script>
 
-<div class="bg-background text-foreground flex h-screen flex-col">
+<div class="flex h-screen flex-col bg-background text-foreground">
   <!-- 顶部导航栏 -->
   <header
-    class="border-border bg-background/95 supports-backdrop-filter:bg-background/60 sticky top-0 z-50 w-full border-b backdrop-blur"
+    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- 左侧：Logo -->
@@ -702,11 +727,13 @@
             {keywords}
             {loading}
             onDownload={downloadCurrentFile}
+            {fontSize}
+            onFontSizeChange={handleFontSizeChange}
           />
 
           <!-- 虚拟滚动内容区域 -->
           <div
-            class="bg-background relative min-h-0 flex-1 overflow-auto dark:bg-[#0d1117]"
+            class="relative min-h-0 flex-1 overflow-auto bg-background dark:bg-[#0d1117]"
             bind:this={parentEl}
             onscroll={handleScroll}
           >
@@ -715,15 +742,15 @@
                 {#if lines.length > 0}
                   {#each lines as ln (ln.no)}
                     {@const isMatch = lineHasMatch(ln.text)}
-                    <div class="group/line hover:bg-muted/10 flex font-mono text-xs leading-5">
+                    <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
                       <div
-                        class="w-[50px] shrink-0 select-none px-3 py-0.5 text-right font-medium {isMatch
-                          ? 'text-foreground font-semibold'
+                        class="w-[50px] shrink-0 px-3 py-0.5 text-right font-medium select-none {isMatch
+                          ? 'font-semibold text-foreground'
                           : 'text-muted-foreground/60'}"
                       >
                         {ln.no}
                       </div>
-                      <div class="code-content text-foreground flex-1 whitespace-pre-wrap break-all px-4">
+                      <div class="code-content min-w-0 flex-1 px-4 break-all text-foreground {fontSizeClass}">
                         {@html highlightKeywords(ln.text)}
                       </div>
                     </div>
@@ -731,12 +758,12 @@
                 {:else}
                   <div class="flex h-full items-center justify-center p-10">
                     {#if loading}
-                      <div class="text-muted-foreground flex flex-col items-center gap-2">
+                      <div class="flex flex-col items-center gap-2 text-muted-foreground">
                         <LoaderCircle class="h-8 w-8 animate-spin" />
                         <span class="text-sm">加载中...</span>
                       </div>
                     {:else}
-                      <div class="text-muted-foreground text-sm">暂无内容</div>
+                      <div class="text-sm text-muted-foreground">暂无内容</div>
                     {/if}
                   </div>
                 {/if}
@@ -750,24 +777,24 @@
                   >
                     {#if ln}
                       {@const isMatch = lineHasMatch(ln.text)}
-                      <div class="group/line hover:bg-muted/10 flex font-mono text-xs leading-5">
+                      <div class="group/line flex font-mono text-xs leading-5 hover:bg-muted/10">
                         <div
-                          class="w-[50px] shrink-0 select-none px-3 text-right font-medium {isMatch
-                            ? 'text-foreground font-semibold'
+                          class="w-[50px] shrink-0 px-3 text-right font-medium select-none {isMatch
+                            ? 'font-semibold text-foreground'
                             : 'text-muted-foreground/60'}"
                         >
                           {ln.no}
                         </div>
-                        <div class="code-content text-foreground flex-1 whitespace-pre-wrap break-all px-4">
+                        <div class="code-content min-w-0 flex-1 px-4 break-all text-foreground {fontSizeClass}">
                           {@html highlightKeywords(ln.text)}
                         </div>
                       </div>
                     {:else}
                       <div class="flex font-mono text-xs leading-relaxed opacity-60">
-                        <div class="text-muted-foreground w-[50px] shrink-0 select-none px-3 text-right font-medium">
+                        <div class="w-[50px] shrink-0 px-3 text-right font-medium text-muted-foreground select-none">
                           {item.index + 1}
                         </div>
-                        <div class="code-content text-muted-foreground flex-1 px-4">加载中…</div>
+                        <div class="code-content flex-1 px-4 text-muted-foreground">加载中…</div>
                       </div>
                     {/if}
                   </div>
@@ -779,8 +806,8 @@
       {:else}
         <div class="flex flex-1 items-center justify-center">
           <div class="text-center">
-            <FileText class="text-muted-foreground/50 mx-auto h-12 w-12" />
-            <p class="text-muted-foreground mt-4 text-sm">没有文件可查看</p>
+            <FileText class="mx-auto h-12 w-12 text-muted-foreground/50" />
+            <p class="mt-4 text-sm text-muted-foreground">没有文件可查看</p>
           </div>
         </div>
       {/if}

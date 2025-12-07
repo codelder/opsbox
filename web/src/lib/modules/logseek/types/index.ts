@@ -24,9 +24,7 @@ export interface JsonChunk {
 /**
  * 关键词信息（带类型）
  */
-export type KeywordInfo =
-  | { type: 'literal'; text: string }
-  | { type: 'phrase'; text: string };
+export type KeywordInfo = { type: 'literal'; text: string } | { type: 'phrase'; text: string };
 
 /**
  * 搜索结果（NDJSON 流中的单个文件结果）

@@ -63,10 +63,7 @@ export async function fetchViewCache(
  * @param file 文件路径
  * @returns 返回 Response 对象，调用者可以处理下载
  */
-export async function fetchViewDownload(
-  sid: string,
-  file: string
-): Promise<Response> {
+export async function fetchViewDownload(sid: string, file: string): Promise<Response> {
   const API_BASE = getApiBase();
 
   // 确保 file 参数是正确格式的 URL（ls://...）
@@ -75,7 +72,7 @@ export async function fetchViewDownload(
   // 使用 URLSearchParams 来正确构建查询参数，避免双重编码
   const params = new URLSearchParams({
     sid: sid,
-    file: fileParam,
+    file: fileParam
   });
 
   const url = `${API_BASE}/view/download?${params.toString()}`;
