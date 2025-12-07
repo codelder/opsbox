@@ -33,7 +33,7 @@
     xlarge: 'text-8xl md:text-10xl'
   };
 
-  const baseClass = `inline-block font-extrabold tracking-[-0.25em] italic antialiased select-none ${sizeClasses[size]}`;
+  const baseClass = `logoseek-logo inline-block font-extrabold tracking-[-0.25em] italic antialiased select-none ${sizeClasses[size]}`;
   const hoverClass = hoverable ? 'transform transition-transform duration-300 hover:scale-105' : '';
   const cursorClass = asLabel ? 'cursor-pointer' : '';
 </script>
@@ -59,3 +59,9 @@
     <span class="text-yellow-500 drop-shadow-sm">k</span>
   </div>
 {/if}
+
+<style>
+  .logoseek-logo {
+    font-family: 'Google Sans Code', var(--font-ui), monospace;
+  }
+</style>
