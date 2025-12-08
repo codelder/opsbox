@@ -148,11 +148,7 @@ pub async fn get_file_list_json(Query(params): Query<FileListParams>) -> Result<
 
 /// 下载完整文件内容
 pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
-  tracing::debug!(
-    "download-request: sid={} file={}",
-    params.sid,
-    params.file
-  );
+  tracing::debug!("download-request: sid={} file={}", params.sid, params.file);
 
   // 解析 FileUrl
   let file_url: FileUrl = match params.file.parse() {
@@ -173,7 +169,7 @@ pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpRespo
     .get_lines_slice(
       &params.sid,
       &file_url,
-      1, // 从第1行开始
+      1,          // 从第1行开始
       usize::MAX, // 到最大行（内部会限制到total）
     )
     .await
@@ -213,10 +209,7 @@ pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpRespo
 
   HttpResponse::builder()
     .status(200)
-    .header(
-      CONTENT_TYPE,
-      HeaderValue::from_static("text/plain; charset=utf-8"),
-    )
+    .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
     .body(Body::from(content))
     .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建下载响应失败: {}", e))))
 }
