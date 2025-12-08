@@ -217,21 +217,14 @@
       if (selectedPath.length > 0 && selectedPath[0] !== typeKey) return false;
       if (selectedPath.length === 1) return true;
 
-      // 2. Check Endpoint ID
-      // 注意：如果 Endpoint ID 被跳过了（因为只有一个），selectedPath 中可能不包含它？
-      // 不，selectedPath 存储的是 UI 上点击的路径。
-      // 如果 UI 上跳过了 Endpoint ID，那么 selectedPath[1] 直接就是 Dir/Archive。
-      // 我们需要根据 sourceTree 的结构来还原匹配逻辑。
-      // 更好的方法是：selectedPath 存储的是 TreeNode 的 fullPath。
-      // 无论 UI 怎么压缩，fullPath 都是完整的真实路径。
-
-      // 让我们重新定义 selectedPath：它存储的是用户点击的那个节点的 fullPath。
-      // 当用户点击一个“压缩节点”时，我们使用该节点的 fullPath。
-      // 压缩节点的 fullPath 指向的是最深层的那个节点。
-
-      // 验证 fullPath 匹配
-      // fullPath: ['S3', 'prod:bucket', 'dir1', 'dir2']
-      // res parts: type, id, path segments...
+      // 2. Check Endpoint ID and deeper paths
+      // selectedPath 存储用户点击节点的完整路径（TreeNode.fullPath），例如：
+      // - ['S3']                      // 仅选中端点类型
+      // - ['S3', 'prod:bucket']       // 选中端点类型和存储桶
+      // - ['S3', 'prod:bucket', 'logs'] // 选中端点类型、存储桶和目录
+      //
+      // 即使UI压缩跳过了某些层级（如只有一个存储桶时），fullPath 依然包含完整路径，
+      // 确保筛选逻辑能准确匹配。
 
       const resPathParts = [typeKey, parsed.endpointId];
       const pathSegments = parsed.path.split('/').filter((p: string) => p);

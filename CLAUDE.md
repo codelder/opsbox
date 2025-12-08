@@ -6,6 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 OpsBox is a modular log search and analysis platform built with Rust backend and SvelteKit frontend. It features a pluggable architecture where modules are automatically discovered and registered at compile time.
 
+### Technology Stack
+
+- **Backend**: Rust 2024 edition with `tracing` ecosystem for logging
+- **Frontend**: SvelteKit 5 with TypeScript, TailwindCSS 4.0
+- **Database**: SQLite with automatic schema management
+- **Build Tools**:
+  - Rust: Cargo workspace
+  - Node.js: pnpm 10.23.0, Vite
+- **Font System**: Maple Mono NF CN for optimal Chinese code display
+- **Version**: 0.1.0-rc10
+
 ### Core Architecture
 
 - **Monorepo Structure**: Rust backend (`backend/`) + SvelteKit frontend (`web/`)
@@ -31,20 +42,25 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
   - Module system (`module.rs`) - inventory-based registration
   - LLM abstraction (`llm/`) - Ollama/OpenAI clients
   - Standard responses (`response.rs`)
+  - Middleware utilities (`middleware/`)
+  - Logging configuration (`logging/`)
 
 - **logseek**: Log search module with layered architecture:
   - API layer (`routes/`, `api/`)
   - Service layer (`service/`)
   - Repository layer (`repository/`)
-  - Domain layer (`domain/`)
+  - Domain layer (`domain/`, `domain/source_planner/`)
+  - Source planners (`planners/`)
   - Utilities (`utils/`)
   - Query parser (`query/`)
   - Agent integration (`agent/`)
 
 - **agent-manager**: Agent management module:
-  - Agent registry and health monitoring
+  - Agent registry and health monitoring (`manager.rs`)
   - Tag-based agent organization
-  - API endpoints under `/api/v1/agents`
+  - Database repository (`repository.rs`)
+  - API endpoints (`routes.rs`) under `/api/v1/agents`
+  - Data models (`models.rs`)
 
 - **agent**: Standalone agent binary for remote log access
 
@@ -56,6 +72,9 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
   - `agent/`: Agent management APIs and composables
 - **Vite dev server** with proxy to backend (`/api` → `http://127.0.0.1:4000`)
 - **Built assets** output to `backend/opsbox-server/static`
+- **Font system**: Maple Mono NF CN font family for optimal Chinese code display
+- **Performance optimizations**: Virtual scrolling and chunked loading for large files
+- **File download**: Integrated download functionality with backend cache support
 
 ## Development Guidelines
 
@@ -92,7 +111,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 ```bash
 # Install dependencies
 corepack enable
-corepack prepare pnpm@10.17.1 --activate
+corepack prepare pnpm@10.23.0 --activate
 pnpm --dir web install
 
 # Run development
@@ -106,6 +125,11 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 # Testing
 cargo test --manifest-path backend/Cargo.toml
 pnpm --dir web test
+
+# Frontend testing with specific environments
+pnpm --dir web test:unit  # Run all tests
+pnpm --dir web test:unit --run --project=client  # Browser tests only
+pnpm --dir web test:unit --run --project=server  # Node.js tests only
 ```
 
 ### Configuration Priority
@@ -122,6 +146,25 @@ pnpm --dir web test
 - **Database migrations**: Handled automatically, but schema changes require `init_schema` updates
 - **Graceful shutdown**: Implemented for all modules via `cleanup()` method
 - **Performance**: IO concurrency, timeouts, and retries configurable via environment variables
+- **Font system**: Uses Maple Mono NF CN font family for optimal Chinese code display; font files are embedded in static assets
+- **Large file handling**: Virtual scrolling and chunked loading implemented for files > 1000 lines
+- **File download**: Full file download with backend cache support via `/view/download` endpoint
+- **Gzip support**: Plain gzip files (non-tar) supported in directory and file targets
+- **Testing configuration**: Dual test environments (browser + Node.js) with Playwright for browser tests
+- **Development server**: Vite dev server configured for external access (0.0.0.0:5173)
+
+## Recent Updates
+
+- **Font migration**: Entire site migrated to Maple Mono NF CN font family for optimal Chinese code display
+- **File download functionality**: Added full file download endpoint with backend cache support
+- **Performance optimizations**: Implemented chunked loading and virtual scrolling for large files
+- **Gzip file support**: Logseek module now supports plain gzip files in directory and file targets
+- **Search text detection**: Improved search text detection with updated tests
+- **Case-sensitive search rules**: Alignment of case-sensitive search rules between frontend and backend highlighting
+- **UI improvements**: View page UI updated with sidebar removal and enhanced FileHeader design with color-coded metadata
+- **Path parsing**: Refactored to use parseFileUrl utility
+- **Settings reorganization**: Moved settings and theme toggle to individual pages for better UX
+- **Font size control**: Added font size control (xs, sm, base, lg, xl) in view page
 
 ## Common Tasks
 
