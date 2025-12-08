@@ -37,32 +37,8 @@
 
 @font-face {
   font-family: 'Google Sans Code';
-  src: url('/fonts/GoogleSansCode.woff2') format('woff2');
-  font-weight: 200 900;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Google Sans Code';
   src: url('/fonts/GoogleSansCode-Italic.woff2') format('woff2');
   font-weight: 200 900;
-  font-style: italic;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-Thin.woff2') format('woff2');
-  font-weight: 100;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-ThinItalic.woff2') format('woff2');
-  font-weight: 100;
   font-style: italic;
   font-display: swap;
 }
@@ -77,41 +53,9 @@
 
 @font-face {
   font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-ExtraLightItalic.woff2') format('woff2');
-  font-weight: 200;
-  font-style: italic;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-Light.woff2') format('woff2');
-  font-weight: 300;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-LightItalic.woff2') format('woff2');
-  font-weight: 300;
-  font-style: italic;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
   src: url('/fonts/MapleMono-NF-CN-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-Italic.woff2') format('woff2');
-  font-weight: 400;
-  font-style: italic;
   font-display: swap;
 }
 
@@ -125,14 +69,6 @@
 
 @font-face {
   font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-MediumItalic.woff2') format('woff2');
-  font-weight: 500;
-  font-style: italic;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
   src: url('/fonts/MapleMono-NF-CN-SemiBold.woff2') format('woff2');
   font-weight: 600;
   font-style: normal;
@@ -141,41 +77,9 @@
 
 @font-face {
   font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-SemiBoldItalic.woff2') format('woff2');
-  font-weight: 600;
-  font-style: italic;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-Blod.woff2') format('woff2');
+  src: url('/fonts/MapleMono-NF-CN-Bold.woff2') format('woff2');
   font-weight: 700;
   font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-BlodItalic.woff2') format('woff2');
-  font-weight: 700;
-  font-style: italic;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-ExtraBlod.woff2') format('woff2');
-  font-weight: 800;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Maple Mono NF CN';
-  src: url('/fonts/MapleMono-NF-CN-ExtraBlodItalic.woff2') format('woff2');
-  font-weight: 800;
-  font-style: italic;
   font-display: swap;
 }
 
