@@ -103,41 +103,11 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
 
-  /* Legacy/Existing mappings to ensure backward compatibility during migration */
-  --color-base: var(--background);
-  --color-content: var(--foreground);
-  --color-primary-base: var(--primary);
-  --color-primary-content: var(--primary-foreground);
-  --color-secondary-base: var(--secondary);
-  --color-secondary-content: var(--secondary-foreground);
-  --color-muted-base: var(--muted);
-  --color-muted-content: var(--muted-foreground);
-  --color-accent-base: var(--accent);
-  --color-accent-content: var(--accent-foreground);
-  --color-destructive-base: var(--destructive);
-  --color-line: var(--border);
-  --color-sidebar-base: var(--sidebar);
-  --color-sidebar-content: var(--sidebar-foreground);
-  --color-sidebar-primary-base: var(--sidebar-primary);
-  --color-sidebar-primary-content: var(--sidebar-primary-foreground);
-  --color-sidebar-accent-base: var(--sidebar-accent);
-  --color-sidebar-accent-content: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-placeholder: var(--placeholder);
-
   /* 字体配置 */
-  --font-sans: 'Maple Mono NF CN', system-ui, sans-serif;
-  --font-serif: 'Maple Mono NF CN', Georgia, serif;
   --font-mono: 'Maple Mono NF CN', ui-monospace, monospace;
 }
 
@@ -164,23 +134,7 @@
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
-  /* Blue 600 */
-  --chart-1: oklch(0.546 0.245 262.881);
-  /* Red 600 */
-  --chart-2: oklch(0.577 0.245 27.325);
-  /* Yellow 500 */
-  --chart-3: oklch(0.823 0.12 84.67);
-  /* Green 600 */
-  --chart-4: oklch(0.627 0.194 149.214);
   --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
   --placeholder: oklch(0.6 0 0);
 }
 
@@ -204,37 +158,12 @@
   --border: oklch(0.269 0 0);
   --input: oklch(0.269 0 0);
   --ring: oklch(0.439 0 0);
-  /* Blue 600 */
-  --chart-1: oklch(0.546 0.245 262.881);
-  /* Red 600 */
-  --chart-2: oklch(0.577 0.245 27.325);
-  /* Yellow 500 */
-  --chart-3: oklch(0.823 0.12 84.67);
-  /* Green 600 */
-  --chart-4: oklch(0.627 0.194 149.214);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
   --placeholder: oklch(0.4 0 0);
 }
 
 html,
 body {
   font-family: var(--font-ui), monospace;
-}
-
-label[for='search'],
-#logo-label {
-  font-family: var(--font-ui), sans-serif;
-}
-
-input#search {
-  font-family: var(--font-ui), sans-serif;
 }
 
 /* 简易 Markdown 样式（用于渲染 README 的 .prose 容器）*/
@@ -261,12 +190,14 @@ input#search {
 }
 
 .prose p {
+  font-weight: 200;
   margin: 0.5rem 0;
 }
 
 .prose ul,
 .prose ol {
   margin: 0.5rem 0;
+  font-weight: 200;
   padding-left: 1.25rem;
 }
 
@@ -286,6 +217,7 @@ input#search {
   padding: 0.15rem 0.35rem;
   border-radius: 0.25rem;
   font-family: var(--font-ui), monospace;
+  font-weight: 200;
   font-size: 0.9em;
   /* slate-300，添加边框增强对比 */
   border: 1px solid #cbd5e1;
