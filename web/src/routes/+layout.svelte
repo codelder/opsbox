@@ -15,6 +15,6 @@
 
 <ModeWatcher />
 
-<div class="min-h-screen bg-base text-content transition-colors duration-200 ease-in-out">
+<div class="min-h-screen bg-background text-foreground transition-colors duration-200 ease-in-out">
   {@render children?.()}
 </div>

@@ -168,7 +168,7 @@
         {/if}
       </div>
       <h1
-        class="min-w-0 flex-1 font-semibold break-all text-base"
+        class="min-w-0 flex-1 text-base font-semibold break-all"
         style="color: hsl(var(--foreground));"
         title={filePath}
       >

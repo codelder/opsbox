@@ -63,7 +63,7 @@
 </script>
 
 <div class="grid gap-2">
-  <Label class="font-semibold text-base">{label}</Label>
+  <Label class="text-base font-semibold">{label}</Label>
   <p class="text-sm text-muted-foreground">
     {description}
   </p>
