@@ -68,7 +68,7 @@
     info: Info
   };
 
-  const Icon = iconMap[type];
+  let Icon = $derived(iconMap[type]);
 
   // Custom styles for non-destructive variants to match original intent
   const typeClasses = {
