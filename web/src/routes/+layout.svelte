@@ -9,12 +9,11 @@
 <svelte:head>
   <link href={favicon} rel="icon" />
 
-  <link rel="preload" href="/fonts/GoogleSansCode.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
   <link rel="preload" href="/fonts/GoogleSansCode-Italic.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
 </svelte:head>
 
 <ModeWatcher />
 
-<div class="min-h-screen bg-background text-foreground transition-colors duration-200 ease-in-out">
+<div class="bg-background text-foreground min-h-screen transition-colors duration-200 ease-in-out">
   {@render children?.()}
 </div>
