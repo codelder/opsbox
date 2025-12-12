@@ -5,7 +5,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   server: {
-    host: '0.0.0.0', // 允许外部访问
+    // 本地开发时允许外部访问；E2E/CI 下建议只绑定回环地址避免端口权限/冲突问题
+    host: process.env.VITE_HOST || '0.0.0.0',
     port: 5173, // 明确指定端口
     proxy: {
       '/api': {
