@@ -2,10 +2,10 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Search E2E', () => {
   test.beforeEach(async ({ page }) => {
-    // Mock the search API
+    // 拦截搜索请求，返回固定的 NDJSON 结果
     await page.route('**/search.ndjson', async (route) => {
       const jsonResults = [
-        // Local File
+        // 本地文件结果
         {
           type: 'result',
           data: {
@@ -23,7 +23,7 @@ test.describe('Search E2E', () => {
             ]
           }
         },
-        // Agent File
+        // 远程代理结果
         {
           type: 'result',
           data: {
@@ -40,7 +40,7 @@ test.describe('Search E2E', () => {
             ]
           }
         },
-        // S3 Archive File
+        // S3 归档结果
         {
           type: 'result',
           data: {
@@ -54,7 +54,7 @@ test.describe('Search E2E', () => {
             ]
           }
         },
-        // Complete event
+        // NDJSON 结束标记（让前端知道结果流结束了）
         {
           type: 'complete',
           data: {
@@ -80,57 +80,46 @@ test.describe('Search E2E', () => {
   });
 
   test('should display search results for different endpoint types', async ({ page }) => {
-    // Perform search
+    // 发起搜索
     const searchInput = page.getByPlaceholder('搜索...');
     await searchInput.fill('error');
     await searchInput.press('Enter');
 
-    // Wait for results
+    // 等待结果统计渲染出来
     await expect(page.locator('.text-lg.font-semibold')).toContainText('3 个结果');
 
-    // Level 0: Endpoint Types
+    // 侧边栏第 1 层：数据源类型
     await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
     await expect(page.getByRole('button', { name: '远程代理' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'S3 云存储' })).toBeVisible();
 
-    // Level 1: Endpoint IDs (Expand tree if needed, or check if they are visible)
-    // Based on my reading of +page.svelte, it renders a tree.
-    // Single child nodes are skipped, so we expect leaf directories.
+    // 展开后应看到叶子目录（页面会跳过只有一个子节点的中间目录）
 
-    // Expand Local
+    // 展开本地文件
     await page.getByRole('button', { name: '本地文件' }).click();
     await expect(page.getByRole('button', { name: 'log' })).toBeVisible();
 
-    // Expand Agent
+    // 展开远程代理
     await page.getByRole('button', { name: '远程代理' }).click();
     await expect(page.getByRole('button', { name: 'logs' })).toBeVisible();
 
-    // Expand S3
+    // 展开 S3
     await page.getByRole('button', { name: 'S3 云存储' }).click();
     await expect(page.getByRole('button', { name: 'internal' })).toBeVisible();
-    // Local: var/log/syslog
-    // Agent: app/logs/error.log
-    // S3: prod:logs-bucket -> ...
-    // Note: the component truncates path, so we check for partial text or specific elements
+    // 路径在卡片里可能会被截断，这里只断言关键节点出现
 
-    // Check filtering by clicking sidebar
-    // (Already clicked '本地文件' above)
-    // await page.getByRole('button', { name: '本地文件' }).click();
-    await page.getByRole('button', { name: '本地文件' }).click(); // Re-select to filter
+    // 点击“本地文件”过滤，只剩本地那条结果
+    await page.getByRole('button', { name: '本地文件' }).click();
     await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果');
 
-    // Verify Card Content
+    // 卡片内容
     await expect(page.getByText('syslog')).toBeVisible();
     await expect(
       page.getByText('Dec 11 10:00:00 localhost kernel: [123.456] error: something bad happened')
     ).toBeVisible();
 
-    // Clear filter
-    await page.getByRole('button', { name: '本地文件' }).click(); // Click again to potentially toggle or verify behavior.
-    // Logic says: if filtered, clicking active clears it (or selects parent).
-    // Let's re-verify exact behavior logic if needed, but for now let's just assert results are back implies logic works
-    // Actually, logic is: toggleSelection -> if exact match, clear to empty?
-    // Let's just check clearing by clicking 'Local' again which matches selectedPath=['Local']
+    // 再点一次取消过滤，回到全部结果
+    await page.getByRole('button', { name: '本地文件' }).click();
 
     await expect(page.locator('.text-lg.font-semibold')).toContainText('3 个结果');
   });

@@ -14,7 +14,13 @@
     "format": "prettier --write .",
     "lint": "prettier --check . && eslint .",
     "test:unit": "vitest",
-    "test": "npm run test:unit -- --run"
+    "test": "npm run test:unit -- --run",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:local": "playwright test tests/e2e/integration_local.spec.ts",
+    "test:e2e:mixed": "playwright test tests/e2e/integration_mixed.spec.ts",
+    "test:e2e:search": "playwright test tests/e2e/search.spec.ts"
   },
   "devDependencies": {
     "@eslint/compat": "^1.2.5",

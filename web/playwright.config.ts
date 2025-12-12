@@ -21,18 +21,19 @@ export default defineConfig({
   webServer: [
     {
       command: 'pnpm run dev',
-      url: 'http://localhost:5173',
-      reuseExistingServer: !process.env.CI,
+      url: 'http://127.0.0.1:5173',
+      reuseExistingServer: !process.env.CI, // CI 环境每次重新启动，本地开发时重用（避免端口冲突）
       stdout: 'ignore',
       stderr: 'pipe',
       env: {
-        BACKEND_PORT: '4001'
+        BACKEND_PORT: '4001',
+        VITE_HOST: '127.0.0.1'
       }
     },
     {
       command: 'sh -c "cd ../backend && cargo run --release -p opsbox-server -- --port 4001"',
       url: 'http://127.0.0.1:4001/healthy',
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: !process.env.CI, // CI 环境每次重新启动，本地开发时重用（避免端口冲突）
       stdout: 'ignore',
       stderr: 'pipe',
       timeout: process.env.CI ? 300000 : 120000 // CI 环境需要更长时间编译
