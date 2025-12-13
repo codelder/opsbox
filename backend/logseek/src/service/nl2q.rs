@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 // 使用新的 LLM 客户端
 use crate::repository::llm::{self, ProviderKind};
 use opsbox_core::SqlitePool;
@@ -101,15 +101,15 @@ pub async fn call_llm(pool: &SqlitePool, nl: &str) -> Result<String, NL2QError> 
   info!("LLM 响应耗时: {:?}，模型: {}", duration, resp.model);
 
   let mut q = resp.content.trim().to_string();
-  debug!("LLM 内容输出: '{}'", &q);
-  debug!("LLM 响应详情: {:?}", resp);
+  trace!("LLM 内容输出: '{}'", &q);
+  trace!("LLM 响应详情: {:?}", resp);
 
   // 兜底清理：移除 <think> 片段、去掉代码块，仅取首行
   // 注意：不要移除双引号！双引号是查询语法的一部分（精确查找）
   let before_strip = q.clone();
   q = strip_think_sections(&q).trim().to_string();
   if q != before_strip {
-    debug!("移除<think>片段后: '{}'", &q);
+    trace!("移除<think>片段后: '{}'", &q);
   }
   if q.starts_with("```") && q.ends_with("```") {
     debug!("移除代码块围栏");

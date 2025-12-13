@@ -5,7 +5,6 @@
 use crate::api::{LogSeekApiError, models::SearchBody};
 use crate::service::search::SearchEvent;
 use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
-use crate::utils::renderer::render_json_chunks;
 use axum::{
   body::Body,
   extract::{Json, State},
@@ -39,14 +38,14 @@ fn serialize_event(value: &serde_json::Value) -> Option<Bytes> {
 /// 将 SearchEvent 流转换为 NDJSON 字节流
 fn convert_to_ndjson_stream(
   mut rx: mpsc::Receiver<SearchEvent>,
-  highlights: Vec<String>,
+  highlights: Vec<crate::query::KeywordHighlight>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
   async_stream::stream! {
     let mut event_count = 0;
 
     while let Some(event) = rx.recv().await {
       event_count += 1;
-      tracing::debug!("[Search Route] 收到事件 #{}: {:?}", event_count,
+      tracing::trace!("[Search Route] 收到事件 #{}: {:?}", event_count,
         match &event {
           SearchEvent::Success(res) => format!("Success(path={}, lines={})", res.path, res.lines.len()),
           SearchEvent::Error { source, message, .. } => format!("Error(source={}, msg={})", source, message),
@@ -56,7 +55,7 @@ fn convert_to_ndjson_stream(
 
       let json_value = match event {
         SearchEvent::Success(res) => {
-          let json_obj = render_json_chunks(
+          let json_obj = crate::utils::renderer::render_json_chunks(
             &res.path,
             res.merged.clone(),
             res.lines.clone(),
@@ -83,7 +82,7 @@ fn convert_to_ndjson_stream(
         }
     }
 
-    tracing::debug!("[Search Route] SearchEvent 流结束，共处理 {} 个事件", event_count);
+    tracing::info!("[Search Route] SearchEvent 流结束，共处理 {} 个事件", event_count);
   }
 }
 
@@ -125,10 +124,24 @@ pub async fn stream_search(
   let executor = SearchExecutor::new(pool, config);
   let (result_rx, sid) = executor.search(&body.q, ctx).await?;
 
-  let highlights = crate::query::Query::parse_github_like(&body.q)
-    .map(|spec| spec.highlights)
-    .unwrap_or_default();
+  let query = crate::query::Query::parse_github_like(&body.q).unwrap_or_default();
+  let highlights = query.highlights.clone();
 
   let stream = convert_to_ndjson_stream(result_rx, highlights);
   build_ndjson_response(stream, sid)
+}
+
+/// 清理搜索会话缓存
+pub async fn delete_search_session(
+  axum::extract::Path(sid): axum::extract::Path<String>,
+) -> Result<HttpResponse<Body>, LogSeekApiError> {
+  tracing::info!("[Search] 清理会话缓存: sid={}", sid);
+  crate::repository::cache::cache().remove_sid(&sid).await;
+
+  HttpResponse::builder().status(200).body(Body::empty()).map_err(|e| {
+    LogSeekApiError::Service(crate::service::ServiceError::ProcessingError(format!(
+      "构建响应失败: {}",
+      e
+    )))
+  })
 }

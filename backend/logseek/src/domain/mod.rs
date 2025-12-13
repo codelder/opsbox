@@ -6,4 +6,4 @@ pub mod file_url;
 pub mod source_planner;
 
 pub use config::{Endpoint, Source, Target};
-pub use file_url::{FileUrl, FileUrlError, TarCompression};
+pub use file_url::{EntrySourceType, FileUrl, FileUrlError};

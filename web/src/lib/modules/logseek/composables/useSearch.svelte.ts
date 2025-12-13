@@ -4,7 +4,7 @@
  */
 
 import type { SearchJsonResult } from '../types';
-import { extractSessionId, startUnifiedSearch } from '../api';
+import { extractSessionId, startUnifiedSearch, deleteSearchSession } from '../api';
 import { useStreamReader } from './useStreamReader.svelte';
 
 /**
@@ -30,6 +30,11 @@ export function useSearch() {
       controller.abort();
     }
 
+    // 如果有旧的 sid，清理后端缓存
+    if (sid) {
+      deleteSearchSession(sid);
+    }
+
     // 重置状态
     query = q;
     results = [];
@@ -40,7 +45,7 @@ export function useSearch() {
 
     try {
       loading = true;
-      const response = await startUnifiedSearch(q);
+      const response = await startUnifiedSearch(q, controller.signal);
       sid = extractSessionId(response);
 
       // 初始化流读取器
@@ -80,7 +85,7 @@ export function useSearch() {
           // 笔记: Error 事件不中断搜索，其他源会继续发送结果
           // 如果有必要，可以在此会变更 UI 状态，例如显示警告信息
         } else if (event.type === 'complete') {
-          console.log(`[搜索] 数据源 ${event.source} 完成, 耗时 ${event.elapsed_ms}ms`);
+          console.info(`[搜索] 数据源 ${event.source} 完成, 耗时 ${event.elapsed_ms}ms`);
           // 可以跟踪各源的完成情况，用于水纳模式的下载较、挺上流量计算等
         }
       }
@@ -116,10 +121,32 @@ export function useSearch() {
    */
   function cleanup(): void {
     cancel();
+    if (sid) {
+      deleteSearchSession(sid);
+    }
     results = [];
     error = null;
     sid = '';
   }
+
+  // 监听页面关闭/刷新事件，确保清理后端会话
+  $effect(() => {
+    const handlePageHide = () => {
+      if (sid) {
+        deleteSearchSession(sid);
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', handlePageHide);
+    }
+
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('pagehide', handlePageHide);
+      }
+    };
+  });
 
   return {
     // 状态

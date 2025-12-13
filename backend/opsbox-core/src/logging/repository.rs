@@ -101,6 +101,7 @@ impl LogConfigRepository {
   }
 
   /// 确保配置存在，如果不存在则创建默认配置
+  /// 注意：只在首次创建时设置默认值，之后不再自动修复，避免覆盖用户手动修改的配置
   async fn ensure_config_exists(&self, component: &str) -> Result<(), LogError> {
     let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM log_config WHERE component = ?")
       .bind(component)

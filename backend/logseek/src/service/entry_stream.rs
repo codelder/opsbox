@@ -3,9 +3,9 @@ use std::{io, path::PathBuf, sync::Arc, time::Duration};
 use async_compression::tokio::bufread::GzipDecoder;
 use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
-use tokio::io::{AsyncRead, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
-use tracing::{debug, info, warn};
+use tracing::{trace, warn};
 
 // 统一读取并发度：使用 ENTRY_CONCURRENCY（范围 1-64，默认 8）
 fn entry_concurrency() -> usize {
@@ -19,12 +19,28 @@ fn entry_concurrency() -> usize {
 use super::search::{SearchEvent, SearchProcessor};
 use opsbox_core::SqlitePool;
 
+/// 条目来源类型
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum EntrySource {
+  /// 普通文件（目录遍历或单文件）
+  #[default]
+  File,
+  /// tar 归档内的条目
+  Tar,
+  /// tar.gz 归档内的条目
+  TarGz,
+  /// 纯 gzip 压缩文件（非 tar 归档）
+  Gz,
+}
+
 /// 条目元数据（目录相对路径或归档内路径）
 #[derive(Clone, Debug)]
 pub struct EntryMeta {
   pub path: String,
   pub size: Option<u64>,
   pub is_compressed: bool,
+  /// 条目来源类型
+  pub source: EntrySource,
 }
 
 /// 统一的“条目流”抽象：每次产出 (EntryMeta, Reader)
@@ -99,14 +115,17 @@ impl EntryStream for FsEntryStream {
           } else {
             path_abs.to_string_lossy().to_string()
           };
-          let file = tokio::fs::File::open(&path_abs).await?;
-          let reader = BufReader::new(file);
-          let meta = EntryMeta {
-            path: rel,
-            size: None,
-            is_compressed: false,
-          };
-          return Ok(Some((meta, Box::new(reader))));
+          match open_file_with_compression_detection(&path_abs.to_string_lossy()).await {
+            Ok((mut meta, reader)) => {
+              // 保持相对路径
+              meta.path = rel;
+              return Ok(Some((meta, reader)));
+            }
+            Err(e) => {
+              tracing::warn!("无法处理文件 {}: {}", path_abs.display(), e);
+              continue;
+            }
+          }
         }
         Ok(None) => {
           self.stack.pop(); /* 回溯 */
@@ -122,6 +141,9 @@ impl EntryStream for FsEntryStream {
 /// tar.gz 条目流（基于 AsyncRead 输入）
 pub struct TarGzEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<R>>>>,
+  consecutive_errors: usize,
+  next_entry_index: usize,
+  last_ok_entry_path: Option<String>,
 }
 
 impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
@@ -130,33 +152,64 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
     let gz = GzipDecoder::new(BufReader::new(reader));
     let archive = async_tar::Archive::new(gz.compat());
     let entries = archive.entries()?; // 注意：entries 拥有 archive
-    Ok(Self { entries })
+    Ok(Self {
+      entries,
+      consecutive_errors: 0,
+      next_entry_index: 0,
+      last_ok_entry_path: None,
+    })
   }
 }
 
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    const MAX_CONSECUTIVE_ERRORS: usize = 100;
+
     loop {
       match self.entries.next().await {
         Some(Ok(entry)) => {
+          // 成功读取条目，重置错误计数器
+          self.consecutive_errors = 0;
+          self.next_entry_index = self.next_entry_index.saturating_add(1);
           let raw = entry
             .path()
             .ok()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "<unknown>".into());
           let path = normalize_archive_entry_path(&raw);
+          self.last_ok_entry_path = Some(path.clone());
           let reader = entry.compat(); // 转为 tokio AsyncRead
           let meta = EntryMeta {
             path,
             size: None,
             is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
+            source: EntrySource::TarGz,
           };
           return Ok(Some((meta, Box::new(reader))));
         }
         Some(Err(e)) => {
-          // 记录错误但继续处理下一个条目（使用debug级别避免日志泛滥）
-          tracing::debug!("跳过损坏的 tar.gz 条目: {}", e);
+          self.consecutive_errors += 1;
+          // 记录错误但继续处理下一个条目
+          tracing::warn!(
+            "跳过损坏的 tar.gz 条目: {} (next_index={}, last_ok_entry={:?}, 连续错误: {}/{})",
+            e,
+            self.next_entry_index,
+            self.last_ok_entry_path,
+            self.consecutive_errors,
+            MAX_CONSECUTIVE_ERRORS
+          );
+
+          // 如果连续错误超过阈值，停止处理以避免死循环
+          if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+            return Err(io::Error::new(
+              io::ErrorKind::InvalidData,
+              format!(
+                "tar.gz 文件损坏严重，连续 {} 个条目读取失败，停止处理",
+                MAX_CONSECUTIVE_ERRORS
+              ),
+            ));
+          }
           continue;
         }
         None => return Ok(None),
@@ -223,7 +276,7 @@ impl EntryStreamProcessor {
         .processor
         .should_process_path_with(&meta.path, self.extra_path_filter.as_ref())
       {
-        debug!("路径不匹配，跳过: {}", &meta.path);
+        trace!("路径不匹配，跳过: {}", &meta.path);
         continue;
       }
 
@@ -405,19 +458,22 @@ impl EntryStream for MultiFileEntryStream {
     }
     let path = std::mem::take(&mut self.files[self.idx]);
     self.idx += 1;
-    let file = tokio::fs::File::open(&path).await?;
-    let reader = BufReader::new(file);
-    let name = std::path::Path::new(&path)
-      .file_name()
-      .and_then(|s| s.to_str())
-      .map(|s| s.to_string())
-      .unwrap_or_else(|| path.clone());
-    let meta = EntryMeta {
-      path: name,
-      size: None,
-      is_compressed: false,
-    };
-    Ok(Some((meta, Box::new(reader))))
+    match open_file_with_compression_detection(&path).await {
+      Ok((mut meta, reader)) => {
+        // 保持文件名（原逻辑）
+        let name = std::path::Path::new(&path)
+          .file_name()
+          .and_then(|s| s.to_str())
+          .map(|s| s.to_string())
+          .unwrap_or_else(|| path.clone());
+        meta.path = name;
+        Ok(Some((meta, reader)))
+      }
+      Err(e) => {
+        // 如果压缩检测失败，返回错误（保持原有行为：文件打开失败时返回错误）
+        Err(e)
+      }
+    }
   }
 }
 
@@ -526,7 +582,7 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
     .await
     .map_err(|e| format!("读取头部失败: {}", e))?;
   head.truncate(n);
-  let kind = sniff_archive_kind(&head);
+  let kind = sniff_archive_kind(&head, hint_name);
   let prefixed = PrefixedReader::new(head, reader);
   match kind {
     ArchiveKind::Tar => {
@@ -569,27 +625,103 @@ async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'static
   }
 }
 
-fn sniff_archive_kind(head: &[u8]) -> ArchiveKind {
+fn sniff_archive_kind(head: &[u8], path_hint: Option<&str>) -> ArchiveKind {
   if head.len() >= 4 {
     let sig = &head[..4];
     if sig == [0x50, 0x4B, 0x03, 0x04] || sig == [0x50, 0x4B, 0x05, 0x06] || sig == [0x50, 0x4B, 0x07, 0x08] {
-      info!("检测到归档类型: Zip");
+      trace!("检测到归档类型: Zip, 文件: {}", path_hint.unwrap_or("unknown"));
       return ArchiveKind::Zip;
     }
   }
   // 优先检查 tar（tar 头在固定位置 257-262，更可靠）
   // 这样可以避免纯 tar 文件被误判为 gzip（如果前2字节恰好是 0x1F 0x8B）
   if head.len() >= 512 && &head[257..257 + 5] == b"ustar" {
-    info!("检测到归档类型: Tar");
+    trace!("检测到归档类型: Tar, 文件: {}", path_hint.unwrap_or("unknown"));
     return ArchiveKind::Tar;
   }
   // 然后检查 gzip（前2字节）
   if head.len() >= 2 && head[0] == 0x1F && head[1] == 0x8B {
-    info!("检测到归档类型: Gzip");
+    trace!("检测到归档类型: Gzip, 文件: {}", path_hint.unwrap_or("unknown"));
     return ArchiveKind::Gzip;
   }
-  info!("检测到归档类型: Unknown");
+  trace!("检测到归档类型: Unknown, 文件: {}", path_hint.unwrap_or("unknown"));
   ArchiveKind::Unknown
+}
+
+/// 检测文件类型并返回适当的 Reader 和 Metadata
+/// 仅处理纯 gzip 文件（非 tar 归档），其他文件按普通文件处理
+async fn open_file_with_compression_detection(
+  path: &str,
+) -> io::Result<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)> {
+  // 1. 打开文件并读取头部（最多560字节，与现有逻辑一致）
+  let mut file = tokio::fs::File::open(path).await?;
+  let mut head = vec![0u8; 560];
+  let n = file.read(&mut head).await?;
+  head.truncate(n);
+
+  // 2. 检测文件类型
+  let kind = sniff_archive_kind(&head, Some(path));
+
+  // 3. 重新创建 Reader（包含已读取的头部）
+  // 注意：直接使用已有的 file 句柄（它已经读取了前 n 个字节），不要重新打开
+  let prefixed = PrefixedReader::new(head, BufReader::new(file));
+
+  // 4. 根据类型返回适当的 Reader
+  match kind {
+    ArchiveKind::Gzip => {
+      // 二次嗅探：判断是否为 tar 归档
+      let mut gz = GzipDecoder::new(BufReader::new(prefixed));
+      let mut inner_head = vec![0u8; 560];
+      let n = gz.read(&mut inner_head).await?;
+      inner_head.truncate(n);
+
+      let is_tar = is_tar_header(&inner_head);
+      let gz_prefixed = PrefixedReader::new(inner_head, gz);
+
+      if is_tar {
+        // tar.gz 文件：按普通文件处理（用户要求不展开 tar 归档）
+        create_regular_file_reader(path).await
+      } else {
+        // 纯 gzip 文件：返回解压后的流
+        let name = std::path::Path::new(path)
+          .file_stem()
+          .and_then(|s| s.to_str())
+          .unwrap_or("<gzip>")
+          .to_string();
+
+        let meta = EntryMeta {
+          path: name,
+          size: None,
+          is_compressed: false, // 解压后的流可并行处理
+          source: EntrySource::Gz,
+        };
+        Ok((meta, Box::new(gz_prefixed)))
+      }
+    }
+    _ => {
+      // 普通文件或其他归档格式（tar/zip）
+      create_regular_file_reader(path).await
+    }
+  }
+}
+
+/// 创建普通文件 Reader（不压缩）
+async fn create_regular_file_reader(path: &str) -> io::Result<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)> {
+  let file = tokio::fs::File::open(path).await?;
+  let reader = BufReader::new(file);
+  let name = std::path::Path::new(path)
+    .file_name()
+    .and_then(|s| s.to_str())
+    .map(|s| s.to_string())
+    .unwrap_or_else(|| path.to_string());
+
+  let meta = EntryMeta {
+    path: name,
+    size: None,
+    is_compressed: false,
+    source: EntrySource::File,
+  };
+  Ok((meta, Box::new(reader)))
 }
 
 fn is_tar_header(head: &[u8]) -> bool {
@@ -648,6 +780,9 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
 
 pub struct TarEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<BufReader<R>>>,
+  consecutive_errors: usize,
+  next_entry_index: usize,
+  last_ok_entry_path: Option<String>,
 }
 
 impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
@@ -655,33 +790,64 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
     let br = BufReader::new(reader);
     let archive = async_tar::Archive::new(br.compat());
     let entries = archive.entries()?;
-    Ok(Self { entries })
+    Ok(Self {
+      entries,
+      consecutive_errors: 0,
+      next_entry_index: 0,
+      last_ok_entry_path: None,
+    })
   }
 }
 
 #[async_trait]
 impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    const MAX_CONSECUTIVE_ERRORS: usize = 100;
+
     loop {
       match self.entries.next().await {
         Some(Ok(entry)) => {
+          // 成功读取条目，重置错误计数器
+          self.consecutive_errors = 0;
+          self.next_entry_index = self.next_entry_index.saturating_add(1);
           let raw = entry
             .path()
             .ok()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "<unknown>".into());
           let path = normalize_archive_entry_path(&raw);
+          self.last_ok_entry_path = Some(path.clone());
           let reader = entry.compat();
           let meta = EntryMeta {
             path,
             size: None,
             is_compressed: true,
+            source: EntrySource::Tar,
           };
           return Ok(Some((meta, Box::new(reader))));
         }
         Some(Err(e)) => {
+          self.consecutive_errors += 1;
           // 记录错误但继续处理下一个条目
-          tracing::warn!("跳过损坏的 tar 条目: {}", e);
+          tracing::warn!(
+            "跳过损坏的 tar 条目: {} (next_index={}, last_ok_entry={:?}, 连续错误: {}/{})",
+            e,
+            self.next_entry_index,
+            self.last_ok_entry_path,
+            self.consecutive_errors,
+            MAX_CONSECUTIVE_ERRORS
+          );
+
+          // 如果连续错误超过阈值，停止处理以避免死循环
+          if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+            return Err(io::Error::new(
+              io::ErrorKind::InvalidData,
+              format!(
+                "tar 文件损坏严重，连续 {} 个条目读取失败，停止处理",
+                MAX_CONSECUTIVE_ERRORS
+              ),
+            ));
+          }
           continue;
         }
         None => return Ok(None),
@@ -714,6 +880,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipEntryStream<R> {
         path: self.name.clone(),
         size: None,
         is_compressed: self.is_compressed,
+        source: EntrySource::Gz,
       };
       Ok(Some((meta, Box::new(rd))))
     } else {
@@ -1450,12 +1617,51 @@ mod tests {
 
     handle.await.expect("任务失败");
 
-    // 应该找到包含 "error" 的归档条目
+    // 应该找到包含 "error" 的文件
     assert!(!results.is_empty(), "应该找到至少一个匹配");
     assert!(
-      results.iter().any(|r| r.path == "archived1.log"),
+      results.iter().any(|r| r.path.contains("archived1.log")),
       "应该匹配 archived1.log"
     );
+  }
+
+  #[tokio::test]
+  async fn test_plain_gzip_file_processing() {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    let temp_dir = TempDir::new().expect("创建临时目录失败");
+    let gz_path = temp_dir.path().join("test.log.gz");
+
+    // 创建纯 gzip 文件 (大于 560 字节以测试 peek 逻辑)
+    let file = std::fs::File::create(&gz_path).expect("创建 gzip 文件失败");
+    let mut gz = GzEncoder::new(file, Compression::default());
+    let content_str = "line1\n".to_string() + &"a".repeat(1000) + "\nline3\n";
+    gz.write_all(content_str.as_bytes()).expect("写入 gzip 内容失败");
+    gz.finish().expect("完成 gzip 编码失败");
+
+    // 使用 FsEntryStream 读取
+    let mut stream = FsEntryStream::new(temp_dir.path().to_path_buf(), false)
+      .await
+      .expect("创建 FsEntryStream 失败");
+
+    let mut found = false;
+    while let Some((meta, mut reader)) = stream.next_entry().await.expect("读取条目失败") {
+      // 注意：FsEntryStream 对于纯 gzip 文件，会将文件名还原为去掉 .gz 的名字
+      if meta.path == "test.log.gz" {
+        found = true;
+        assert!(!meta.is_compressed, "纯 gzip 解压后应标记为非压缩");
+
+        let mut content = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut reader, &mut content)
+          .await
+          .expect("读取内容失败");
+
+        assert_eq!(content, content_str);
+      }
+    }
+    assert!(found, "应该找到 test.log");
   }
 
   #[tokio::test]

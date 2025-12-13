@@ -3,6 +3,14 @@
    * 文件查看页面 - 文件信息头部组件
    */
   import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import type { ParsedFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import { Button } from '$lib/components/ui/button';
+  import { Badge } from '$lib/components/ui/badge';
+  import type { KeywordInfo } from '$lib/modules/logseek/types';
+  import { Download, FileText, Database, Server, HardDrive, Archive, Folder, Minus, Plus } from 'lucide-svelte';
+
+  // Lucide 图标类型
+  type LucideIcon = typeof FileText;
 
   interface Props {
     /**
@@ -20,7 +28,7 @@
     /**
      * 关键词列表
      */
-    keywords?: string[];
+    keywords?: KeywordInfo[];
     /**
      * 是否正在加载
      */
@@ -29,119 +37,260 @@
      * 下载回调
      */
     onDownload?: () => void;
+    /**
+     * 当前字体大小
+     */
+    fontSize?: string;
+    /**
+     * 字体大小改变回调
+     */
+    onFontSizeChange?: (size: string) => void;
   }
 
-  let { filePath, total, loadedLines, keywords = [], loading = false, onDownload }: Props = $props();
+  let {
+    filePath,
+    total,
+    loadedLines,
+    keywords = [],
+    loading = false,
+    onDownload,
+    fontSize = 'base',
+    onFontSizeChange
+  }: Props = $props();
 
-  // 统一解析标题与来源（与搜索结果卡片保持一致）
-  function parseTitleAndSource(full: string): { title: string; source?: string } {
-    if (!full) return { title: '未知文件' };
-    const parsed = parseFileUrl(full);
-    if (!parsed) return { title: full };
+  // Svelte 5 类型导出
+  export type { Props };
 
-    switch (parsed.type) {
-      case 'tar-entry': {
-        const title = parsed.entryPath || parsed.displayName || full;
-        const source = `${parsed.compression}+${parsed.baseUrl}`; // 例如 tar.gz+s3://...
-        return { title, source };
-      }
-      case 'dir-entry': {
-        const title = parsed.entryPath || parsed.displayName || full; // 相对路径
-        const source = parsed.baseUrl; // 例如 file:///root
-        return { title, source };
-      }
-      case 'agent': {
-        const title = parsed.path || parsed.displayName || full; // 去掉前缀
-        const source = `agent://${parsed.agentId}`;
-        return { title, source };
-      }
-      case 'local': {
-        // 保留原样（或可仅显示绝对路径部分）
-        return { title: full };
-      }
-      case 's3': {
-        return { title: full };
-      }
-      default:
-        return { title: full };
+  // 字体大小选项
+  const fontSizeOptions = [
+    { value: 'xs', label: 'XS', size: 'text-xs' },
+    { value: 'sm', label: 'SM', size: 'text-sm' },
+    { value: 'base', label: 'MD', size: 'text-base' },
+    { value: 'lg', label: 'LG', size: 'text-lg' },
+    { value: 'xl', label: 'XL', size: 'text-xl' }
+  ];
+
+  // 切换字体大小
+  function handleFontSizeChange(newSize: string) {
+    if (onFontSizeChange) {
+      onFontSizeChange(newSize);
     }
   }
+
+  // 减小字体大小
+  function decreaseFontSize() {
+    const currentIndex = fontSizeOptions.findIndex((opt) => opt.value === fontSize);
+    if (currentIndex > 0) {
+      const newSize = fontSizeOptions[currentIndex - 1].value;
+      handleFontSizeChange(newSize);
+    }
+  }
+
+  // 增大字体大小
+  function increaseFontSize() {
+    const currentIndex = fontSizeOptions.findIndex((opt) => opt.value === fontSize);
+    if (currentIndex < fontSizeOptions.length - 1) {
+      const newSize = fontSizeOptions[currentIndex + 1].value;
+      handleFontSizeChange(newSize);
+    }
+  }
+
+  // 获取当前字体大小显示标签
+  const currentFontSizeLabel = $derived(fontSizeOptions.find((opt) => opt.value === fontSize)?.label || 'MD');
+
+  // 统一解析标题与来源
+  function parseFileInfo(full: string) {
+    if (!full) return { title: '未知文件', icon: FileText, metadata: [] };
+
+    const parsed: ParsedFileUrl | null = parseFileUrl(full);
+    if (!parsed) {
+      const parts = full.split('/');
+      return {
+        title: parts[parts.length - 1] || full,
+        icon: FileText,
+        metadata: [{ label: full, icon: FileText, type: 'path' as const }]
+      };
+    }
+
+    const title = parsed.displayName;
+    const metadata: {
+      label: string;
+      icon: LucideIcon;
+      title?: string;
+      type: 's3' | 'agent' | 'local' | 'archive' | 'path';
+    }[] = [];
+
+    // 1. Endpoint Part
+    if (parsed.endpointType === 's3') {
+      const s3Label = parsed.endpointId.replace(':', ' / ');
+      metadata.push({ label: `S3: ${s3Label}`, icon: Database, title: parsed.endpointId, type: 's3' });
+    } else if (parsed.endpointType === 'agent') {
+      metadata.push({ label: `Agent: ${parsed.endpointId}`, icon: Server, type: 'agent' });
+    } else if (parsed.endpointType === 'local') {
+      metadata.push({ label: 'Local Host', icon: HardDrive, title: parsed.endpointId, type: 'local' });
+    }
+
+    // 2. Path/Archive Part
+    if (parsed.targetType === 'archive') {
+      // Archive File - 显示完整路径
+      if (parsed.path) {
+        metadata.push({ label: parsed.path, icon: Archive, title: parsed.path, type: 'archive' });
+      }
+
+      // Entry Path - 显示完整路径（包括文件名）
+      if (parsed.entryPath) {
+        metadata.push({ label: parsed.entryPath, icon: Folder, title: parsed.entryPath, type: 'path' });
+      }
+    } else {
+      // Standard Directory - 显示完整路径
+      if (parsed.path) {
+        metadata.push({ label: parsed.path, icon: Folder, title: parsed.path, type: 'path' });
+      }
+    }
+
+    return { title, icon: FileText, metadata };
+  }
+
+  let fileInfo = $derived(parseFileInfo(filePath));
 </script>
 
-<!-- 标题栏 -->
-<div class="flex-shrink-0 border-b border-[var(--border)] bg-[var(--surface-2)] px-6 py-4">
-  <!-- 响应式布局：在小屏幕上垂直排列，大屏幕上横向排列 -->
-  <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-    <!-- 左侧：文件信息 -->
-    <div class="min-w-0 flex-1">
-      <div class="mb-2">
-        <h2 class="font-mono text-base leading-snug font-semibold break-all text-[var(--text)]">
-          {parseTitleAndSource(filePath).title}
-        </h2>
-        {#if parseTitleAndSource(filePath).source}
-          <p class="mt-1 font-mono text-xs break-all text-[var(--muted)]">
-            source: {parseTitleAndSource(filePath).source}
-          </p>
+<!-- 标题栏 - 两行布局 -->
+<div
+  class="sticky top-0 z-10 flex items-center gap-4 border-b border-border bg-background/95 px-6 py-3 shadow-sm backdrop-blur-sm"
+>
+  <!-- 左侧：两行内容 -->
+  <div class="flex min-w-0 flex-1 flex-col gap-2">
+    <!-- 第一行：文件名 -->
+    <div class="flex items-center gap-3">
+      <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+        {#if fileInfo.icon}
+          {@const Icon = fileInfo.icon}
+          <Icon class="h-4 w-4" />
         {/if}
       </div>
-      {#if total > 0}
-        <div class="flex flex-wrap items-center gap-2">
-          <span
-            class="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200 ring-inset dark:bg-blue-900/30 dark:text-blue-300 dark:ring-blue-800/50"
-          >
-            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-              />
-            </svg>
-            {total.toLocaleString()} 行
-          </span>
-          <span
-            class="inline-flex items-center gap-1 rounded-lg bg-green-50 px-2.5 py-1 text-xs font-medium text-green-700 ring-1 ring-green-200 ring-inset dark:bg-green-900/30 dark:text-green-300 dark:ring-green-800/50"
-          >
-            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-            </svg>
-            已加载 {loadedLines.toLocaleString()}
-          </span>
+      <h1
+        class="min-w-0 flex-1 text-base font-semibold break-all"
+        style="color: hsl(var(--foreground));"
+        title={filePath}
+      >
+        {fileInfo.title}
+      </h1>
+    </div>
 
-          {#if keywords?.length}
-            <!-- 关键词显示 -->
-            <div class="flex flex-wrap items-center gap-1.5">
-              {#each keywords.slice(0, 3) as keyword (keyword)}
-                <span
-                  class="inline-flex items-center rounded-md bg-yellow-50 px-2 py-0.5 text-xs font-medium text-yellow-800 ring-1 ring-yellow-600/20 ring-inset dark:bg-yellow-900/30 dark:text-yellow-300 dark:ring-yellow-600/30"
-                  >{keyword}</span
-                >
-              {/each}
-              {#if keywords.length > 3}
-                <span class="text-xs text-[var(--muted)]">+{keywords.length - 3}</span>
+    <!-- 第二行：路径、统计信息和关键词 -->
+    <div class="flex flex-wrap items-center gap-3 text-xs">
+      <!-- 路径信息 -->
+      {#if fileInfo.metadata.length > 0}
+        <div class="flex flex-wrap items-center gap-1.5 text-muted-foreground">
+          {#each fileInfo.metadata as meta, i (meta)}
+            {@const commonClass = 'bg-muted/40 text-muted-foreground border-border/40 hover:bg-muted/60'}
+            {@const colorClasses = {
+              s3: commonClass,
+              agent: commonClass,
+              local: commonClass,
+              archive: commonClass,
+              path: commonClass
+            }}
+            <div
+              class="flex items-center gap-1 rounded-md border px-1.5 py-0.5 {colorClasses[meta.type] ||
+                'border-border/50 bg-muted/50 text-muted-foreground'}"
+              title={meta.title || meta.label}
+            >
+              {#if meta.icon}
+                {@const MetaIcon = meta.icon}
+                <MetaIcon class="h-3 w-3 shrink-0" />
               {/if}
+              <span class="font-mono text-[11px] break-all">{meta.label}</span>
             </div>
+            {#if i < fileInfo.metadata.length - 1}
+              <span class="text-muted-foreground/40">/</span>
+            {/if}
+          {/each}
+        </div>
+      {/if}
+
+      <!-- 统计信息 -->
+      {#if total > 0}
+        <div class="flex items-center gap-1.5">
+          <div class="h-1.5 w-1.5 rounded-full bg-blue-500"></div>
+          <span class="font-medium text-foreground">{total.toLocaleString()}</span>
+          <span class="text-muted-foreground">行</span>
+          {#if loadedLines < total}
+            <span class="text-muted-foreground/60">·</span>
+            <span class="text-muted-foreground">已加载 {loadedLines.toLocaleString()}</span>
           {/if}
         </div>
       {/if}
+
+      <!-- 关键词 -->
+      {#if keywords?.length}
+        <div class="flex items-center gap-1.5">
+          <div class="flex flex-wrap items-center gap-1">
+            {#each keywords.slice(0, 3) as keyword (`${keyword.type}:${keyword.text}`)}
+              <Badge
+                variant="secondary"
+                class="h-5 border border-amber-200/50 bg-amber-50/80 px-2 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/30 dark:text-amber-400"
+              >
+                {keyword.text}
+              </Badge>
+            {/each}
+            {#if keywords.length > 3}
+              <span class="text-xs text-muted-foreground">+{keywords.length - 3}</span>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </div>
+  </div>
+
+  <!-- 右侧：字体大小控制和下载按钮 -->
+  <div class="flex shrink-0 items-center gap-2">
+    <!-- 字体大小控制 -->
+    <div class="flex items-center rounded-md border border-border bg-background">
+      <!-- 减小按钮 -->
+      <Button
+        variant="ghost"
+        size="sm"
+        class="h-7 w-7 rounded-none rounded-l-md p-0 hover:bg-muted"
+        onclick={decreaseFontSize}
+        disabled={fontSize === fontSizeOptions[0].value}
+        title="减小字体"
+      >
+        <Minus class="h-3.5 w-3.5" />
+      </Button>
+
+      <!-- 当前字体大小显示 -->
+      <div class="flex h-7 w-8 items-center justify-center border-x border-border px-2">
+        <span class="text-xs font-medium">{currentFontSizeLabel}</span>
+      </div>
+
+      <!-- 增大按钮 -->
+      <Button
+        variant="ghost"
+        size="sm"
+        class="h-7 w-7 rounded-none rounded-r-md p-0 hover:bg-muted"
+        onclick={increaseFontSize}
+        disabled={fontSize === fontSizeOptions[fontSizeOptions.length - 1].value}
+        title="增大字体"
+      >
+        <Plus class="h-3.5 w-3.5" />
+      </Button>
     </div>
 
-    <!-- 右侧：下载按钮 -->
-    <div class="flex shrink-0 items-start">
-      <button
-        class="inline-flex items-center gap-2 rounded-xl bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-[var(--primary-foreground)] shadow-lg shadow-black/10 transition-all duration-300 hover:opacity-90 hover:shadow-xl hover:shadow-black/15 focus:ring-4 focus:ring-[var(--ring)] focus:outline-none disabled:opacity-50"
-        onclick={onDownload}
-        disabled={loading || total <= 0}
-        title="下载当前文件"
-      >
-        <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-          />
-        </svg>
-        <span>下载</span>
-      </button>
-    </div>
+    <!-- 分隔线 -->
+    <div class="h-5 w-px bg-border"></div>
+
+    <!-- 下载按钮 -->
+    <Button
+      variant="outline"
+      size="sm"
+      class="h-8 gap-2"
+      onclick={onDownload}
+      disabled={loading || total <= 0}
+      title="下载当前文件"
+    >
+      <Download class="h-4 w-4" />
+      <span class="hidden sm:inline">下载</span>
+    </Button>
   </div>
 </div>

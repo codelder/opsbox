@@ -90,6 +90,27 @@ RUST_LOG=opsbox_server=debug,logseek=info ./opsbox-server
 RUST_LOG=debug ./opsbox-server --log-dir /var/log/opsbox
 ```
 
+### 检索日志分层（LogSeek）
+
+检索链路的日志按“粒度”分层，便于在生产环境默认保持低噪音、在排障时逐步打开细节：
+
+- **任务级（INFO）**：一次搜索请求的开始/结束、每个数据源的开始/完成、关键计数与耗时
+- **文件级（DEBUG）**：单文件是否命中/跳过的原因、匹配行数、编码判定/跳过等
+- **细节级（TRACE）**：逐文件的缓存/管道细节、编码探测细节、逐事件/逐条目明细
+
+常用 `RUST_LOG` 示例：
+
+```bash
+# 默认：只看任务级（推荐生产环境）
+RUST_LOG=info ./opsbox-server
+
+# 排查检索结果：打开文件级日志
+RUST_LOG=info,logseek=debug ./opsbox-server
+
+# 深度排查：打开更细的追踪（会非常多）
+RUST_LOG=info,logseek=debug,logseek::service::search=trace,logseek::service::entry_stream=trace ./opsbox-server
+```
+
 ## 日志文件管理
 
 ### 日志文件命名规则

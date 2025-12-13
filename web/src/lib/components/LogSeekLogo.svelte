@@ -1,9 +1,9 @@
 <script lang="ts">
   interface Props {
     /**
-     * Logo 尺寸：'small' | 'medium' | 'large' | 'xlarge'
+     * Logo 尺寸：'xsmall' | 'small' | 'medium' | 'large' | 'xlarge'
      */
-    size?: 'small' | 'medium' | 'large' | 'xlarge';
+    size?: 'xsmall' | 'small' | 'medium' | 'large' | 'xlarge';
     /**
      * 是否显示为标签（label），将 cursor 设为 pointer
      */
@@ -26,15 +26,16 @@
 
   // 尺寸映射
   const sizeClasses = {
+    xsmall: 'text-xl',
     small: 'text-3xl md:text-4xl',
     medium: 'text-4xl md:text-6xl',
     large: 'text-6xl md:text-8xl',
     xlarge: 'text-8xl md:text-10xl'
   };
 
-  const baseClass = `inline-block font-extrabold tracking-[-0.25em] italic antialiased select-none ${sizeClasses[size]}`;
-  const hoverClass = hoverable ? 'transform transition-transform duration-300 hover:scale-105' : '';
-  const cursorClass = asLabel ? 'cursor-pointer' : '';
+  let baseClass = $derived(`logoseek-logo inline-block font-extrabold tracking-[-0.25em] italic antialiased select-none ${sizeClasses[size]}`);
+  let hoverClass = $derived(hoverable ? 'transform transition-transform duration-300 hover:scale-105' : '');
+  let cursorClass = $derived(asLabel ? 'cursor-pointer' : '');
 </script>
 
 {#if asLabel && htmlFor}
@@ -58,3 +59,9 @@
     <span class="text-yellow-500 drop-shadow-sm">k</span>
   </div>
 {/if}
+
+<style>
+  .logoseek-logo {
+    font-family: 'Google Sans Code', var(--font-ui), monospace;
+  }
+</style>
