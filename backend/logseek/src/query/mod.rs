@@ -2,6 +2,7 @@ mod lexer;
 pub mod parser;
 
 use globset::GlobSet;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -34,26 +35,34 @@ pub enum Term {
   // 匹配精确短语（子串语义）
   Phrase(String),
   // 标准 regex 引擎（性能更好，不支持 look-around）
-  RegexStd(regex::Regex),
+  RegexStd { pattern: String, re: regex::Regex },
   // fancy-regex 引擎（支持 look-around，可能有回溯开销）
-  RegexFancy(fancy_regex::Regex),
+  RegexFancy { pattern: String, re: fancy_regex::Regex },
 }
 
 impl Term {
   pub fn matches(&self, line: &str) -> bool {
     match self {
-      Term::Literal(s) => line.contains(s),
+      // Literal: 默认不区分大小写
+      Term::Literal(s) => {
+        let line_lower = line.to_lowercase();
+        let s_lower = s.to_lowercase();
+        line_lower.contains(&s_lower)
+      }
+      // Phrase: 引号内的短语区分大小写
       Term::Phrase(p) => line.contains(p),
-      Term::RegexStd(r) => r.is_match(line),
-      Term::RegexFancy(r) => r.is_match(line).unwrap_or(false),
+      Term::RegexStd { re, .. } => re.is_match(line),
+      Term::RegexFancy { re, .. } => re.is_match(line).unwrap_or(false),
     }
   }
 
-  pub fn display_text(&self) -> Option<String> {
+  pub fn highlight(&self) -> Option<KeywordHighlight> {
     match self {
-      Term::Literal(s) => Some(s.clone()),
-      Term::Phrase(p) => Some(p.clone()),
-      Term::RegexStd(_) | Term::RegexFancy(_) => None, // skip regex for highlighting to avoid confusion
+      Term::Literal(s) => Some(KeywordHighlight::Literal(s.clone())),
+      Term::Phrase(p) => Some(KeywordHighlight::Phrase(p.clone())),
+      Term::RegexStd { pattern, .. } | Term::RegexFancy { pattern, .. } => {
+        Some(KeywordHighlight::Regex(pattern.clone()))
+      }
     }
   }
 }
@@ -89,12 +98,20 @@ impl PathFilter {
   }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "text", rename_all = "lowercase")]
+pub enum KeywordHighlight {
+  Literal(String),
+  Phrase(String),
+  Regex(String),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Query {
   pub terms: Vec<Term>,
   pub expr: Option<Expr>,
   pub path_filter: PathFilter,
-  pub highlights: Vec<String>, // 前端用于高亮显示的字符串
+  pub highlights: Vec<KeywordHighlight>, // 带类型信息的高亮列表（仅正向项）
 }
 
 impl Query {
@@ -109,7 +126,11 @@ impl Query {
       let atoms: Vec<Expr> = (0..terms.len()).map(Expr::Atom).collect();
       Some(Expr::And(atoms))
     };
-    let highlights: Vec<String> = keywords.iter().filter(|s| !s.is_empty()).cloned().collect();
+    let highlights: Vec<KeywordHighlight> = keywords
+      .iter()
+      .filter(|s| !s.is_empty())
+      .map(|s| KeywordHighlight::Literal(s.clone()))
+      .collect();
     Self {
       terms,
       expr,

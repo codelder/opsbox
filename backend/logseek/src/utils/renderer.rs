@@ -97,7 +97,7 @@ pub struct JsonChunk {
 #[derive(Debug, Serialize)]
 pub struct SearchJsonResult {
   pub path: String,
-  pub keywords: Vec<String>,
+  pub keywords: Vec<crate::query::KeywordHighlight>, // 带类型信息的关键词列表
   pub chunks: Vec<JsonChunk>,
   /// 文件编码名称（如 "UTF-8"、"GBK"）
   pub encoding: Option<String>,
@@ -107,7 +107,7 @@ pub fn render_json_chunks(
   path: &str,
   ranges: Vec<(usize, usize)>,
   all_lines: Vec<String>,
-  keywords: &[String],
+  highlights_with_type: &[crate::query::KeywordHighlight],
   encoding: Option<String>,
 ) -> SearchJsonResult {
   let mut chunks: Vec<JsonChunk> = Vec::with_capacity(ranges.len());
@@ -128,7 +128,7 @@ pub fn render_json_chunks(
 
   SearchJsonResult {
     path: path.to_string(),
-    keywords: keywords.to_vec(),
+    keywords: highlights_with_type.to_vec(),
     chunks,
     encoding,
   }
@@ -227,10 +227,15 @@ mod tests {
   #[test]
   fn test_render_json_chunks_basic() {
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
-    let result = render_json_chunks("test.log", vec![(0, 1)], lines, &["test".to_string()], None);
+    let highlights = vec![crate::query::KeywordHighlight::Literal("test".to_string())];
+    let result = render_json_chunks("test.log", vec![(0, 1)], lines, &highlights, None);
 
     assert_eq!(result.path, "test.log");
-    assert_eq!(result.keywords, vec!["test".to_string()]);
+    assert_eq!(result.keywords.len(), 1);
+    match &result.keywords[0] {
+      crate::query::KeywordHighlight::Literal(s) => assert_eq!(s, "test"),
+      _ => panic!("expected Literal"),
+    }
     assert_eq!(result.chunks.len(), 1);
     assert_eq!(result.chunks[0].range, (1, 2)); // 从 1 开始
     assert_eq!(result.chunks[0].lines.len(), 2);
@@ -246,7 +251,8 @@ mod tests {
       "line 3".to_string(),
       "line 4".to_string(),
     ];
-    let result = render_json_chunks("test.log", vec![(0, 1), (2, 3)], lines, &["line".to_string()], None);
+    let highlights = vec![crate::query::KeywordHighlight::Literal("line".to_string())];
+    let result = render_json_chunks("test.log", vec![(0, 1), (2, 3)], lines, &highlights, None);
 
     assert_eq!(result.chunks.len(), 2);
     assert_eq!(result.chunks[0].range, (1, 2));
@@ -259,5 +265,21 @@ mod tests {
     let result = render_json_chunks("test.log", vec![], lines, &[], None);
 
     assert_eq!(result.chunks.len(), 0);
+  }
+
+  #[test]
+  fn test_keyword_highlight_serialization() {
+    use serde_json;
+    let literal = crate::query::KeywordHighlight::Literal("error".to_string());
+    let phrase = crate::query::KeywordHighlight::Phrase("Error".to_string());
+    let regex = crate::query::KeywordHighlight::Regex("ERR\\d+".to_string());
+
+    let literal_json = serde_json::to_string(&literal).unwrap();
+    let phrase_json = serde_json::to_string(&phrase).unwrap();
+    let regex_json = serde_json::to_string(&regex).unwrap();
+
+    assert_eq!(literal_json, r#"{"type":"literal","text":"error"}"#);
+    assert_eq!(phrase_json, r#"{"type":"phrase","text":"Error"}"#);
+    assert_eq!(regex_json, r#"{"type":"regex","text":"ERR\\d+"}"#);
   }
 }

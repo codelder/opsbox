@@ -12,6 +12,12 @@
   import PlannerManagement from './PlannerManagement.svelte';
   import ServerLogSettings from './ServerLogSettings.svelte';
 
+  import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
+  import { Button } from '$lib/components/ui/button';
+  import { ArrowLeft } from 'lucide-svelte';
+  import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
+  import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+
   // 选项卡状态
   let activeTab = $state<'profiles' | 'agents' | 'planners' | 'llm' | 'server-log'>('profiles');
 
@@ -31,92 +37,56 @@
   <title>对象存储设置 · Opsboard</title>
 </svelte:head>
 
-<div class="mx-auto flex max-w-5xl flex-col gap-6 px-6 pb-16 text-[var(--text)]">
-  <header class="pt-6">
-    <div class="mb-4 flex items-center gap-3">
-      <button
-        type="button"
-        onclick={handleBack}
-        class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-[var(--muted)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--text)] focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:outline-none dark:focus:ring-offset-gray-900"
-        aria-label="返回上一页"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          class="h-4 w-4"
-        >
-          <path d="M19 12H5M12 19l-7-7 7-7" />
-        </svg>
-        <span>返回</span>
-      </button>
+<div class="flex min-h-screen flex-col bg-background text-foreground">
+  <!-- 顶部导航栏 -->
+  <header
+    class="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60"
+  >
+    <div class="flex h-16 w-full items-center gap-4 px-6">
+      <!-- 左侧：Logo -->
+      <a href="/" class="flex items-center gap-2 transition-opacity hover:opacity-80">
+        <LogSeekLogo size="small" />
+      </a>
+
+      <!-- 中间：标题 -->
+      <div class="flex-1 px-4">
+        <h1 class="text-lg font-semibold tracking-tight">系统设置</h1>
+      </div>
+
+      <!-- 右侧：操作区 -->
+      <div class="flex items-center gap-2">
+        <ThemeToggle />
+      </div>
     </div>
-    <p class="text-xs font-semibold tracking-[0.2em] text-[var(--muted)] uppercase">Settings</p>
-    <h1 class="mt-2 text-2xl font-semibold text-[var(--text)]">系统设置</h1>
-    <p class="mt-2 text-sm text-[var(--muted)]">管理对象存储、Agent、大模型与规划脚本。</p>
   </header>
 
-  <nav class="flex items-center gap-6 border-b border-[var(--border)] pb-3 text-sm font-medium text-[var(--muted)]">
-    <button
-      type="button"
-      class="rounded-full px-3 py-1 transition {activeTab === 'profiles'
-        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
-      onclick={() => (activeTab = 'profiles')}
-    >
-      对象存储
-    </button>
-    <button
-      type="button"
-      class="rounded-full px-3 py-1 transition {activeTab === 'agents'
-        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
-      onclick={() => (activeTab = 'agents')}
-    >
-      Agent
-    </button>
-    <button
-      type="button"
-      class="rounded-full px-3 py-1 transition {activeTab === 'planners'
-        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
-      onclick={() => (activeTab = 'planners')}
-    >
-      规划脚本
-    </button>
-    <button
-      type="button"
-      class="rounded-full px-3 py-1 transition {activeTab === 'llm'
-        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
-      onclick={() => (activeTab = 'llm')}
-    >
-      大模型
-    </button>
-    <button
-      type="button"
-      class="rounded-full px-3 py-1 transition {activeTab === 'server-log'
-        ? 'bg-[var(--surface)] text-[var(--text)] shadow-sm'
-        : 'text-[var(--muted)] hover:text-[var(--text)]'}"
-      onclick={() => (activeTab = 'server-log')}
-    >
-      Server 日志
-    </button>
-  </nav>
+  <div class="mx-auto flex w-full max-w-5xl flex-col gap-6 px-6 py-8">
+    <Tabs bind:value={activeTab} class="w-full">
+      <TabsList class="mx-auto grid w-full grid-cols-5 lg:w-[600px]">
+        <TabsTrigger value="profiles">对象存储</TabsTrigger>
+        <TabsTrigger value="agents">Agent</TabsTrigger>
+        <TabsTrigger value="planners">规划脚本</TabsTrigger>
+        <TabsTrigger value="llm">大模型</TabsTrigger>
+        <TabsTrigger value="server-log">Server 日志</TabsTrigger>
+      </TabsList>
 
-  {#if activeTab === 'profiles'}
-    <ProfileManagement />
-  {:else if activeTab === 'agents'}
-    <AgentManagement />
-  {:else if activeTab === 'planners'}
-    <PlannerManagement />
-  {:else if activeTab === 'llm'}
-    <LlmManagement />
-  {:else if activeTab === 'server-log'}
-    <ServerLogSettings />
-  {/if}
+      <div class="mt-6">
+        <TabsContent value="profiles">
+          <ProfileManagement />
+        </TabsContent>
+        <TabsContent value="agents">
+          <AgentManagement />
+        </TabsContent>
+        <TabsContent value="planners">
+          <PlannerManagement />
+        </TabsContent>
+        <TabsContent value="llm">
+          <LlmManagement />
+        </TabsContent>
+        <TabsContent value="server-log">
+          <ServerLogSettings />
+        </TabsContent>
+      </div>
+    </Tabs>
+  </div>
 </div>

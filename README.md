@@ -108,6 +108,7 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 - `--log-level error|warn|info|debug|trace`
 - 或使用 `-V`/`-VV`/`-VVV`
 - 或设置 `RUST_LOG` 环境变量
+- 检索日志分层建议见 `docs/guides/logging-configuration.md`
 
 ### 守护进程（macOS/Linux）
 
@@ -213,4 +214,3 @@ pnpm --dir web test
 ## License
 
 MIT
-

@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use aws_sdk_s3::{
   Client as S3Client,
   config::{Credentials, Region},
+  error::SdkError,
 };
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -113,6 +114,59 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
   Ok(client)
 }
 
+/// 格式化 AWS SDK 错误，提取详细的错误信息
+fn format_s3_error<E: std::fmt::Display + std::fmt::Debug>(err: &SdkError<E>) -> String {
+  let mut parts = Vec::new();
+
+  // 提取错误消息（基本消息）
+  let message = err.to_string();
+  if !message.is_empty() {
+    parts.push(format!("message={}", message));
+  }
+
+  // 尝试从错误类型中提取更多信息
+  match err {
+    SdkError::ServiceError(service_err) => {
+      // 服务错误：尝试提取错误类型
+      let err_kind = service_err.err();
+      let err_kind_str = format!("{:?}", err_kind);
+      if !err_kind_str.is_empty() && err_kind_str != message {
+        parts.push(format!("kind={}", err_kind_str));
+      }
+
+      // 尝试从响应中提取状态码
+      let raw_response = service_err.raw();
+      let status = raw_response.status();
+      parts.push(format!("status={}", status.as_u16()));
+    }
+    SdkError::ConstructionFailure(err) => {
+      parts.push(format!("construction_error={:?}", err));
+    }
+    SdkError::TimeoutError(err) => {
+      parts.push(format!("timeout_error={:?}", err));
+    }
+    SdkError::DispatchFailure(err) => {
+      parts.push(format!("dispatch_error={:?}", err));
+    }
+    SdkError::ResponseError(err) => {
+      parts.push(format!("response_error={:?}", err));
+    }
+    _ => {
+      // 对于其他类型的错误，使用Debug格式
+      let debug_str = format!("{:?}", err);
+      if debug_str != message && !debug_str.is_empty() {
+        parts.push(format!("debug={}", debug_str));
+      }
+    }
+  }
+
+  if parts.is_empty() {
+    "unknown error".to_string()
+  } else {
+    parts.join(", ")
+  }
+}
+
 #[async_trait]
 pub trait ReaderProvider {
   async fn open(&self) -> Result<Box<dyn AsyncRead + Send + Unpin>, S3Error>;
@@ -173,11 +227,15 @@ impl<'a> ReaderProvider for S3ReaderProvider<'a> {
           .send()
           .await
           .map_err(|e| {
-            error!("获取S3对象失败: bucket={}, key={}, error={}", self.bucket, self.key, e);
+            let error_detail = format_s3_error(&e);
+            error!(
+              "获取S3对象失败: bucket={}, key={}, {}",
+              self.bucket, self.key, error_detail
+            );
             S3Error::S3GetObject {
               bucket: self.bucket.to_string(),
               key: self.key.to_string(),
-              error: e.to_string(),
+              error: error_detail,
             }
           })?;
 
@@ -278,11 +336,15 @@ impl<'a> S3ReaderProvider<'a> {
         }
 
         let response = request.send().await.map_err(|e| {
-          error!("列举S3对象失败: error={:?}", e);
+          let error_detail = format_s3_error(&e);
+          error!(
+            "列举S3对象失败: bucket={}, prefix={}, {}",
+            self.bucket, prefix, error_detail
+          );
           S3Error::S3ListObjects {
             bucket: self.bucket.to_string(),
             prefix: prefix.to_string(),
-            error: e.to_string(),
+            error: error_detail,
           }
         })?;
 
@@ -350,11 +412,12 @@ pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, b
       .send()
       .await
       .map_err(|e| {
-        error!("S3 连接测试失败: {:?}", e);
+        let error_detail = format_s3_error(&e);
+        error!("S3 连接测试失败: bucket={}, {}", bucket, error_detail);
         S3Error::S3ListObjects {
           bucket: bucket.to_string(),
           prefix: "".to_string(),
-          error: e.to_string(),
+          error: error_detail,
         }
       })?;
 

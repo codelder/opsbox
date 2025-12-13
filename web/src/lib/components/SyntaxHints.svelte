@@ -3,6 +3,8 @@
    * 语法提示按钮组组件
    * 提供快捷插入查询语法的按钮
    */
+  import { Button } from '$lib/components/ui/button';
+
   interface Props {
     /**
      * 插入文本的回调函数
@@ -26,24 +28,28 @@
   const exampleSnippet = '(taxResult OR taxWarn) /"9111[0-9A-Z]{14}"/ dt:20250818 path:ptcr -path:system.log';
 </script>
 
-<div class="mt-2 flex flex-wrap items-center justify-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+<div class="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
   <span class="mr-1 select-none">语法提示：</span>
   {#each hints as hint (hint.label)}
-    <button
-      class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 hover:bg-gray-100 dark:border-gray-800 dark:bg-gray-950 hover:dark:bg-gray-600"
+    <Button
+      variant="outline"
+      size="sm"
+      class="h-6 rounded-full px-2.5 text-xs font-normal hover:bg-secondary hover:text-secondary-foreground"
       onclick={() => onInsert(hint.snippet, hint.caretOffset)}
       title={hint.title}
       type="button"
     >
       {hint.label}
-    </button>
+    </Button>
   {/each}
-  <button
-    class="ml-2 underline underline-offset-2 hover:text-gray-200"
+  <Button
+    variant="link"
+    size="sm"
+    class="h-6 px-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground"
     onclick={() => onInsert(exampleSnippet)}
     title="插入完整示例"
     type="button"
   >
     示例
-  </button>
+  </Button>
 </div>

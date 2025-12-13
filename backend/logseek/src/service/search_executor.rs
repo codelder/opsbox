@@ -13,7 +13,7 @@ use opsbox_core::SqlitePool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Semaphore, mpsc};
-use tracing::debug;
+use tracing::{debug, info, trace};
 
 /// 搜索执行器配置
 #[derive(Debug, Clone)]
@@ -130,11 +130,11 @@ impl SearchExecutor {
   /// 生成搜索会话 ID 并缓存关键字
   ///
   /// # 参数
-  /// - highlights: 高亮关键字列表
+  /// - highlights: 高亮关键字列表（带类型信息）
   ///
   /// # 返回
   /// - String: 搜索会话 ID (sid)
-  async fn generate_sid_and_cache_keywords(&self, highlights: Vec<String>) -> String {
+  async fn generate_sid_and_cache_keywords(&self, highlights: Vec<crate::query::KeywordHighlight>) -> String {
     let sid = new_sid();
     simple_cache().put_keywords(&sid, highlights).await;
     sid
@@ -153,7 +153,7 @@ impl SearchExecutor {
     source: Source,
     cleaned_query: String,
     ctx: usize,
-    _highlights: Vec<String>,
+    _highlights: Vec<crate::query::KeywordHighlight>,
     sid: String,
     tx: mpsc::Sender<SearchEvent>,
   ) {
@@ -168,7 +168,10 @@ impl SearchExecutor {
       }
     };
 
-    debug!("[SearchExecutor] 开始 Agent 搜索: agent_id={}", agent_id);
+    info!(
+      "[SearchExecutor] 开始数据源搜索: endpoint=agent agent_id={} ctx={}",
+      agent_id, ctx
+    );
 
     // 创建 Agent 客户端
     let client = match AgentClient::new_by_agent_id(agent_id.clone()).await {
@@ -259,7 +262,7 @@ impl SearchExecutor {
     };
 
     // 消费结果流
-    debug!("[SearchExecutor] 开始消费 Agent 结果流");
+    debug!("[SearchExecutor] 开始消费 Agent 结果流: agent_id={}", agent_id);
     let mut result_count = 0;
 
     while let Some(item) = stream.next().await {
@@ -269,7 +272,7 @@ impl SearchExecutor {
       };
 
       result_count += 1;
-      debug!(
+      trace!(
         "[SearchExecutor] 收到 Agent 结果 #{}: path={}, lines={}",
         result_count,
         res.path,
@@ -291,7 +294,7 @@ impl SearchExecutor {
       };
 
       // 缓存结果
-      debug!(
+      trace!(
         "Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
         sid,
         file_url,
@@ -305,6 +308,7 @@ impl SearchExecutor {
         lines: res.lines.clone(),
         merged: res.merged,
         encoding: res.encoding.clone(),
+        source_type: res.source_type,
       });
 
       if tx.send(success_event).await.is_err() {
@@ -313,7 +317,10 @@ impl SearchExecutor {
       }
     }
 
-    debug!("[SearchExecutor] Agent 结果流消费完成，共处理 {} 个结果", result_count);
+    debug!(
+      "[SearchExecutor] Agent 结果流消费完成: agent_id={} results={}",
+      agent_id, result_count
+    );
 
     // 发送完成事件
     let elapsed = start_time.elapsed();
@@ -354,7 +361,7 @@ impl SearchExecutor {
     spec: Arc<Query>,
     ctx: usize,
     encoding_qualifier: Option<String>,
-    _highlights: Vec<String>,
+    _highlights: Vec<crate::query::KeywordHighlight>,
     sid: String,
     tx: mpsc::Sender<SearchEvent>,
   ) {
@@ -384,6 +391,15 @@ impl SearchExecutor {
         }
       }
     });
+    let endpoint_kind = match &source.endpoint {
+      Endpoint::Local { .. } => "local",
+      Endpoint::S3 { .. } => "s3",
+      Endpoint::Agent { .. } => "agent",
+    };
+    info!(
+      "[SearchExecutor] 开始数据源搜索: source={} endpoint={} ctx={}",
+      source_name, endpoint_kind, ctx
+    );
 
     // 创建条目流
     let factory = crate::service::entry_stream::EntryStreamFactory::new(pool);
@@ -454,7 +470,7 @@ impl SearchExecutor {
               }
             };
 
-            // 缓存结果
+            // 缓存结果（文件级明细，默认应保持低噪音）
             simple_cache().put_lines(&sid_clone, &file_url, res.lines.clone()).await;
 
             // 更新 path 为完整的 FileUrl 字符串
@@ -531,7 +547,7 @@ impl SearchExecutor {
   /// - spec: 查询规范
   /// - ctx: 上下文行数
   /// - encoding_qualifier: 编码限定词
-  /// - highlights: 高亮关键字列表
+  /// - highlights: 高亮关键字列表（带类型信息）
   /// - sid: 搜索会话 ID
   /// - cleaned_query: 清理后的查询字符串
   /// - tx: 结果发送通道
@@ -542,7 +558,7 @@ impl SearchExecutor {
     spec: Arc<Query>,
     ctx: usize,
     encoding_qualifier: Option<String>,
-    highlights: Vec<String>,
+    highlights: Vec<crate::query::KeywordHighlight>,
     sid: String,
     cleaned_query: String,
     tx: mpsc::Sender<SearchEvent>,
@@ -822,7 +838,10 @@ SOURCES = [
     let config = SearchExecutorConfig::default();
     let executor = SearchExecutor::new(pool, config);
 
-    let highlights = vec!["error".to_string(), "warning".to_string()];
+    let highlights: Vec<crate::query::KeywordHighlight> = vec![
+      crate::query::KeywordHighlight::Literal("error".to_string()),
+      crate::query::KeywordHighlight::Literal("warning".to_string()),
+    ];
     let sid = executor.generate_sid_and_cache_keywords(highlights).await;
 
     // 验证 sid 不为空
@@ -3101,7 +3120,7 @@ SOURCES = [
     let cached_keywords = crate::repository::cache::cache().get_keywords(&sid).await;
     assert!(cached_keywords.is_some());
     let keywords = cached_keywords.unwrap();
-    assert!(keywords.contains(&"error".to_string()));
+    assert!(keywords.contains(&crate::query::KeywordHighlight::Literal("error".to_string())));
   }
 
   #[tokio::test]

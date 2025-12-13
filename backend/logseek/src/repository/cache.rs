@@ -8,7 +8,7 @@ use tokio::time as tokio_time;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::domain::FileUrl;
+use crate::{domain::FileUrl, query::KeywordHighlight};
 
 #[derive(Debug, Clone)]
 pub struct CompactLines {
@@ -53,22 +53,37 @@ impl CompactLines {
   fn len(&self) -> usize {
     self.line_starts.len().saturating_sub(1)
   }
+
+  fn size_in_bytes(&self) -> usize {
+    self.content.len() + (self.line_starts.capacity() * std::mem::size_of::<usize>())
+  }
 }
 
-#[derive(Debug, Clone)]
-pub struct Entry<T> {
-  pub last_touch: Instant,
-  pub value: T,
+#[derive(Debug)]
+struct SessionData {
+  last_touch: Instant,
+  keywords: Vec<KeywordHighlight>,
+  files: HashMap<FileUrl, CompactLines>,
 }
 
-type KeywordsCache = RwLock<HashMap<String, Entry<Vec<String>>>>;
-type FilesCache = RwLock<HashMap<(String, FileUrl), Entry<CompactLines>>>;
+impl SessionData {
+  fn size_in_bytes(&self) -> usize {
+    let keywords_size: usize = self
+      .keywords
+      .iter()
+      .map(|k| match k {
+        KeywordHighlight::Literal(s) | KeywordHighlight::Phrase(s) | KeywordHighlight::Regex(s) => s.len(),
+      })
+      .sum();
+    let files_size: usize = self.files.values().map(|v| v.size_in_bytes()).sum();
+    keywords_size + files_size
+  }
+}
 
 #[derive(Debug)]
 pub struct Cache {
   ttl: Duration,
-  keywords: KeywordsCache, // sid -> keywords
-  files: FilesCache,       // (sid, FileUrl) -> lines
+  sessions: RwLock<HashMap<String, SessionData>>,
 }
 
 static GLOBAL: OnceLock<Cache> = OnceLock::new();
@@ -79,9 +94,8 @@ pub fn cache() -> &'static Cache {
   GLOBAL.get_or_init(|| {
     Cache::start_cleaner_once();
     Cache {
-      ttl: Duration::from_secs(1 * 60),
-      keywords: RwLock::new(HashMap::new()),
-      files: RwLock::new(HashMap::new()),
+      ttl: Duration::from_secs(15 * 60),
+      sessions: RwLock::new(HashMap::new()),
     }
   })
 }
@@ -91,8 +105,8 @@ pub fn new_sid() -> String {
 }
 
 impl Cache {
-  fn expired<T>(&self, e: &Entry<T>) -> bool {
-    e.last_touch.elapsed() > self.ttl
+  fn expired(&self, session: &SessionData) -> bool {
+    session.last_touch.elapsed() > self.ttl
   }
 
   fn start_cleaner_once() {
@@ -107,40 +121,43 @@ impl Cache {
             _ = tokio_time::sleep(interval) => {
               let c = cache();
               let now = Instant::now();
-              let mut total_removed = 0;
+              let mut total_removed_count = 0;
+              let mut total_removed_bytes = 0;
 
-              // 清理 keywords
-              {
-                let mut m = c.keywords.write().await;
-                let to_remove: Vec<String> = m
+              // 清理过期会话并统计剩余
+              let (active_count, active_bytes) = {
+                let mut sessions = c.sessions.write().await;
+                let to_remove: Vec<(String, usize)> = sessions
                   .iter()
-                  .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
-                  .map(|(k, _)| k.clone())
+                  .filter(|(_, data)| now.duration_since(data.last_touch) > c.ttl)
+                  .map(|(k, data)| (k.clone(), data.size_in_bytes()))
                   .collect();
-                total_removed += to_remove.len();
-                for k in to_remove {
-                  let _ = m.remove(&k);
-                }
-              }
 
-              // 清理 files
-              {
-                let mut m = c.files.write().await;
-                let to_remove: Vec<(String, FileUrl)> = m
-                  .iter()
-                  .filter(|(_, e)| now.duration_since(e.last_touch) > c.ttl)
-                  .map(|(k, _)| k.clone())
-                  .collect();
-                total_removed += to_remove.len();
-                for k in to_remove {
-                  let _ = m.remove(&k);
+                for (k, size) in to_remove {
+                  sessions.remove(&k);
+                  total_removed_count += 1;
+                  total_removed_bytes += size;
                 }
-              }
 
-              if total_removed > 0 {
-                tracing::info!("缓存清理完成: 移除 {} 个条目", total_removed);
+                // 统计剩余活跃会话
+                let count = sessions.len();
+                let bytes: usize = sessions.values().map(|s| s.size_in_bytes()).sum();
+                (count, bytes)
+              };
+
+              let active_mb = active_bytes as f64 / 1024.0 / 1024.0;
+
+              if total_removed_count > 0 {
+                let removed_mb = total_removed_bytes as f64 / 1024.0 / 1024.0;
+                tracing::info!(
+                  "缓存清理完成: 移除 {} 个过期会话 ({:.2} MB), 当前活跃: {} 个 ({:.2} MB)",
+                  total_removed_count, removed_mb, active_count, active_mb
+                );
               } else {
-                 tracing::info!("缓存清理检查完成，无过期条目");
+                 tracing::debug!(
+                   "缓存清理检查完成，无过期会话。当前活跃: {} 个 ({:.2} MB)",
+                   active_count, active_mb
+                 );
               }
 
               // 无论是否移除了条目，都尝试触发底层分配器的内存回收
@@ -153,7 +170,7 @@ impl Cache {
                   unsafe {
                     libmimalloc_sys::mi_collect(true);
                   }
-                  tracing::info!("libmimalloc_sys::mi_collect(true) 调用完成");
+                  tracing::debug!("libmimalloc_sys::mi_collect(true) 调用完成");
                 });
               }
             }
@@ -168,51 +185,64 @@ impl Cache {
     });
   }
 
-  pub async fn put_keywords(&self, sid: &str, kws: Vec<String>) {
+  pub async fn put_keywords(&self, sid: &str, kws: Vec<KeywordHighlight>) {
     Self::start_cleaner_once();
-    let mut map = self.keywords.write().await;
-    map.insert(
-      sid.to_string(),
-      Entry {
+    let mut sessions = self.sessions.write().await;
+
+    sessions
+      .entry(sid.to_string())
+      .and_modify(|s| {
+        s.last_touch = Instant::now();
+        s.keywords = kws.clone();
+      })
+      .or_insert(SessionData {
         last_touch: Instant::now(),
-        value: kws,
-      },
-    );
+        keywords: kws,
+        files: HashMap::new(),
+      });
   }
-  pub async fn get_keywords(&self, sid: &str) -> Option<Vec<String>> {
+
+  pub async fn get_keywords(&self, sid: &str) -> Option<Vec<KeywordHighlight>> {
     Self::start_cleaner_once();
-    let mut map = self.keywords.write().await; // write to refresh
-    let e = map.get_mut(sid)?;
-    if self.expired(e) {
-      map.remove(sid);
-      return None;
+    let mut sessions = self.sessions.write().await;
+
+    if let Some(session) = sessions.get_mut(sid) {
+      if self.expired(session) {
+        sessions.remove(sid);
+        return None;
+      }
+      session.last_touch = Instant::now();
+      return Some(session.keywords.clone());
     }
-    e.last_touch = Instant::now();
-    Some(e.value.clone())
+    None
   }
+
   pub async fn put_lines(&self, sid: &str, file_url: &FileUrl, lines: Vec<String>) {
     Self::start_cleaner_once();
-    let mut map = self.files.write().await;
-    let key = (sid.to_string(), file_url.clone());
+    let mut sessions = self.sessions.write().await;
+
+    let session = sessions.entry(sid.to_string()).or_insert(SessionData {
+      last_touch: Instant::now(),
+      keywords: Vec::new(),
+      files: HashMap::new(),
+    });
+
+    session.last_touch = Instant::now();
+
     tracing::debug!(
-      "🔍 Cache存储: key=({:?}, {:?}), lines_count={}",
-      key.0,
-      key.1,
+      "🔍 Cache存储: sid={}, file_url={}, lines_count={}",
+      sid,
+      file_url,
       lines.len()
     );
 
-    // 使用 CompactLines 优化存储，减少内存碎片
+    // 使用 CompactLines 优化存储
     let compact = CompactLines::from_lines(lines);
+    session.files.insert(file_url.clone(), compact);
 
-    map.insert(
-      key,
-      Entry {
-        last_touch: Instant::now(),
-        value: compact,
-      },
-    );
-    tracing::debug!("🔍 Cache当前大小: {}", map.len());
+    tracing::debug!("🔍 Cache当前会话文件数: {}", session.files.len());
   }
+
   pub async fn get_lines_slice(
     &self,
     sid: &str,
@@ -221,36 +251,59 @@ impl Cache {
     end: usize,
   ) -> Option<(usize, Vec<String>)> {
     Self::start_cleaner_once();
-    let mut map = self.files.write().await;
-    let key = (sid.to_string(), file_url.clone());
-    tracing::debug!("🔍 Cache查找: key=({:?}, {:?}), cache_size={}", key.0, key.1, map.len());
+    let mut sessions = self.sessions.write().await;
 
-    // 打印所有现有的键用于调试
-    for (existing_key, entry) in map.iter() {
-      tracing::debug!(
-        "🔍 Cache现有条目: key=({:?}, {:?}), expired={}",
-        existing_key.0,
-        existing_key.1,
-        self.expired(entry)
-      );
+    if let Some(session) = sessions.get_mut(sid) {
+      if self.expired(session) {
+        tracing::debug!("🔍 Cache会话已过期，移除: sid={}", sid);
+        sessions.remove(sid);
+        return None;
+      }
+
+      session.last_touch = Instant::now();
+
+      if let Some(compact_lines) = session.files.get(file_url) {
+        let total = compact_lines.len();
+        if total == 0 {
+          return Some((0, Vec::new()));
+        }
+        let s = start.max(1).min(total.max(1));
+        let eidx = end.max(s).min(total);
+
+        let slice = compact_lines.get_slice(s, eidx);
+        return Some((total, slice));
+      }
     }
 
-    let e = map.get_mut(&key)?;
-    if self.expired(e) {
-      tracing::debug!("🔍 Cache条目已过期，移除");
-      map.remove(&key);
-      return None;
+    None
+  }
+
+  /// 按 sid 显式移除缓存（用于关闭标签页或会话结束时清理资源）
+  pub async fn remove_sid(&self, sid: &str) {
+    let mut sessions = self.sessions.write().await;
+    if sessions.remove(sid).is_some() {
+      tracing::debug!("已清理 sid={} 的缓存", sid);
     }
-    e.last_touch = Instant::now();
+  }
 
-    let total = e.value.len();
-    let s = start.max(1).min(total.max(1));
-    let eidx = end.max(s).min(total);
+  /// 获取指定会话的所有文件列表
+  pub async fn get_file_list(&self, sid: &str) -> Option<Vec<FileUrl>> {
+    Self::start_cleaner_once();
+    let mut sessions = self.sessions.write().await;
 
-    // 从 CompactLines 中提取切片
-    let slice = e.value.get_slice(s, eidx);
+    if let Some(session) = sessions.get_mut(sid) {
+      if self.expired(session) {
+        tracing::debug!("🔍 Cache会话已过期，移除: sid={}", sid);
+        sessions.remove(sid);
+        return None;
+      }
 
-    Some((total, slice))
+      session.last_touch = Instant::now();
+      let files: Vec<FileUrl> = session.files.keys().cloned().collect();
+      return Some(files);
+    }
+
+    None
   }
 
   /// 停止后台清理任务（用于优雅关闭）
@@ -269,7 +322,10 @@ mod tests {
   async fn test_cache_put_and_get_keywords() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let keywords = vec!["error".to_string(), "warn".to_string()];
+    let keywords = vec![
+      KeywordHighlight::Literal("error".to_string()),
+      KeywordHighlight::Literal("warn".to_string()),
+    ];
 
     c.put_keywords(&sid, keywords.clone()).await;
     let result = c.get_keywords(&sid).await;
@@ -288,7 +344,13 @@ mod tests {
   async fn test_cache_put_and_get_file_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
     c.put_lines(&sid, &file_url, lines.clone()).await;
@@ -303,7 +365,13 @@ mod tests {
   #[tokio::test]
   async fn test_cache_get_file_lines_missing() {
     let c = cache();
-    let file_url = FileUrl::local("/non-existent-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "non-existent-file.log",
+      None,
+    );
     let result = c.get_lines_slice("non-existent-sid", &file_url, 1, 10).await;
     assert_eq!(result, None);
   }
@@ -312,7 +380,7 @@ mod tests {
   async fn test_cache_keywords_retrieval() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let keywords = vec!["test".to_string()];
+    let keywords = vec![KeywordHighlight::Literal("test".to_string())];
 
     c.put_keywords(&sid, keywords.clone()).await;
 
@@ -329,19 +397,33 @@ mod tests {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
-    c.put_keywords(&sid, vec!["old".to_string()]).await;
-    c.put_keywords(&sid, vec!["new".to_string()]).await;
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("old".to_string())])
+      .await;
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("new".to_string())])
+      .await;
 
     let result = c.get_keywords(&sid).await;
-    assert_eq!(result, Some(vec!["new".to_string()]));
+    assert_eq!(result, Some(vec![KeywordHighlight::Literal("new".to_string())]));
   }
 
   #[tokio::test]
   async fn test_cache_multiple_files_same_sid() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url1 = FileUrl::local("/file1.log");
-    let file_url2 = FileUrl::local("/file2.log");
+    let file_url1 = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "file1.log",
+      None,
+    );
+    let file_url2 = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "file2.log",
+      None,
+    );
 
     c.put_lines(&sid, &file_url1, vec!["a".to_string()]).await;
     c.put_lines(&sid, &file_url2, vec!["b".to_string()]).await;
@@ -358,7 +440,13 @@ mod tests {
     let c = cache();
     let sid1 = format!("test-sid-1-{}", Uuid::new_v4());
     let sid2 = format!("test-sid-2-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/shared-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "shared-file.log",
+      None,
+    );
 
     c.put_lines(&sid1, &file_url, vec!["content1".to_string()]).await;
     c.put_lines(&sid2, &file_url, vec!["content2".to_string()]).await;
@@ -374,7 +462,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines: Vec<String> = (1..=10).map(|i| format!("line {}", i)).collect();
 
     c.put_lines(&sid, &file_url, lines).await;
@@ -394,7 +488,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice_out_of_bounds() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
     c.put_lines(&sid, &file_url, lines).await;
@@ -435,7 +535,8 @@ mod tests {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
-    c.put_keywords(&sid, vec!["test".to_string()]).await;
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("test".to_string())])
+      .await;
 
     // 等待一小段时间
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -457,7 +558,9 @@ mod tests {
       .map(|i| {
         let sid = sid.clone();
         task::spawn(async move {
-          cache().put_keywords(&sid, vec![format!("keyword-{}", i)]).await;
+          cache()
+            .put_keywords(&sid, vec![KeywordHighlight::Literal(format!("keyword-{}", i))])
+            .await;
         })
       })
       .collect();
@@ -478,7 +581,10 @@ mod tests {
 
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let keywords = vec!["test1".to_string(), "test2".to_string()];
+    let keywords = vec![
+      KeywordHighlight::Literal("test1".to_string()),
+      KeywordHighlight::Literal("test2".to_string()),
+    ];
 
     c.put_keywords(&sid, keywords.clone()).await;
 
@@ -504,7 +610,13 @@ mod tests {
   async fn test_cache_get_lines_slice_boundary_conditions() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/test-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
     let lines: Vec<String> = (1..=5).map(|i| format!("line {}", i)).collect();
 
     c.put_lines(&sid, &file_url, lines).await;
@@ -536,17 +648,23 @@ mod tests {
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
     // 存储空关键词列表
-    c.put_keywords(&sid, vec![]).await;
+    c.put_keywords(&sid, Vec::<KeywordHighlight>::new()).await;
 
     let result = c.get_keywords(&sid).await;
-    assert_eq!(result, Some(vec![]));
+    assert_eq!(result, Some(Vec::<KeywordHighlight>::new()));
   }
 
   #[tokio::test]
   async fn test_cache_empty_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/empty-file.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "empty-file.log",
+      None,
+    );
 
     // 存储空行列表
     c.put_lines(&sid, &file_url, vec![]).await;
@@ -566,7 +684,9 @@ mod tests {
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
     // 创建大量关键词
-    let keywords: Vec<String> = (0..1000).map(|i| format!("keyword-{}", i)).collect();
+    let keywords: Vec<KeywordHighlight> = (0..1000)
+      .map(|i| KeywordHighlight::Literal(format!("keyword-{}", i)))
+      .collect();
 
     c.put_keywords(&sid, keywords.clone()).await;
 
@@ -579,21 +699,56 @@ mod tests {
     let c = cache();
     let sid = "sid-with-特殊字符-!@#$%";
 
-    c.put_keywords(sid, vec!["test".to_string()]).await;
+    c.put_keywords(sid, vec![KeywordHighlight::Literal("test".to_string())])
+      .await;
 
     let result = c.get_keywords(sid).await;
-    assert_eq!(result, Some(vec!["test".to_string()]));
+    assert_eq!(result, Some(vec![KeywordHighlight::Literal("test".to_string())]));
   }
 
   #[tokio::test]
   async fn test_cache_special_characters_in_file_id() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::local("/path/to/file-with-特殊字符.log");
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "path/to/file-with-特殊字符.log",
+      None,
+    );
 
     c.put_lines(&sid, &file_url, vec!["line 1".to_string()]).await;
 
     let result = c.get_lines_slice(&sid, &file_url, 1, 1).await;
     assert!(result.is_some());
+  }
+
+  #[tokio::test]
+  async fn test_cache_remove_sid() {
+    let c = cache();
+    let sid = format!("test-sid-remove-{}", Uuid::new_v4());
+    let file_url = FileUrl::new(
+      crate::domain::file_url::EndpointType::Local,
+      "localhost",
+      crate::domain::file_url::TargetType::Dir,
+      "test-file.log",
+      None,
+    );
+
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("test".to_string())])
+      .await;
+    c.put_lines(&sid, &file_url, vec!["line 1".to_string()]).await;
+
+    // Verify existence
+    assert!(c.get_keywords(&sid).await.is_some());
+    assert!(c.get_lines_slice(&sid, &file_url, 1, 1).await.is_some());
+
+    // Remove
+    c.remove_sid(&sid).await;
+
+    // Verify removal
+    assert!(c.get_keywords(&sid).await.is_none());
+    assert!(c.get_lines_slice(&sid, &file_url, 1, 1).await.is_none());
   }
 }

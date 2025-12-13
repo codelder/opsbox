@@ -8,7 +8,7 @@ use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -28,7 +28,7 @@ impl From<io::Error> for SearchError {
   }
 }
 
-use crate::query::Query;
+use crate::query::{PathFilter, Query};
 
 // ============================================================================
 // 配置和辅助类型（已简化：删除未使用的旧配置/统计结构）
@@ -86,7 +86,7 @@ impl SearchProcessor {
   ///
   /// - extra 为 None 时，行为与 should_process_path 完全一致
   /// - extra 为 Some 时，先检查 extra.is_allowed(path)，若不通过则直接拒绝
-  pub fn should_process_path_with(&self, path: &str, extra: Option<&crate::query::PathFilter>) -> bool {
+  pub fn should_process_path_with(&self, path: &str, extra: Option<&PathFilter>) -> bool {
     if let Some(f) = extra
       && !f.is_allowed(path)
     {
@@ -141,12 +141,12 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
     match &sample[0..2] {
       [0xFF, 0xFE] => {
         // UTF-16 LE BOM
-        debug!("检测到 UTF-16 LE BOM");
+        trace!("检测到 UTF-16 LE BOM");
         return Some(UTF_16LE);
       }
       [0xFE, 0xFF] => {
         // UTF-16 BE BOM
-        debug!("检测到 UTF-16 BE BOM");
+        trace!("检测到 UTF-16 BE BOM");
         return Some(UTF_16BE);
       }
       _ => {}
@@ -156,7 +156,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   if sample.len() >= 3
     && let [0xEF, 0xBB, 0xBF] = &sample[0..3]
   {
-    debug!("检测到 UTF-8 BOM");
+    trace!("检测到 UTF-8 BOM");
     return Some(UTF_8);
   }
 
@@ -165,7 +165,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   match std::str::from_utf8(sample) {
     Ok(_) => {
       // 样本完全是有效的 UTF-8
-      debug!("样本是有效的 UTF-8，使用 UTF-8 编码");
+      trace!("样本是有效的 UTF-8，使用 UTF-8 编码");
       return Some(UTF_8);
     }
     Err(e) => {
@@ -177,7 +177,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
       if valid_up_to > 0 && sample.len() - valid_up_to <= 3 {
         // 验证前面的部分确实是有效的 UTF-8
         if std::str::from_utf8(&sample[..valid_up_to]).is_ok() {
-          debug!(
+          trace!(
             "样本前 {} 字节是有效的 UTF-8（末尾 {} 字节可能被截断），使用 UTF-8 编码",
             valid_up_to,
             sample.len() - valid_up_to
@@ -194,8 +194,17 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   detector.feed(sample, true); // last=true 表示这是最后一块数据
   let detected_encoding = detector.guess(None, true); // tld=None, allow_utf8=true
 
-  debug!("chardetng 检测到编码: {}", detected_encoding.name());
+  trace!("chardetng 检测到编码: {}", detected_encoding.name());
   Some(detected_encoding)
+}
+
+/// 自动检测编码并返回 `(Encoding, 编码名称字符串)`，同时输出调试日志
+fn auto_detect_encoding(sample: &[u8]) -> Option<(&'static Encoding, String)> {
+  detect_encoding(sample).map(|enc| {
+    let name = enc.name().to_string();
+    trace!("自动检测到编码: {}", name);
+    (enc, name)
+  })
 }
 
 /// 读取 UTF-8 编码的文件行
@@ -214,7 +223,7 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
       let valid_up_to = e.utf8_error().valid_up_to();
       if valid_up_to > 0 && sample.len() - valid_up_to <= 3 {
         // 只使用有效的部分，丢弃末尾不完整的字节
-        debug!(
+        trace!(
           "样本末尾 {} 字节被截断，使用前 {} 字节",
           sample.len() - valid_up_to,
           valid_up_to
@@ -285,13 +294,44 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
   Ok(lines)
 }
 
+/// 将完整缓冲区按指定编码解码为按行分割的字符串向量
+fn decode_buffer_to_lines(encoding: &'static Encoding, buffer: &[u8], warn_prefix: &str) -> Vec<String> {
+  let mut lines: Vec<String> = Vec::new();
+
+  // 解码整个缓冲区
+  let (decoded, _, had_errors) = encoding.decode(buffer);
+
+  if had_errors {
+    warn!("{warn_prefix}解码过程中遇到错误，但继续处理");
+  }
+
+  // 按行分割
+  for line in decoded.lines() {
+    lines.push(line.to_string());
+  }
+
+  // 处理最后一行（可能没有换行符）
+  let decoded_str = decoded.as_ref();
+  if !decoded_str.ends_with('\n')
+    && !decoded_str.ends_with('\r')
+    && let Some(last_line) = decoded_str.lines().last()
+    && !last_line.is_empty()
+  {
+    // 如果最后一行已经在 lines 中，不需要重复添加
+    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
+      lines.push(last_line.to_string());
+    }
+  }
+
+  lines
+}
+
 /// 读取 UTF-16 编码的文件行（LE 或 BE）
 async fn read_lines_utf16<R: AsyncRead + Unpin>(
   buf_reader: &mut BufReader<R>,
   encoding: &'static Encoding,
   sample: Vec<u8>,
 ) -> Result<Vec<String>, SearchError> {
-  let mut lines: Vec<String> = Vec::new();
   let mut buffer = Vec::new();
 
   // 处理样本（跳过 BOM，如果存在）
@@ -318,32 +358,7 @@ async fn read_lines_utf16<R: AsyncRead + Unpin>(
     buffer.pop(); // 移除最后一个字节
   }
 
-  // 解码整个缓冲区
-  let (decoded, _, had_errors) = encoding.decode(&buffer);
-
-  if had_errors {
-    warn!("UTF-16 解码过程中遇到错误，但继续处理");
-  }
-
-  // 按行分割
-  for line in decoded.lines() {
-    lines.push(line.to_string());
-  }
-
-  // 处理最后一行（可能没有换行符）
-  let decoded_str = decoded.as_ref();
-  if !decoded_str.ends_with('\n')
-    && !decoded_str.ends_with('\r')
-    && let Some(last_line) = decoded_str.lines().last()
-    && !last_line.is_empty()
-  {
-    // 如果最后一行已经在 lines 中，不需要重复添加
-    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
-      lines.push(last_line.to_string());
-    }
-  }
-
-  Ok(lines)
+  Ok(decode_buffer_to_lines(encoding, &buffer, "UTF-16 "))
 }
 
 /// 读取非 UTF-8 编码的文件行（如 GBK）
@@ -352,7 +367,6 @@ async fn read_lines_with_encoding<R: AsyncRead + Unpin>(
   encoding: &'static Encoding,
   sample: Vec<u8>,
 ) -> Result<Vec<String>, SearchError> {
-  let mut lines: Vec<String> = Vec::new();
   let mut buffer = Vec::new();
 
   // 处理样本
@@ -368,46 +382,24 @@ async fn read_lines_with_encoding<R: AsyncRead + Unpin>(
     buffer.extend_from_slice(&temp_buf[..n]);
   }
 
-  // 解码整个缓冲区
-  let (decoded, _, had_errors) = encoding.decode(&buffer);
-
-  if had_errors {
-    warn!("解码过程中遇到错误，但继续处理");
-  }
-
-  // 按行分割
-  for line in decoded.lines() {
-    lines.push(line.to_string());
-  }
-
-  // 处理最后一行（可能没有换行符）
-  let decoded_str = decoded.as_ref();
-  if !decoded_str.ends_with('\n')
-    && !decoded_str.ends_with('\r')
-    && let Some(last_line) = decoded_str.lines().last()
-    && !last_line.is_empty()
-  {
-    // 如果最后一行已经在 lines 中，不需要重复添加
-    if lines.last().is_none() || lines.last() != Some(&last_line.to_string()) {
-      lines.push(last_line.to_string());
-    }
-  }
-
-  Ok(lines)
+  Ok(decode_buffer_to_lines(encoding, &buffer, ""))
 }
 
 fn is_probably_text_bytes(sample: &[u8]) -> bool {
   if sample.is_empty() {
     return true;
   }
-  // 包含 null 字节的文件通常不是文本文件
-  if sample.contains(&0) {
-    return false;
-  }
 
   // 先检查 UTF-8，因为 UTF-8 可能包含多字节字符（如 emoji），可打印字符比例可能较低
+  // 有效的 UTF-8 包含 null 字符 (0x00) 也是合法的文本
   if std::str::from_utf8(sample).is_ok() {
     return true;
+  }
+
+  // 如果不是有效的 UTF-8，再检查 null 字节
+  // 包含 null 字节的文件通常不是文本文件（除非是 UTF-16 等其他编码）
+  if sample.contains(&0) {
+    return false;
   }
 
   // 计算可打印字符比例
@@ -439,11 +431,11 @@ fn is_probably_text_bytes(sample: &[u8]) -> bool {
 
 pub async fn grep_context<R: AsyncRead + Unpin>(
   reader: &mut R,
-  spec: &crate::query::Query,
+  spec: &Query,
   context_lines: usize,
   encoding_qualifier: Option<&str>,
 ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>, Option<String>)>, SearchError> {
-  debug!(
+  trace!(
     "开始文本搜索，上下文行数: {}, 搜索条件数: {}",
     context_lines,
     spec.terms.len()
@@ -469,8 +461,52 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   // 检查是否为文本文件
   if !is_probably_text_bytes(&sample) {
     debug!("文件不是文本格式，跳过搜索");
+
+    // 添加详细诊断信息
+    trace!("文本检测诊断信息 - 样本大小: {} 字节", sample.len());
+
+    if sample.is_empty() {
+      warn!("样本为空，但 is_probably_text_bytes 应返回 true（代码逻辑异常）");
+    }
+
+    // 检查是否包含 null 字节
+    let has_null = sample.contains(&0);
+    trace!("是否包含 null 字节: {}", has_null);
+
+    // 检查是否为有效的 UTF-8
+    let utf8_result = std::str::from_utf8(&sample);
+    match utf8_result {
+      Ok(_) => trace!("UTF-8 验证: 有效"),
+      Err(e) => trace!("UTF-8 验证失败，有效部分: {} 字节", e.valid_up_to()),
+    }
+
+    // 计算可打印字符比例
+    let printable = sample
+      .iter()
+      .filter(|b| matches!(**b, 0x09 | 0x0A | 0x0D | 0x20..=0x7E))
+      .count();
+    let ratio = if sample.is_empty() {
+      0.0
+    } else {
+      printable as f32 / sample.len() as f32
+    };
+    trace!("可打印字符比例: {:.2}% ({}/{})", ratio * 100.0, printable, sample.len());
+
+    // 使用 chardetng 检测编码并获取置信度
+    let mut detector = EncodingDetector::new();
+    detector.feed(&sample, true);
+    let (encoding, confidence) = detector.guess_assess(None, true);
+    trace!("chardetng 检测编码: {}，置信度: {}", encoding.name(), confidence);
+
+    // 检查常见非文本模式
+    if sample.len() > 4 {
+      trace!("样本前 4 字节: {:02X?}", &sample[..4.min(sample.len())]);
+    }
+
     return Ok(None);
   }
+
+  trace!("文本检测通过，样本大小: {} 字节", sample.len());
 
   // 检测编码：如果指定了 encoding 限定词，使用指定的编码；否则自动检测
   let (encoding, encoding_name) = if let Some(enc_name) = encoding_qualifier {
@@ -492,18 +528,14 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     });
     match enc_opt {
       Some(enc) => {
-        debug!("使用指定的编码: {} ({})", enc_name, enc.name());
+        trace!("使用指定的编码: {} ({})", enc_name, enc.name());
         (enc, enc.name().to_string())
       }
       None => {
         warn!("无法识别的编码名称: {}，回退到自动检测", enc_name);
         // 回退到自动检测
-        match detect_encoding(&sample) {
-          Some(enc) => {
-            let name = enc.name().to_string();
-            debug!("自动检测到编码: {}", name);
-            (enc, name)
-          }
+        match auto_detect_encoding(&sample) {
+          Some((enc, name)) => (enc, name),
           None => {
             debug!("无法确定文件编码，跳过搜索");
             return Ok(None);
@@ -513,12 +545,8 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     }
   } else {
     // 未指定编码，自动检测
-    match detect_encoding(&sample) {
-      Some(enc) => {
-        let name = enc.name().to_string();
-        debug!("自动检测到编码: {}", name);
-        (enc, name)
-      }
+    match auto_detect_encoding(&sample) {
+      Some((enc, name)) => (enc, name),
       None => {
         debug!("无法确定文件编码，跳过搜索");
         return Ok(None);
@@ -545,7 +573,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     return Ok(None);
   }
 
-  debug!("读取完成，共{}'行，开始执行搜索逻辑", lines.len());
+  trace!("读取完成，共{}'行，开始执行搜索逻辑", lines.len());
 
   // 文件级布尔计算：检查各关键字是否在文件中出现
   let term_count = spec.terms.len();
@@ -578,7 +606,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   }
 
   // 文件级布尔求值
-  debug!("执行文件级布尔计算，关键字出现状态: {:?}", occurs);
+  trace!("执行文件级布尔计算，关键字出现状态: {:?}", occurs);
   if !spec.eval_file(&occurs) {
     debug!("文件级布尔求值不满足，跳过文件");
     return Ok(None);
@@ -615,6 +643,21 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   Ok(Some((lines, merged, detected_encoding)))
 }
 
+/// 条目来源类型（用于序列化传输）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntrySourceType {
+  /// 普通文件
+  #[default]
+  File,
+  /// tar 归档内的条目
+  Tar,
+  /// tar.gz 归档内的条目
+  TarGz,
+  /// 纯 gzip 压缩文件
+  Gz,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SearchResult {
   pub path: String,
@@ -622,6 +665,9 @@ pub struct SearchResult {
   pub merged: Vec<(usize, usize)>,
   /// 文件编码（如果不是 UTF-8，则包含编码名称，如 "GBK"）
   pub encoding: Option<String>,
+  /// 条目来源类型
+  #[serde(default)]
+  pub source_type: EntrySourceType,
 }
 
 impl SearchResult {
@@ -631,7 +677,13 @@ impl SearchResult {
       lines,
       merged,
       encoding,
+      source_type: EntrySourceType::default(),
     }
+  }
+
+  pub fn with_source_type(mut self, source_type: EntrySourceType) -> Self {
+    self.source_type = source_type;
+    self
   }
 }
 
@@ -675,8 +727,11 @@ pub enum SearchEvent {
 mod tests {
   use super::*;
   use crate::query::Query;
-  use std::pin::Pin;
-  use std::task::{Context, Poll};
+  use std::{
+    io,
+    pin::Pin,
+    task::{Context, Poll},
+  };
   use tokio::io::{AsyncRead, ReadBuf};
 
   // 用于测试的内存 AsyncRead 实现
@@ -693,7 +748,7 @@ mod tests {
     }
   }
   impl AsyncRead for MemReader {
-    fn poll_read(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+    fn poll_read(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
       let remaining = self.buf.len().saturating_sub(self.pos);
       if remaining == 0 {
         return Poll::Ready(Ok(()));
@@ -825,13 +880,13 @@ beta only
     let input = r#"Foo upper
 foo lower
 "#;
-    // 字面量大小写敏感
+    // 字面量不区分大小写（默认行为）
     let hit_lower = grep_with_q(input, "foo", 0).await;
-    assert!(hit_lower.is_some());
+    assert!(hit_lower.is_some(), "小写 'foo' 应该匹配 'Foo' 和 'foo'");
     let hit_upper = grep_with_q(input, "Foo", 0).await;
-    assert!(hit_upper.is_some());
-    let miss_mixed = grep_with_q(input, "fOo", 0).await;
-    assert!(miss_mixed.is_none());
+    assert!(hit_upper.is_some(), "大写 'Foo' 应该匹配 'Foo' 和 'foo'");
+    let hit_mixed = grep_with_q(input, "fOo", 0).await;
+    assert!(hit_mixed.is_some(), "混合大小写 'fOo' 应该匹配 'Foo' 和 'foo'");
   }
 
   // === look-around 支持测试（依赖 fancy-regex 动态选择） ===
@@ -899,7 +954,8 @@ foo lower
   #[test]
   fn test_is_text_contains_null() {
     let bytes = b"hello\x00world";
-    assert!(!is_probably_text_bytes(bytes));
+    // 合法 UTF-8 中允许包含 NUL 字节，此时仍视为文本
+    assert!(is_probably_text_bytes(bytes));
   }
 
   #[test]
@@ -1008,10 +1064,15 @@ foo lower
 
   #[tokio::test]
   async fn grep_mixed_case_in_phrase() {
-    let input = "Connection Reset By Peer\n";
-    // 短语匹配是否大小写敏感
-    let res = grep_with_q(input, "\"Connection Reset\"", 0).await;
-    assert!(res.is_some());
+    let input = "Connection Reset By Peer\nconnection reset by peer\n";
+    // 短语（引号内）区分大小写
+    let res_exact = grep_with_q(input, "\"Connection Reset\"", 0).await;
+    assert!(res_exact.is_some(), "精确匹配 'Connection Reset' 应该成功");
+    let res_lower = grep_with_q(input, "\"connection reset\"", 0).await;
+    assert!(res_lower.is_some(), "精确匹配 'connection reset' 应该成功");
+    // 区分大小写：大小写不匹配应该失败
+    let res_mismatch = grep_with_q("Connection Reset By Peer\n", "\"connection Reset\"", 0).await;
+    assert!(res_mismatch.is_none(), "大小写不匹配的短语应该失败");
   }
 
   #[tokio::test]
@@ -1337,16 +1398,15 @@ foo lower
 
   // 测试辅助：运行基于 tar.gz 字节的搜索并收集所有结果
   async fn run_tar_search_bytes(tar_gz: Vec<u8>, spec: &Query, ctx: usize) -> Vec<SearchResult> {
+    use crate::service::entry_stream::{EntryStreamProcessor, TarGzEntryStream};
     use futures::io::Cursor;
     use tokio::sync::mpsc;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let cursor = Cursor::new(tar_gz).compat();
-    let mut stream = crate::service::entry_stream::TarGzEntryStream::new(cursor)
-      .await
-      .unwrap();
+    let mut stream = TarGzEntryStream::new(cursor).await.unwrap();
     let proc = Arc::new(SearchProcessor::new(Arc::new(spec.clone()), ctx));
-    let mut esp = crate::service::entry_stream::EntryStreamProcessor::new(proc);
+    let mut esp = EntryStreamProcessor::new(proc);
     let (tx, mut rx) = mpsc::channel::<SearchEvent>(64);
 
     let handle = tokio::spawn(async move {
@@ -1365,8 +1425,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_basic() {
-    use crate::query::Query;
-
     // 创建包含两个文件的 tar.gz
     let tar_gz = create_test_tar_gz(vec![
       ("file1.log", "line1\nerror found here\nline3\n"),
@@ -1389,8 +1447,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_no_match() {
-    use crate::query::Query;
-
     // 创建不包含目标字符串的文件
     let tar_gz = create_test_tar_gz(vec![
       ("file1.log", "line1\nline2\nline3\n"),
@@ -1407,8 +1463,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_with_context() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![("file1.log", "line1\nline2\nerror here\nline4\nline5\n")]);
 
     let spec = Query::parse_github_like("error").unwrap();
@@ -1425,8 +1479,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_multiple_matches_in_one_file() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![("file1.log", "error1\nline2\nline3\nerror2\nline5\n")]);
 
     let spec = Query::parse_github_like("error").unwrap();
@@ -1441,8 +1493,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_regex_pattern() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![("file1.log", "error123\nline2\nwarn456\n")]);
 
     // 使用正则匹配 error 或 warn
@@ -1458,8 +1508,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_empty_tar() {
-    use crate::query::Query;
-
     // 创建空的 tar.gz
     let tar_gz = create_test_tar_gz(vec![]);
 
@@ -1473,9 +1521,7 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_binary_file_skipped() {
-    use crate::query::Query;
-
-    // 创建包含二进制内容的文件
+    // 创建包含 NUL 字节的文件（在 UTF-8 视角下仍可能是文本）
     let binary_content = "\x00\x01\x02\x03error\x04\x05\x06";
     let tar_gz = create_test_tar_gz(vec![
       ("binary.dat", binary_content),
@@ -1486,15 +1532,15 @@ foo lower
 
     let results = run_tar_search_bytes(tar_gz, &spec, 0).await;
 
-    // 验证：二进制文件被跳过，只有文本文件
-    assert_eq!(results.len(), 1);
-    assert!(results[0].path.contains("text.log"));
+    // 现在策略：只要是合法 UTF-8（即便包含 NUL），也视为文本并参与搜索
+    // 因此应当返回两个结果：binary.dat 与 text.log
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().any(|r| r.path.contains("binary.dat")));
+    assert!(results.iter().any(|r| r.path.contains("text.log")));
   }
 
   #[tokio::test]
   async fn test_search_trait_many_files() {
-    use crate::query::Query;
-
     // 创建多个文件
     let mut files = Vec::new();
     for i in 0..10 {
@@ -1518,8 +1564,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_complex_query() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![
       ("file1.log", "error and warning\nline2\n"),
       ("file2.log", "only error here\nline2\n"),
@@ -1538,8 +1582,6 @@ foo lower
 
   #[tokio::test]
   async fn test_search_trait_path_with_directory() {
-    use crate::query::Query;
-
     let tar_gz = create_test_tar_gz(vec![
       ("logs/app/file1.log", "error in app\n"),
       ("logs/system/file2.log", "error in system\n"),
@@ -1764,7 +1806,7 @@ foo lower
 
   #[test]
   fn test_search_error_from_io_error() {
-    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+    let io_err = io::Error::new(io::ErrorKind::NotFound, "file not found");
     let search_err: SearchError = io_err.into();
 
     match search_err {
@@ -1797,13 +1839,9 @@ foo lower
 
     // 创建一个会失败的 reader
     struct FailingReader;
-    impl tokio::io::AsyncRead for FailingReader {
-      fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-        _buf: &mut tokio::io::ReadBuf<'_>,
-      ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Err(std::io::Error::other("read error")))
+    impl AsyncRead for FailingReader {
+      fn poll_read(self: Pin<&mut Self>, _cx: &mut Context<'_>, _buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Err(io::Error::other("read error")))
       }
     }
 
@@ -1826,6 +1864,7 @@ foo lower
       lines: vec!["test line".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      source_type: EntrySourceType::default(),
     };
 
     let send_result = processor.send_result(result, &tx).await;
@@ -1870,6 +1909,7 @@ foo lower
       lines: vec!["line1".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      source_type: EntrySourceType::default(),
     };
 
     let cloned = result.clone();
@@ -1886,6 +1926,7 @@ foo lower
       lines: vec!["line".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      source_type: EntrySourceType::default(),
     });
 
     match success {

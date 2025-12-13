@@ -3,6 +3,7 @@
 //! 验证多数据源搜索、并发控制、缓存功能
 
 use logseek::domain::config::{Endpoint, Source, Target};
+use logseek::query::KeywordHighlight;
 use logseek::repository::cache::cache;
 use logseek::service::search::SearchEvent;
 use logseek::service::search_executor::{SearchExecutor, SearchExecutorConfig};
@@ -111,14 +112,23 @@ async fn test_cache_functionality() {
   let sid = format!("test-sid-{}", uuid::Uuid::new_v4());
 
   // 测试关键字缓存
-  let keywords = vec!["error".to_string(), "warn".to_string()];
+  let keywords = vec![
+    KeywordHighlight::Literal("error".to_string()),
+    KeywordHighlight::Literal("warn".to_string()),
+  ];
   c.put_keywords(&sid, keywords.clone()).await;
 
   let cached_keywords = c.get_keywords(&sid).await;
   assert_eq!(cached_keywords, Some(keywords));
 
   // 测试文件行缓存
-  let file_url = logseek::domain::file_url::FileUrl::local("/test.log");
+  let file_url = logseek::domain::file_url::FileUrl::new(
+    logseek::domain::file_url::EndpointType::Local,
+    "localhost",
+    logseek::domain::file_url::TargetType::Dir,
+    "test.log",
+    None,
+  );
   let lines = vec!["line 1".to_string(), "line 2".to_string()];
   c.put_lines(&sid, &file_url, lines.clone()).await;
 
@@ -138,6 +148,7 @@ async fn test_search_event_types() {
     lines: vec!["error line".to_string()],
     merged: vec![(0, 1)],
     encoding: None,
+    source_type: logseek::service::search::EntrySourceType::default(),
   });
 
   let error_event = SearchEvent::Error {
@@ -239,6 +250,7 @@ async fn test_multi_source_event_collection() {
           lines: vec![format!("error from source {}", i)],
           merged: vec![(0, 1)],
           encoding: None,
+          source_type: logseek::service::search::EntrySourceType::default(),
         }))
         .await;
 

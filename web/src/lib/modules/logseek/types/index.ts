@@ -22,6 +22,14 @@ export interface JsonChunk {
 }
 
 /**
+ * 关键词信息（带类型）
+ */
+export type KeywordInfo =
+  | { type: 'literal'; text: string }
+  | { type: 'phrase'; text: string }
+  | { type: 'regex'; text: string };
+
+/**
  * 搜索结果（NDJSON 流中的单个文件结果）
  */
 export interface SearchJsonResult {
@@ -32,11 +40,14 @@ export interface SearchJsonResult {
    * - 本地文件: `file:///path/to/file.log`
    * - S3 对象（默认配置）: `s3://bucket/path/to/file`
    * - S3 对象（指定配置）: `s3://profile:bucket/path/to/file`
-   * - Tar 压缩包内文件: `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
+   * - Tar.gz 压缩包内文件: `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
+   * - Tar 压缩包内文件: `tar+file:///path/archive.tar:entry/path`
+   * - 纯 Gzip 压缩文件: `gz+s3://bucket/file.log.gz:file.log`
+   * - 目录内文件: `dir+file:///base/path:relative/file.log`
    * - Agent 远程文件: `agent://server-01/var/log/app.log`
    */
   path: string;
-  keywords: string[];
+  keywords: KeywordInfo[]; // 带类型信息的关键词列表
   chunks: JsonChunk[];
   /**
    * 文件编码名称（如 "UTF-8"、"GBK"）
@@ -165,7 +176,7 @@ export interface ViewCacheResponse {
   total: number; // 文件总行数
   start: number;
   end: number;
-  keywords: string[];
+  keywords: KeywordInfo[];
   lines: JsonLine[];
 }
 
@@ -209,7 +220,7 @@ export interface ViewState {
   total: number;
   start: number;
   end: number;
-  keywords: string[];
+  keywords: KeywordInfo[];
   lines: JsonLine[];
   loading: boolean;
   error: string | null;
@@ -221,6 +232,7 @@ export interface ViewState {
  * 搜索错误事件（从流中接收）
  */
 export interface SearchErrorEvent {
+  type: 'error';
   source: string; // 错误来源
   message: string; // 错误信息
   recoverable: boolean; // 是否可恢复（是否继续搜索其他源）
@@ -230,6 +242,7 @@ export interface SearchErrorEvent {
  * 搜索完成事件（从流中接收）
  */
 export interface SearchCompleteEvent {
+  type: 'complete';
   source: string; // 完成的来源
   elapsed_ms: number; // 耗时（毫秒）
 }

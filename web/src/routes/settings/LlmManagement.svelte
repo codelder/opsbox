@@ -7,6 +7,12 @@
   import { useLlmBackends } from '$lib/modules/logseek/composables/useLlmBackends.svelte';
   import type { LlmBackendUpsertPayload, LlmProviderType } from '$lib/modules/logseek';
   import { listLlmModelsByParams, listLlmModelsByBackend } from '$lib/modules/logseek/api';
+  import { Button } from '$lib/components/ui/button';
+  import { Input } from '$lib/components/ui/input';
+  import { Label } from '$lib/components/ui/label';
+  import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '$lib/components/ui/card';
+  import { Badge } from '$lib/components/ui/badge';
+  import { Plus, Edit2, Trash2, Check, LoaderCircle, RefreshCw } from 'lucide-svelte';
 
   const store = useLlmBackends();
 
@@ -181,56 +187,48 @@
   {/if}
 
   {#if !editing}
-    <section
-      class="rounded-3xl border border-slate-200 bg-white shadow-lg shadow-slate-200/40 dark:border-slate-800 dark:bg-slate-900 dark:shadow-black/30"
-    >
-      <div class="flex items-center justify-between border-b border-slate-200 p-6 dark:border-slate-800">
-        <div>
-          <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">大模型配置</h2>
-          <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">配置 Ollama 与多个 OpenAI 后端，并选择默认</p>
+    <Card class="border-border/40 dark:border-gray-700/50">
+      <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
+        <div class="space-y-1">
+          <CardTitle>大模型配置</CardTitle>
+          <CardDescription>配置 Ollama 与多个 OpenAI 后端，并选择默认</CardDescription>
         </div>
-        <button
-          class="inline-flex items-center rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500 focus:ring-4 focus:ring-indigo-200 focus:outline-none dark:bg-indigo-500 dark:hover:bg-indigo-400 dark:focus:ring-indigo-500/40"
-          onclick={startNew}
-        >
+        <Button onclick={startNew} size="sm">
+          <Plus class="mr-2 h-4 w-4" />
           新建后端
-        </button>
-      </div>
-
-      <div class="p-6">
+        </Button>
+      </CardHeader>
+      <CardContent>
         {#if store.loading}
-          <div class="text-center text-sm text-slate-500 dark:text-slate-400">加载中…</div>
+          <div class="py-8 text-center text-sm text-muted-foreground">加载中…</div>
         {:else if store.backends.length === 0}
           <div
-            class="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center dark:border-slate-700 dark:bg-slate-900/50"
+            class="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/40 py-12 text-center dark:border-gray-700/50"
           >
-            <p class="text-sm text-slate-600 dark:text-slate-400">暂无配置，点击 "新建后端" 添加</p>
+            <p class="text-sm text-muted-foreground">暂无配置，点击 "新建后端" 添加</p>
           </div>
         {:else}
-          <div class="space-y-3">
+          <div class="grid gap-4">
             {#each store.backends as b (b.name)}
               <div
-                class="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/50"
+                class="flex items-center justify-between rounded-lg border border-border/40 p-4 transition-colors hover:bg-muted/50 dark:border-gray-700/50"
               >
-                <div class="flex-1">
+                <div class="grid gap-1">
                   <div class="flex items-center gap-2">
-                    <h3 class="font-semibold text-slate-900 dark:text-slate-100">{b.name}</h3>
-                    <span
-                      class="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-200"
-                      >{b.provider}</span
-                    >
+                    <span class="font-semibold">{b.name}</span>
+                    <Badge variant="secondary" class="text-xs font-normal">{b.provider}</Badge>
                     {#if store.defaultName === b.name}
-                      <span
-                        class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
-                        >默认</span
-                      >
+                      <Badge variant="default" class="text-xs">默认</Badge>
                     {/if}
                   </div>
-                  <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">{b.base_url} · {b.model}</p>
+                  <div class="flex items-center text-sm text-muted-foreground">
+                    {b.base_url} · {b.model}
+                  </div>
                 </div>
                 <div class="flex items-center gap-2">
-                  <button
-                    class="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-600 transition hover:bg-slate-200 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-slate-100"
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     onclick={() =>
                       startEdit({
                         name: b.name,
@@ -240,170 +238,145 @@
                         timeout_secs: b.timeout_secs
                       })}
                   >
-                    编辑
-                  </button>
-                  <button
-                    class="rounded-lg px-3 py-1.5 text-sm font-medium text-indigo-600 transition hover:bg-indigo-100 hover:text-indigo-700 dark:text-indigo-400 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-300"
+                    <Edit2 class="h-4 w-4" />
+                    <span class="sr-only">编辑</span>
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    class={store.defaultName === b.name ? 'text-primary' : 'text-muted-foreground'}
                     onclick={() => store.makeDefault(b.name)}
                     disabled={store.settingDefault || store.defaultName === b.name}
+                    title="设为默认"
                   >
-                    设为默认
-                  </button>
-                  <button
-                    class="rounded-lg px-3 py-1.5 text-sm font-medium text-red-600 transition hover:bg-red-100 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-900/30 dark:hover:text-red-300"
+                    {#if store.defaultName === b.name}
+                      <Check class="mr-1 h-4 w-4" />
+                      已默认
+                    {:else}
+                      设为默认
+                    {/if}
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    class="text-destructive hover:bg-destructive/10 hover:text-destructive"
                     onclick={() => handleDelete(b.name)}
                     disabled={store.deleting}
                   >
-                    删除
-                  </button>
+                    <Trash2 class="h-4 w-4" />
+                    <span class="sr-only">删除</span>
+                  </Button>
                 </div>
               </div>
             {/each}
           </div>
         {/if}
-      </div>
-    </section>
+      </CardContent>
+    </Card>
   {:else}
-    <section
-      class="rounded-3xl border border-slate-200 bg-white shadow-lg shadow-slate-200/40 dark:border-slate-800 dark:bg-slate-900 dark:shadow-black/30"
-    >
-      <div class="border-b border-slate-200 p-6 dark:border-slate-800">
-        <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
-          {editingName ? `编辑后端：${editingName}` : '新建后端'}
-        </h2>
-      </div>
-      <form class="space-y-6 p-6" onsubmit={handleSave}>
-        <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
-          <div>
-            <label for="llm-name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">名称</label>
-            <input
-              id="llm-name"
-              class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-              bind:value={name}
-              placeholder="例如：ollama-local / openai-prod"
-              disabled={editingName !== null}
-              required
-            />
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">用于标识配置，创建后不可修改</p>
-          </div>
-          <div>
-            <label for="llm-provider" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-              >接口类型</label
-            >
-            <select
-              id="llm-provider"
-              class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-              bind:value={provider}
-              disabled={store.saving}
-            >
-              <option value="ollama">ollama</option>
-              <option value="openai">openai</option>
-            </select>
-          </div>
-          <div class="md:col-span-2">
-            <label for="llm-base-url" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-              >基础地址</label
-            >
-            <input
-              id="llm-base-url"
-              class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-              bind:value={baseUrl}
-              placeholder="http://127.0.0.1:11434 或 https://api.openai.com"
-              required
-            />
-          </div>
-          <div>
-            <div class="flex items-center justify-between">
-              <label for="llm-model" class="block text-sm font-medium text-slate-700 dark:text-slate-300">模型</label>
-              <button
-                type="button"
-                class="text-xs text-indigo-600 hover:underline disabled:text-slate-400"
-                onclick={refreshModels}
-                disabled={modelsLoading}
-              >
-                {modelsLoading ? '加载中…' : '加载模型'}
-              </button>
+    <Card class="border-border/40 dark:border-gray-700/50">
+      <CardHeader>
+        <CardTitle>{editingName ? `编辑后端：${editingName}` : '新建后端'}</CardTitle>
+      </CardHeader>
+      <form onsubmit={handleSave}>
+        <CardContent class="space-y-4">
+          <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div class="space-y-2">
+              <Label for="llm-name">名称</Label>
+              <Input
+                id="llm-name"
+                bind:value={name}
+                placeholder="例如：ollama-local / openai-prod"
+                disabled={editingName !== null}
+                required
+              />
+              <p class="text-xs text-muted-foreground">用于标识配置，创建后不可修改</p>
             </div>
-            <input
-              id="llm-model"
-              class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-              bind:value={model}
-              placeholder="从下拉选择或手动输入"
-              required
-              list="llm-models"
-            />
-            {#if modelsError}
-              <p class="mt-1 text-xs text-red-600 dark:text-red-400">{modelsError}</p>
+            <div class="space-y-2">
+              <Label for="llm-provider">接口类型</Label>
+              <select
+                id="llm-provider"
+                class="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                bind:value={provider}
+                disabled={store.saving}
+              >
+                <option value="ollama">ollama</option>
+                <option value="openai">openai</option>
+              </select>
+            </div>
+            <div class="space-y-2 md:col-span-2">
+              <Label for="llm-base-url">基础地址</Label>
+              <Input
+                id="llm-base-url"
+                bind:value={baseUrl}
+                placeholder="http://127.0.0.1:11434 或 https://api.openai.com"
+                required
+              />
+            </div>
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <Label for="llm-model">模型</Label>
+                <Button
+                  variant="link"
+                  size="sm"
+                  class="h-auto p-0 text-xs"
+                  onclick={refreshModels}
+                  disabled={modelsLoading}
+                  type="button"
+                >
+                  {#if modelsLoading}
+                    <LoaderCircle class="mr-1 h-3 w-3 animate-spin" />
+                  {:else}
+                    <RefreshCw class="mr-1 h-3 w-3" />
+                  {/if}
+                  {modelsLoading ? '加载中…' : '加载模型'}
+                </Button>
+              </div>
+              <Input id="llm-model" bind:value={model} placeholder="从下拉选择或手动输入" required list="llm-models" />
+              {#if modelsError}
+                <p class="text-xs text-destructive">{modelsError}</p>
+              {/if}
+              <datalist id="llm-models">
+                {#each modelOptions as m (m)}
+                  <option value={m}></option>
+                {/each}
+              </datalist>
+            </div>
+            <div class="space-y-2">
+              <Label for="llm-timeout">超时（秒）</Label>
+              <Input id="llm-timeout" type="number" min="1" bind:value={timeoutSecs} />
+            </div>
+            {#if provider === 'openai'}
+              <div class="space-y-2 md:col-span-2">
+                <Label for="llm-api-key">API Key</Label>
+                <Input
+                  id="llm-api-key"
+                  type="password"
+                  bind:value={apiKey}
+                  placeholder={editingName ? '留空表示不修改原密钥' : 'sk-...'}
+                  autocomplete="off"
+                />
+              </div>
+              <div class="space-y-2">
+                <Label for="llm-org">Organization（可选）</Label>
+                <Input id="llm-org" bind:value={organization} />
+              </div>
+              <div class="space-y-2">
+                <Label for="llm-project">Project（可选）</Label>
+                <Input id="llm-project" bind:value={project} />
+              </div>
             {/if}
-            <datalist id="llm-models">
-              {#each modelOptions as m (m)}
-                <option value={m}></option>
-              {/each}
-            </datalist>
           </div>
-          <div>
-            <label for="llm-timeout" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-              >超时（秒）</label
-            >
-            <input
-              id="llm-timeout"
-              type="number"
-              min="1"
-              class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-              bind:value={timeoutSecs}
-            />
-          </div>
-          {#if provider === 'openai'}
-            <div class="md:col-span-2">
-              <label for="llm-api-key" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-                >API Key</label
-              >
-              <input
-                id="llm-api-key"
-                type="password"
-                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-                bind:value={apiKey}
-                placeholder={editingName ? '留空表示不修改原密钥' : 'sk-...'}
-                autocomplete="off"
-              />
-            </div>
-            <div>
-              <label for="llm-org" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-                >Organization（可选）</label
-              >
-              <input
-                id="llm-org"
-                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-                bind:value={organization}
-              />
-            </div>
-            <div>
-              <label for="llm-project" class="block text-sm font-medium text-slate-700 dark:text-slate-300"
-                >Project（可选）</label
-              >
-              <input
-                id="llm-project"
-                class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-                bind:value={project}
-              />
-            </div>
-          {/if}
-        </div>
-        <div class="flex justify-end gap-3 border-t border-slate-200 pt-6 dark:border-slate-800">
-          <button
-            type="button"
-            class="rounded-xl px-4 py-2 text-sm text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-            onclick={cancelEdit}
-            disabled={store.saving}>取消</button
-          >
-          <button
-            type="submit"
-            class="inline-flex items-center justify-center rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-500 focus:ring-4 focus:ring-indigo-200 focus:outline-none disabled:cursor-not-allowed disabled:bg-indigo-300 dark:bg-indigo-500 dark:hover:bg-indigo-400 dark:focus:ring-indigo-500/40"
-            disabled={store.saving || !name.trim() || !baseUrl.trim() || !model.trim()}
-            >{store.saving ? '保存中…' : '保存'}</button
-          >
-        </div>
+        </CardContent>
+        <CardFooter class="flex justify-end gap-2">
+          <Button variant="outline" type="button" onclick={cancelEdit} disabled={store.saving}>取消</Button>
+          <Button type="submit" disabled={store.saving || !name.trim() || !baseUrl.trim() || !model.trim()}>
+            {store.saving ? '保存中…' : '保存'}
+          </Button>
+        </CardFooter>
       </form>
-    </section>
+    </Card>
   {/if}
 </div>

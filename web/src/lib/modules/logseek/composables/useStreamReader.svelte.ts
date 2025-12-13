@@ -63,11 +63,11 @@ export function useStreamReader() {
               produced += 1;
             } else if (obj.type === 'error') {
               // Error 事件：通知事件处理器
-              const errorEvent = obj.data as SearchErrorEvent;
+              const errorEvent = { ...(obj.data as object), type: 'error' } as SearchErrorEvent;
               onEvent?.(errorEvent);
             } else if (obj.type === 'complete') {
               // Complete 事件：通知事件处理器
-              const completeEvent = obj.data as SearchCompleteEvent;
+              const completeEvent = { ...(obj.data as object), type: 'complete' } as SearchCompleteEvent;
               onEvent?.(completeEvent);
             } else {
               console.warn('未知的搜索事件类型：', obj.type);
@@ -98,10 +98,10 @@ export function useStreamReader() {
                   onResult(result);
                   produced += 1;
                 } else if (obj.type === 'error') {
-                  const errorEvent = obj.data as SearchErrorEvent;
+                  const errorEvent = { ...(obj.data as object), type: 'error' } as SearchErrorEvent;
                   onEvent?.(errorEvent);
                 } else if (obj.type === 'complete') {
-                  const completeEvent = obj.data as SearchCompleteEvent;
+                  const completeEvent = { ...(obj.data as object), type: 'complete' } as SearchCompleteEvent;
                   onEvent?.(completeEvent);
                 } else {
                   console.warn('未知的搜索事件类型：', obj.type);

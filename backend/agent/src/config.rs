@@ -62,7 +62,7 @@ pub struct Args {
   pub search_roots: String,
 
   /// 监听端口
-  #[arg(global = true, long, default_value_t = 4001)]
+  #[arg(global = true, long, default_value_t = 3976)]
   pub listen_port: u16,
 
   /// 启用心跳
