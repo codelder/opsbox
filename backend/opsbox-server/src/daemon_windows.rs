@@ -622,7 +622,7 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, config: AppConfig
           tracing::info!("收到停止信号，开始优雅关闭...");
         });
 
-        crate::async_main(addr, db_url).await;
+        crate::async_main(addr, db_url, &cfg).await;
       });
 
       Ok(())
