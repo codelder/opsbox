@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
-use tracing::{debug, info, warn};
+use tracing::{trace, warn};
 
 // 统一读取并发度：使用 ENTRY_CONCURRENCY（范围 1-64，默认 8）
 fn entry_concurrency() -> usize {
@@ -268,7 +268,7 @@ impl EntryStreamProcessor {
         .processor
         .should_process_path_with(&meta.path, self.extra_path_filter.as_ref())
       {
-        debug!("路径不匹配，跳过: {}", &meta.path);
+        trace!("路径不匹配，跳过: {}", &meta.path);
         continue;
       }
 
@@ -621,22 +621,22 @@ fn sniff_archive_kind(head: &[u8], path_hint: Option<&str>) -> ArchiveKind {
   if head.len() >= 4 {
     let sig = &head[..4];
     if sig == [0x50, 0x4B, 0x03, 0x04] || sig == [0x50, 0x4B, 0x05, 0x06] || sig == [0x50, 0x4B, 0x07, 0x08] {
-      info!("检测到归档类型: Zip, 文件: {}", path_hint.unwrap_or("unknown"));
+      trace!("检测到归档类型: Zip, 文件: {}", path_hint.unwrap_or("unknown"));
       return ArchiveKind::Zip;
     }
   }
   // 优先检查 tar（tar 头在固定位置 257-262，更可靠）
   // 这样可以避免纯 tar 文件被误判为 gzip（如果前2字节恰好是 0x1F 0x8B）
   if head.len() >= 512 && &head[257..257 + 5] == b"ustar" {
-    info!("检测到归档类型: Tar, 文件: {}", path_hint.unwrap_or("unknown"));
+    trace!("检测到归档类型: Tar, 文件: {}", path_hint.unwrap_or("unknown"));
     return ArchiveKind::Tar;
   }
   // 然后检查 gzip（前2字节）
   if head.len() >= 2 && head[0] == 0x1F && head[1] == 0x8B {
-    info!("检测到归档类型: Gzip, 文件: {}", path_hint.unwrap_or("unknown"));
+    trace!("检测到归档类型: Gzip, 文件: {}", path_hint.unwrap_or("unknown"));
     return ArchiveKind::Gzip;
   }
-  info!("检测到归档类型: Unknown, 文件: {}", path_hint.unwrap_or("unknown"));
+  trace!("检测到归档类型: Unknown, 文件: {}", path_hint.unwrap_or("unknown"));
   ArchiveKind::Unknown
 }
 

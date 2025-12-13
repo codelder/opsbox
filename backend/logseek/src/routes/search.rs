@@ -45,7 +45,7 @@ fn convert_to_ndjson_stream(
 
     while let Some(event) = rx.recv().await {
       event_count += 1;
-      tracing::debug!("[Search Route] 收到事件 #{}: {:?}", event_count,
+      tracing::trace!("[Search Route] 收到事件 #{}: {:?}", event_count,
         match &event {
           SearchEvent::Success(res) => format!("Success(path={}, lines={})", res.path, res.lines.len()),
           SearchEvent::Error { source, message, .. } => format!("Error(source={}, msg={})", source, message),
@@ -82,7 +82,7 @@ fn convert_to_ndjson_stream(
         }
     }
 
-    tracing::debug!("[Search Route] SearchEvent 流结束，共处理 {} 个事件", event_count);
+    tracing::info!("[Search Route] SearchEvent 流结束，共处理 {} 个事件", event_count);
   }
 }
 

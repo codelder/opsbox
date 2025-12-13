@@ -148,7 +148,7 @@ impl Cache {
                   total_removed_count, removed_mb, active_count, active_mb
                 );
               } else {
-                 tracing::info!(
+                 tracing::debug!(
                    "缓存清理检查完成，无过期会话。当前活跃: {} 个 ({:.2} MB)",
                    active_count, active_mb
                  );

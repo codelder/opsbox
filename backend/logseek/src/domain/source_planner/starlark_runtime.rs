@@ -219,7 +219,7 @@ pub async fn plan_with_starlark_with_script(
       continue;
     };
     let j = starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(e)))?;
-    tracing::info!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
+    tracing::trace!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
     let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
       crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
         "解析 Source 失败: {}; JSON={}",
@@ -388,7 +388,7 @@ fn log_script_source(idx: usize, src: &Source) {
   use crate::domain::config::{Endpoint, Target};
   match (&src.endpoint, &src.target) {
     (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
-      tracing::info!(
+      tracing::debug!(
         "[Planner] 来源[{}] s3 profile={} bucket={} archive={}",
         idx,
         profile,
@@ -402,7 +402,7 @@ fn log_script_source(idx: usize, src: &Source) {
         Target::Files { paths } => format!("Files count={}", paths.len()),
         Target::Archive { path } => format!("Archive path={}", path),
       };
-      tracing::info!(
+      tracing::debug!(
         "[Planner] 来源[{}] agent id={} subpath={} scope={} filter_glob={}",
         idx,
         agent_id,
@@ -417,7 +417,7 @@ fn log_script_source(idx: usize, src: &Source) {
         Target::Files { paths } => format!("Files count={}", paths.len()),
         Target::Archive { path } => format!("Archive path={}", path),
       };
-      tracing::info!(
+      tracing::debug!(
         "[Planner] 来源[{}] local root={} scope={} filter_glob={}",
         idx,
         root,

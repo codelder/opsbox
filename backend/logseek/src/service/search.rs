@@ -8,7 +8,7 @@ use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
-use tracing::{debug, info, warn};
+use tracing::{debug, trace, warn};
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -141,12 +141,12 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
     match &sample[0..2] {
       [0xFF, 0xFE] => {
         // UTF-16 LE BOM
-        debug!("检测到 UTF-16 LE BOM");
+        trace!("检测到 UTF-16 LE BOM");
         return Some(UTF_16LE);
       }
       [0xFE, 0xFF] => {
         // UTF-16 BE BOM
-        debug!("检测到 UTF-16 BE BOM");
+        trace!("检测到 UTF-16 BE BOM");
         return Some(UTF_16BE);
       }
       _ => {}
@@ -156,7 +156,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   if sample.len() >= 3
     && let [0xEF, 0xBB, 0xBF] = &sample[0..3]
   {
-    debug!("检测到 UTF-8 BOM");
+    trace!("检测到 UTF-8 BOM");
     return Some(UTF_8);
   }
 
@@ -165,7 +165,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   match std::str::from_utf8(sample) {
     Ok(_) => {
       // 样本完全是有效的 UTF-8
-      debug!("样本是有效的 UTF-8，使用 UTF-8 编码");
+      trace!("样本是有效的 UTF-8，使用 UTF-8 编码");
       return Some(UTF_8);
     }
     Err(e) => {
@@ -177,7 +177,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
       if valid_up_to > 0 && sample.len() - valid_up_to <= 3 {
         // 验证前面的部分确实是有效的 UTF-8
         if std::str::from_utf8(&sample[..valid_up_to]).is_ok() {
-          debug!(
+          trace!(
             "样本前 {} 字节是有效的 UTF-8（末尾 {} 字节可能被截断），使用 UTF-8 编码",
             valid_up_to,
             sample.len() - valid_up_to
@@ -194,7 +194,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   detector.feed(sample, true); // last=true 表示这是最后一块数据
   let detected_encoding = detector.guess(None, true); // tld=None, allow_utf8=true
 
-  debug!("chardetng 检测到编码: {}", detected_encoding.name());
+  trace!("chardetng 检测到编码: {}", detected_encoding.name());
   Some(detected_encoding)
 }
 
@@ -202,7 +202,7 @@ fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
 fn auto_detect_encoding(sample: &[u8]) -> Option<(&'static Encoding, String)> {
   detect_encoding(sample).map(|enc| {
     let name = enc.name().to_string();
-    debug!("自动检测到编码: {}", name);
+    trace!("自动检测到编码: {}", name);
     (enc, name)
   })
 }
@@ -223,7 +223,7 @@ async fn read_lines_utf8<R: AsyncRead + Unpin>(
       let valid_up_to = e.utf8_error().valid_up_to();
       if valid_up_to > 0 && sample.len() - valid_up_to <= 3 {
         // 只使用有效的部分，丢弃末尾不完整的字节
-        debug!(
+        trace!(
           "样本末尾 {} 字节被截断，使用前 {} 字节",
           sample.len() - valid_up_to,
           valid_up_to
@@ -435,7 +435,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   context_lines: usize,
   encoding_qualifier: Option<&str>,
 ) -> Result<Option<(Vec<String>, Vec<(usize, usize)>, Option<String>)>, SearchError> {
-  debug!(
+  trace!(
     "开始文本搜索，上下文行数: {}, 搜索条件数: {}",
     context_lines,
     spec.terms.len()
@@ -460,24 +460,24 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
 
   // 检查是否为文本文件
   if !is_probably_text_bytes(&sample) {
-    info!("文件不是文本格式，跳过搜索");
+    debug!("文件不是文本格式，跳过搜索");
 
     // 添加详细诊断信息
-    info!("文本检测诊断信息 - 样本大小: {} 字节", sample.len());
+    trace!("文本检测诊断信息 - 样本大小: {} 字节", sample.len());
 
     if sample.is_empty() {
-      info!("样本为空，但 is_probably_text_bytes 应返回 true（代码逻辑异常）");
+      warn!("样本为空，但 is_probably_text_bytes 应返回 true（代码逻辑异常）");
     }
 
     // 检查是否包含 null 字节
     let has_null = sample.contains(&0);
-    info!("是否包含 null 字节: {}", has_null);
+    trace!("是否包含 null 字节: {}", has_null);
 
     // 检查是否为有效的 UTF-8
     let utf8_result = std::str::from_utf8(&sample);
     match utf8_result {
-      Ok(_) => info!("UTF-8 验证: 有效"),
-      Err(e) => info!("UTF-8 验证失败，有效部分: {} 字节", e.valid_up_to()),
+      Ok(_) => trace!("UTF-8 验证: 有效"),
+      Err(e) => trace!("UTF-8 验证失败，有效部分: {} 字节", e.valid_up_to()),
     }
 
     // 计算可打印字符比例
@@ -490,23 +490,23 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     } else {
       printable as f32 / sample.len() as f32
     };
-    info!("可打印字符比例: {:.2}% ({}/{})", ratio * 100.0, printable, sample.len());
+    trace!("可打印字符比例: {:.2}% ({}/{})", ratio * 100.0, printable, sample.len());
 
     // 使用 chardetng 检测编码并获取置信度
     let mut detector = EncodingDetector::new();
     detector.feed(&sample, true);
     let (encoding, confidence) = detector.guess_assess(None, true);
-    info!("chardetng 检测编码: {}，置信度: {}", encoding.name(), confidence);
+    trace!("chardetng 检测编码: {}，置信度: {}", encoding.name(), confidence);
 
     // 检查常见非文本模式
     if sample.len() > 4 {
-      info!("样本前 4 字节: {:02X?}", &sample[..4.min(sample.len())]);
+      trace!("样本前 4 字节: {:02X?}", &sample[..4.min(sample.len())]);
     }
 
     return Ok(None);
   }
 
-  info!("文本检测通过，样本大小: {} 字节", sample.len());
+  trace!("文本检测通过，样本大小: {} 字节", sample.len());
 
   // 检测编码：如果指定了 encoding 限定词，使用指定的编码；否则自动检测
   let (encoding, encoding_name) = if let Some(enc_name) = encoding_qualifier {
@@ -528,7 +528,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     });
     match enc_opt {
       Some(enc) => {
-        debug!("使用指定的编码: {} ({})", enc_name, enc.name());
+        trace!("使用指定的编码: {} ({})", enc_name, enc.name());
         (enc, enc.name().to_string())
       }
       None => {
@@ -573,7 +573,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
     return Ok(None);
   }
 
-  debug!("读取完成，共{}'行，开始执行搜索逻辑", lines.len());
+  trace!("读取完成，共{}'行，开始执行搜索逻辑", lines.len());
 
   // 文件级布尔计算：检查各关键字是否在文件中出现
   let term_count = spec.terms.len();
@@ -606,7 +606,7 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   }
 
   // 文件级布尔求值
-  debug!("执行文件级布尔计算，关键字出现状态: {:?}", occurs);
+  trace!("执行文件级布尔计算，关键字出现状态: {:?}", occurs);
   if !spec.eval_file(&occurs) {
     debug!("文件级布尔求值不满足，跳过文件");
     return Ok(None);
