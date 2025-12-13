@@ -136,9 +136,7 @@ impl SearchExecutor {
   /// - String: 搜索会话 ID (sid)
   async fn generate_sid_and_cache_keywords(&self, highlights: Vec<crate::query::KeywordHighlight>) -> String {
     let sid = new_sid();
-    // 提取文本用于缓存（view 页面使用）
-    let keywords: Vec<String> = highlights.iter().map(|h| h.text.clone()).collect();
-    simple_cache().put_keywords(&sid, keywords).await;
+    simple_cache().put_keywords(&sid, highlights).await;
     sid
   }
 
@@ -841,14 +839,8 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     let highlights: Vec<crate::query::KeywordHighlight> = vec![
-      crate::query::KeywordHighlight {
-        text: "error".to_string(),
-        is_phrase: false,
-      },
-      crate::query::KeywordHighlight {
-        text: "warning".to_string(),
-        is_phrase: false,
-      },
+      crate::query::KeywordHighlight::Literal("error".to_string()),
+      crate::query::KeywordHighlight::Literal("warning".to_string()),
     ];
     let sid = executor.generate_sid_and_cache_keywords(highlights).await;
 
@@ -3128,7 +3120,7 @@ SOURCES = [
     let cached_keywords = crate::repository::cache::cache().get_keywords(&sid).await;
     assert!(cached_keywords.is_some());
     let keywords = cached_keywords.unwrap();
-    assert!(keywords.contains(&"error".to_string()));
+    assert!(keywords.contains(&crate::query::KeywordHighlight::Literal("error".to_string())));
   }
 
   #[tokio::test]

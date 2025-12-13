@@ -26,7 +26,7 @@
   let currentFile = $state('');
   let total = $state(0);
   let end = $state(0);
-  let keywords = $state<string[]>([]);
+  let keywords = $state<KeywordInfo[]>([]);
   let lines = $state<{ no: number; text: string }[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -436,7 +436,7 @@
     }
 
     // 检查关键词是否变化，清空缓存
-    const currentKeywordsHash = keywords.join('|');
+    const currentKeywordsHash = keywords.map((k) => `${k.type}:${k.text}`).join('|');
     if (currentKeywordsHash !== cachedKeywordsHash) {
       highlightCache.clear();
       cachedKeywordsHash = currentKeywordsHash;
@@ -448,9 +448,7 @@
       return highlightCache.get(cacheKey)!;
     }
 
-    // 将 keywords 字符串数组转换为 KeywordInfo 数组（默认都是 Literal，不区分大小写）
-    const keywordInfos: KeywordInfo[] = keywords.map((kw) => ({ type: 'literal', text: kw }));
-    const result = highlight(text, keywordInfos);
+    const result = highlight(text, keywords);
 
     // 缓存结果
     highlightCache.set(cacheKey, result);
@@ -459,7 +457,20 @@
 
   function lineHasMatch(text: string): boolean {
     if (!keywords || keywords.length === 0 || !text) return false;
-    return keywords.some((kw) => kw && text.includes(kw));
+    return keywords.some((kwInfo) => {
+      const kw = kwInfo.text;
+      if (!kw || kw.length === 0) return false;
+      if (kwInfo.type === 'literal') return text.toLowerCase().includes(kw.toLowerCase());
+      if (kwInfo.type === 'phrase') return text.includes(kw);
+      if (kwInfo.type === 'regex') {
+        try {
+          return new RegExp(kw).test(text);
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
   }
 
   async function downloadCurrentFile() {

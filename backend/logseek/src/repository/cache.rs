@@ -8,7 +8,7 @@ use tokio::time as tokio_time;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::domain::FileUrl;
+use crate::{domain::FileUrl, query::KeywordHighlight};
 
 #[derive(Debug, Clone)]
 pub struct CompactLines {
@@ -62,13 +62,19 @@ impl CompactLines {
 #[derive(Debug)]
 struct SessionData {
   last_touch: Instant,
-  keywords: Vec<String>,
+  keywords: Vec<KeywordHighlight>,
   files: HashMap<FileUrl, CompactLines>,
 }
 
 impl SessionData {
   fn size_in_bytes(&self) -> usize {
-    let keywords_size: usize = self.keywords.iter().map(|k| k.len()).sum();
+    let keywords_size: usize = self
+      .keywords
+      .iter()
+      .map(|k| match k {
+        KeywordHighlight::Literal(s) | KeywordHighlight::Phrase(s) | KeywordHighlight::Regex(s) => s.len(),
+      })
+      .sum();
     let files_size: usize = self.files.values().map(|v| v.size_in_bytes()).sum();
     keywords_size + files_size
   }
@@ -179,7 +185,7 @@ impl Cache {
     });
   }
 
-  pub async fn put_keywords(&self, sid: &str, kws: Vec<String>) {
+  pub async fn put_keywords(&self, sid: &str, kws: Vec<KeywordHighlight>) {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -196,7 +202,7 @@ impl Cache {
       });
   }
 
-  pub async fn get_keywords(&self, sid: &str) -> Option<Vec<String>> {
+  pub async fn get_keywords(&self, sid: &str) -> Option<Vec<KeywordHighlight>> {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -316,7 +322,10 @@ mod tests {
   async fn test_cache_put_and_get_keywords() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let keywords = vec!["error".to_string(), "warn".to_string()];
+    let keywords = vec![
+      KeywordHighlight::Literal("error".to_string()),
+      KeywordHighlight::Literal("warn".to_string()),
+    ];
 
     c.put_keywords(&sid, keywords.clone()).await;
     let result = c.get_keywords(&sid).await;
@@ -371,7 +380,7 @@ mod tests {
   async fn test_cache_keywords_retrieval() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let keywords = vec!["test".to_string()];
+    let keywords = vec![KeywordHighlight::Literal("test".to_string())];
 
     c.put_keywords(&sid, keywords.clone()).await;
 
@@ -388,11 +397,13 @@ mod tests {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
-    c.put_keywords(&sid, vec!["old".to_string()]).await;
-    c.put_keywords(&sid, vec!["new".to_string()]).await;
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("old".to_string())])
+      .await;
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("new".to_string())])
+      .await;
 
     let result = c.get_keywords(&sid).await;
-    assert_eq!(result, Some(vec!["new".to_string()]));
+    assert_eq!(result, Some(vec![KeywordHighlight::Literal("new".to_string())]));
   }
 
   #[tokio::test]
@@ -524,7 +535,8 @@ mod tests {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
-    c.put_keywords(&sid, vec!["test".to_string()]).await;
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("test".to_string())])
+      .await;
 
     // 等待一小段时间
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
@@ -546,7 +558,9 @@ mod tests {
       .map(|i| {
         let sid = sid.clone();
         task::spawn(async move {
-          cache().put_keywords(&sid, vec![format!("keyword-{}", i)]).await;
+          cache()
+            .put_keywords(&sid, vec![KeywordHighlight::Literal(format!("keyword-{}", i))])
+            .await;
         })
       })
       .collect();
@@ -567,7 +581,10 @@ mod tests {
 
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let keywords = vec!["test1".to_string(), "test2".to_string()];
+    let keywords = vec![
+      KeywordHighlight::Literal("test1".to_string()),
+      KeywordHighlight::Literal("test2".to_string()),
+    ];
 
     c.put_keywords(&sid, keywords.clone()).await;
 
@@ -631,10 +648,10 @@ mod tests {
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
     // 存储空关键词列表
-    c.put_keywords(&sid, vec![]).await;
+    c.put_keywords(&sid, Vec::<KeywordHighlight>::new()).await;
 
     let result = c.get_keywords(&sid).await;
-    assert_eq!(result, Some(vec![]));
+    assert_eq!(result, Some(Vec::<KeywordHighlight>::new()));
   }
 
   #[tokio::test]
@@ -667,7 +684,9 @@ mod tests {
     let sid = format!("test-sid-{}", Uuid::new_v4());
 
     // 创建大量关键词
-    let keywords: Vec<String> = (0..1000).map(|i| format!("keyword-{}", i)).collect();
+    let keywords: Vec<KeywordHighlight> = (0..1000)
+      .map(|i| KeywordHighlight::Literal(format!("keyword-{}", i)))
+      .collect();
 
     c.put_keywords(&sid, keywords.clone()).await;
 
@@ -680,10 +699,11 @@ mod tests {
     let c = cache();
     let sid = "sid-with-特殊字符-!@#$%";
 
-    c.put_keywords(sid, vec!["test".to_string()]).await;
+    c.put_keywords(sid, vec![KeywordHighlight::Literal("test".to_string())])
+      .await;
 
     let result = c.get_keywords(sid).await;
-    assert_eq!(result, Some(vec!["test".to_string()]));
+    assert_eq!(result, Some(vec![KeywordHighlight::Literal("test".to_string())]));
   }
 
   #[tokio::test]
@@ -716,7 +736,8 @@ mod tests {
       None,
     );
 
-    c.put_keywords(&sid, vec!["test".to_string()]).await;
+    c.put_keywords(&sid, vec![KeywordHighlight::Literal("test".to_string())])
+      .await;
     c.put_lines(&sid, &file_url, vec!["line 1".to_string()]).await;
 
     // Verify existence

@@ -142,6 +142,8 @@ impl EntryStream for FsEntryStream {
 pub struct TarGzEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<R>>>>,
   consecutive_errors: usize,
+  next_entry_index: usize,
+  last_ok_entry_path: Option<String>,
 }
 
 impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
@@ -153,6 +155,8 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
     Ok(Self {
       entries,
       consecutive_errors: 0,
+      next_entry_index: 0,
+      last_ok_entry_path: None,
     })
   }
 }
@@ -167,12 +171,14 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> 
         Some(Ok(entry)) => {
           // 成功读取条目，重置错误计数器
           self.consecutive_errors = 0;
+          self.next_entry_index = self.next_entry_index.saturating_add(1);
           let raw = entry
             .path()
             .ok()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "<unknown>".into());
           let path = normalize_archive_entry_path(&raw);
+          self.last_ok_entry_path = Some(path.clone());
           let reader = entry.compat(); // 转为 tokio AsyncRead
           let meta = EntryMeta {
             path,
@@ -186,8 +192,10 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> 
           self.consecutive_errors += 1;
           // 记录错误但继续处理下一个条目
           tracing::warn!(
-            "跳过损坏的 tar.gz 条目: {} (连续错误: {}/{})",
+            "跳过损坏的 tar.gz 条目: {} (next_index={}, last_ok_entry={:?}, 连续错误: {}/{})",
             e,
+            self.next_entry_index,
+            self.last_ok_entry_path,
             self.consecutive_errors,
             MAX_CONSECUTIVE_ERRORS
           );
@@ -773,6 +781,8 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
 pub struct TarEntryStream<R: AsyncRead + Send + Unpin + 'static> {
   entries: async_tar::Entries<tokio_util::compat::Compat<BufReader<R>>>,
   consecutive_errors: usize,
+  next_entry_index: usize,
+  last_ok_entry_path: Option<String>,
 }
 
 impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
@@ -783,6 +793,8 @@ impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
     Ok(Self {
       entries,
       consecutive_errors: 0,
+      next_entry_index: 0,
+      last_ok_entry_path: None,
     })
   }
 }
@@ -797,12 +809,14 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
         Some(Ok(entry)) => {
           // 成功读取条目，重置错误计数器
           self.consecutive_errors = 0;
+          self.next_entry_index = self.next_entry_index.saturating_add(1);
           let raw = entry
             .path()
             .ok()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "<unknown>".into());
           let path = normalize_archive_entry_path(&raw);
+          self.last_ok_entry_path = Some(path.clone());
           let reader = entry.compat();
           let meta = EntryMeta {
             path,
@@ -816,8 +830,10 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
           self.consecutive_errors += 1;
           // 记录错误但继续处理下一个条目
           tracing::warn!(
-            "跳过损坏的 tar 条目: {} (连续错误: {}/{})",
+            "跳过损坏的 tar 条目: {} (next_index={}, last_ok_entry={:?}, 连续错误: {}/{})",
             e,
+            self.next_entry_index,
+            self.last_ok_entry_path,
             self.consecutive_errors,
             MAX_CONSECUTIVE_ERRORS
           );

@@ -62,9 +62,8 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
     indices.sort();
     indices.dedup();
     for &i in &indices {
-      if let Some(s) = terms[i].display_text() {
-        let is_phrase = matches!(terms[i], super::Term::Phrase(_));
-        highlights.push(super::KeywordHighlight { text: s, is_phrase });
+      if let Some(h) = terms[i].highlight() {
+        highlights.push(h);
       }
     }
   }
@@ -247,7 +246,7 @@ impl Parser {
           body.contains("(?=") || body.contains("(?!") || body.contains("(?<=") || body.contains("(?<!");
         let term = if has_lookaround {
           match fancy_regex::Regex::new(&body) {
-            Ok(r) => Term::RegexFancy(r),
+            Ok(re) => Term::RegexFancy { pattern: body, re },
             Err(e) => {
               return Err(ParseError::InvalidRegex {
                 message: e.to_string(),
@@ -257,7 +256,7 @@ impl Parser {
           }
         } else {
           match regex::Regex::new(&body) {
-            Ok(r) => Term::RegexStd(r),
+            Ok(re) => Term::RegexStd { pattern: body, re },
             Err(e) => {
               return Err(ParseError::InvalidRegex {
                 message: e.to_string(),
@@ -347,10 +346,24 @@ mod tests {
   #[test]
   fn highlights_positive_atoms_only() {
     let spec = parse_github_like("(\"hello world\" OR foo) /ERR\\d+/").expect("parse");
-    let texts: Vec<&str> = spec.highlights.iter().map(|h| h.text.as_str()).collect();
-    assert!(texts.contains(&"hello world"));
-    assert!(texts.contains(&"foo"));
-    assert_eq!(texts.iter().filter(|s| s.starts_with("ERR")).count(), 0);
+    assert!(
+      spec
+        .highlights
+        .iter()
+        .any(|h| matches!(h, crate::query::KeywordHighlight::Phrase(s) if s == "hello world"))
+    );
+    assert!(
+      spec
+        .highlights
+        .iter()
+        .any(|h| matches!(h, crate::query::KeywordHighlight::Literal(s) if s == "foo"))
+    );
+    assert!(
+      spec
+        .highlights
+        .iter()
+        .any(|h| matches!(h, crate::query::KeywordHighlight::Regex(s) if s == r"ERR\d+"))
+    );
   }
 
   #[test]
@@ -484,11 +497,11 @@ mod tests {
     let spec = parse_github_like("/^[0-9A-Z]{18}$/").expect("parse");
     assert_eq!(spec.terms.len(), 1, "regex should produce a single term");
     match &spec.terms[0] {
-      Term::RegexStd(r) => {
-        assert!(r.is_match("91110108MA7DXPY30B"), "expected valid code to match");
-        assert!(!r.is_match("91350200792232668x"), "lowercase letters should not match");
+      Term::RegexStd { re, .. } => {
+        assert!(re.is_match("91110108MA7DXPY30B"), "expected valid code to match");
+        assert!(!re.is_match("91350200792232668x"), "lowercase letters should not match");
         assert!(
-          !r.is_match("9135020079223266"),
+          !re.is_match("9135020079223266"),
           "code shorter than 18 chars should not match"
         );
       }

@@ -30,18 +30,63 @@ export function escapeRegExp(s: string): string {
  * @param keywords 带类型信息的关键词列表
  */
 export function highlight(line: string, keywords: KeywordInfo[]): string {
-  let out = escapeHtml(line);
+  if (!line || line.length === 0) return '';
+  if (!keywords || keywords.length === 0) return escapeHtml(line);
+
+  const spans: Array<[number, number]> = [];
 
   for (const kwInfo of keywords) {
     const kw = kwInfo.text;
     if (!kw || kw.length === 0) continue;
 
-    const escapedKw = escapeRegExp(kw);
-    // Literal: 不区分大小写，Phrase: 区分大小写
-    const flags = kwInfo.type === 'literal' ? 'gi' : 'g';
-    const re = new RegExp(escapedKw, flags);
-    out = out.replace(re, (m) => `<mark class="highlight">${escapeHtml(m)}</mark>`);
+    let re: RegExp | null = null;
+    if (kwInfo.type === 'literal') {
+      re = new RegExp(escapeRegExp(kw), 'gi');
+    } else if (kwInfo.type === 'phrase') {
+      re = new RegExp(escapeRegExp(kw), 'g');
+    } else if (kwInfo.type === 'regex') {
+      try {
+        re = new RegExp(kw, 'g');
+      } catch {
+        re = null;
+      }
+    }
+    if (!re) continue;
+
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(line)) !== null) {
+      const start = m.index;
+      const matchText = m[0] ?? '';
+      const end = start + matchText.length;
+      if (end <= start) {
+        re.lastIndex = Math.min(line.length, start + 1);
+        continue;
+      }
+      spans.push([start, end]);
+    }
   }
+
+  if (spans.length === 0) return escapeHtml(line);
+
+  spans.sort((a, b) => (a[0] !== b[0] ? a[0] - b[0] : b[1] - a[1]));
+  const merged: Array<[number, number]> = [];
+  for (const [s, e] of spans) {
+    const last = merged[merged.length - 1];
+    if (!last || s > last[1]) {
+      merged.push([s, e]);
+    } else {
+      last[1] = Math.max(last[1], e);
+    }
+  }
+
+  let out = '';
+  let cursor = 0;
+  for (const [s, e] of merged) {
+    out += escapeHtml(line.slice(cursor, s));
+    out += `<mark class="highlight">${escapeHtml(line.slice(s, e))}</mark>`;
+    cursor = e;
+  }
+  out += escapeHtml(line.slice(cursor));
   return out;
 }
 
@@ -59,17 +104,39 @@ export function snippet(line: string, keywords: KeywordInfo[], opts: SnippetOpti
     return { html: highlight(line, keywords), leftTrunc: false, rightTrunc: false };
   }
 
-  const kws = keywords.map((k) => k.text).filter((k) => k && k.length > 0);
-
   let firstIdx = -1;
   let firstLen = 0;
 
-  // 查找首个关键词位置（不区分大小写查找）
-  for (const kw of kws) {
-    const idx = line.toLowerCase().indexOf(kw.toLowerCase());
+  // 查找首个关键词/正则命中位置
+  for (const kwInfo of keywords) {
+    const kw = kwInfo.text;
+    if (!kw || kw.length === 0) continue;
+
+    let idx = -1;
+    let len = 0;
+
+    if (kwInfo.type === 'literal') {
+      idx = line.toLowerCase().indexOf(kw.toLowerCase());
+      len = kw.length;
+    } else if (kwInfo.type === 'phrase') {
+      idx = line.indexOf(kw);
+      len = kw.length;
+    } else if (kwInfo.type === 'regex') {
+      try {
+        const re = new RegExp(kw);
+        const m = re.exec(line);
+        if (m && typeof m.index === 'number') {
+          idx = m.index;
+          len = (m[0] ?? '').length;
+        }
+      } catch {
+        // ignore invalid regex
+      }
+    }
+
     if (idx !== -1 && (firstIdx === -1 || idx < firstIdx)) {
       firstIdx = idx;
-      firstLen = kw.length;
+      firstLen = len;
     }
   }
 

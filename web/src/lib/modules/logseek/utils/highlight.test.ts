@@ -7,6 +7,7 @@ import { escapeHtml, escapeRegExp, highlight, snippet } from './highlight';
 import type { KeywordInfo } from '../types';
 
 const kw = (list: string[]): KeywordInfo[] => list.map((text) => ({ type: 'literal', text }));
+const kwRegex = (pattern: string): KeywordInfo[] => [{ type: 'regex', text: pattern }];
 
 describe('highlight utils', () => {
   describe('escapeHtml', () => {
@@ -115,6 +116,16 @@ describe('highlight utils', () => {
     it('应该处理特殊字符在关键词中', () => {
       const result = highlight('price: $100', kw(['$100']));
       expect(result).toContain('<mark class="highlight">$100</mark>');
+    });
+
+    it('应该支持正则表达式高亮', () => {
+      const result = highlight('ERR123 ok', kwRegex('ERR\\d+'));
+      expect(result).toBe('<mark class="highlight">ERR123</mark> ok');
+    });
+
+    it('正则无效时应忽略并保持原文', () => {
+      const result = highlight('ERR123 ok', kwRegex('('));
+      expect(result).toBe('ERR123 ok');
     });
   });
 

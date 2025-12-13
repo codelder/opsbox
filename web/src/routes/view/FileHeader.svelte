@@ -6,6 +6,7 @@
   import type { ParsedFileUrl } from '$lib/modules/logseek/utils/fileUrl';
   import { Button } from '$lib/components/ui/button';
   import { Badge } from '$lib/components/ui/badge';
+  import type { KeywordInfo } from '$lib/modules/logseek/types';
   import { Download, FileText, Database, Server, HardDrive, Archive, Folder, Minus, Plus } from 'lucide-svelte';
 
   // Lucide 图标类型
@@ -27,7 +28,7 @@
     /**
      * 关键词列表
      */
-    keywords?: string[];
+    keywords?: KeywordInfo[];
     /**
      * 是否正在加载
      */
@@ -225,12 +226,12 @@
       {#if keywords?.length}
         <div class="flex items-center gap-1.5">
           <div class="flex flex-wrap items-center gap-1">
-            {#each keywords.slice(0, 3) as keyword (keyword)}
+            {#each keywords.slice(0, 3) as keyword (`${keyword.type}:${keyword.text}`)}
               <Badge
                 variant="secondary"
                 class="h-5 border border-amber-200/50 bg-amber-50/80 px-2 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/30 dark:text-amber-400"
               >
-                {keyword}
+                {keyword.text}
               </Badge>
             {/each}
             {#if keywords.length > 3}
