@@ -164,7 +164,7 @@ impl Cache {
                   unsafe {
                     libmimalloc_sys::mi_collect(true);
                   }
-                  tracing::info!("libmimalloc_sys::mi_collect(true) 调用完成");
+                  tracing::debug!("libmimalloc_sys::mi_collect(true) 调用完成");
                 });
               }
             }
