@@ -3,6 +3,7 @@
 //! 验证多数据源搜索、并发控制、缓存功能
 
 use logseek::domain::config::{Endpoint, Source, Target};
+use logseek::query::KeywordHighlight;
 use logseek::repository::cache::cache;
 use logseek::service::search::SearchEvent;
 use logseek::service::search_executor::{SearchExecutor, SearchExecutorConfig};
@@ -111,7 +112,10 @@ async fn test_cache_functionality() {
   let sid = format!("test-sid-{}", uuid::Uuid::new_v4());
 
   // 测试关键字缓存
-  let keywords = vec!["error".to_string(), "warn".to_string()];
+  let keywords = vec![
+    KeywordHighlight::Literal("error".to_string()),
+    KeywordHighlight::Literal("warn".to_string()),
+  ];
   c.put_keywords(&sid, keywords.clone()).await;
 
   let cached_keywords = c.get_keywords(&sid).await;

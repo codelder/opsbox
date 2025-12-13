@@ -118,8 +118,18 @@
       for (let li = 0; li < lines.length && processedCount < maxLinesToProcess; li++) {
         const ln = lines[li];
         const hasMatch = keywords.some((kw) => {
-          const kwText = kw.text.toLowerCase();
-          return ln.text.toLowerCase().includes(kwText);
+          const kwText = kw?.text ?? '';
+          if (!kwText) return false;
+          if (kw.type === 'literal') return ln.text.toLowerCase().includes(kwText.toLowerCase());
+          if (kw.type === 'phrase') return ln.text.includes(kwText);
+          if (kw.type === 'regex') {
+            try {
+              return new RegExp(kwText).test(ln.text);
+            } catch {
+              return false;
+            }
+          }
+          return false;
         });
         arr.push({ no: ln.no, text: ln.text, _ci: ci, _li: li, isMatch: hasMatch });
         processedCount++;
