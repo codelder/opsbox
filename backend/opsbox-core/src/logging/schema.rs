@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS log_config (
 );
 
 -- 插入默认配置（如果不存在）
+-- 注意：只在首次创建时设置默认值，之后不再自动修复，避免覆盖用户手动修改的配置
 INSERT OR IGNORE INTO log_config (component, level, retention_count, updated_at)
 VALUES ('server', 'info', 7, strftime('%s', 'now'));
 "#;

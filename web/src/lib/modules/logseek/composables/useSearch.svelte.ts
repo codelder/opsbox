@@ -85,7 +85,7 @@ export function useSearch() {
           // 笔记: Error 事件不中断搜索，其他源会继续发送结果
           // 如果有必要，可以在此会变更 UI 状态，例如显示警告信息
         } else if (event.type === 'complete') {
-          console.log(`[搜索] 数据源 ${event.source} 完成, 耗时 ${event.elapsed_ms}ms`);
+          console.info(`[搜索] 数据源 ${event.source} 完成, 耗时 ${event.elapsed_ms}ms`);
           // 可以跟踪各源的完成情况，用于水纳模式的下载较、挺上流量计算等
         }
       }

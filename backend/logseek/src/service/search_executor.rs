@@ -13,7 +13,7 @@ use opsbox_core::SqlitePool;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Semaphore, mpsc};
-use tracing::debug;
+use tracing::{debug, info, trace};
 
 /// 搜索执行器配置
 #[derive(Debug, Clone)]
@@ -170,7 +170,10 @@ impl SearchExecutor {
       }
     };
 
-    debug!("[SearchExecutor] 开始 Agent 搜索: agent_id={}", agent_id);
+    info!(
+      "[SearchExecutor] 开始数据源搜索: endpoint=agent agent_id={} ctx={}",
+      agent_id, ctx
+    );
 
     // 创建 Agent 客户端
     let client = match AgentClient::new_by_agent_id(agent_id.clone()).await {
@@ -261,7 +264,7 @@ impl SearchExecutor {
     };
 
     // 消费结果流
-    debug!("[SearchExecutor] 开始消费 Agent 结果流");
+    debug!("[SearchExecutor] 开始消费 Agent 结果流: agent_id={}", agent_id);
     let mut result_count = 0;
 
     while let Some(item) = stream.next().await {
@@ -271,7 +274,7 @@ impl SearchExecutor {
       };
 
       result_count += 1;
-      debug!(
+      trace!(
         "[SearchExecutor] 收到 Agent 结果 #{}: path={}, lines={}",
         result_count,
         res.path,
@@ -293,7 +296,7 @@ impl SearchExecutor {
       };
 
       // 缓存结果
-      debug!(
+      trace!(
         "Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
         sid,
         file_url,
@@ -316,7 +319,10 @@ impl SearchExecutor {
       }
     }
 
-    debug!("[SearchExecutor] Agent 结果流消费完成，共处理 {} 个结果", result_count);
+    debug!(
+      "[SearchExecutor] Agent 结果流消费完成: agent_id={} results={}",
+      agent_id, result_count
+    );
 
     // 发送完成事件
     let elapsed = start_time.elapsed();
@@ -387,6 +393,15 @@ impl SearchExecutor {
         }
       }
     });
+    let endpoint_kind = match &source.endpoint {
+      Endpoint::Local { .. } => "local",
+      Endpoint::S3 { .. } => "s3",
+      Endpoint::Agent { .. } => "agent",
+    };
+    info!(
+      "[SearchExecutor] 开始数据源搜索: source={} endpoint={} ctx={}",
+      source_name, endpoint_kind, ctx
+    );
 
     // 创建条目流
     let factory = crate::service::entry_stream::EntryStreamFactory::new(pool);
@@ -457,7 +472,7 @@ impl SearchExecutor {
               }
             };
 
-            // 缓存结果
+            // 缓存结果（文件级明细，默认应保持低噪音）
             simple_cache().put_lines(&sid_clone, &file_url, res.lines.clone()).await;
 
             // 更新 path 为完整的 FileUrl 字符串
