@@ -20,7 +20,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-manager"
-version = "0.1.0-rc10"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "logseek"
-version = "0.1.0-rc10"
+version = "0.1.0"
 dependencies = [
  "agent-manager",
  "async-compression",
@@ -3135,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "opsbox-agent"
-version = "0.1.0-rc10"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3168,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "opsbox-core"
-version = "0.1.0-rc10"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -3193,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "opsbox-server"
-version = "0.1.0-rc10"
+version = "0.1.0"
 dependencies = [
  "agent-manager",
  "axum",
