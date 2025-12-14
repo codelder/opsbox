@@ -13,7 +13,20 @@
   import { Search } from 'lucide-svelte';
 
   // 工具函数：将片段插入到输入框光标位置
-  let inputEl: HTMLInputElement | null = null;
+  let inputEl: HTMLTextAreaElement | null = null;
+
+  function autoResize() {
+    if (!inputEl) return;
+    inputEl.style.height = 'auto';
+    inputEl.style.height = `${inputEl.scrollHeight}px`;
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleHomeSubmit(e);
+    }
+  }
 
   // AI 加载状态（点击 AI 按钮时使用）；不再持久切换模式
   let aiLoading = $state(false);
@@ -85,15 +98,17 @@
             <Search class="h-5 w-5" />
           </span>
 
-          <input
+          <textarea
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="flex h-14 w-full rounded-full border border-input bg-background px-12 py-2 text-foreground shadow-sm ring-offset-background placeholder:text-muted-foreground focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex min-h-[56px] w-full resize-none overflow-hidden rounded-[28px] border border-input bg-background pl-12 pr-32 py-4 text-foreground shadow-sm ring-offset-background placeholder:text-muted-foreground focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             id="search"
             name="q"
+            rows="1"
             placeholder="试一下: (taxResult OR taxWarn) /&quot;9111[0-9A-Z]{14}&quot;/ dt:20250818 path:ptcr -path:system.log"
-            type="text"
-          />
+            oninput={autoResize}
+            onkeydown={handleKeydown}
+          ></textarea>
 
           <!-- 右侧"AI 模式"按钮 -->
           <div class="absolute right-2 z-20">
