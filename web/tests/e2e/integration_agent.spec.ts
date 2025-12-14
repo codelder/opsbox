@@ -448,6 +448,26 @@ SOURCES = [{
     await expect(page.getByRole('link', { name: 'agent.log' })).toBeVisible();
   });
 
+  test('should open agent file view and render content', async ({ page }) => {
+    await page.goto('http://127.0.0.1:5173/search');
+
+    const searchInput = page.getByPlaceholder('搜索...');
+    await searchInput.fill(`app:${TEST_APP_AGENT} "${UNI_ID_AGENT}"`);
+    await searchInput.press('Enter');
+
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果', { timeout: 10000 });
+
+    const popupPromise = page.waitForEvent('popup');
+    await page.getByRole('link', { name: 'agent.log' }).click();
+    const viewPage = await popupPromise;
+
+    await viewPage.waitForURL(/\/view\?/);
+    await expect(viewPage.getByRole('heading', { name: 'agent.log' })).toBeVisible({ timeout: 10000 });
+    await expect(viewPage.locator('.code-content').getByText(UNI_ID_AGENT)).toBeVisible({ timeout: 10000 });
+
+    await viewPage.close();
+  });
+
   test('should search agent archive entries using app: directive', async ({ page }) => {
     await page.goto('http://127.0.0.1:5173/search');
 
@@ -461,8 +481,28 @@ SOURCES = [{
     const entryLink = page.getByRole('link', { name: 'archived.log' });
     await expect(entryLink).toHaveAttribute(
       'href',
-      new RegExp(`file=ls%3A%2F%2Fagent%2F${encodeURIComponent(AGENT_ID)}%2Farchive%2Flogs%2Fagent-archive\\.tar`)
+      new RegExp(`file=ls%3A%2F%2Fagent%2F${encodeURIComponent(AGENT_ID)}%2Farchive%2F.*agent-archive\\.tar`)
     );
+  });
+
+  test('should open agent archive entry view and render content', async ({ page }) => {
+    await page.goto('http://127.0.0.1:5173/search');
+
+    const searchInput = page.getByPlaceholder('搜索...');
+    await searchInput.fill(`app:${TEST_APP_AGENT_ARCHIVE} "${UNI_ID_AGENT_ARCHIVE}"`);
+    await searchInput.press('Enter');
+
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果', { timeout: 10000 });
+
+    const popupPromise = page.waitForEvent('popup');
+    await page.getByRole('link', { name: 'archived.log' }).click();
+    const viewPage = await popupPromise;
+
+    await viewPage.waitForURL(/\/view\?/);
+    await expect(viewPage.getByRole('heading', { name: 'archived.log' })).toBeVisible({ timeout: 10000 });
+    await expect(viewPage.locator('.code-content').getByText(UNI_ID_AGENT_ARCHIVE)).toBeVisible({ timeout: 10000 });
+
+    await viewPage.close();
   });
 
   test('should search agent tar.gz archive entries using app: directive', async ({ page }) => {
@@ -478,8 +518,28 @@ SOURCES = [{
     const entryLink = page.getByRole('link', { name: 'archived-tgz.log' });
     await expect(entryLink).toHaveAttribute(
       'href',
-      new RegExp(`file=ls%3A%2F%2Fagent%2F${encodeURIComponent(AGENT_ID)}%2Farchive%2Flogs%2Fagent-archive\\.tar\\.gz`)
+      new RegExp(`file=ls%3A%2F%2Fagent%2F${encodeURIComponent(AGENT_ID)}%2Farchive%2F.*agent-archive\\.tar\\.gz`)
     );
+  });
+
+  test('should open agent tar.gz archive entry view and render content', async ({ page }) => {
+    await page.goto('http://127.0.0.1:5173/search');
+
+    const searchInput = page.getByPlaceholder('搜索...');
+    await searchInput.fill(`app:${TEST_APP_AGENT_TARGZ} "${UNI_ID_AGENT_TARGZ}"`);
+    await searchInput.press('Enter');
+
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果', { timeout: 10000 });
+
+    const popupPromise = page.waitForEvent('popup');
+    await page.getByRole('link', { name: 'archived-tgz.log' }).click();
+    const viewPage = await popupPromise;
+
+    await viewPage.waitForURL(/\/view\?/);
+    await expect(viewPage.getByRole('heading', { name: 'archived-tgz.log' })).toBeVisible({ timeout: 10000 });
+    await expect(viewPage.locator('.code-content').getByText(UNI_ID_AGENT_TARGZ)).toBeVisible({ timeout: 10000 });
+
+    await viewPage.close();
   });
 
   test('should search multiple gz files in agent dir using app: directive', async ({ page }) => {

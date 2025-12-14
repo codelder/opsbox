@@ -28,7 +28,8 @@
     ChevronDown,
     ChevronUp,
     X,
-    Plus
+    Plus,
+    Folder
   } from 'lucide-svelte';
 
   const agentsStore = useAgents();
@@ -246,6 +247,21 @@
                         <span>{formatHeartbeat(a.last_heartbeat)}</span>
                       </div>
                     </div>
+
+                    <!-- Search Roots Display -->
+                    {#if a.search_roots && a.search_roots.length > 0}
+                      <div class="mt-2 flex flex-wrap gap-1">
+                        {#each a.search_roots as root}
+                          <div
+                            class="flex items-center gap-1 rounded bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                            title="Search Root"
+                          >
+                            <Folder class="h-3 w-3" />
+                            <span class="font-mono">{root}</span>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
                 </div>
               </div>

@@ -264,6 +264,12 @@
                     </div>
                   {/if}
                 {:else if parsedUrl.targetType === 'archive'}
+                  {#if parsedUrl.endpointType === 'agent'}
+                    <div class="grid grid-cols-[80px_1fr] gap-2">
+                      <span class="text-muted-foreground">Agent ID</span>
+                      <span class="font-mono text-foreground">{parsedUrl.endpointId}</span>
+                    </div>
+                  {/if}
                   <div class="grid grid-cols-[80px_1fr] gap-2">
                     <span class="text-muted-foreground">Archive</span>
                     <span class="font-mono break-all text-foreground">{parsedUrl.path}</span>

@@ -665,6 +665,9 @@ pub struct SearchResult {
   pub merged: Vec<(usize, usize)>,
   /// 文件编码（如果不是 UTF-8，则包含编码名称，如 "GBK"）
   pub encoding: Option<String>,
+  /// 当结果来自归档内部条目时，归档文件的绝对路径（Agent/Local 侧填充；用于服务端构造唯一 FileUrl）
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub archive_path: Option<String>,
   /// 条目来源类型
   #[serde(default)]
   pub source_type: EntrySourceType,
@@ -677,12 +680,18 @@ impl SearchResult {
       lines,
       merged,
       encoding,
+      archive_path: None,
       source_type: EntrySourceType::default(),
     }
   }
 
   pub fn with_source_type(mut self, source_type: EntrySourceType) -> Self {
     self.source_type = source_type;
+    self
+  }
+
+  pub fn with_archive_path(mut self, archive_path: Option<String>) -> Self {
+    self.archive_path = archive_path;
     self
   }
 }
@@ -1404,7 +1413,7 @@ foo lower
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let cursor = Cursor::new(tar_gz).compat();
-    let mut stream = TarGzEntryStream::new(cursor).await.unwrap();
+    let mut stream = TarGzEntryStream::new(cursor, None).await.unwrap();
     let proc = Arc::new(SearchProcessor::new(Arc::new(spec.clone()), ctx));
     let mut esp = EntryStreamProcessor::new(proc);
     let (tx, mut rx) = mpsc::channel::<SearchEvent>(64);
@@ -1864,6 +1873,7 @@ foo lower
       lines: vec!["test line".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      archive_path: None,
       source_type: EntrySourceType::default(),
     };
 
@@ -1909,6 +1919,7 @@ foo lower
       lines: vec!["line1".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      archive_path: None,
       source_type: EntrySourceType::default(),
     };
 
@@ -1926,6 +1937,7 @@ foo lower
       lines: vec!["line".to_string()],
       merged: vec![(1, 1)],
       encoding: Some("UTF-8".to_string()),
+      archive_path: None,
       source_type: EntrySourceType::default(),
     });
 
