@@ -101,7 +101,7 @@
           <textarea
             aria-labelledby="logo-label"
             bind:this={inputEl}
-            class="flex min-h-[56px] w-full resize-none overflow-hidden rounded-[28px] border border-input bg-background pl-12 pr-32 py-4 text-foreground shadow-sm ring-offset-background placeholder:text-muted-foreground focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            class="flex min-h-[56px] w-full resize-none overflow-hidden rounded-[28px] border border-input bg-background py-4 pr-32 pl-12 text-foreground shadow-sm ring-offset-background placeholder:text-muted-foreground focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             id="search"
             name="q"
             rows="1"
