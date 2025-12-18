@@ -183,7 +183,7 @@ mod tests {
 
     // 第一条是 system 消息
     assert!(matches!(messages[0].role, Role::System));
-    assert!(messages[0].content.contains("查询字符串规范"));
+    assert!(messages[0].content.contains("查询语法指南"));
 
     // 第二条是 user 消息
     assert!(matches!(messages[1].role, Role::User));
@@ -270,7 +270,7 @@ mod tests {
   #[test]
   fn test_quick_guide_loaded() {
     // 验证 QUICK_GUIDE 常量已正确加载
-    assert!(QUICK_GUIDE.contains("查询字符串规范"));
+    assert!(QUICK_GUIDE.contains("查询语法指南"));
   }
 
   #[test]
