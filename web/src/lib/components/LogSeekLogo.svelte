@@ -33,7 +33,9 @@
     xlarge: 'text-8xl md:text-10xl'
   };
 
-  let baseClass = $derived(`logoseek-logo inline-block font-extrabold tracking-[-0.25em] italic antialiased select-none ${sizeClasses[size]}`);
+  let baseClass = $derived(
+    `logoseek-logo inline-block font-extrabold tracking-[-0.25em] italic antialiased select-none ${sizeClasses[size]}`
+  );
   let hoverClass = $derived(hoverable ? 'transform transition-transform duration-300 hover:scale-105' : '');
   let cursorClass = $derived(asLabel ? 'cursor-pointer' : '');
 </script>
