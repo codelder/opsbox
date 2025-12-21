@@ -67,7 +67,7 @@ jobs:
       - name: Prepare release files
         run: |
           mkdir -p release-files
-          
+
           # 为每个 artifact 创建 tar.gz 包
           for dir in artifacts/*/; do
             if [ -d "$dir" ]; then
@@ -76,7 +76,7 @@ jobs:
               tar -czf "release-files/${artifact_name}.tar.gz" -C "$dir" .
             fi
           done
-          
+
           echo "Release files:"
           ls -lh release-files/
 
@@ -85,17 +85,17 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           files: release-files/*.tar.gz
-          prerelease: true
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}
           generate_release_notes: true
           body: |
             ## opsbox ${{ steps.tag.outputs.tag }}
-            
+
             ### 下载
-            
+
             #### Linux (推荐 - 通用静态链接)
             - [opsbox-server-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-server-linux-x86_64-musl.tar.gz)
             - [opsbox-agent-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-agent-linux-x86_64-musl.tar.gz)
-            
+
             #### Windows
             - [opsbox-server-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-server-windows-x86_64-msvc.tar.gz)
             - [opsbox-agent-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-agent-windows-x86_64-msvc.tar.gz)

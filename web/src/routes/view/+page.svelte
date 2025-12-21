@@ -4,9 +4,11 @@
    * 文件内容查看器（虚拟滚动）
    */
   import { onMount, onDestroy } from 'svelte';
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity';
   import { createVirtualizer } from '@tanstack/svelte-virtual';
   import { get } from 'svelte/store';
   import { browser } from '$app/environment';
+  import { resolve } from '$app/paths';
   import { fetchViewCache, fetchViewDownload, escapeHtml } from '$lib/modules/logseek';
   import { highlight } from '$lib/modules/logseek/utils/highlight';
   import type { KeywordInfo } from '$lib/modules/logseek/types';
@@ -82,13 +84,13 @@
   // 分块加载相关状态
   const CHUNK_SIZE = 1000;
   const MAX_CONCURRENT_CHUNKS = 3; // 最大并发加载块数
-  let loadedChunks = $state<Set<number>>(new Set());
-  let loadingChunks = $state<Set<number>>(new Set());
-  let pendingChunkLoads = $state<Set<number>>(new Set()); // 等待加载的块
+  const loadedChunks = new SvelteSet<number>();
+  const loadingChunks = new SvelteSet<number>();
+  const pendingChunkLoads = new SvelteSet<number>(); // 等待加载的块
   let lastChunkCheckTime = $state(0);
 
   // 高亮缓存
-  const highlightCache = new Map<string, string>();
+  const highlightCache = new SvelteMap<string, string>();
   let cachedKeywordsHash = '';
 
   // 虚拟滚动容器引用
@@ -217,7 +219,7 @@
       if (!items.length) return;
 
       // 收集虚拟items中涉及的所有块索引
-      const neededChunks = new Set<number>();
+      const neededChunks = new SvelteSet<number>();
       for (const item of items) {
         const lineNo = item.index + 1;
         const chunkIndex = getChunkIndex(lineNo);
@@ -233,7 +235,7 @@
 
       // 处理待加载块
       processPendingChunks();
-    } catch (e) {
+    } catch {
       // 忽略错误
     }
   }
@@ -380,9 +382,9 @@
       lines = [];
       total = 0;
       end = 0;
-      loadedChunks = new Set();
-      loadingChunks = new Set();
-      pendingChunkLoads = new Set();
+      loadedChunks.clear(); // Use .clear()
+      loadingChunks.clear(); // Use .clear()
+      pendingChunkLoads.clear(); // Use .clear()
       lastChunkCheckTime = 0;
       highlightCache.clear();
       cachedKeywordsHash = '';
@@ -604,7 +606,7 @@
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- 左侧：Logo -->
-      <a href="/" class="flex items-center gap-2 transition-opacity hover:opacity-80">
+      <a href={resolve('/')} class="flex items-center gap-2 transition-opacity hover:opacity-80">
         <LogSeekLogo size="small" />
       </a>
 

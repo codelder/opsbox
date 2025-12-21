@@ -15,7 +15,7 @@
   import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '$lib/components/ui/card';
   import { Badge } from '$lib/components/ui/badge';
   import { Separator } from '$lib/components/ui/separator';
-  import { Plus, Edit2, Trash2, Check, PlayCircle, HelpCircle, X } from 'lucide-svelte';
+  import { Plus, Edit2, Trash2, PlayCircle, HelpCircle } from 'lucide-svelte';
 
   let loading = $state(false);
   let error = $state<string | null>(null);
@@ -346,7 +346,7 @@
                 <div>
                   <h4 class="mb-2 text-sm font-medium">调试日志（print 输出）：</h4>
                   <div class="max-h-40 overflow-auto rounded border bg-muted/30 p-3">
-                    {#each testResult.debug_logs as log}
+                    {#each testResult.debug_logs as log (log)}
                       <div class="mb-1 font-mono text-xs">{log}</div>
                     {/each}
                   </div>

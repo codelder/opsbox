@@ -6,6 +6,7 @@
   import empty from '$lib/assets/empty.svg';
   import emptyDark from '$lib/assets/empty-dark.svg';
   import { ChevronDown } from 'lucide-svelte';
+  import { resolve } from '$app/paths';
 
   /**
    * 搜索空状态组件
@@ -173,7 +174,7 @@
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:bbip path:logs/*.log timeout</code>
                 </div>
                 <p class="mt-2 text-xs">
-                  规划脚本可在<a href="/settings" class="text-primary hover:underline">设置</a>中配置
+                  规划脚本可在<a href={resolve('/settings')} class="text-primary hover:underline">设置</a>中配置
                 </p>
               </div>
             </details>
@@ -269,7 +270,9 @@
               <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
                 <p>搜索仅限于已配置的日志源。请检查：</p>
                 <ul class="ml-2 list-inside list-disc space-y-1">
-                  <li>日志源是否已在<a href="/settings" class="text-primary hover:underline">设置</a>中配置</li>
+                  <li>
+                    日志源是否已在<a href={resolve('/settings')} class="text-primary hover:underline">设置</a>中配置
+                  </li>
                   <li>搜索关键词是否正确（区分大小写）</li>
                   <li>路径过滤器是否过于严格</li>
                   <li>文件编码是否支持（支持 UTF-8、GBK、Big5 等）</li>
@@ -323,7 +326,7 @@
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:bbip path:logs/*.log timeout</code>
                 </div>
                 <p class="mt-2 text-xs">
-                  规划脚本可在<a href="/settings" class="text-primary hover:underline">设置</a>中配置
+                  规划脚本可在<a href={resolve('/settings')} class="text-primary hover:underline">设置</a>中配置
                 </p>
               </div>
             </details>
@@ -439,11 +442,11 @@
 
                   <span class="text-foreground">匹配 IP 地址:</span>
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs"
-                    >{'/\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/'}</code
+                    >{'/\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}/'}</code
                   >
 
                   <span class="text-foreground">匹配时间格式:</span>
-                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">{'/\d{4}-\\d{2}-\\d{2}/'}</code>
+                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">{'/\\d{4}-\\d{2}-\\d{2}/'}</code>
 
                   <span class="text-foreground">组合使用:</span>
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">/ERROR|WARN/ timeout</code>

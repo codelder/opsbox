@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFileUrl, getDisplayName, isArchive } from './fileUrl';
+import { parseFileUrl, isArchive } from './fileUrl';
 
 describe('fileUrl', () => {
   it('parses local dir url', () => {

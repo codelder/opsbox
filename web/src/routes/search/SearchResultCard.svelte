@@ -34,7 +34,8 @@
   // Svelte 5 类型导出
   export type { Props };
 
-  let viewUrl = $derived(`/view?${new URLSearchParams({ sid, file: item.path }).toString()}`);
+  import { resolve } from '$app/paths';
+  let viewUrlWithParams = $derived(`/view?${new URLSearchParams({ sid, file: item.path }).toString()}`);
 
   // 悬浮提示框状态
   let showTooltip = $state(false);
@@ -195,7 +196,7 @@
           onmouseleave={handleMouseLeave}
         >
           <a
-            href={viewUrl}
+            href={resolve(viewUrlWithParams as Parameters<typeof resolve>[0])}
             target="_blank"
             rel="noopener"
             class="flex items-center font-bold text-foreground hover:underline"
@@ -314,7 +315,7 @@
                 <div class="mt-4 border-t border-border pt-3">
                   <div class="mb-2 text-xs font-medium text-muted-foreground">Matched Keywords</div>
                   <div class="flex flex-wrap gap-1.5">
-                    {#each displayKeywords as keyword}
+                    {#each displayKeywords as keyword (keyword.text)}
                       <span
                         class="inline-flex items-center rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
                       >
@@ -355,7 +356,7 @@
           variant="ghost"
           size="icon"
           class="h-7 w-7 text-muted-foreground hover:text-foreground"
-          href={viewUrl}
+          href={resolve(viewUrlWithParams as Parameters<typeof resolve>[0])}
           target="_blank"
           title="在新窗口打开"
         >
