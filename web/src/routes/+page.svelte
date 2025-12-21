@@ -4,6 +4,7 @@
    * 使用 LogSeek 模块的 API 客户端
    */
   import { goto } from '$app/navigation';
+  import { resolve } from '$app/paths';
   import { convertNaturalLanguage } from '$lib/modules/logseek';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import SyntaxHints from '$lib/components/SyntaxHints.svelte';
@@ -58,8 +59,7 @@
     const text = (inputEl?.value || '').trim();
     if (!text || aiLoading) return;
     // 表达式模式：直接跳到 /search?q=
-    // eslint-disable-next-line svelte/no-navigation-without-resolve
-    goto(`/search?q=${encodeURIComponent(text)}`);
+    goto(resolve(`/search?q=${encodeURIComponent(text)}` as Parameters<typeof resolve>[0]));
   }
 
   // 点击右侧“AI 模式”按钮：临时使用 AI 把自然语言转查询后再检索
@@ -69,8 +69,7 @@
     aiLoading = true;
     try {
       const query = await convertNaturalLanguage(text);
-      // eslint-disable-next-line svelte/no-navigation-without-resolve
-      goto(`/search?q=${encodeURIComponent(query)}`);
+      goto(resolve(`/search?q=${encodeURIComponent(query)}` as Parameters<typeof resolve>[0]));
     } catch (err) {
       console.error('AI 生成失败：', err);
     } finally {

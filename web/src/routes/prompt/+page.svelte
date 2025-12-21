@@ -22,8 +22,8 @@
   });
 </script>
 
-<div class="container mx-auto max-w-4xl py-8 px-4">
-  <h1 class="text-2xl font-bold mb-4">系统提示词 (System Prompt)</h1>
+<div class="container mx-auto max-w-4xl px-4 py-8">
+  <h1 class="mb-4 text-2xl font-bold">系统提示词 (System Prompt)</h1>
 
   {#if loading}
     <p>Loading...</p>

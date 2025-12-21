@@ -251,7 +251,7 @@
                     <!-- Search Roots Display -->
                     {#if a.search_roots && a.search_roots.length > 0}
                       <div class="mt-2 flex flex-wrap gap-1">
-                        {#each a.search_roots as root}
+                        {#each a.search_roots as root (root)}
                           <div
                             class="flex items-center gap-1 rounded bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
                             title="Search Root"

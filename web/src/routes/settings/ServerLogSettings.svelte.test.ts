@@ -5,7 +5,6 @@
 import { expect, test, vi, beforeEach, afterEach } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { page, userEvent } from '@vitest/browser/context';
-import type { LogConfigResponse } from '$lib/modules/agent/api';
 import ServerLogSettings from './ServerLogSettings.svelte';
 
 // Mock API 模块
@@ -60,7 +59,7 @@ test('组件渲染 - 成功加载配置后显示表单', async () => {
   const retentionInput = await page.getByRole('spinbutton');
   await expect.element(retentionInput).toBeInTheDocument();
 
-  const logDirInputs = page.getByRole('textbox');
+  page.getByRole('textbox'); // Verify log dir input exists and is disabled
   // Verify log dir input exists and is disabled (it's the third textbox)
 });
 

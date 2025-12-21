@@ -4,8 +4,6 @@
    * 使用 Profile 管理统一管理多个 S3 配置
    * 支持 AWS S3、MinIO、阿里云 OSS 等 S3 兼容存储
    */
-  import { browser } from '$app/environment';
-  import { goto } from '$app/navigation';
   import ProfileManagement from './ProfileManagement.svelte';
   import AgentManagement from './AgentManagement.svelte';
   import LlmManagement from './LlmManagement.svelte';
@@ -13,24 +11,12 @@
   import ServerLogSettings from './ServerLogSettings.svelte';
 
   import { Tabs, TabsContent, TabsList, TabsTrigger } from '$lib/components/ui/tabs';
-  import { Button } from '$lib/components/ui/button';
-  import { ArrowLeft } from 'lucide-svelte';
+  import { resolve } from '$app/paths';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 
   // 选项卡状态
   let activeTab = $state<'profiles' | 'agents' | 'planners' | 'llm' | 'server-log'>('profiles');
-
-  // 返回上一页，如果没有历史记录则返回首页
-  function handleBack() {
-    if (browser && window.history.length > 1) {
-      // 有历史记录，返回上一页
-      window.history.back();
-    } else {
-      // 没有历史记录，返回首页
-      goto('/');
-    }
-  }
 </script>
 
 <svelte:head>
@@ -44,7 +30,7 @@
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- 左侧：Logo -->
-      <a href="/" class="flex items-center gap-2 transition-opacity hover:opacity-80">
+      <a href={resolve('/')} class="flex items-center gap-2 transition-opacity hover:opacity-80">
         <LogSeekLogo size="small" />
       </a>
 

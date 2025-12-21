@@ -44,7 +44,7 @@
   };
 
   function getVariantClass(v: string, s: string) {
-    // @ts-ignore
+    // @ts-expect-error - buttonVariants has a complex nested structure that TS has trouble mapping with dynamic keys v and s
     return cn(buttonVariants.base, buttonVariants.variants.variant[v], buttonVariants.variants.size[s]);
   }
 </script>

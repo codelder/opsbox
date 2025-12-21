@@ -3,8 +3,8 @@
    * 搜索页面（重构版）
    * 仿 GitHub 代码搜索布局
    */
-  import { SvelteSet } from 'svelte/reactivity';
   import { useSearch } from '$lib/modules/logseek';
+  import { resolve } from '$app/paths';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import Settings from '$lib/components/Settings.svelte';
@@ -50,7 +50,7 @@
     fullPath: string[];
     children: Map<string, TreeNode>;
     type: 'endpoint_type' | 'endpoint_id' | 'dir' | 'archive' | 'file';
-    icon?: any;
+    icon?: typeof LoaderCircle;
     url: string; // Added URL field
   }
 
@@ -302,13 +302,9 @@
     startSearch(next);
   }
 
-  // ============ 侧边栏交互逻辑 ============
-  let totalCount = $derived(searchStore.results.length);
-
   // 交互逻辑
   function toggleSelection(node: TreeNode) {
     // 检查是否已经选中（是当前选中路径的前缀）
-    const isSelected = isPathSelected(node.fullPath);
     const isExactMatch =
       selectedPath.length === node.fullPath.length && selectedPath.every((p, i) => p === node.fullPath[i]);
 
@@ -373,7 +369,7 @@
   >
     <div class="flex h-16 w-full items-center gap-4 px-6">
       <!-- Logo -->
-      <a href="/" class="flex items-center gap-2 transition-opacity hover:opacity-80">
+      <a href={resolve('/')} class="flex items-center gap-2 transition-opacity hover:opacity-80">
         <LogSeekLogo size="small" />
       </a>
 
