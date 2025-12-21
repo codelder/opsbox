@@ -84,7 +84,7 @@ pub async fn call_llm(pool: &SqlitePool, nl: &str) -> Result<String, NL2QError> 
   let req = ChatRequest {
     messages,
     model: None,
-    temperature: Some(0.2),
+    temperature: Some(0.0),
     max_tokens: None, // 默认不限制长度，由提供方按模型策略决定
     // 使用结构化输出，并用 replace 避免与文档自身的系统提示冲突
     separate_think: true,
