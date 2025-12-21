@@ -4,6 +4,7 @@
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use logseek::domain::config::Target as ConfigTarget;
+use std::collections::HashSet;
 use std::path::{Path as StdPath, PathBuf};
 
 use crate::config::AgentConfig;
@@ -76,6 +77,7 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
 /// 解析文件路径（强制白名单校验，禁止越权）
 pub fn resolve_file_paths(config: &AgentConfig, relative_paths: &[String]) -> Result<Vec<PathBuf>, String> {
   let mut resolved_paths = Vec::new();
+  let mut resolved_set: HashSet<PathBuf> = HashSet::new();
   let canon_roots = canonicalize_roots(&config.search_roots);
 
   for p in relative_paths {
@@ -86,12 +88,14 @@ pub fn resolve_file_paths(config: &AgentConfig, relative_paths: &[String]) -> Re
         if !is_under_any_root(&cand_c, &canon_roots) {
           return Err(format!("文件路径不在白名单中: {}", cand_c.display()));
         }
-        resolved_paths.push(cand_c);
+        if resolved_set.insert(cand_c.clone()) {
+          resolved_paths.push(cand_c);
+        }
       }
       continue;
     }
 
-    // 相对路径：逐个根尝试
+    // 相对路径：逐个根尝试（不再只取第一个命中）
     for root in &config.search_roots {
       let root_path = PathBuf::from(root);
       let full_path = root_path.join(p);
@@ -101,8 +105,9 @@ pub fn resolve_file_paths(config: &AgentConfig, relative_paths: &[String]) -> Re
         if !cand_c.starts_with(&root_c) {
           return Err(format!("文件路径不在白名单中: {}", cand_c.display()));
         }
-        resolved_paths.push(cand_c);
-        break; // 找到第一个匹配的文件就停止
+        if resolved_set.insert(cand_c.clone()) {
+          resolved_paths.push(cand_c);
+        }
       }
     }
   }
@@ -118,6 +123,7 @@ pub fn resolve_targz_path(config: &AgentConfig, relative_path: &str) -> Result<V
   }
 
   let mut resolved_paths = Vec::new();
+  let mut resolved_set: HashSet<PathBuf> = HashSet::new();
   let canon_roots = canonicalize_roots(&config.search_roots);
 
   // 若传入的是绝对路径，直接检查
@@ -128,7 +134,9 @@ pub fn resolve_targz_path(config: &AgentConfig, relative_path: &str) -> Result<V
       if !is_under_any_root(&cand_c, &canon_roots) {
         return Err(format!("归档文件路径不在白名单中: {}", cand_c.display()));
       }
-      resolved_paths.push(cand_c);
+      if resolved_set.insert(cand_c.clone()) {
+        resolved_paths.push(cand_c);
+      }
     }
   } else {
     // 否则在 search_roots 下拼接查找
@@ -141,8 +149,9 @@ pub fn resolve_targz_path(config: &AgentConfig, relative_path: &str) -> Result<V
         if !cand_c.starts_with(&root_c) {
           return Err(format!("归档文件路径不在白名单中: {}", cand_c.display()));
         }
-        resolved_paths.push(cand_c);
-        break;
+        if resolved_set.insert(cand_c.clone()) {
+          resolved_paths.push(cand_c);
+        }
       }
     }
   }

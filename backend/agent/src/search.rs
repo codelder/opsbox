@@ -185,50 +185,80 @@ pub async fn execute_search(
 /// 通用条目流搜索辅助函数
 /// 使用通用处理函数并自动处理消息发送
 #[allow(clippy::too_many_arguments)]
+/// 通用条目流搜索辅助函数
+/// 使用通用处理函数并自动处理消息发送
+#[allow(clippy::too_many_arguments)]
 async fn search_with_entry_stream(
-  stream: Box<dyn logseek::service::entry_stream::EntryStream>,
+  mut stream: Box<dyn logseek::service::entry_stream::EntryStream>,
   processor: Arc<SearchProcessor>,
-  _task_id: &str,
+  task_id: &str,
   tx: &mpsc::Sender<SearchEvent>,
   all_processed: &mut usize,
   all_matched: &mut usize,
   extra_path_filter: Option<logseek::query::PathFilter>,
   cancel_token: &CancellationToken,
 ) -> Result<(), String> {
-  // 使用通用条目流处理函数
-  let tx_clone = tx.clone();
-  let cancel_token_clone = cancel_token.clone();
+  loop {
+    if cancel_token.is_cancelled() {
+      info!("搜索任务 {} 已被取消", task_id);
+      break;
+    }
 
-  let (processed, matched) = logseek::service::entry_stream::process_entry_stream_with_callback(
-    stream,
-    processor,
-    extra_path_filter,
-    move |result| {
-      // 检查是否被取消
-      if cancel_token_clone.is_cancelled() {
-        debug!("搜索已被取消，停止处理");
-        return false;
-      }
-
-      // 发送结果到 channel（使用 try_send 避免阻塞）
-      match tx_clone.try_send(result) {
-        Ok(_) => true, // 继续处理
-        Err(mpsc::error::TrySendError::Full(_)) => {
-          // 通道已满，等待一下再重试
-          warn!("搜索结果通道已满，跳过此结果");
-          true // 继续处理其他结果
+    match stream.next_entry().await {
+      Ok(Some((meta, mut reader))) => {
+        // 全局 Path 过滤（硬性 AND + Query Spec 过滤）
+        // combined check: extra_path_filter AND spec.path_filter
+        if !processor.should_process_path_with(&meta.path, extra_path_filter.as_ref()) {
+          continue;
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => {
-          debug!("接收端已关闭，停止处理");
-          false // 停止处理
+
+        // 处理条目内容
+        match processor.process_content(meta.path.clone(), &mut reader).await {
+          Ok(Some(mut result)) => {
+            // 设置 archive_path (如果来自归档)
+            result.archive_path = meta.container_path;
+
+            *all_processed += 1;
+            *all_matched += 1;
+
+            // Send with backpressure
+            if tx.send(SearchEvent::Success(result)).await.is_err() {
+              debug!("接收端已关闭，停止处理任务 {}", task_id);
+              break;
+            }
+          }
+          Ok(None) => {
+            *all_processed += 1;
+            // No match, do nothing
+          }
+          Err(e) => {
+            *all_processed += 1;
+            warn!("处理内容失败 {}: {}", meta.path, e);
+            let err_event = SearchEvent::Error {
+              source: "agent-process".to_string(),
+              message: format!("处理失败: {}", e),
+              recoverable: true,
+            };
+            if tx.send(err_event).await.is_err() {
+              break;
+            }
+          }
         }
       }
-    },
-  )
-  .await?;
-
-  *all_processed += processed;
-  *all_matched += matched;
+      Ok(None) => break, // Stream 结束
+      Err(e) => {
+        warn!("读取条目流失败: {}", e);
+        let err_event = SearchEvent::Error {
+          source: "agent-stream".to_string(),
+          message: format!("读取流失败: {}", e),
+          recoverable: true,
+        };
+        if tx.send(err_event).await.is_err() {
+          break;
+        }
+      }
+    }
+  }
 
   Ok(())
 }

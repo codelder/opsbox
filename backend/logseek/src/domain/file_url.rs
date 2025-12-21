@@ -215,6 +215,33 @@ pub fn build_file_url_for_result_with_source_type(
   rel_path: &str,
   _source_type: EntrySourceType,
 ) -> Option<(FileUrl, String)> {
+  build_file_url_for_result_with_source_type_and_archive_path(source, rel_path, _source_type, None)
+}
+
+/// Build FileUrl from Source and relative path, with optional archive path override.
+///
+/// When the result is an archive entry, callers may provide `archive_path_override` as an absolute
+/// archive file path (typically filled by Agent/Local side), so the resulting FileUrl becomes
+/// unambiguous even with multiple roots.
+pub fn build_file_url_for_result_with_archive_path(
+  source: &crate::domain::config::Source,
+  rel_path: &str,
+  archive_path_override: Option<&str>,
+) -> Option<(FileUrl, String)> {
+  build_file_url_for_result_with_source_type_and_archive_path(
+    source,
+    rel_path,
+    EntrySourceType::default(),
+    archive_path_override,
+  )
+}
+
+fn build_file_url_for_result_with_source_type_and_archive_path(
+  source: &crate::domain::config::Source,
+  rel_path: &str,
+  _source_type: EntrySourceType,
+  archive_path_override: Option<&str>,
+) -> Option<(FileUrl, String)> {
   use crate::domain::config::{Endpoint, Target};
 
   let (endpoint_type, endpoint_id, base_path, _is_archive_target) = match &source.endpoint {
@@ -242,8 +269,8 @@ pub fn build_file_url_for_result_with_source_type(
       // For Local and Agent Dir, remove leading slash to ensure consistency
       // Display implementation splits by '/' and filters empty, which loses leading slash
       // So we store paths without leading slash to match what FromStr will parse
-      if (endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent) && final_path.starts_with('/') {
-        final_path = final_path.strip_prefix('/').unwrap_or(&final_path).to_string();
+      if endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent {
+        final_path = normalize_path_segment(&final_path);
       }
 
       let url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
@@ -255,8 +282,8 @@ pub fn build_file_url_for_result_with_source_type(
       let mut final_path = join_root_path(&base_path, rel_path);
 
       // For Local and Agent Dir, remove leading slash to ensure consistency
-      if (endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent) && final_path.starts_with('/') {
-        final_path = final_path.strip_prefix('/').unwrap_or(&final_path).to_string();
+      if endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent {
+        final_path = normalize_path_segment(&final_path);
       }
 
       let url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
@@ -267,7 +294,11 @@ pub fn build_file_url_for_result_with_source_type(
       // If Endpoint is S3, path is the object key.
       // If Endpoint is Local/Agent, path is relative to root/subpath.
 
-      let mut archive_path = if endpoint_type == EndpointType::S3 {
+      let mut archive_path = if let Some(override_path) = archive_path_override
+        && endpoint_type != EndpointType::S3
+      {
+        override_path.to_string()
+      } else if endpoint_type == EndpointType::S3 {
         path.clone()
       } else {
         join_root_path(&base_path, path)
@@ -276,9 +307,8 @@ pub fn build_file_url_for_result_with_source_type(
       // Remove leading slash to ensure consistency with FileUrl Display/FromStr behavior
       // Display splits by '/' and filters empty segments, which loses leading slash
       // So we store paths without leading slash to match what FromStr will parse
-      if (endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent) && archive_path.starts_with('/')
-      {
-        archive_path = archive_path.strip_prefix('/').unwrap_or(&archive_path).to_string();
+      if endpoint_type == EndpointType::Local || endpoint_type == EndpointType::Agent {
+        archive_path = normalize_path_segment(&archive_path);
       }
 
       let url = FileUrl::new(
@@ -286,11 +316,27 @@ pub fn build_file_url_for_result_with_source_type(
         endpoint_id,
         TargetType::Archive,
         archive_path,
-        Some(rel_path.to_string()),
+        Some(normalize_path_segment(rel_path)),
       );
       Some((url.clone(), url.to_string()))
     }
   }
+}
+
+fn normalize_path_segment(s: &str) -> String {
+  let mut t = s;
+  loop {
+    if t.starts_with("./") {
+      t = &t[2..];
+      continue;
+    }
+    if t.starts_with('/') {
+      t = &t[1..];
+      continue;
+    }
+    break;
+  }
+  t.to_string()
 }
 
 #[cfg(test)]

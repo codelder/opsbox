@@ -285,7 +285,11 @@ impl SearchExecutor {
       }
 
       // 构造 FileUrl
-      let (file_url, file_id) = match crate::domain::file_url::build_file_url_for_result(&source, &res.path) {
+      let (file_url, file_id) = match crate::domain::file_url::build_file_url_for_result_with_archive_path(
+        &source,
+        &res.path,
+        res.archive_path.as_deref(),
+      ) {
         Some((url, id)) => (url, id),
         None => {
           tracing::warn!("[SearchExecutor] 无法构造 Agent FileUrl, path={}", res.path);
@@ -308,6 +312,7 @@ impl SearchExecutor {
         lines: res.lines.clone(),
         merged: res.merged,
         encoding: res.encoding.clone(),
+        archive_path: None,
         source_type: res.source_type,
       });
 

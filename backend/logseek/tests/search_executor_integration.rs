@@ -148,6 +148,7 @@ async fn test_search_event_types() {
     lines: vec!["error line".to_string()],
     merged: vec![(0, 1)],
     encoding: None,
+    archive_path: None,
     source_type: logseek::service::search::EntrySourceType::default(),
   });
 
@@ -250,6 +251,7 @@ async fn test_multi_source_event_collection() {
           lines: vec![format!("error from source {}", i)],
           merged: vec![(0, 1)],
           encoding: None,
+          archive_path: None,
           source_type: logseek::service::search::EntrySourceType::default(),
         }))
         .await;
