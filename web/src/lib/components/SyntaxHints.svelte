@@ -52,4 +52,14 @@
   >
     示例
   </Button>
+  <Button
+    variant="link"
+    size="sm"
+    class="h-6 px-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground"
+    onclick={() => window.open('/prompt', '_blank')}
+    title="查看系统提示词"
+    type="button"
+  >
+    系统提示词
+  </Button>
 </div>

@@ -206,10 +206,9 @@ async fn search_with_entry_stream(
 
     match stream.next_entry().await {
       Ok(Some((meta, mut reader))) => {
-        // 全局 Path 过滤（硬性 AND）
-        if let Some(ref filter) = extra_path_filter
-          && !filter.is_allowed(&meta.path)
-        {
+        // 全局 Path 过滤（硬性 AND + Query Spec 过滤）
+        // combined check: extra_path_filter AND spec.path_filter
+        if !processor.should_process_path_with(&meta.path, extra_path_filter.as_ref()) {
           continue;
         }
 
