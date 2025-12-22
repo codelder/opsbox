@@ -9,7 +9,7 @@ test.describe('Search E2E', () => {
         {
           type: 'result',
           data: {
-            path: 'ls://local/localhost/dir/var/log/syslog',
+            path: 'odfi://local/dir/var/log/syslog',
             keywords: [{ type: 'literal', text: 'error' }],
             chunks: [
               {
@@ -27,7 +27,7 @@ test.describe('Search E2E', () => {
         {
           type: 'result',
           data: {
-            path: 'ls://agent/web-01/dir/app/logs/error.log',
+            path: 'odfi://web-01@agent/dir/app/logs/error.log',
             keywords: [{ type: 'literal', text: 'error' }],
             chunks: [
               {
@@ -44,7 +44,7 @@ test.describe('Search E2E', () => {
         {
           type: 'result',
           data: {
-            path: 'ls://s3/prod:logs-bucket/archive/2023/10/data.tar.gz?entry=internal/service.log',
+            path: 'odfi://prod:logs-bucket@s3/archive/2023/10/data.tar.gz?entry=internal/service.log',
             keywords: [{ type: 'literal', text: 'error' }],
             chunks: [
               {

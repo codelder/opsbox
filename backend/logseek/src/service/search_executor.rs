@@ -2,7 +2,7 @@
 //!
 //! 负责协调多数据源并行搜索，管理并发控制，聚合搜索结果
 
-use crate::agent::{AgentClient, SearchOptions, SearchService};
+use crate::agent::{SearchOptions, SearchService, create_agent_client_by_id};
 use crate::domain::config::{Endpoint, Source, Target};
 use crate::query::Query;
 use crate::repository::cache::{cache as simple_cache, new_sid};
@@ -174,7 +174,7 @@ impl SearchExecutor {
     );
 
     // 创建 Agent 客户端
-    let client = match AgentClient::new_by_agent_id(agent_id.clone()).await {
+    let client = match create_agent_client_by_id(agent_id.clone()).await {
       Ok(client) => client,
       Err(e) => {
         tracing::error!("[SearchExecutor] 无法创建 Agent 客户端 agent_id={} err={}", agent_id, e);
@@ -463,7 +463,11 @@ impl SearchExecutor {
           SearchEvent::Success(mut res) => {
             result_count_clone.fetch_add(1, Ordering::Relaxed);
             // 构造 Odfi
-            let (file_url, file_id) = match crate::domain::build_odfi_for_result(&source_clone, &res.path) {
+            let (file_url, file_id) = match crate::domain::build_odfi_for_result_with_archive_path(
+              &source_clone,
+              &res.path,
+              res.archive_path.as_deref(),
+            ) {
               Some((url, id)) => (url, id),
               None => {
                 tracing::warn!("[SearchExecutor] 无法构造 Odfi, path={}", res.path);

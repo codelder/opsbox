@@ -3170,26 +3170,34 @@ dependencies = [
 name = "opsbox-core"
 version = "0.1.1"
 dependencies = [
+ "async-compression",
+ "async-tar",
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
  "axum",
  "chrono",
  "futures",
  "http 1.3.1",
  "inventory",
  "libsqlite3-sys",
+ "once_cell",
  "problemdetails",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
  "sqlx",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-util",
  "tower",
  "tower-http 0.6.6",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3208,6 +3216,7 @@ dependencies = [
  "num_cpus",
  "openssl",
  "opsbox-core",
+ "resource-explorer",
  "rust-embed",
  "serde",
  "serde_json",
@@ -3775,6 +3784,27 @@ dependencies = [
  "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.4",
+]
+
+[[package]]
+name = "resource-explorer"
+version = "0.1.1"
+dependencies = [
+ "agent-manager",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "inventory",
+ "opsbox-core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "urlencoding",
 ]
 
 [[package]]

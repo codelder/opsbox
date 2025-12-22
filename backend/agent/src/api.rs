@@ -57,6 +57,8 @@ pub enum ApiError {
   InvalidRetention(String),
   ReloadFailed(String),
   NotInitialized,
+  NotFound(String),
+  Internal(String),
 }
 
 impl IntoResponse for ApiError {
@@ -66,6 +68,8 @@ impl IntoResponse for ApiError {
       ApiError::InvalidRetention(msg) => (StatusCode::BAD_REQUEST, format!("无效的保留数量: {}", msg)),
       ApiError::ReloadFailed(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("重载失败: {}", msg)),
       ApiError::NotInitialized => (StatusCode::INTERNAL_SERVER_ERROR, "日志系统未初始化".to_string()),
+      ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+      ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("内部错误: {}", msg)),
     };
 
     (status, Json(ErrorResponse { error: message })).into_response()
