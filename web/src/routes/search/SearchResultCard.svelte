@@ -231,6 +231,10 @@
                   <div class="font-medium break-all text-foreground">{parsedUrl.displayName}</div>
                   <div class="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                     <span class="capitalize">{parsedUrl.endpointType}</span>
+                    {#if parsedUrl.serverAddr}
+                      <span>•</span>
+                      <span class="font-mono">{parsedUrl.serverAddr}</span>
+                    {/if}
                     <span>•</span>
                     <span>{item.encoding || 'UTF-8'}</span>
                   </div>

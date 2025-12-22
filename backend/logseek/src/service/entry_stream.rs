@@ -402,13 +402,7 @@ impl EntryStreamFactory {
           .await
           .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
           .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
-        if &profile_row.bucket != bucket {
-          tracing::warn!(
-            "S3 配置中的桶与脚本提供不一致：db='{}' script='{}'，以脚本为准",
-            profile_row.bucket,
-            bucket
-          );
-        }
+
         // 构造读取器
         let reader = {
           use crate::utils::storage::{ReaderProvider as _, S3ReaderProvider, get_or_create_s3_client};

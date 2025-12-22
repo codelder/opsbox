@@ -28,15 +28,9 @@ pub async fn save_profile(
   // 将前端负载转换为内部 Profile 结构
   let profile: s3::S3Profile = payload.into();
 
-  // 在持久化前先验证 S3 连接可用性（防止保存不可用配置）
-  // 校验内容：Endpoint、Bucket、Access Key、Secret Key
-  let verify_target = s3::S3Settings {
-    endpoint: profile.endpoint.clone(),
-    bucket: profile.bucket.clone(),
-    access_key: profile.access_key.clone(),
-    secret_key: profile.secret_key.clone(),
-  };
-  s3::verify_s3_settings(&verify_target).await?;
+  // 注意：从 Profile 中移除 bucket 后，无法在保存时验证连接，
+  // 因为没有目标 bucket。连接验证现在将在使用具体存储桶的场景中进行。
+  // s3::verify_s3_settings(&verify_target).await?;
 
   // 验证通过后再保存/更新 Profile
   s3::save_s3_profile(&pool, &profile).await?;

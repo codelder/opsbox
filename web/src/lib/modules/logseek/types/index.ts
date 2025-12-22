@@ -70,7 +70,6 @@ export interface SearchBody {
  */
 export interface S3SettingsPayload {
   endpoint: string;
-  bucket: string;
   access_key: string;
   secret_key: string;
 }
@@ -86,12 +85,11 @@ export interface S3SettingsResponse extends S3SettingsPayload {
 /**
  * S3 Profile 负载（用于 POST 请求）
  *
- * 每个 Profile 包含完整的 S3 访问配置：Endpoint + Bucket + Credentials
+ * 每个 Profile 包含完整的 S3 访问配置：Endpoint + Credentials
  */
 export interface S3ProfilePayload {
   profile_name: string;
   endpoint: string;
-  bucket: string;
   access_key: string;
   secret_key: string;
 }
@@ -199,7 +197,6 @@ export interface SearchState {
  */
 export interface SettingsState {
   endpoint: string;
-  bucket: string;
   accessKey: string;
   secretKey: string;
   loadingSettings: boolean;

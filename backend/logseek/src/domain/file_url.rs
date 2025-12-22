@@ -116,7 +116,9 @@ impl fmt::Display for FileUrl {
       } else {
         url.set_username(&self.endpoint_id).map_err(|_| fmt::Error)?;
       }
-    } else if !self.endpoint_id.is_empty() {
+    } else if !self.endpoint_id.is_empty()
+      && (self.endpoint_type != EndpointType::Local || self.endpoint_id != "localhost")
+    {
       // For non-S3, id is just userinfo
       if let Some((user, pass)) = self.endpoint_id.split_once(':') {
         url.set_username(user).map_err(|_| fmt::Error)?;
@@ -198,6 +200,10 @@ impl FromStr for FileUrl {
       "s3" => EndpointType::S3,
       other => return Err(FileUrlError::InvalidEndpointType(other.to_string())),
     };
+
+    if endpoint_type == EndpointType::Local && endpoint_id.is_empty() {
+      endpoint_id = "localhost".to_string();
+    }
 
     // Parse path and handle S3 specific bucket extraction
     let mut path = url.path().trim_start_matches('/').to_string();
@@ -425,7 +431,7 @@ mod tests {
       "/var/log/syslog",
       None,
     );
-    assert_eq!(url.to_string(), "ls://localhost@local/var/log/syslog");
+    assert_eq!(url.to_string(), "ls://local/var/log/syslog");
   }
 
   #[test]

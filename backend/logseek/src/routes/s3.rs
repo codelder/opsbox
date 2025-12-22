@@ -30,10 +30,10 @@ pub async fn get_s3_settings(
   payload.configured = settings_opt.is_some();
 
   // 可选：按需验证连接（仅在显式请求 verify=true 时）
-  if let (true, Some(settings_value)) = (q.verify.unwrap_or(false), settings_opt.as_ref())
-    && let Err(e) = s3::verify_s3_settings(settings_value).await
-  {
-    payload.connection_error = Some(format!("无法连接对象存储：{}", e));
+  if let (true, Some(_settings_value)) = (q.verify.unwrap_or(false), settings_opt.as_ref()) {
+    // 由于 Profile 不再包含 bucket，如果需要验证连接，目前只能在有具体业务请求时进行。
+    // 这里暂时跳过或者如果以后有默认测试桶再加回来。
+    // payload.connection_error = Some("无法在没有存储桶的情况下验证连接".to_string());
   }
 
   Ok(Json(payload))
