@@ -25,7 +25,7 @@
     Database,
     CircleCheckBig
   } from 'lucide-svelte';
-  import { parseFileUrl, stringifyFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import { parseOdfi, stringifyOdfi } from '$lib/utils/odfi';
   import { Badge } from '$lib/components/ui/badge';
   import { Separator } from '$lib/components/ui/separator';
 
@@ -65,7 +65,7 @@
         children: new Map(),
         type: 'endpoint_type',
         icon: Cloud,
-        url: 'ls://s3'
+        url: 'odfi://s3'
       },
       Agent: {
         key: 'Agent',
@@ -75,7 +75,7 @@
         children: new Map(),
         type: 'endpoint_type',
         icon: Server,
-        url: 'ls://agent'
+        url: 'odfi://agent'
       },
       Local: {
         key: 'Local',
@@ -85,12 +85,12 @@
         children: new Map(),
         type: 'endpoint_type',
         icon: HardDrive,
-        url: 'ls://local'
+        url: 'odfi://local'
       }
     };
 
     for (const res of searchStore.results) {
-      const parsed = parseFileUrl(res.path);
+      const parsed = parseOdfi(res.path);
       if (!parsed) continue;
 
       // 1. Endpoint Type
@@ -112,7 +112,7 @@
           children: new Map(),
           type: 'endpoint_id',
           icon: typeKey === 'S3' ? Database : typeKey === 'Agent' ? Server : HardDrive,
-          url: stringifyFileUrl({
+          url: stringifyOdfi({
             endpointId: parsed.endpointId,
             endpointType: parsed.endpointType,
             serverAddr: parsed.serverAddr,
@@ -142,7 +142,7 @@
         let child = currentParent.children.get(segment);
         if (!child) {
           const nodeTargetType = isArchiveFile ? 'archive' : 'dir';
-          const nodeUrl = stringifyFileUrl({
+          const nodeUrl = stringifyOdfi({
             endpointId: parsed.endpointId,
             endpointType: parsed.endpointType,
             serverAddr: parsed.serverAddr,
@@ -176,7 +176,7 @@
 
           let child = currentParent.children.get(segment);
           if (!child) {
-            const nodeUrl = stringifyFileUrl({
+            const nodeUrl = stringifyOdfi({
               endpointId: parsed.endpointId,
               endpointType: parsed.endpointType,
               serverAddr: parsed.serverAddr,
@@ -222,7 +222,7 @@
     if (selectedPath.length === 0) return searchStore.results;
 
     return searchStore.results.filter((res) => {
-      const parsed = parseFileUrl(res.path);
+      const parsed = parseOdfi(res.path);
       if (!parsed) return false;
 
       // 1. Check Endpoint Type

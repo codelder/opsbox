@@ -21,7 +21,7 @@ export async function fetchViewCache(
 ): Promise<ViewCacheResponse> {
   const API_BASE = getApiBase();
 
-  // 确保 file 参数是正确格式的 URL（ls://...）
+  // 确保 file 参数是正确格式的 URL（odfi://...）
   // 如果已经是正确格式，直接使用；否则可能需要处理
   const fileParam = file.trim();
 
@@ -66,7 +66,7 @@ export async function fetchViewCache(
 export async function fetchViewDownload(sid: string, file: string): Promise<Response> {
   const API_BASE = getApiBase();
 
-  // 确保 file 参数是正确格式的 URL（ls://...）
+  // 确保 file 参数是正确格式的 URL（odfi://...）
   const fileParam = file.trim();
 
   // 使用 URLSearchParams 来正确构建查询参数，避免双重编码

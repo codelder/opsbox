@@ -1,13 +1,13 @@
 /**
- * FileUrl Utility (Redesigned)
+ * ODFI Utility (OpsBox Distributed File Interface)
  *
- * Scheme: `ls://[id]@[type][.serverAddr]/[path]?entry=[entryPath]`
+ * Scheme: `odfi://[id]@[type][.serverAddr]/[path]?entry=[entryPath]`
  */
 
 export type EndpointType = 'local' | 'agent' | 's3';
 export type TargetType = 'dir' | 'archive';
 
-export interface ParsedFileUrl {
+export interface ParsedOdfi {
   serverAddr?: string;
   endpointType: EndpointType;
   endpointId: string;
@@ -19,13 +19,14 @@ export interface ParsedFileUrl {
 }
 
 /**
- * Parse a File URL string
- * @param urlStr The URL string (e.g. "ls://web-01@agent.hk-prod/var/log/syslog")
+ * Parse an ODFI URL string
+ * @param urlStr The URL string (e.g. "odfi://web-01@agent.hk-prod/var/log/syslog")
  */
-export function parseFileUrl(urlStr: string): ParsedFileUrl | null {
+export function parseOdfi(urlStr: string): ParsedOdfi | null {
   try {
     const url = new URL(urlStr);
-    if (url.protocol !== 'ls:') return null;
+    // Only accept odfi:
+    if (url.protocol !== 'odfi:') return null;
 
     // Parse id from userinfo
     let endpointId = decodeURIComponent(url.username);
@@ -48,7 +49,7 @@ export function parseFileUrl(urlStr: string): ParsedFileUrl | null {
     // Parse path (strip leading slash)
     let path = decodeURIComponent(url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname);
 
-    // Special handling for S3: ls://profile@s3/bucket/path
+    // Special handling for S3: odfi://profile@s3/bucket/path
     if (endpointType === 's3') {
       const slashIndex = path.indexOf('/');
       if (slashIndex !== -1) {
@@ -81,15 +82,15 @@ export function parseFileUrl(urlStr: string): ParsedFileUrl | null {
       displayName: getDisplayName(path, entryPath)
     };
   } catch (e) {
-    console.error('Failed to parse file URL:', urlStr, e);
+    console.error('Failed to parse ODFI URL:', urlStr, e);
     return null;
   }
 }
 
 /**
- * Construct a File URL string from parts
+ * Construct an ODFI URL string from parts
  */
-export function stringifyFileUrl(parts: {
+export function stringifyOdfi(parts: {
   endpointId: string;
   endpointType: EndpointType;
   serverAddr?: string;
@@ -122,7 +123,7 @@ export function stringifyFileUrl(parts: {
     id = '';
   }
 
-  const url = new URL(`ls://${host}`);
+  const url = new URL(`odfi://${host}`);
   url.username = id;
   if (port) url.port = port;
 
@@ -147,14 +148,14 @@ export function getDisplayName(path: string, entryPath?: string): string {
 }
 
 export function isArchive(urlStr: string): boolean {
-  const parsed = parseFileUrl(urlStr);
+  const parsed = parseOdfi(urlStr);
   return parsed?.targetType === 'archive';
 }
 
 /**
- * Get the file type for icon display
+ * Get the ODFI type for icon display
  */
-export function getFileUrlType(urlStr: string): EndpointType | null {
-  const parsed = parseFileUrl(urlStr);
+export function getOdfiType(urlStr: string): EndpointType | null {
+  const parsed = parseOdfi(urlStr);
   return parsed ? parsed.endpointType : null;
 }

@@ -284,18 +284,15 @@ impl SearchExecutor {
         break;
       }
 
-      // 构造 FileUrl
-      let (file_url, file_id) = match crate::domain::file_url::build_file_url_for_result_with_archive_path(
-        &source,
-        &res.path,
-        res.archive_path.as_deref(),
-      ) {
-        Some((url, id)) => (url, id),
-        None => {
-          tracing::warn!("[SearchExecutor] 无法构造 Agent FileUrl, path={}", res.path);
-          continue;
-        }
-      };
+      // 构造 Odfi
+      let (file_url, file_id) =
+        match crate::domain::build_odfi_for_result_with_archive_path(&source, &res.path, res.archive_path.as_deref()) {
+          Some((url, id)) => (url, id),
+          None => {
+            tracing::warn!("[SearchExecutor] 无法构造 Agent Odfi, path={}", res.path);
+            continue;
+          }
+        };
 
       // 缓存结果
       trace!(
@@ -465,12 +462,11 @@ impl SearchExecutor {
         match event {
           SearchEvent::Success(mut res) => {
             result_count_clone.fetch_add(1, Ordering::Relaxed);
-            // 构造 FileUrl
-            let (file_url, file_id) = match crate::domain::file_url::build_file_url_for_result(&source_clone, &res.path)
-            {
+            // 构造 Odfi
+            let (file_url, file_id) = match crate::domain::build_odfi_for_result(&source_clone, &res.path) {
               Some((url, id)) => (url, id),
               None => {
-                tracing::warn!("[SearchExecutor] 无法构造 FileUrl, path={}", res.path);
+                tracing::warn!("[SearchExecutor] 无法构造 Odfi, path={}", res.path);
                 continue;
               }
             };
@@ -478,7 +474,7 @@ impl SearchExecutor {
             // 缓存结果（文件级明细，默认应保持低噪音）
             simple_cache().put_lines(&sid_clone, &file_url, res.lines.clone()).await;
 
-            // 更新 path 为完整的 FileUrl 字符串
+            // 更新 path 为完整的 Odfi 字符串
             res.path = file_id;
 
             // 发送成功事件

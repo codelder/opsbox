@@ -3,7 +3,7 @@
 //! 处理 /view.cache.json 端点，从缓存中读取文件内容
 
 use crate::api::{LogSeekApiError, models::ViewParams};
-use crate::domain::FileUrl;
+use crate::domain::Odfi;
 use crate::repository::{RepositoryError, cache::cache as simple_cache};
 use crate::service::ServiceError;
 use axum::{
@@ -24,8 +24,8 @@ pub async fn view_cache_json(Query(params): Query<ViewParams>) -> Result<HttpRes
     params.end
   );
 
-  // 解析 FileUrl
-  let file_url: FileUrl = match params.file.parse() {
+  // 解析 Odfi
+  let file_url: Odfi = match params.file.parse() {
     Ok(url) => url,
     Err(e) => {
       tracing::warn!(
@@ -150,8 +150,8 @@ pub async fn get_file_list_json(Query(params): Query<FileListParams>) -> Result<
 pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
   tracing::debug!("download-request: sid={} file={}", params.sid, params.file);
 
-  // 解析 FileUrl
-  let file_url: FileUrl = match params.file.parse() {
+  // 解析 Odfi
+  let file_url: Odfi = match params.file.parse() {
     Ok(url) => url,
     Err(e) => {
       tracing::warn!(

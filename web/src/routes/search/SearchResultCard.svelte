@@ -5,7 +5,7 @@
    */
   import type { SearchJsonResult, JsonChunk } from '$lib/modules/logseek';
   import { highlight, snippet } from '$lib/modules/logseek';
-  import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import { parseOdfi } from '$lib/utils/odfi';
 
   import { Card } from '$lib/components/ui/card';
   import { Button } from '$lib/components/ui/button';
@@ -47,7 +47,7 @@
   let expandedLines = $state(new Set<string>());
 
   // 解析文件URL获取详细元数据
-  let parsedUrl = $derived(parseFileUrl(item.path));
+  let parsedUrl = $derived(parseOdfi(item.path));
 
   // 延迟显示tooltip
   function handleMouseEnter() {
