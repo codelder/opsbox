@@ -13,6 +13,7 @@ use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FileUrl {
+  pub server_addr: Option<String>,
   pub endpoint_type: EndpointType,
   pub endpoint_id: String,
   pub target_type: TargetType,
@@ -29,7 +30,9 @@ pub enum EndpointType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TargetType {
+  /// Regular file or directory (corresponds to old "dir")
   Dir,
+  /// File inside an archive
   Archive,
 }
 
@@ -58,12 +61,18 @@ impl FileUrl {
     entry_path: Option<String>,
   ) -> Self {
     Self {
+      server_addr: None,
       endpoint_type,
       endpoint_id: endpoint_id.into(),
       target_type,
       path: path.into(),
       entry_path,
     }
+  }
+
+  pub fn with_server_addr(mut self, addr: impl Into<String>) -> Self {
+    self.server_addr = Some(addr.into());
+    self
   }
 
   /// Check if it points to an entry inside an archive
@@ -89,37 +98,50 @@ impl fmt::Display for FileUrl {
       EndpointType::S3 => "s3",
     };
 
-    let target_type_str = match self.target_type {
-      TargetType::Dir => "dir",
-      TargetType::Archive => "archive",
-    };
-
-    // Construct the path part: /<endpoint_id>/<target_type>/<path>
-    // Note: path should be percent-encoded if it contains special chars,
-    // but here we assume the caller handles basic path safety or we rely on Url struct to encode.
-    // To ensure correct encoding, we use the `url` crate to build the string.
-
+    // Format: ls://[id]@[type][.server_addr]/[path]?entry=[entry_path]
     let mut url = Url::parse("ls://placeholder").map_err(|_| fmt::Error)?;
-    url.set_host(Some(endpoint_type_str)).map_err(|_| fmt::Error)?;
 
-    // We use path segments to ensure proper encoding
-    let mut path_segments = vec![self.endpoint_id.as_str(), target_type_str];
-
-    // Split the path into segments to avoid double encoding slashes if we just pushed the whole string
-    // But wait, if we split by '/', we might break paths that actually contain encoded slashes?
-    // For simplicity in this implementation, we assume `path` is a standard path string separated by '/'.
-    for segment in self.path.split('/') {
-      if !segment.is_empty() {
-        path_segments.push(segment);
+    // Set Info (id)
+    if !self.endpoint_id.is_empty() {
+      if let Some((user, pass)) = self.endpoint_id.split_once(':') {
+        url.set_username(user).map_err(|_| fmt::Error)?;
+        url.set_password(Some(pass)).map_err(|_| fmt::Error)?;
+      } else {
+        url.set_username(&self.endpoint_id).map_err(|_| fmt::Error)?;
       }
     }
 
-    url
-      .path_segments_mut()
-      .map_err(|_| fmt::Error)?
-      .clear()
-      .extend(path_segments);
+    // Set Host (type[.server_addr]) and Port
+    let mut host = endpoint_type_str.to_string();
+    let mut port = None;
 
+    if let Some(addr) = &self.server_addr {
+      if let Some((h, p)) = addr.split_once(':') {
+        if !h.is_empty() {
+          host.push('.');
+          host.push_str(h);
+        }
+        port = p.parse::<u16>().ok();
+      } else {
+        host.push('.');
+        host.push_str(addr);
+      }
+    }
+
+    url.set_host(Some(&host)).map_err(|_| fmt::Error)?;
+    if let Some(p) = port {
+      url.set_port(Some(p)).map_err(|_| fmt::Error)?;
+    }
+
+    // Set Path
+    let path = if self.path.starts_with('/') {
+      &self.path
+    } else {
+      &format!("/{}", self.path)
+    };
+    url.set_path(path);
+
+    // Set Query
     if let Some(entry) = &self.entry_path {
       url.query_pairs_mut().append_pair("entry", entry);
     }
@@ -138,39 +160,54 @@ impl FromStr for FileUrl {
       return Err(FileUrlError::UnsupportedScheme(url.scheme().to_string()));
     }
 
-    let endpoint_type = match url.host_str() {
-      Some("local") => EndpointType::Local,
-      Some("agent") => EndpointType::Agent,
-      Some("s3") => EndpointType::S3,
-      Some(other) => return Err(FileUrlError::InvalidEndpointType(other.to_string())),
-      None => return Err(FileUrlError::MissingField("endpoint_type")),
+    // Parse id from userinfo
+    let mut endpoint_id = url.username().to_string();
+    if let Some(pass) = url.password() {
+      endpoint_id = format!("{}:{}", endpoint_id, pass);
+    }
+
+    // Parse type and server_addr from host
+    let host = url.host_str().ok_or(FileUrlError::MissingField("host"))?;
+    let (endpoint_type_str, mut server_addr) = if let Some((t, addr)) = host.split_once('.') {
+      (t, Some(addr.to_string()))
+    } else {
+      (host, None)
     };
 
-    let mut segments = url.path_segments().ok_or(FileUrlError::MissingField("path"))?;
+    // Append port to server_addr if present
+    if let Some(port) = url.port() {
+      if let Some(ref mut addr) = server_addr {
+        addr.push_str(&format!(":{}", port));
+      } else {
+        server_addr = Some(format!(":{}", port));
+      }
+    }
 
-    let endpoint_id = segments
-      .next()
-      .ok_or(FileUrlError::MissingField("endpoint_id"))?
-      .to_string();
-    let target_type_str = segments.next().ok_or(FileUrlError::MissingField("target_type"))?;
-
-    let target_type = match target_type_str {
-      "dir" => TargetType::Dir,
-      "archive" => TargetType::Archive,
-      other => return Err(FileUrlError::InvalidTargetType(other.to_string())),
+    let endpoint_type = match endpoint_type_str {
+      "local" => EndpointType::Local,
+      "agent" => EndpointType::Agent,
+      "s3" => EndpointType::S3,
+      other => return Err(FileUrlError::InvalidEndpointType(other.to_string())),
     };
 
-    // The rest of the segments form the path
-    let path_parts: Vec<&str> = segments.collect();
-    let path = path_parts.join("/"); // Reconstruct path
-    // Note: paths are stored without leading slash to ensure consistency with Display
+    // Parse path (strip leading slash)
+    let path = url.path().trim_start_matches('/').to_string();
 
+    // Parse entry_path
     let entry_path = url
       .query_pairs()
       .find(|(k, _)| k == "entry")
       .map(|(_, v)| v.to_string());
 
+    // Infer target_type
+    let target_type = if entry_path.is_some() {
+      TargetType::Archive
+    } else {
+      TargetType::Dir
+    };
+
     Ok(FileUrl {
+      server_addr,
       endpoint_type,
       endpoint_id,
       target_type,
@@ -273,7 +310,12 @@ fn build_file_url_for_result_with_source_type_and_archive_path(
         final_path = normalize_path_segment(&final_path);
       }
 
-      let url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
+      let mut url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
+      if let Some(tuning) = crate::utils::tuning::get()
+        && let Some(sid) = &tuning.server_id
+      {
+        url = url.with_server_addr(sid);
+      }
       Some((url.clone(), url.to_string()))
     }
     Target::Files { .. } => {
@@ -286,7 +328,12 @@ fn build_file_url_for_result_with_source_type_and_archive_path(
         final_path = normalize_path_segment(&final_path);
       }
 
-      let url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
+      let mut url = FileUrl::new(endpoint_type, endpoint_id, TargetType::Dir, final_path, None);
+      if let Some(tuning) = crate::utils::tuning::get()
+        && let Some(sid) = &tuning.server_id
+      {
+        url = url.with_server_addr(sid);
+      }
       Some((url.clone(), url.to_string()))
     }
     Target::Archive { path } => {
@@ -311,13 +358,18 @@ fn build_file_url_for_result_with_source_type_and_archive_path(
         archive_path = normalize_path_segment(&archive_path);
       }
 
-      let url = FileUrl::new(
+      let mut url = FileUrl::new(
         endpoint_type,
         endpoint_id,
         TargetType::Archive,
         archive_path,
         Some(normalize_path_segment(rel_path)),
       );
+      if let Some(tuning) = crate::utils::tuning::get()
+        && let Some(sid) = &tuning.server_id
+      {
+        url = url.with_server_addr(sid);
+      }
       Some((url.clone(), url.to_string()))
     }
   }
@@ -344,62 +396,69 @@ mod tests {
   use super::*;
 
   #[test]
-  fn test_local_dir() {
+  fn test_local_file() {
     let url = FileUrl::new(
       EndpointType::Local,
       "localhost",
       TargetType::Dir,
-      "/var/log/nginx/access.log",
+      "/var/log/syslog",
       None,
     );
-    assert_eq!(url.to_string(), "ls://local/localhost/dir/var/log/nginx/access.log");
+    assert_eq!(url.to_string(), "ls://localhost@local/var/log/syslog");
   }
 
   #[test]
-  fn test_agent_dir() {
+  fn test_agent_file() {
     let url = FileUrl::new(
       EndpointType::Agent,
       "web-01",
       TargetType::Dir,
-      "/app/logs/error.log",
+      "app/logs/error.log",
       None,
     );
-    assert_eq!(url.to_string(), "ls://agent/web-01/dir/app/logs/error.log");
+    assert_eq!(url.to_string(), "ls://web-01@agent/app/logs/error.log");
   }
 
   #[test]
   fn test_s3_archive() {
     let url = FileUrl::new(
       EndpointType::S3,
-      "prod:logs-bucket",
+      "prod:logs",
       TargetType::Archive,
-      "2023/10/data.tar.gz",
-      Some("internal/service.log".to_string()),
+      "2023/data.tgz",
+      Some("access.log".to_string()),
     );
-    // Note: URL encoding might affect the output string, e.g. ':' in host might be allowed or encoded?
-    // In ls:// scheme, host is "s3". "prod:logs-bucket" is the first path segment.
-    assert_eq!(
-      url.to_string(),
-      "ls://s3/prod:logs-bucket/archive/2023/10/data.tar.gz?entry=internal%2Fservice.log"
-    );
+    assert_eq!(url.to_string(), "ls://prod:logs@s3/2023/data.tgz?entry=access.log");
   }
 
   #[test]
-  fn test_parse_local() {
-    let s = "ls://local/localhost/dir/var/log/syslog";
+  fn test_multi_cluster() {
+    let url = FileUrl::new(EndpointType::Agent, "web-01", TargetType::Dir, "app.log", None).with_server_addr("hk-prod");
+    assert_eq!(url.to_string(), "ls://web-01@agent.hk-prod/app.log");
+
+    let url_with_port =
+      FileUrl::new(EndpointType::Agent, "web-01", TargetType::Dir, "app.log", None).with_server_addr("hk-prod:4000");
+    assert_eq!(url_with_port.to_string(), "ls://web-01@agent.hk-prod:4000/app.log");
+  }
+
+  #[test]
+  fn test_parse_concise() {
+    let s = "ls://web-01@agent.hk-prod:4000/var/log/syslog?entry=internal.log";
     let url = FileUrl::from_str(s).unwrap();
-    assert_eq!(url.endpoint_type, EndpointType::Local);
-    assert_eq!(url.endpoint_id, "localhost");
-    assert_eq!(url.target_type, TargetType::Dir);
-    assert_eq!(url.path, "var/log/syslog"); // Note: leading slash might be stripped by path_segments?
-    // Url::parse("ls://local/localhost/dir/var/log/syslog")
-    // path segments: ["localhost", "dir", "var", "log", "syslog"]
-    // We take first 2 as id and type. Rest is path.
-    // So path is "var/log/syslog".
-    // If the original path was absolute "/var/log/syslog", we might want to preserve that?
-    // In the implementation: path_parts.join("/") -> "var/log/syslog".
-    // If we want absolute path, we might need to handle it.
-    // However, for "local", usually we want absolute.
-    // Let's adjust implementation to handle leading slash if needed or just accept that it's relative to "root" of the URL structure.
+    assert_eq!(url.endpoint_id, "web-01");
+    assert_eq!(url.endpoint_type, EndpointType::Agent);
+    assert_eq!(url.server_addr.as_deref(), Some("hk-prod:4000"));
+    assert_eq!(url.path, "var/log/syslog");
+    assert_eq!(url.entry_path.as_deref(), Some("internal.log"));
+    assert_eq!(url.target_type, TargetType::Archive);
+  }
+
+  #[test]
+  fn test_parse_s3_with_colon() {
+    let s = "ls://prod:bucket@s3/archive.tgz?entry=log";
+    let url = FileUrl::from_str(s).unwrap();
+    assert_eq!(url.endpoint_id, "prod:bucket");
+    assert_eq!(url.endpoint_type, EndpointType::S3);
+    assert_eq!(url.target_type, TargetType::Archive);
   }
 }
