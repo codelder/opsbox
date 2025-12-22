@@ -8,7 +8,7 @@ use tokio::time as tokio_time;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{domain::FileUrl, query::KeywordHighlight};
+use crate::{domain::Odfi, query::KeywordHighlight};
 
 #[derive(Debug, Clone)]
 pub struct CompactLines {
@@ -63,7 +63,7 @@ impl CompactLines {
 struct SessionData {
   last_touch: Instant,
   keywords: Vec<KeywordHighlight>,
-  files: HashMap<FileUrl, CompactLines>,
+  files: HashMap<Odfi, CompactLines>,
 }
 
 impl SessionData {
@@ -217,7 +217,7 @@ impl Cache {
     None
   }
 
-  pub async fn put_lines(&self, sid: &str, file_url: &FileUrl, lines: Vec<String>) {
+  pub async fn put_lines(&self, sid: &str, file_url: &Odfi, lines: Vec<String>) {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -246,7 +246,7 @@ impl Cache {
   pub async fn get_lines_slice(
     &self,
     sid: &str,
-    file_url: &FileUrl,
+    file_url: &Odfi,
     start: usize,
     end: usize,
   ) -> Option<(usize, Vec<String>)> {
@@ -287,7 +287,7 @@ impl Cache {
   }
 
   /// 获取指定会话的所有文件列表
-  pub async fn get_file_list(&self, sid: &str) -> Option<Vec<FileUrl>> {
+  pub async fn get_file_list(&self, sid: &str) -> Option<Vec<Odfi>> {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -299,7 +299,7 @@ impl Cache {
       }
 
       session.last_touch = Instant::now();
-      let files: Vec<FileUrl> = session.files.keys().cloned().collect();
+      let files: Vec<Odfi> = session.files.keys().cloned().collect();
       return Some(files);
     }
 
@@ -344,10 +344,10 @@ mod tests {
   async fn test_cache_put_and_get_file_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "test-file.log",
       None,
     );
@@ -365,10 +365,10 @@ mod tests {
   #[tokio::test]
   async fn test_cache_get_file_lines_missing() {
     let c = cache();
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "non-existent-file.log",
       None,
     );
@@ -410,17 +410,17 @@ mod tests {
   async fn test_cache_multiple_files_same_sid() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url1 = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url1 = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "file1.log",
       None,
     );
-    let file_url2 = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url2 = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "file2.log",
       None,
     );
@@ -440,10 +440,10 @@ mod tests {
     let c = cache();
     let sid1 = format!("test-sid-1-{}", Uuid::new_v4());
     let sid2 = format!("test-sid-2-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "shared-file.log",
       None,
     );
@@ -462,10 +462,10 @@ mod tests {
   async fn test_cache_get_file_lines_slice() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "test-file.log",
       None,
     );
@@ -488,10 +488,10 @@ mod tests {
   async fn test_cache_get_file_lines_slice_out_of_bounds() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "test-file.log",
       None,
     );
@@ -610,10 +610,10 @@ mod tests {
   async fn test_cache_get_lines_slice_boundary_conditions() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "test-file.log",
       None,
     );
@@ -658,10 +658,10 @@ mod tests {
   async fn test_cache_empty_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "empty-file.log",
       None,
     );
@@ -710,10 +710,10 @@ mod tests {
   async fn test_cache_special_characters_in_file_id() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "path/to/file-with-特殊字符.log",
       None,
     );
@@ -728,10 +728,10 @@ mod tests {
   async fn test_cache_remove_sid() {
     let c = cache();
     let sid = format!("test-sid-remove-{}", Uuid::new_v4());
-    let file_url = FileUrl::new(
-      crate::domain::file_url::EndpointType::Local,
+    let file_url = Odfi::new(
+      crate::domain::EndpointType::Local,
       "localhost",
-      crate::domain::file_url::TargetType::Dir,
+      crate::domain::TargetType::Dir,
       "test-file.log",
       None,
     );

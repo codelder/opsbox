@@ -2,8 +2,8 @@
   /**
    * 文件查看页面 - 文件信息头部组件
    */
-  import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
-  import type { ParsedFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import { parseOdfi } from '$lib/utils/odfi';
+  import type { ParsedOdfi } from '$lib/utils/odfi';
   import { Button } from '$lib/components/ui/button';
   import { Badge } from '$lib/components/ui/badge';
   import type { KeywordInfo } from '$lib/modules/logseek/types';
@@ -102,7 +102,7 @@
   function parseFileInfo(full: string) {
     if (!full) return { title: '未知文件', icon: FileText, metadata: [] };
 
-    const parsed: ParsedFileUrl | null = parseFileUrl(full);
+    const parsed: ParsedOdfi | null = parseOdfi(full);
     if (!parsed) {
       const parts = full.split('/');
       return {

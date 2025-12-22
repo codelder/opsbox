@@ -18,7 +18,7 @@ pub enum LogSeekApiError {
 
   /// Domain 层错误
   #[error(transparent)]
-  Domain(#[from] crate::domain::FileUrlError),
+  Domain(#[from] crate::domain::OdfiError),
 
   /// JSON 解析失败
   #[error("JSON 解析失败: {0}")]
@@ -277,7 +277,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_domain_error_conversion() {
-    let domain_err = crate::domain::FileUrlError::InvalidFormat("无效的 URL 格式".to_string());
+    let domain_err = crate::domain::OdfiError::InvalidFormat("无效的 URL 格式".to_string());
     let api_err: LogSeekApiError = domain_err.into();
     let response = api_err.into_response();
 

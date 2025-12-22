@@ -665,7 +665,7 @@ pub struct SearchResult {
   pub merged: Vec<(usize, usize)>,
   /// 文件编码（如果不是 UTF-8，则包含编码名称，如 "GBK"）
   pub encoding: Option<String>,
-  /// 当结果来自归档内部条目时，归档文件的绝对路径（Agent/Local 侧填充；用于服务端构造唯一 FileUrl）
+  /// 当结果来自归档内部条目时，归档文件的绝对路径（Agent/Local 侧填充；用于服务端构造唯一 Odfi）
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub archive_path: Option<String>,
   /// 条目来源类型

@@ -122,10 +122,10 @@ async fn test_cache_functionality() {
   assert_eq!(cached_keywords, Some(keywords));
 
   // 测试文件行缓存
-  let file_url = logseek::domain::file_url::FileUrl::new(
-    logseek::domain::file_url::EndpointType::Local,
+  let file_url = logseek::domain::Odfi::new(
+    logseek::domain::EndpointType::Local,
     "localhost",
-    logseek::domain::file_url::TargetType::Dir,
+    logseek::domain::TargetType::Dir,
     "test.log",
     None,
   );

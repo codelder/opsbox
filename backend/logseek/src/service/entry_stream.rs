@@ -37,7 +37,7 @@ pub enum EntrySource {
 #[derive(Clone, Debug)]
 pub struct EntryMeta {
   pub path: String,
-  /// 当条目来自归档内部时，归档文件路径（绝对路径，供上层构造唯一 FileUrl）
+  /// 当条目来自归档内部时，归档文件路径（绝对路径，供上层构造唯一 Odfi）
   pub container_path: Option<String>,
   pub size: Option<u64>,
   pub is_compressed: bool,
