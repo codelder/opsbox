@@ -140,6 +140,13 @@ pub struct AppConfig {
   )]
   pub io_max_retries: Option<u32>,
 
+  #[arg(
+    long = "server-id",
+    value_name = "ID",
+    help = "当前服务器的唯一标识（可以是域名或 IP），用于生成跨集群可访问的 FileURL"
+  )]
+  pub server_id: Option<String>,
+
   /// 管理子命令（start/stop）
   #[command(subcommand)]
   pub cmd: Option<Commands>,
@@ -236,6 +243,14 @@ impl AppConfig {
       .or_else(|| Self::env_u32("LOGSEEK_IO_MAX_RETRIES"))
       .unwrap_or(5)
       .clamp(1, 20)
+  }
+
+  /// 获取服务器标识
+  pub fn get_server_id(&self) -> Option<String> {
+    self
+      .server_id
+      .clone()
+      .or_else(|| std::env::var("LOGSEEK_SERVER_ID").ok())
   }
 
   fn env_usize(key: &str) -> Option<usize> {

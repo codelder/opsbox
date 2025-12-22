@@ -296,6 +296,10 @@ pub(crate) fn setup_module_env_vars(config: &AppConfig) {
     );
     std::env::set_var("LOGSEEK_IO_TIMEOUT_SEC", config.get_io_timeout_sec().to_string());
     std::env::set_var("LOGSEEK_IO_MAX_RETRIES", config.get_io_max_retries().to_string());
+
+    if let Some(sid) = config.get_server_id() {
+      std::env::set_var("LOGSEEK_SERVER_ID", sid);
+    }
   }
 
   tracing::debug!("模块配置环境变量已设置");

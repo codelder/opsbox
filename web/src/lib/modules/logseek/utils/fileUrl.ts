@@ -8,6 +8,7 @@ export type EndpointType = 'local' | 'agent' | 's3';
 export type TargetType = 'dir' | 'archive';
 
 export interface ParsedFileUrl {
+  serverAddr?: string;
   endpointType: EndpointType;
   endpointId: string;
   targetType: TargetType;
@@ -19,33 +20,40 @@ export interface ParsedFileUrl {
 
 /**
  * Parse a File URL string
- * @param urlStr The URL string (e.g. "ls://local/localhost/dir/var/log/syslog")
+ * @param urlStr The URL string (e.g. "ls://web-01@agent.hk-prod/var/log/syslog")
  */
 export function parseFileUrl(urlStr: string): ParsedFileUrl | null {
   try {
     const url = new URL(urlStr);
     if (url.protocol !== 'ls:') return null;
 
-    const endpointType = url.hostname as EndpointType;
-    if (!['local', 'agent', 's3'].includes(endpointType)) return null;
+    // Parse id from userinfo
+    let endpointId = decodeURIComponent(url.username);
+    if (url.password) {
+      endpointId += ':' + decodeURIComponent(url.password);
+    }
 
-    // Path segments: /<endpoint_id>/<target_type>/<path...>
-    const segments = url.pathname.split('/').filter((s) => s.length > 0);
-    if (segments.length < 2) return null;
+    // Parse type and serverAddr from hostname
+    const hostParts = url.hostname.split('.');
+    const endpointTypeStr = hostParts[0];
+    if (!['local', 'agent', 's3'].includes(endpointTypeStr)) return null;
+    const endpointType = endpointTypeStr as EndpointType;
 
-    const endpointId = decodeURIComponent(segments[0]);
-    const targetTypeStr = segments[1];
+    let serverAddr = hostParts.length > 1 ? hostParts.slice(1).join('.') : undefined;
+    if (url.port) {
+      serverAddr = (serverAddr || '') + ':' + url.port;
+    }
 
-    if (targetTypeStr !== 'dir' && targetTypeStr !== 'archive') return null;
-    const targetType = targetTypeStr as TargetType;
-
-    // The rest is the path
-    const pathSegments = segments.slice(2);
-    const path = pathSegments.map(decodeURIComponent).join('/');
+    // Parse path (strip leading slash)
+    const path = decodeURIComponent(url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname);
 
     const entryPath = url.searchParams.get('entry') || undefined;
 
+    // Infer targetType
+    const targetType: TargetType = entryPath ? 'archive' : 'dir';
+
     return {
+      serverAddr,
       endpointType,
       endpointId,
       targetType,

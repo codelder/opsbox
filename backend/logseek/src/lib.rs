@@ -126,7 +126,10 @@ impl opsbox_core::Module for LogSeekModule {
       .and_then(|v| v.parse().ok())
       .unwrap_or(5);
 
+    let server_id = std::env::var("LOGSEEK_SERVER_ID").ok();
+
     let tuning = utils::tuning::Tuning {
+      server_id,
       io_max_concurrency,
       io_timeout_sec,
       io_max_retries,
