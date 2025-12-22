@@ -189,7 +189,7 @@ pub async fn execute_search(
 /// 使用通用处理函数并自动处理消息发送
 #[allow(clippy::too_many_arguments)]
 async fn search_with_entry_stream(
-  mut stream: Box<dyn logseek::service::entry_stream::EntryStream>,
+  mut stream: Box<dyn opsbox_core::fs::EntryStream>,
   processor: Arc<SearchProcessor>,
   task_id: &str,
   tx: &mpsc::Sender<SearchEvent>,

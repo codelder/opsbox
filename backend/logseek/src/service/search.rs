@@ -1407,8 +1407,9 @@ foo lower
 
   // 测试辅助：运行基于 tar.gz 字节的搜索并收集所有结果
   async fn run_tar_search_bytes(tar_gz: Vec<u8>, spec: &Query, ctx: usize) -> Vec<SearchResult> {
-    use crate::service::entry_stream::{EntryStreamProcessor, TarGzEntryStream};
+    use crate::service::entry_stream::EntryStreamProcessor;
     use futures::io::Cursor;
+    use opsbox_core::fs::TarGzEntryStream;
     use tokio::sync::mpsc;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 

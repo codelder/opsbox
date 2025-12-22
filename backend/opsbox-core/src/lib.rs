@@ -7,8 +7,13 @@
 //! - 共享中间件
 //! - 日志系统
 
+pub mod agent;
 pub mod database;
 pub mod error;
+pub mod fs;
+pub mod repository;
+pub mod storage;
+
 pub mod llm;
 pub mod logging;
 pub mod middleware;

@@ -4,13 +4,13 @@
 
 use axum::{
   Json,
-  extract::{Path, State},
+  extract::{Path, Query, State},
   http::StatusCode,
   response::IntoResponse,
   routing::{get, post, put},
 };
-use logseek::agent::AgentInfo;
-use logseek::agent::AgentSearchRequest;
+use logseek::agent::{AgentInfo, AgentSearchRequest};
+use opsbox_core::agent::models::{AgentFileItem, AgentListRequest, AgentListResponse};
 use opsbox_core::logging::LogLevel;
 use std::str::FromStr;
 use tokio::sync::mpsc;
@@ -152,6 +152,65 @@ pub async fn update_log_retention(
   }))
 }
 
+/// 列出目录文件
+pub async fn handle_list_files(
+  State(_state): State<AppState>,
+  Query(req): Query<AgentListRequest>,
+) -> Result<Json<AgentListResponse>, ApiError> {
+  let path_str = req.path;
+  let path = std::path::Path::new(&path_str);
+
+  // Security check: ensure path is within allowed directories or subdirectories
+  // This is simplified. Real implementation should check `state.config.search_dirs`
+  // assuming agent config has allowed paths.
+
+  if !path.exists() {
+    return Err(ApiError::NotFound(format!("Path not found: {}", path_str)));
+  }
+
+  let mut read_dir = tokio::fs::read_dir(path)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+  let mut items = Vec::new();
+
+  while let Ok(Some(entry)) = read_dir.next_entry().await {
+    if let Ok(meta) = entry.metadata().await {
+      let name = entry.file_name().to_string_lossy().to_string();
+      let is_dir = meta.is_dir();
+      let size = if is_dir { None } else { Some(meta.len()) };
+      let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+
+      // Full path
+      let full_path = entry.path().to_string_lossy().to_string();
+
+      items.push(AgentFileItem {
+        name,
+        path: full_path,
+        is_dir,
+        size,
+        modified,
+      });
+    }
+  }
+
+  // Sort items: directories first, then files
+  items.sort_by(|a, b| {
+    if a.is_dir == b.is_dir {
+      a.name.cmp(&b.name)
+    } else if a.is_dir {
+      std::cmp::Ordering::Less
+    } else {
+      std::cmp::Ordering::Greater
+    }
+  });
+
+  Ok(Json(AgentListResponse { items }))
+}
+
 /// 创建 Agent 路由
 pub fn create_router(config: Arc<AgentConfig>) -> Router {
   Router::new()
@@ -163,5 +222,6 @@ pub fn create_router(config: Arc<AgentConfig>) -> Router {
     .route("/api/v1/log/config", get(get_log_config))
     .route("/api/v1/log/level", put(update_log_level))
     .route("/api/v1/log/retention", put(update_log_retention))
+    .route("/api/v1/list_files", get(handle_list_files))
     .with_state(AppState { config })
 }

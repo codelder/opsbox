@@ -1,9 +1,9 @@
 [package]
 name = "opsbox-server"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-authors.workspace = true
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
 
 [[bin]]
 name = "opsbox-server"
@@ -18,6 +18,7 @@ opsbox-core = { path = "../opsbox-core" }
 # 为 logseek 启用 mimalloc-collect 特性，以便在缓存清理后尝试收缩 mimalloc 堆
 logseek = { path = "../logseek", optional = true, features = ["mimalloc-collect"] }
 agent-manager = { path = "../agent-manager", optional = true }
+resource-explorer = { path = "../resource-explorer", optional = true }
 # 未来可添加更多模块：
 # analytics = { path = "../analytics", optional = true }
 # monitoring = { path = "../monitoring", optional = true }
@@ -42,7 +43,7 @@ mimalloc = "0.1"
 # ✅ 模块功能开关
 [features]
 # 默认启用所有模块
-default = ["logseek", "agent-manager"]
+default = ["logseek", "agent-manager", "resource-explorer"]
 # 可选：只启用特定模块
 # minimal = []  # 最小化构建，无业务模块
 # all = ["logseek", "agent-manager", "analytics", "monitoring"]  # 启用所有模块
