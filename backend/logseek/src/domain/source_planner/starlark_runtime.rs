@@ -109,10 +109,9 @@ pub async fn plan_with_starlark_with_script(
   prefix.push_str("S3_PROFILES = [\n");
   for p in &s3_profiles {
     prefix.push_str(&format!(
-      "  {{'profile_name': '{}', 'endpoint': '{}', 'bucket': '{}'}},\n",
+      "  {{'profile_name': '{}', 'endpoint': '{}'}},\n",
       esc_single(&p.profile_name),
       esc_single(&p.endpoint),
-      esc_single(&p.bucket)
     ));
   }
   prefix.push_str("]\n");

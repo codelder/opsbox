@@ -11,7 +11,6 @@ import type { S3SettingsPayload } from '../types';
  */
 export function useSettings() {
   let endpoint = $state('');
-  let bucket = $state('');
   let accessKey = $state('');
   let secretKey = $state('');
   let loadingSettings = $state(false);
@@ -35,7 +34,6 @@ export function useSettings() {
     try {
       const data = await fetchS3Settings(true);
       endpoint = data.endpoint ?? '';
-      bucket = data.bucket ?? '';
       accessKey = data.access_key ?? '';
       secretKey = data.secret_key ?? '';
       connectionError = data.connection_error ?? null;
@@ -62,7 +60,6 @@ export function useSettings() {
     try {
       const payload: S3SettingsPayload = {
         endpoint,
-        bucket,
         access_key: accessKey,
         secret_key: secretKey
       };
@@ -87,12 +84,6 @@ export function useSettings() {
     },
     set endpoint(value: string) {
       endpoint = value;
-    },
-    get bucket() {
-      return bucket;
-    },
-    set bucket(value: string) {
-      bucket = value;
     },
     get accessKey() {
       return accessKey;

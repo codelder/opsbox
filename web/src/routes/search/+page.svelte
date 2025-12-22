@@ -25,7 +25,7 @@
     Database,
     CircleCheckBig
   } from 'lucide-svelte';
-  import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import { parseFileUrl, stringifyFileUrl } from '$lib/modules/logseek/utils/fileUrl';
   import { Badge } from '$lib/components/ui/badge';
   import { Separator } from '$lib/components/ui/separator';
 
@@ -112,7 +112,12 @@
           children: new Map(),
           type: 'endpoint_id',
           icon: typeKey === 'S3' ? Database : typeKey === 'Agent' ? Server : HardDrive,
-          url: `ls://${parsed.endpointType}/${parsed.endpointId}`
+          url: stringifyFileUrl({
+            endpointId: parsed.endpointId,
+            endpointType: parsed.endpointType,
+            serverAddr: parsed.serverAddr,
+            path: ''
+          })
         };
         typeNode.children.set(parsed.endpointId, idNode);
       }
@@ -137,7 +142,12 @@
         let child = currentParent.children.get(segment);
         if (!child) {
           const nodeTargetType = isArchiveFile ? 'archive' : 'dir';
-          const nodeUrl = `ls://${parsed.endpointType}/${parsed.endpointId}/${nodeTargetType}/${currentPathStr}`;
+          const nodeUrl = stringifyFileUrl({
+            endpointId: parsed.endpointId,
+            endpointType: parsed.endpointType,
+            serverAddr: parsed.serverAddr,
+            path: currentPathStr
+          });
 
           child = {
             key: segment,
@@ -166,7 +176,13 @@
 
           let child = currentParent.children.get(segment);
           if (!child) {
-            const nodeUrl = `ls://${parsed.endpointType}/${parsed.endpointId}/archive/${parsed.path}?entry=${currentEntryPathStr}`;
+            const nodeUrl = stringifyFileUrl({
+              endpointId: parsed.endpointId,
+              endpointType: parsed.endpointType,
+              serverAddr: parsed.serverAddr,
+              path: parsed.path,
+              entryPath: currentEntryPathStr
+            });
 
             child = {
               key: segment,

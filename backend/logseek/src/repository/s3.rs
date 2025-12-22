@@ -17,7 +17,6 @@ use tracing::{debug, error, info};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct S3Settings {
   pub endpoint: String,
-  pub bucket: String,
   pub access_key: String,
   pub secret_key: String,
 }
@@ -29,7 +28,6 @@ pub struct S3Settings {
 pub struct S3Profile {
   pub profile_name: String,
   pub endpoint: String,
-  pub bucket: String,
   pub access_key: String,
   pub secret_key: String,
 }
@@ -41,7 +39,6 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
     CREATE TABLE IF NOT EXISTS s3_profiles (
         profile_name TEXT PRIMARY KEY,
         endpoint TEXT NOT NULL,
-        bucket TEXT NOT NULL,
         access_key TEXT NOT NULL,
         secret_key TEXT NOT NULL,
         created_at INTEGER NOT NULL,
@@ -58,8 +55,8 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
 
 pub async fn load_s3_settings(pool: &SqlitePool) -> Result<Option<S3Settings>> {
   debug!("加载 S3 配置（default profile）");
-  let row = sqlx::query_as::<_, (String, String, String, String)>(
-    "SELECT endpoint, bucket, access_key, secret_key FROM s3_profiles WHERE profile_name = 'default'",
+  let row = sqlx::query_as::<_, (String, String, String)>(
+    "SELECT endpoint, access_key, secret_key FROM s3_profiles WHERE profile_name = 'default'",
   )
   .fetch_optional(pool)
   .await
@@ -70,9 +67,8 @@ pub async fn load_s3_settings(pool: &SqlitePool) -> Result<Option<S3Settings>> {
     None => info!("S3 配置不存在 (profile=default)"),
   }
 
-  Ok(row.map(|(endpoint, bucket, access_key, secret_key)| S3Settings {
+  Ok(row.map(|(endpoint, access_key, secret_key)| S3Settings {
     endpoint,
-    bucket,
     access_key,
     secret_key,
   }))
@@ -85,13 +81,11 @@ pub async fn load_required_s3_settings(pool: &SqlitePool) -> Result<S3Settings> 
 }
 
 pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Result<()> {
-  info!(
-    "保存 S3 配置(default): endpoint={}, bucket={}",
-    settings.endpoint, settings.bucket
-  );
+  info!("保存 S3 配置(default): endpoint={}", settings.endpoint);
 
-  debug!("验证 S3 配置有效性");
-  verify_s3_settings(settings).await?;
+  // 注意：移除 bucket 后，save_s3_settings 不再自动验证连接，
+  // 因为没有目标 bucket 无法调用 ListObjects 等接口
+  // verify_s3_settings(settings).await?;
 
   debug!("将 S3 配置写入 s3_profiles(default)");
   let now = std::time::SystemTime::now()
@@ -108,10 +102,9 @@ pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Resul
 
   if existing.is_some() {
     sqlx::query(
-      "UPDATE s3_profiles SET endpoint = ?, bucket = ?, access_key = ?, secret_key = ?, updated_at = ? WHERE profile_name = 'default'",
+      "UPDATE s3_profiles SET endpoint = ?, access_key = ?, secret_key = ?, updated_at = ? WHERE profile_name = 'default'",
     )
     .bind(&settings.endpoint)
-    .bind(&settings.bucket)
     .bind(&settings.access_key)
     .bind(&settings.secret_key)
     .bind(now)
@@ -120,10 +113,9 @@ pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Resul
     .map_err(|e| RepositoryError::QueryFailed(format!("更新 S3 配置失败: {}", e)))?;
   } else {
     sqlx::query(
-      "INSERT INTO s3_profiles (profile_name, endpoint, bucket, access_key, secret_key, created_at, updated_at) VALUES ('default', ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key, created_at, updated_at) VALUES ('default', ?, ?, ?, ?, ?)",
     )
     .bind(&settings.endpoint)
-    .bind(&settings.bucket)
     .bind(&settings.access_key)
     .bind(&settings.secret_key)
     .bind(now)
@@ -137,20 +129,10 @@ pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Resul
   Ok(())
 }
 
-pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
-  debug!(
-    "开始验证S3连接: endpoint={}, bucket={}",
-    settings.endpoint, settings.bucket
-  );
+pub async fn verify_s3_settings_with_bucket(settings: &S3Settings, bucket: &str) -> Result<()> {
+  debug!("开始验证S3连接: endpoint={}, bucket={}", settings.endpoint, bucket);
 
-  match storage::test_s3_connection(
-    &settings.endpoint,
-    &settings.access_key,
-    &settings.secret_key,
-    &settings.bucket,
-  )
-  .await
-  {
+  match storage::test_s3_connection(&settings.endpoint, &settings.access_key, &settings.secret_key, bucket).await {
     Ok(_) => {
       info!("S3配置验证成功");
       Ok(())
@@ -215,33 +197,35 @@ pub async fn verify_s3_settings(settings: &S3Settings) -> Result<()> {
 
 /// 加载指定 profile 的 S3 配置
 pub async fn load_s3_profile(pool: &SqlitePool, profile_name: &str) -> Result<Option<S3Profile>> {
+  let profile_name = if profile_name.is_empty() {
+    "default"
+  } else {
+    profile_name
+  };
   debug!("加载 S3 Profile: {}", profile_name);
 
-  let row = sqlx::query_as::<_, (String, String, String, String, String)>(
-    "SELECT profile_name, endpoint, bucket, access_key, secret_key FROM s3_profiles WHERE profile_name = ?",
+  let row = sqlx::query_as::<_, (String, String, String, String)>(
+    "SELECT profile_name, endpoint, access_key, secret_key FROM s3_profiles WHERE profile_name = ?",
   )
   .bind(profile_name)
   .fetch_optional(pool)
   .await
   .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profile 失败: {}", e)))?;
 
-  Ok(
-    row.map(|(profile_name, endpoint, bucket, access_key, secret_key)| S3Profile {
-      profile_name,
-      endpoint,
-      bucket,
-      access_key,
-      secret_key,
-    }),
-  )
+  Ok(row.map(|(profile_name, endpoint, access_key, secret_key)| S3Profile {
+    profile_name,
+    endpoint,
+    access_key,
+    secret_key,
+  }))
 }
 
 /// 加载所有 S3 Profiles
 pub async fn list_s3_profiles(pool: &SqlitePool) -> Result<Vec<S3Profile>> {
   debug!("加载所有 S3 Profiles");
 
-  let rows = sqlx::query_as::<_, (String, String, String, String, String)>(
-    "SELECT profile_name, endpoint, bucket, access_key, secret_key FROM s3_profiles ORDER BY profile_name",
+  let rows = sqlx::query_as::<_, (String, String, String, String)>(
+    "SELECT profile_name, endpoint, access_key, secret_key FROM s3_profiles ORDER BY profile_name",
   )
   .fetch_all(pool)
   .await
@@ -250,10 +234,9 @@ pub async fn list_s3_profiles(pool: &SqlitePool) -> Result<Vec<S3Profile>> {
   Ok(
     rows
       .into_iter()
-      .map(|(profile_name, endpoint, bucket, access_key, secret_key)| S3Profile {
+      .map(|(profile_name, endpoint, access_key, secret_key)| S3Profile {
         profile_name,
         endpoint,
-        bucket,
         access_key,
         secret_key,
       })
@@ -264,8 +247,8 @@ pub async fn list_s3_profiles(pool: &SqlitePool) -> Result<Vec<S3Profile>> {
 /// 保存或更新 S3 Profile
 pub async fn save_s3_profile(pool: &SqlitePool, profile: &S3Profile) -> Result<()> {
   info!(
-    "保存 S3 Profile: profile={}, endpoint={}, bucket={}",
-    profile.profile_name, profile.endpoint, profile.bucket
+    "保存 S3 Profile: profile={}, endpoint={}",
+    profile.profile_name, profile.endpoint
   );
 
   let now = std::time::SystemTime::now()
@@ -279,10 +262,9 @@ pub async fn save_s3_profile(pool: &SqlitePool, profile: &S3Profile) -> Result<(
   if existing.is_some() {
     // 更新现有配置
     sqlx::query(
-      "UPDATE s3_profiles SET endpoint = ?, bucket = ?, access_key = ?, secret_key = ?, updated_at = ? WHERE profile_name = ?",
+      "UPDATE s3_profiles SET endpoint = ?, access_key = ?, secret_key = ?, updated_at = ? WHERE profile_name = ?",
     )
     .bind(&profile.endpoint)
-    .bind(&profile.bucket)
     .bind(&profile.access_key)
     .bind(&profile.secret_key)
     .bind(now)
@@ -295,12 +277,11 @@ pub async fn save_s3_profile(pool: &SqlitePool, profile: &S3Profile) -> Result<(
   } else {
     // 插入新配置
     sqlx::query(
-      "INSERT INTO s3_profiles (profile_name, endpoint, bucket, access_key, secret_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&profile.profile_name)
     .bind(&profile.endpoint)
-    .bind(&profile.bucket)
     .bind(&profile.access_key)
     .bind(&profile.secret_key)
     .bind(now)

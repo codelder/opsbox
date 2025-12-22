@@ -20,7 +20,6 @@
   let isEditing = $state(false);
   let profileName = $state('');
   let endpoint = $state('');
-  let bucket = $state('');
   let accessKey = $state('');
   let secretKey = $state('');
 
@@ -38,7 +37,6 @@
     editingProfile = null;
     profileName = '';
     endpoint = '';
-    bucket = '';
     accessKey = '';
     secretKey = '';
     profileStore.clearSaveState();
@@ -50,7 +48,6 @@
     editingProfile = profile;
     profileName = profile.profile_name;
     endpoint = profile.endpoint;
-    bucket = profile.bucket;
     accessKey = profile.access_key;
     secretKey = profile.secret_key;
     profileStore.clearSaveState();
@@ -62,7 +59,6 @@
     editingProfile = null;
     profileName = '';
     endpoint = '';
-    bucket = '';
     accessKey = '';
     secretKey = '';
     profileStore.clearSaveState();
@@ -74,7 +70,6 @@
     const success = await profileStore.save({
       profile_name: profileName.trim(),
       endpoint: endpoint.trim(),
-      bucket: bucket.trim(),
       access_key: accessKey.trim(),
       secret_key: secretKey.trim()
     });
@@ -147,7 +142,7 @@
                   </div>
                   <div class="flex items-center text-sm text-muted-foreground">
                     <Cloud class="mr-1 h-3 w-3" />
-                    {profile.endpoint} / {profile.bucket}
+                    {profile.endpoint}
                   </div>
                 </div>
                 <div class="flex items-center gap-2">
@@ -210,19 +205,6 @@
           </div>
 
           <div class="grid gap-2">
-            <Label for="profile-bucket">Bucket</Label>
-            <Input
-              id="profile-bucket"
-              type="text"
-              bind:value={bucket}
-              placeholder="bucket"
-              disabled={profileStore.saving}
-              required
-            />
-            <p class="text-xs text-muted-foreground">指定要访问的 S3 存储桶名称</p>
-          </div>
-
-          <div class="grid gap-2">
             <Label for="profile-access-key">Access Key</Label>
             <Input
               id="profile-access-key"
@@ -255,7 +237,6 @@
             disabled={profileStore.saving ||
               !profileName.trim() ||
               !endpoint.trim() ||
-              !bucket.trim() ||
               !accessKey.trim() ||
               !secretKey.trim()}
           >
