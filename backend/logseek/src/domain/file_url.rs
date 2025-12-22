@@ -101,8 +101,23 @@ impl fmt::Display for FileUrl {
     // Format: ls://[id]@[type][.server_addr]/[path]?entry=[entry_path]
     let mut url = Url::parse("ls://placeholder").map_err(|_| fmt::Error)?;
 
-    // Set Info (id)
-    if !self.endpoint_id.is_empty() {
+    // Set Path
+    let mut final_path = if self.path.starts_with('/') {
+      self.path.clone()
+    } else {
+      format!("/{}", self.path)
+    };
+
+    // Special handling for S3: ls://profile@s3/bucket/path
+    if self.endpoint_type == EndpointType::S3 {
+      if let Some((profile, bucket)) = self.endpoint_id.split_once(':') {
+        url.set_username(profile).map_err(|_| fmt::Error)?;
+        final_path = format!("/{}{}", bucket, final_path);
+      } else {
+        url.set_username(&self.endpoint_id).map_err(|_| fmt::Error)?;
+      }
+    } else if !self.endpoint_id.is_empty() {
+      // For non-S3, id is just userinfo
       if let Some((user, pass)) = self.endpoint_id.split_once(':') {
         url.set_username(user).map_err(|_| fmt::Error)?;
         url.set_password(Some(pass)).map_err(|_| fmt::Error)?;
@@ -133,13 +148,7 @@ impl fmt::Display for FileUrl {
       url.set_port(Some(p)).map_err(|_| fmt::Error)?;
     }
 
-    // Set Path
-    let path = if self.path.starts_with('/') {
-      &self.path
-    } else {
-      &format!("/{}", self.path)
-    };
-    url.set_path(path);
+    url.set_path(&final_path);
 
     // Set Query
     if let Some(entry) = &self.entry_path {
@@ -160,7 +169,7 @@ impl FromStr for FileUrl {
       return Err(FileUrlError::UnsupportedScheme(url.scheme().to_string()));
     }
 
-    // Parse id from userinfo
+    // Parse id from userinfo (base)
     let mut endpoint_id = url.username().to_string();
     if let Some(pass) = url.password() {
       endpoint_id = format!("{}:{}", endpoint_id, pass);
@@ -190,8 +199,20 @@ impl FromStr for FileUrl {
       other => return Err(FileUrlError::InvalidEndpointType(other.to_string())),
     };
 
-    // Parse path (strip leading slash)
-    let path = url.path().trim_start_matches('/').to_string();
+    // Parse path and handle S3 specific bucket extraction
+    let mut path = url.path().trim_start_matches('/').to_string();
+
+    if endpoint_type == EndpointType::S3 {
+      // In ls://profile@s3/bucket/path, the first segment of path is the bucket
+      if let Some((bucket, rest)) = path.split_once('/') {
+        endpoint_id = format!("{}:{}", endpoint_id, bucket);
+        path = rest.to_string();
+      } else if !path.is_empty() {
+        // Only bucket is provided
+        endpoint_id = format!("{}:{}", endpoint_id, path);
+        path = String::new();
+      }
+    }
 
     // Parse entry_path
     let entry_path = url
@@ -428,7 +449,7 @@ mod tests {
       "2023/data.tgz",
       Some("access.log".to_string()),
     );
-    assert_eq!(url.to_string(), "ls://prod:logs@s3/2023/data.tgz?entry=access.log");
+    assert_eq!(url.to_string(), "ls://prod@s3/logs/2023/data.tgz?entry=access.log");
   }
 
   #[test]
@@ -455,7 +476,7 @@ mod tests {
 
   #[test]
   fn test_parse_s3_with_colon() {
-    let s = "ls://prod:bucket@s3/archive.tgz?entry=log";
+    let s = "ls://prod@s3/bucket/archive.tgz?entry=log";
     let url = FileUrl::from_str(s).unwrap();
     assert_eq!(url.endpoint_id, "prod:bucket");
     assert_eq!(url.endpoint_type, EndpointType::S3);

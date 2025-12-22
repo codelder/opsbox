@@ -33,7 +33,7 @@ describe('fileUrl', () => {
   });
 
   it('parses s3 archive url', () => {
-    const url = 'ls://prod:logs@s3/2023/10/data.tar.gz?entry=internal/service.log';
+    const url = 'ls://prod@s3/logs/2023/10/data.tar.gz?entry=internal/service.log';
     const parsed = parseFileUrl(url);
     expect(parsed).toEqual({
       endpointType: 's3',
