@@ -40,12 +40,26 @@ export function parseFileUrl(urlStr: string): ParsedFileUrl | null {
     const endpointType = endpointTypeStr as EndpointType;
 
     let serverAddr = hostParts.length > 1 ? hostParts.slice(1).join('.') : undefined;
+
+    // Parse path (strip leading slash)
+    let path = decodeURIComponent(url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname);
+
+    // Special handling for S3: ls://profile@s3/bucket/path
+    if (endpointType === 's3') {
+      const slashIndex = path.indexOf('/');
+      if (slashIndex !== -1) {
+        const bucket = path.substring(0, slashIndex);
+        endpointId = `${endpointId}:${bucket}`;
+        path = path.substring(slashIndex + 1);
+      } else if (path.length > 0) {
+        endpointId = `${endpointId}:${path}`;
+        path = '';
+      }
+    }
+
     if (url.port) {
       serverAddr = (serverAddr || '') + ':' + url.port;
     }
-
-    // Parse path (strip leading slash)
-    const path = decodeURIComponent(url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname);
 
     const entryPath = url.searchParams.get('entry') || undefined;
 
