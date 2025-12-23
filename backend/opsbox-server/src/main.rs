@@ -12,8 +12,8 @@ extern crate logseek;
 #[cfg(feature = "agent-manager")]
 extern crate agent_manager;
 
-#[cfg(feature = "resource-explorer")]
-extern crate resource_explorer;
+#[cfg(feature = "explorer")]
+extern crate explorer;
 
 // 模块声明
 mod config;

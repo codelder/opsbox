@@ -168,45 +168,23 @@ pub async fn handle_list_files(
     return Err(ApiError::NotFound(format!("Path not found: {}", path_str)));
   }
 
-  let mut read_dir = tokio::fs::read_dir(path)
+  let items = opsbox_core::fs::list_directory(path)
     .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
-  let mut items = Vec::new();
+    .map_err(ApiError::Internal)?;
 
-  while let Ok(Some(entry)) = read_dir.next_entry().await {
-    if let Ok(meta) = entry.metadata().await {
-      let name = entry.file_name().to_string_lossy().to_string();
-      let is_dir = meta.is_dir();
-      let size = if is_dir { None } else { Some(meta.len()) };
-      let modified = meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
-
-      // Full path
-      let full_path = entry.path().to_string_lossy().to_string();
-
-      items.push(AgentFileItem {
-        name,
-        path: full_path,
-        is_dir,
-        size,
-        modified,
-      });
-    }
-  }
-
-  // Sort items: directories first, then files
-  items.sort_by(|a, b| {
-    if a.is_dir == b.is_dir {
-      a.name.cmp(&b.name)
-    } else if a.is_dir {
-      std::cmp::Ordering::Less
-    } else {
-      std::cmp::Ordering::Greater
-    }
-  });
+  let items = items
+    .into_iter()
+    .map(|item| AgentFileItem {
+      name: item.name,
+      path: item.path,
+      is_dir: item.is_dir,
+      is_symlink: item.is_symlink,
+      size: item.size,
+      modified: item.modified,
+      child_count: item.child_count,
+      hidden_child_count: item.hidden_child_count,
+    })
+    .collect();
 
   Ok(Json(AgentListResponse { items }))
 }

@@ -1709,6 +1709,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "explorer"
+version = "0.1.1"
+dependencies = [
+ "agent-manager",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "inventory",
+ "opsbox-core",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "urlencoding",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3209,6 +3230,7 @@ dependencies = [
  "axum",
  "clap",
  "daemonize",
+ "explorer",
  "futures",
  "logseek",
  "mimalloc",
@@ -3217,7 +3239,6 @@ dependencies = [
  "num_cpus",
  "openssl",
  "opsbox-core",
- "resource-explorer",
  "rust-embed",
  "serde",
  "serde_json",
@@ -3785,27 +3806,6 @@ dependencies = [
  "wasm-streams",
  "web-sys",
  "webpki-roots 1.0.4",
-]
-
-[[package]]
-name = "resource-explorer"
-version = "0.1.1"
-dependencies = [
- "agent-manager",
- "anyhow",
- "async-trait",
- "axum",
- "inventory",
- "opsbox-core",
- "serde",
- "serde_json",
- "sqlx",
- "tar",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "urlencoding",
 ]
 
 [[package]]
