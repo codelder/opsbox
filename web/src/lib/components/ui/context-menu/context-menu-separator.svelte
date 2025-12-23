@@ -5,4 +5,8 @@
   let { ref = $bindable(null), class: className, ...restProps }: ContextMenuPrimitive.SeparatorProps = $props();
 </script>
 
-<ContextMenuPrimitive.Separator bind:ref class={cn('bg-muted -mx-1 my-1 h-px', className)} {...restProps} />
+<ContextMenuPrimitive.Separator
+  bind:ref
+  class={cn('-mx-1 my-1 h-px bg-black/5 dark:bg-white/10', className)}
+  {...restProps}
+/>

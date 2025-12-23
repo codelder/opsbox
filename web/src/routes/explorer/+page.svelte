@@ -247,16 +247,35 @@
     return `${bytes.toFixed(1)} ${units[i]}`;
   }
 
-  function getFolderIcon(name: string) {
-    const n = name.toLowerCase();
-    if (n.includes('download')) return Download;
-    if (n.includes('picture') || n.includes('image')) return ImageIcon;
-    if (n.includes('desktop')) return Monitor;
-    if (n.includes('music')) return Music;
-    if (n.includes('movie') || n.includes('video')) return Film;
-    if (n.includes('cloud') || name.startsWith('odfi://s3')) return Cloud;
-    if (n.includes('agent')) return Server;
-    return null;
+  function truncateMiddle(str: string, maxVisualWidth: number = 40, tailChars: number = 7): string {
+    let visualWidth = 0;
+    for (let i = 0; i < str.length; i++) {
+      visualWidth += str.charCodeAt(i) > 255 ? 2 : 1;
+    }
+
+    if (visualWidth <= maxVisualWidth) return str;
+
+    const ellipsis = '...';
+    const tailStr = str.slice(-tailChars);
+
+    let tailWidth = 0;
+    for (let i = 0; i < tailStr.length; i++) {
+      tailWidth += tailStr.charCodeAt(i) > 255 ? 2 : 1;
+    }
+
+    const availableHeadWidth = maxVisualWidth - tailWidth - 3;
+    if (availableHeadWidth <= 0) return '...' + tailStr;
+
+    let headStr = '';
+    let headWidth = 0;
+    for (let i = 0; i < str.length - tailChars; i++) {
+      const charWidth = str.charCodeAt(i) > 255 ? 2 : 1;
+      if (headWidth + charWidth > availableHeadWidth) break;
+      headStr += str[i];
+      headWidth += charWidth;
+    }
+
+    return headStr + ellipsis + tailStr;
   }
 </script>
 
@@ -265,20 +284,20 @@
 <div class="flex h-[calc(100vh-4rem)] gap-8 overflow-hidden px-6 py-6">
   <!-- Sidebar -->
   <aside
-    class="group/sidebar border-border relative hidden h-full border-r pr-6 md:block"
+    class="group/sidebar relative hidden h-full border-r border-border pr-6 md:block"
     style="width: {sidebarWidth}px"
   >
     <!-- 拖动把手 -->
     <button
       type="button"
-      class="hover:bg-primary/20 absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize border-0 bg-transparent p-0 transition-colors"
+      class="absolute top-0 -right-1 z-10 h-full w-2 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20"
       onmousedown={startResizing}
       aria-label="调整侧边栏宽度"
     ></button>
 
     <div class="sticky top-0 max-h-full space-y-6 overflow-y-auto pr-2">
       <div>
-        <h3 class="text-foreground mb-3 text-sm font-semibold">Explorer</h3>
+        <h3 class="mb-3 text-sm font-semibold text-foreground">Explorer</h3>
         <Separator class="mb-4" />
 
         {#snippet renderLevel(items: any[], depth: number)}
@@ -289,7 +308,7 @@
                 (depth === 1 && (activeId === item.name || currentOdfiStr.startsWith(item.path)))}
               <button
                 class="group flex w-full items-center rounded-md px-2 py-1.5 text-sm transition-colors {isActive
-                  ? 'bg-primary/10 text-primary font-medium'
+                  ? 'bg-primary/10 font-medium text-primary'
                   : 'text-foreground hover:bg-muted/50'}"
                 onclick={() => handleNavigate(item.path)}
               >
@@ -324,9 +343,9 @@
                   1
                 )}
               {:else if sidebarLoading[activeRoot.key as 's3' | 'agent']}
-                <div class="text-muted-foreground mt-4 animate-pulse px-2 py-1 text-xs">Loading...</div>
+                <div class="mt-4 animate-pulse px-2 py-1 text-xs text-muted-foreground">Loading...</div>
               {:else}
-                <div class="text-muted-foreground mt-4 px-2 py-1 text-xs">
+                <div class="mt-4 px-2 py-1 text-xs text-muted-foreground">
                   {#if activeRoot.key === 's3'}No profiles found{:else}No online agents{/if}
                 </div>
               {/if}
@@ -346,7 +365,7 @@
     </div>
   </aside>
 
-  {#snippet macOSFolder(className = 'h-20 w-20', hasFiles = true, icon: any = null)}
+  {#snippet macOSFolder(className = 'h-16 w-16', hasFiles = true, icon: any = null)}
     <div class="relative {className} flex items-center justify-center">
       <svg viewBox="0 0 100 88" class="h-full w-full drop-shadow-sm">
         <defs>
@@ -363,8 +382,8 @@
           <!-- Filter for the front cover's shadow on the body -->
           <filter id="frontShadow" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur in="SourceAlpha" stdDeviation="1.2" />
-            <feOffset dx="0" dy="-0.5" result="offsetblur" />
-            <feFlood flood-color="black" flood-opacity="0.2" />
+            <feOffset dx="0" dy="-1" result="offsetblur" />
+            <feFlood flood-color="black" flood-opacity="0.3" />
             <feComposite in2="offsetblur" operator="in" />
             <feMerge>
               <feMergeNode />
@@ -374,7 +393,7 @@
         </defs>
         <!-- Folder Body with tab - Shoulder at y=17 -->
         <path
-          d="M10,12 L35,12 L42,17 L90,17 C94,17 95,18 95,22 L95,83 C95,87 94,88 90,88 L10,88 C6,88 5,87 5,83 L5,17 C5,13 6,12 10,12 Z"
+          d="M10,12 L35,12 L42,17 L90,17 C94,17 95,18 95,22 L95,80 C95,84 94,85 90,85 L10,85 C6,85 5,84 5,80 L5,17 C5,13 6,12 10,12 Z"
           fill="url(#folderBackGrad)"
           stroke="#2d9cdb"
           stroke-width="0.3"
@@ -387,15 +406,23 @@
             class="dark:fill-gray-100"
           />
         {/if}
-        <!-- Folder Front - Lowered to y=25 to reveal more back shoulder context -->
+        <!-- Folder Front - Rounded top corners (radius 6) -->
         <path
-          d="M5,25 L95,25 L95,83 C95,87 94,88 90,88 L10,88 C6,88 5,87 5,83 L5,25 Z"
+          d="M5,31 Q5,25 11,25 L89,25 Q95,25 95,31 L95,80 C95,84 94,85 90,85 L10,85 C6,85 5,84 5,80 L5,31 Z"
           fill="url(#folderFrontGrad)"
           filter="url(#frontShadow)"
         />
+        <!-- Top Bevel Highlight -->
+        <path
+          d="M5,31 Q5,25 11,25 L89,25 Q95,25 95,31"
+          fill="none"
+          stroke="white"
+          stroke-opacity="0.4"
+          stroke-width="0.5"
+        />
         <!-- Bottom/Side Stroke for Front -->
         <path
-          d="M95,25 L95,83 C95,87 94,88 90,88 L10,88 C6,88 5,87 5,83 L5,25"
+          d="M95,31 L95,80 C95,84 94,85 90,85 L10,85 C6,85 5,84 5,80 L5,31"
           fill="none"
           stroke="#2d8cdb"
           stroke-width="0.5"
@@ -403,28 +430,28 @@
       </svg>
       {#if icon}
         {@const IconComp = icon}
-        <div class="absolute left-0 right-0 top-[62%] flex -translate-y-1/2 items-center justify-center">
+        <div class="absolute top-[62%] right-0 left-0 flex -translate-y-1/2 items-center justify-center">
           <!-- Subtle bottom highlight -->
           <div
             class="absolute inset-0 flex translate-y-[0.5px] items-center justify-center opacity-20 mix-blend-overlay"
           >
-            <IconComp class={className.includes('h-6') ? 'h-3 w-3' : 'h-8 w-8'} strokeWidth={2} color="white" />
+            <IconComp class={className.includes('h-5') ? 'h-2.5 w-2.5' : 'h-6 w-6'} strokeWidth={2} color="white" />
           </div>
           <!-- Soft recessed inner shadow -->
           <div class="opacity-30 mix-blend-multiply dark:mix-blend-overlay">
-            <IconComp class={className.includes('h-6') ? 'h-3 w-3' : 'h-8 w-8'} strokeWidth={2} />
+            <IconComp class={className.includes('h-5') ? 'h-2.5 w-2.5' : 'h-6 w-6'} strokeWidth={2} />
           </div>
         </div>
       {/if}
     </div>
   {/snippet}
 
-  {#snippet macOSFile(className = 'h-20 w-20', icon: any = null)}
+  {#snippet macOSFile(className = 'h-16 w-16', icon: any = null)}
     <div class="relative {className} flex items-center justify-center">
       <div
         class="relative h-full w-[80%] rounded-[4px] border border-gray-200 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.1),0_1px_2px_rgba(0,0,0,0.06)] dark:border-gray-700 dark:bg-gray-100"
       >
-        <div class="absolute right-0 top-0 h-[20%] w-[30%]">
+        <div class="absolute top-0 right-0 h-[20%] w-[30%]">
           <svg viewBox="0 0 30 20" class="h-full w-full">
             <path
               d="M0,0 L0,20 L30,20 Z"
@@ -447,49 +474,78 @@
 
   {#snippet itemContextMenu(item: ResourceItem)}
     {#if item && item.name}
-      <ContextMenu.Content class="w-56">
-        <ContextMenu.Item onclick={() => handleRowClick(item)}>
-          <ExternalLink class="mr-2 h-4 w-4" />
+      <ContextMenu.Content class="w-64 text-[13px]">
+        <ContextMenu.Item class="h-8 py-0 focus:bg-[#007aff] focus:text-white" onclick={() => handleRowClick(item)}>
+          <ExternalLink class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>打开</span>
         </ContextMenu.Item>
-        <ContextMenu.Separator />
-        <ContextMenu.Item onclick={() => copyToClipboard(item.path)}>
-          <Link class="mr-2 h-4 w-4" />
+
+        <ContextMenu.Separator class="bg-black/5 dark:bg-white/10" />
+
+        <ContextMenu.Item
+          class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
+          onclick={() => copyToClipboard(item.path)}
+        >
+          <Link class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>复制 ODFI 路径</span>
         </ContextMenu.Item>
-        <ContextMenu.Item onclick={() => copyToClipboard(item.name)}>
-          <Copy class="mr-2 h-4 w-4" />
+
+        <ContextMenu.Item
+          class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
+          onclick={() => copyToClipboard(item.name)}
+        >
+          <Copy class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>复制名称</span>
         </ContextMenu.Item>
-        <ContextMenu.Separator />
+
         {#if item.type === 'file' || item.type === 'linkfile'}
-          <ContextMenu.Item onclick={() => handleDownload(item)}>
-            <Download class="mr-2 h-4 w-4" />
+          <ContextMenu.Item class="h-8 py-0 focus:bg-[#007aff] focus:text-white" onclick={() => handleDownload(item)}>
+            <Download class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
             <span>下载</span>
           </ContextMenu.Item>
         {/if}
-        <ContextMenu.Separator />
-        <ContextMenu.Item>
-          <Info class="mr-2 h-4 w-4" />
+
+        <ContextMenu.Separator class="bg-black/5 dark:bg-white/10" />
+
+        <ContextMenu.Item class="h-8 py-0 focus:bg-[#007aff] focus:text-white">
+          <Info class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>属性</span>
         </ContextMenu.Item>
+
+        <ContextMenu.Separator class="bg-black/5 dark:bg-white/10" />
+
+        <!-- macOS Style Tags Row -->
+        <div class="flex items-center justify-between px-3 py-2">
+          <div class="flex w-full justify-between px-1">
+            {#each [{ color: '#ff5f57', label: '红色' }, { color: '#febc2e', label: '橙色' }, { color: '#fedd34', label: '黄色' }, { color: '#28c840', label: '绿色' }, { color: '#4a90e2', label: '蓝色' }, { color: '#a370f7', label: '紫色' }, { color: '#8e8e93', label: '灰色' }] as tag}
+              <button
+                class="h-[18px] w-[18px] rounded-full ring-1 ring-black/5 transition-transform hover:scale-110 active:scale-90 dark:ring-white/10"
+                style="background-color: {tag.color}"
+                title={tag.label}
+              ></button>
+            {/each}
+          </div>
+        </div>
       </ContextMenu.Content>
     {/if}
   {/snippet}
 
   {#snippet containerContextMenu()}
-    <ContextMenu.Content class="w-56">
-      <ContextMenu.Item onclick={() => loadResources(currentOdfiStr)}>
-        <RefreshCw class="mr-2 h-4 w-4" />
+    <ContextMenu.Content class="w-48 text-[13px]">
+      <ContextMenu.Item
+        class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
+        onclick={() => loadResources(currentOdfiStr)}
+      >
+        <RefreshCw class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
         <span>刷新</span>
       </ContextMenu.Item>
     </ContextMenu.Content>
   {/snippet}
 
   <!-- Main Content -->
-  <div class="bg-background flex flex-1 flex-col overflow-hidden">
+  <div class="flex flex-1 flex-col overflow-hidden bg-background">
     <!-- Toolbar -->
-    <div class="border-border/40 flex items-center space-x-2 border-b p-4 dark:border-gray-700/50">
+    <div class="flex items-center space-x-2 border-b border-border/40 p-4 dark:border-gray-700/50">
       <Button variant="ghost" size="icon" onclick={goUp} disabled={loading}>
         <ArrowLeft class="h-4 w-4" />
       </Button>
@@ -497,7 +553,7 @@
         <RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
       </Button>
       <div
-        class="border-border/40 bg-muted/50 focus-within:ring-ring flex flex-1 items-center rounded-md border px-3 py-1.5 focus-within:ring-1 dark:border-gray-700/50"
+        class="flex flex-1 items-center rounded-md border border-border/40 bg-muted/50 px-3 py-1.5 focus-within:ring-1 focus-within:ring-ring dark:border-gray-700/50"
       >
         <input
           class="w-full flex-1 border-none bg-transparent font-mono text-sm outline-none"
@@ -506,7 +562,7 @@
         />
       </div>
 
-      <div class="border-border/40 flex items-center rounded-md border p-0.5 dark:border-gray-700/50">
+      <div class="flex items-center rounded-md border border-border/40 p-0.5 dark:border-gray-700/50">
         <Button
           variant="ghost"
           size="icon"
@@ -547,7 +603,7 @@
           <div {...props} class="flex-1 overflow-auto p-4">
             {#if error}
               <div class="mx-auto w-full max-w-5xl py-12">
-                <div class="border-border bg-card rounded-lg border p-10 md:p-14">
+                <div class="rounded-lg border border-border bg-card p-10 md:p-14">
                   <div class="flex flex-col items-center gap-10 md:flex-row md:items-start md:gap-14">
                     <!-- Illustration -->
                     <div class="shrink-0">
@@ -558,38 +614,38 @@
                     <!-- Content -->
                     <div class="w-full flex-1 space-y-6 text-left">
                       <div>
-                        <h3 class="text-foreground text-2xl font-semibold">资源列举失败</h3>
-                        <p class="text-muted-foreground mt-2">在访问指定的 ODFI 路径时发生了错误。</p>
+                        <h3 class="text-2xl font-semibold text-foreground">资源列举失败</h3>
+                        <p class="mt-2 text-muted-foreground">在访问指定的 ODFI 路径时发生了错误。</p>
                       </div>
 
                       <!-- Error Details Box -->
-                      <div class="border-border bg-background rounded-md border text-sm">
-                        <details class="border-border group last:border-0" open>
+                      <div class="rounded-md border border-border bg-background text-sm">
+                        <details class="group border-border last:border-0" open>
                           <summary
-                            class="hover:bg-muted/50 flex cursor-pointer select-none items-center justify-between p-4 font-medium"
+                            class="flex cursor-pointer items-center justify-between p-4 font-medium select-none hover:bg-muted/50"
                           >
                             <span>错误详情</span>
                             <ChevronDown
-                              class="text-muted-foreground h-4 w-4 transition-transform duration-200 group-open:rotate-180"
+                              class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
                             />
                           </summary>
-                          <div class="text-muted-foreground px-4 pb-4 pt-0">
-                            <p class="bg-muted break-all rounded p-3 font-mono text-xs leading-relaxed">
+                          <div class="px-4 pt-0 pb-4 text-muted-foreground">
+                            <p class="rounded bg-muted p-3 font-mono text-xs leading-relaxed break-all">
                               {error}
                             </p>
                           </div>
                         </details>
 
-                        <details class="border-border group border-t last:border-0">
+                        <details class="group border-t border-border last:border-0">
                           <summary
-                            class="hover:bg-muted/50 flex cursor-pointer select-none items-center justify-between p-4 font-medium"
+                            class="flex cursor-pointer items-center justify-between p-4 font-medium select-none hover:bg-muted/50"
                           >
                             <span>排查建议</span>
                             <ChevronDown
-                              class="text-muted-foreground h-4 w-4 transition-transform duration-200 group-open:rotate-180"
+                              class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
                             />
                           </summary>
-                          <div class="text-muted-foreground space-y-2 px-4 pb-4 pt-0">
+                          <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
                             <ul class="ml-2 list-inside list-disc space-y-1">
                               <li>检查 ODFI 语法是否正确</li>
                               <li>确保远程代理 (Agent) 处于在线状态</li>
@@ -600,7 +656,7 @@
                         </details>
 
                         <!-- Retry action -->
-                        <div class="border-border border-t p-4">
+                        <div class="border-t border-border p-4">
                           <Button
                             variant="default"
                             size="sm"
@@ -617,62 +673,62 @@
                 </div>
               </div>
             {:else}
-              <div class="border-border/40 rounded-md border dark:border-gray-700/50">
+              <div class="rounded-md border border-border/40 dark:border-gray-700/50">
                 {#if viewMode === 'table'}
                   <table class="w-full text-sm">
-                    <thead class="bg-muted/40 block w-full">
+                    <thead class="block w-full bg-muted/40">
                       <tr class="flex w-full">
                         <th
-                          class="text-muted-foreground flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle font-medium"
+                          class="flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle font-medium text-muted-foreground"
                         ></th>
                         <th
-                          class="text-muted-foreground flex h-10 flex-1 items-center px-4 text-left align-middle font-medium"
+                          class="flex h-10 flex-1 items-center px-4 text-left align-middle font-medium text-muted-foreground"
                           >Name</th
                         >
                         <th
-                          class="text-muted-foreground flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle font-medium"
+                          class="flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle font-medium text-muted-foreground"
                           >Size</th
                         >
                         <th
-                          class="text-muted-foreground flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle font-medium"
+                          class="flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle font-medium text-muted-foreground"
                           >Modified</th
                         >
                       </tr>
                     </thead>
                     <tbody class="block max-h-[calc(100vh-16rem)] w-full overflow-y-auto">
                       {#if displayedItems.length === 0 && !loading}
-                        <tr class="border-border/40 flex w-full border-t dark:border-gray-700/50">
-                          <td class="text-muted-foreground w-full p-8 text-center"> This directory is empty. </td>
+                        <tr class="flex w-full border-t border-border/40 dark:border-gray-700/50">
+                          <td class="w-full p-8 text-center text-muted-foreground"> This directory is empty. </td>
                         </tr>
                       {/if}
                       {#each displayedItems as item}
                         <ContextMenu.Root>
                           <ContextMenu.Trigger
-                            class="border-border/40 hover:bg-muted/50 flex w-full cursor-pointer border-t dark:border-gray-700/50"
+                            class="flex w-full cursor-pointer border-t border-border/40 hover:bg-muted/50 dark:border-gray-700/50"
                           >
                             {#snippet child({ props })}
                               <tr {...props} onclick={() => handleRowClick(item)}>
                                 <td class="flex w-12 flex-shrink-0 items-center justify-center p-2">
                                   {#if item.type === 'dir'}
-                                    {@render macOSFolder('h-6 w-6', !!item.has_children, getFolderIcon(item.name))}
+                                    {@render macOSFolder('h-5 w-5', !!item.has_children)}
                                   {:else if item.type === 'linkdir'}
-                                    {@render macOSFolder('h-6 w-6', !!item.has_children, Link)}
+                                    {@render macOSFolder('h-5 w-5', !!item.has_children, Link)}
                                   {:else if item.type === 'linkfile'}
-                                    {@render macOSFile('h-6 w-6', Link)}
+                                    {@render macOSFile('h-5 w-5', Link)}
                                   {:else}
-                                    {@render macOSFile('h-6 w-6')}
+                                    {@render macOSFile('h-5 w-5')}
                                   {/if}
                                 </td>
                                 <td class="flex flex-1 items-center truncate p-2 font-medium">
                                   {item.name}
                                 </td>
                                 <td
-                                  class="text-muted-foreground flex w-24 flex-shrink-0 items-center justify-end p-2 font-mono text-xs"
+                                  class="flex w-24 flex-shrink-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
                                 >
                                   {formatSize(item.size)}
                                 </td>
                                 <td
-                                  class="text-muted-foreground flex w-40 flex-shrink-0 items-center justify-end p-2 font-mono text-xs"
+                                  class="flex w-40 flex-shrink-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
                                 >
                                   {#if item.modified}
                                     {new Date(item.modified * 1000).toLocaleString()}
@@ -690,7 +746,7 @@
                   <!-- Grid View (Auto-fill) -->
                   <div class="grid gap-2 p-2" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));">
                     {#if displayedItems.length === 0 && !loading}
-                      <div class="text-muted-foreground col-span-full p-8 text-center">This directory is empty.</div>
+                      <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
                     {/if}
                     {#each displayedItems as item}
                       <ContextMenu.Root>
@@ -698,27 +754,38 @@
                           {#snippet child({ props })}
                             <button
                               {...props}
-                              class="hover:bg-muted/30 group flex flex-col items-center gap-2 rounded-lg border border-transparent p-2 transition-all hover:shadow-sm"
+                              class="group flex flex-col items-center gap-1 rounded-lg border border-transparent p-2 transition-all hover:bg-muted/30 hover:shadow-sm"
                               onclick={() => handleRowClick(item)}
                             >
                               <div
-                                class="flex h-24 w-24 items-center justify-center transition-transform group-hover:scale-105"
+                                class="flex h-[72px] w-20 items-end justify-center transition-transform group-hover:scale-105"
                               >
                                 {#if item.type === 'dir'}
-                                  {@render macOSFolder('h-20 w-20', !!item.has_children, getFolderIcon(item.name))}
+                                  {@render macOSFolder('h-16 w-16', !!item.has_children)}
                                 {:else if item.type === 'linkdir'}
-                                  {@render macOSFolder('h-20 w-20', !!item.has_children, Link)}
+                                  {@render macOSFolder('h-16 w-16', !!item.has_children, Link)}
                                 {:else if item.type === 'linkfile'}
-                                  {@render macOSFile('h-20 w-20', Link)}
+                                  {@render macOSFile('h-16 w-16', Link)}
                                 {:else}
-                                  {@render macOSFile('h-20 w-20')}
+                                  {@render macOSFile('h-16 w-16')}
                                 {/if}
                               </div>
-                              <span class="w-full truncate text-center text-xs font-medium" title={item.name}>
-                                {item.name}
+                              <span
+                                class="line-clamp-2 min-h-[2.2em] w-full text-center text-[10.5px] leading-[1.1] font-medium [overflow-wrap:anywhere] [word-break:normal]"
+                                title={item.name}
+                              >
+                                {truncateMiddle(item.name, 28, 9).replace(/(.)([_-])/g, '$1\u200B$2')}
                               </span>
-                              {#if item.size}
-                                <span class="text-muted-foreground text-[10px]">
+                              {#if item.type === 'dir' || item.type === 'linkdir'}
+                                {@const count =
+                                  (showHidden
+                                    ? item.child_count
+                                    : (item.child_count ?? 0) - (item.hidden_child_count ?? 0)) ?? 0}
+                                <span class="text-[10px] font-medium text-blue-500/80">
+                                  {count === 0 ? '无项目' : `${count} 个项目`}
+                                </span>
+                              {:else if item.size}
+                                <span class="text-[10px] font-medium text-blue-500/80">
                                   {formatSize(item.size)}
                                 </span>
                               {/if}

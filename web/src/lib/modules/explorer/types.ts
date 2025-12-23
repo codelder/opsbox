@@ -18,6 +18,8 @@ export interface ResourceItem {
   size?: number | null;
   modified?: number | null;
   has_children?: boolean | null;
+  child_count?: number | null;
+  hidden_child_count?: number | null;
 }
 
 export interface ResourceListRequest {
