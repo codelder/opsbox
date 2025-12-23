@@ -75,6 +75,8 @@ impl ExplorerService {
           size: meta.size,
           modified: None, // Archives often store mtime but EntryMeta might not expose it yet? opsbox-core EntryMeta has no mtime.
           has_children: if meta.path.ends_with('/') { Some(true) } else { None }, // Assume dirs in archives are non-empty for now
+          child_count: None,
+          hidden_child_count: None,
         });
       }
 
@@ -158,15 +160,24 @@ impl ExplorerService {
         None,
       );
 
-      let has_children = if r_type == ResourceType::Dir || r_type == ResourceType::LinkDir {
-        if let Ok(mut d) = tokio::fs::read_dir(entry.path()).await {
-          d.next_entry().await.ok().flatten().is_some()
+      let (has_children, child_count, hidden_child_count) =
+        if r_type == ResourceType::Dir || r_type == ResourceType::LinkDir {
+          if let Ok(mut d) = tokio::fs::read_dir(entry.path()).await {
+            let mut count = 0;
+            let mut hidden = 0;
+            while let Ok(Some(e)) = d.next_entry().await {
+              count += 1;
+              if e.file_name().to_string_lossy().starts_with('.') {
+                hidden += 1;
+              }
+            }
+            (count > 0, Some(count), Some(hidden))
+          } else {
+            (false, Some(0), Some(0))
+          }
         } else {
-          false
-        }
-      } else {
-        false
-      };
+          (false, None, None)
+        };
 
       items.push(ResourceItem {
         name,
@@ -183,6 +194,8 @@ impl ExplorerService {
           .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
           .map(|d| d.as_secs() as i64),
         has_children: Some(has_children),
+        child_count,
+        hidden_child_count,
       });
     }
 
@@ -233,6 +246,8 @@ impl ExplorerService {
               size: None,
               modified: Some(a.last_heartbeat),
               has_children: Some(true), // Agents presumably have files
+              child_count: None,
+              hidden_child_count: None,
             }
           })
           .collect();
@@ -306,6 +321,8 @@ impl ExplorerService {
           size: item.size,
           modified: item.modified,
           has_children: if item.is_dir { Some(true) } else { None },
+          child_count: None,
+          hidden_child_count: None,
         }
       })
       .collect();
@@ -337,6 +354,8 @@ impl ExplorerService {
             size: None,
             modified: None,
             has_children: Some(true),
+            child_count: None,
+            hidden_child_count: None,
           }
         })
         .collect();
@@ -408,6 +427,8 @@ impl ExplorerService {
               size: None,
               modified: None,
               has_children: Some(true),
+              child_count: None,
+              hidden_child_count: None,
             });
           }
         }
@@ -449,6 +470,8 @@ impl ExplorerService {
               size: obj.size.map(|s| s as u64),
               modified: obj.last_modified.map(|d| d.secs()),
               has_children: None,
+              child_count: None,
+              hidden_child_count: None,
             });
           }
         }
@@ -482,6 +505,8 @@ impl ExplorerService {
             size: None,
             modified: b.creation_date.map(|d| d.secs()),
             has_children: Some(true),
+            child_count: None,
+            hidden_child_count: None,
           }
         })
         .collect();

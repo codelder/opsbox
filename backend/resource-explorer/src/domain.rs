@@ -17,4 +17,6 @@ pub struct ResourceItem {
   pub size: Option<u64>,
   pub modified: Option<i64>, // Unix timestamp
   pub has_children: Option<bool>,
+  pub child_count: Option<u64>,
+  pub hidden_child_count: Option<u64>,
 }
