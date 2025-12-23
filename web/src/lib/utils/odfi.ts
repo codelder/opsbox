@@ -138,7 +138,7 @@ export function stringifyOdfi(parts: {
     url.searchParams.set('entry', parts.entryPath);
   }
 
-  return decodeURIComponent(url.toString());
+  return url.toString();
 }
 
 export function getDisplayName(path: string, entryPath?: string): string {

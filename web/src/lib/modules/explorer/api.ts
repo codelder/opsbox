@@ -13,8 +13,14 @@ export async function listResources(odfi: string): Promise<ResourceItem[]> {
   });
 
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Failed to list resources: ${err}`);
+    let message = 'Unknown error';
+    try {
+      const errJson = await res.json();
+      message = errJson.detail || errJson.title || JSON.stringify(errJson);
+    } catch {
+      message = await res.text();
+    }
+    throw new Error(message);
   }
 
   const json = await res.json();

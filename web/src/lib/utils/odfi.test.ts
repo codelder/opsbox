@@ -132,5 +132,15 @@ describe('odfi', () => {
         })
       ).toBe('odfi://s3/my-bucket/logs/error.log');
     });
+
+    it('encodes spaces in path when stringifying', () => {
+      expect(
+        stringifyOdfi({
+          endpointId: 'localhost',
+          endpointType: 'local',
+          path: 'var/log/my log.txt'
+        })
+      ).toBe('odfi://local/var/log/my%20log.txt');
+    });
   });
 });

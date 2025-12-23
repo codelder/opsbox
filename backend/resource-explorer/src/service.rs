@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use crate::domain::{ResourceItem, ResourceType};
 use opsbox_core::SqlitePool;
 use opsbox_core::odfi::{EndpointType, Odfi, TargetType};
+use opsbox_core::storage::s3::format_s3_error;
 
 pub struct ExplorerService {
   db_pool: SqlitePool,
@@ -73,18 +74,21 @@ impl ExplorerService {
           },
           size: meta.size,
           modified: None, // Archives often store mtime but EntryMeta might not expose it yet? opsbox-core EntryMeta has no mtime.
+          has_children: if meta.path.ends_with('/') { Some(true) } else { None }, // Assume dirs in archives are non-empty for now
         });
       }
 
       // Sort items
       items.sort_by(|a, b| {
-        if a.r#type == b.r#type {
+        let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
+        let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
+
+        if a_is_dir == b_is_dir {
           a.name.cmp(&b.name)
+        } else if a_is_dir {
+          std::cmp::Ordering::Less
         } else {
-          match a.r#type {
-            ResourceType::Dir => std::cmp::Ordering::Less,
-            ResourceType::File => std::cmp::Ordering::Greater,
-          }
+          std::cmp::Ordering::Greater
         }
       });
 
@@ -100,13 +104,35 @@ impl ExplorerService {
     let mut items = Vec::new();
 
     while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-      let meta = entry.metadata().await.map_err(|e| e.to_string())?;
-      let file_type = meta.file_type();
-
-      let r_type = if file_type.is_dir() {
-        ResourceType::Dir
+      let entry_type = entry.file_type().await.map_err(|e| e.to_string())?;
+      let (r_type, meta) = if entry_type.is_symlink() {
+        // For symlinks, entry.metadata() should follow the link, but let's be explicit
+        let path = entry.path();
+        match tokio::fs::metadata(&path).await {
+          Ok(target_meta) => {
+            let t = if target_meta.is_dir() {
+              ResourceType::LinkDir
+            } else {
+              ResourceType::LinkFile
+            };
+            (t, target_meta)
+          }
+          Err(_) => {
+            // Broken link or restricted? Treat as link file
+            (
+              ResourceType::LinkFile,
+              entry.metadata().await.map_err(|e| e.to_string())?,
+            )
+          }
+        }
       } else {
-        ResourceType::File
+        let meta = entry.metadata().await.map_err(|e| e.to_string())?;
+        let t = if meta.is_dir() {
+          ResourceType::Dir
+        } else {
+          ResourceType::File
+        };
+        (t, meta)
       };
 
       let name = entry.file_name().to_string_lossy().to_string();
@@ -132,11 +158,21 @@ impl ExplorerService {
         None,
       );
 
+      let has_children = if r_type == ResourceType::Dir || r_type == ResourceType::LinkDir {
+        if let Ok(mut d) = tokio::fs::read_dir(entry.path()).await {
+          d.next_entry().await.ok().flatten().is_some()
+        } else {
+          false
+        }
+      } else {
+        false
+      };
+
       items.push(ResourceItem {
         name,
         path: child_odfi.to_string(),
         r#type: r_type,
-        size: if r_type == ResourceType::File {
+        size: if r_type == ResourceType::File || r_type == ResourceType::LinkFile {
           Some(meta.len())
         } else {
           None
@@ -146,18 +182,21 @@ impl ExplorerService {
           .ok()
           .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
           .map(|d| d.as_secs() as i64),
+        has_children: Some(has_children),
       });
     }
 
     // Sort: Directories first, then files
     items.sort_by(|a, b| {
-      if a.r#type == b.r#type {
+      let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
+      let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
+
+      if a_is_dir == b_is_dir {
         a.name.cmp(&b.name)
+      } else if a_is_dir {
+        std::cmp::Ordering::Less
       } else {
-        match a.r#type {
-          ResourceType::Dir => std::cmp::Ordering::Less,
-          ResourceType::File => std::cmp::Ordering::Greater,
-        }
+        std::cmp::Ordering::Greater
       }
     });
 
@@ -193,6 +232,7 @@ impl ExplorerService {
               r#type: ResourceType::Dir, // Treat agent as a directory
               size: None,
               modified: Some(a.last_heartbeat),
+              has_children: Some(true), // Agents presumably have files
             }
           })
           .collect();
@@ -265,6 +305,7 @@ impl ExplorerService {
           },
           size: item.size,
           modified: item.modified,
+          has_children: if item.is_dir { Some(true) } else { None },
         }
       })
       .collect();
@@ -295,6 +336,7 @@ impl ExplorerService {
             r#type: ResourceType::Dir,
             size: None,
             modified: None,
+            has_children: Some(true),
           }
         })
         .collect();
@@ -342,7 +384,7 @@ impl ExplorerService {
         .delimiter("/")
         .send()
         .await
-        .map_err(|e| format!("S3 ListObjects failed: {}", e))?;
+        .map_err(|e| format!("S3 ListObjects failed: {}", format_s3_error(&e)))?;
 
       let mut items = Vec::new();
 
@@ -365,6 +407,7 @@ impl ExplorerService {
               r#type: ResourceType::Dir,
               size: None,
               modified: None,
+              has_children: Some(true),
             });
           }
         }
@@ -405,6 +448,7 @@ impl ExplorerService {
               r#type: ResourceType::File,
               size: obj.size.map(|s| s as u64),
               modified: obj.last_modified.map(|d| d.secs()),
+              has_children: None,
             });
           }
         }
@@ -416,7 +460,7 @@ impl ExplorerService {
         .list_buckets()
         .send()
         .await
-        .map_err(|e| format!("S3 ListBuckets failed: {}", e))?;
+        .map_err(|e| format!("S3 ListBuckets failed: {}", format_s3_error(&e)))?;
 
       let items = resp
         .buckets
@@ -437,6 +481,7 @@ impl ExplorerService {
             r#type: ResourceType::Dir,
             size: None,
             modified: b.creation_date.map(|d| d.secs()),
+            has_children: Some(true),
           }
         })
         .collect();

@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 pub enum ResourceType {
   File,
   Dir,
+  LinkFile,
+  LinkDir,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14,4 +16,5 @@ pub struct ResourceItem {
   pub r#type: ResourceType,
   pub size: Option<u64>,
   pub modified: Option<i64>, // Unix timestamp
+  pub has_children: Option<bool>,
 }
