@@ -113,14 +113,36 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
 }
 
 /// 格式化 AWS SDK 错误，提取详细的错误信息
-fn format_s3_error<E: std::fmt::Display + std::fmt::Debug>(err: &SdkError<E>) -> String {
+pub fn format_s3_error<E: std::fmt::Display + std::fmt::Debug + aws_sdk_s3::error::ProvideErrorMetadata>(
+  err: &SdkError<E>,
+) -> String {
+  use aws_sdk_s3::error::ProvideErrorMetadata;
+  use aws_sdk_s3::operation::RequestId;
   let mut parts = Vec::new();
 
-  // 提取错误消息（基本消息）
-  let message = err.to_string();
-  if !message.is_empty() {
+  // 尝试从错误元数据中提取代码和消息
+  if let Some(code) = err.code() {
+    parts.push(format!("code={}", code));
+  }
+  let err_message = err.message();
+  if let Some(message) = err_message {
     parts.push(format!("message={}", message));
   }
+
+  // 如果没有从元数据中提取到消息，则使用 to_string()
+  if parts.is_empty() {
+    let message = err.to_string();
+    if !message.is_empty() && message != "service error" {
+      parts.push(format!("message={}", message));
+    }
+  }
+
+  // 提取请求 ID（如果有）
+  if let Some(req_id) = err.request_id() {
+    parts.push(format!("request_id={}", req_id));
+  }
+
+  let message_for_compare = err_message.unwrap_or("");
 
   // 尝试从错误类型中提取更多信息
   match err {
@@ -128,7 +150,7 @@ fn format_s3_error<E: std::fmt::Display + std::fmt::Debug>(err: &SdkError<E>) ->
       // 服务错误：尝试提取错误类型
       let err_kind = service_err.err();
       let err_kind_str = format!("{:?}", err_kind);
-      if !err_kind_str.is_empty() && err_kind_str != message {
+      if !err_kind_str.is_empty() && err_kind_str != message_for_compare {
         parts.push(format!("kind={}", err_kind_str));
       }
 
@@ -152,7 +174,7 @@ fn format_s3_error<E: std::fmt::Display + std::fmt::Debug>(err: &SdkError<E>) ->
     _ => {
       // 对于其他类型的错误，使用Debug格式
       let debug_str = format!("{:?}", err);
-      if debug_str != message && !debug_str.is_empty() {
+      if debug_str != message_for_compare && !debug_str.is_empty() {
         parts.push(format!("debug={}", debug_str));
       }
     }

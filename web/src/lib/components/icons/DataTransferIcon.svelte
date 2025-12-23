@@ -30,8 +30,8 @@
     files: TargetFilesIcon
   };
 
-  const SourceCmp = sourceIcons[source];
-  const TargetCmp = targetIcons[target];
+  const SourceCmp = $derived(sourceIcons[source]);
+  const TargetCmp = $derived(targetIcons[target]);
 </script>
 
 <div class="inline-flex items-center gap-1.5 {className}" style="font-size: {size}px;">

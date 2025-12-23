@@ -3182,6 +3182,7 @@ dependencies = [
  "inventory",
  "libsqlite3-sys",
  "once_cell",
+ "percent-encoding",
  "problemdetails",
  "regex",
  "reqwest",

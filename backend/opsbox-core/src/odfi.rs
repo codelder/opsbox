@@ -207,7 +207,10 @@ impl FromStr for Odfi {
     }
 
     // Parse path and handle S3 bucket
-    let mut path = url.path().trim_start_matches('/').to_string();
+    let path_encoded = url.path().trim_start_matches('/');
+    let mut path = percent_encoding::percent_decode_str(path_encoded)
+      .decode_utf8_lossy()
+      .into_owned();
 
     if endpoint_type == EndpointType::S3 {
       if let Some((bucket, rest)) = path.split_once('/') {
@@ -322,5 +325,13 @@ mod tests {
     assert_eq!(url.path, "var/log/syslog");
     assert_eq!(url.entry_path.as_deref(), Some("internal.log"));
     assert_eq!(url.target_type, TargetType::Archive);
+  }
+
+  #[test]
+  fn test_parse_encoded_path() {
+    let s = "odfi://local/path%20with%20spaces/file.log";
+    let url = Odfi::from_str(s).unwrap();
+    assert_eq!(url.endpoint_type, EndpointType::Local);
+    assert_eq!(url.path, "path with spaces/file.log");
   }
 }

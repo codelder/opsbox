@@ -9,7 +9,7 @@ export interface Odfi {
   filter_glob?: string;
 }
 
-export type ResourceType = 'file' | 'dir';
+export type ResourceType = 'file' | 'dir' | 'linkfile' | 'linkdir';
 
 export interface ResourceItem {
   name: string;
@@ -17,6 +17,7 @@ export interface ResourceItem {
   type: ResourceType;
   size?: number | null;
   modified?: number | null;
+  has_children?: boolean | null;
 }
 
 export interface ResourceListRequest {
