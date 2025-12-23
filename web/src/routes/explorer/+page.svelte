@@ -178,12 +178,18 @@
     loadResources(newOdfi);
   }
 
+  let selectedItem: ResourceItem | null = $state(null);
+
   function handleRowClick(item: ResourceItem) {
+    selectedItem = item;
+  }
+
+  function handleRowDoubleClick(item: ResourceItem) {
     if (item.type === 'dir' || item.type === 'linkdir') {
       handleNavigate(item.path);
     } else {
       // Default action for files could be preview or download
-      console.log('File clicked:', item.path);
+      console.log('File double-clicked:', item.path);
     }
   }
 
@@ -245,6 +251,41 @@
       i++;
     }
     return `${bytes.toFixed(1)} ${units[i]}`;
+  }
+
+  const TEXT_EXTS = new Set([
+    'txt',
+    'log',
+    'md',
+    'json',
+    'yaml',
+    'yml',
+    'sh',
+    'bash',
+    'zsh',
+    'py',
+    'js',
+    'ts',
+    'rs',
+    'c',
+    'cpp',
+    'h',
+    'hpp',
+    'go',
+    'java',
+    'xml',
+    'html',
+    'css',
+    'sql',
+    'toml',
+    'gitconfig',
+    'env',
+    'config'
+  ]);
+
+  function isTextFile(name: string): boolean {
+    const ext = name.split('.').pop()?.toLowerCase();
+    return !!ext && TEXT_EXTS.has(ext);
   }
 
   function truncateMiddle(str: string, maxVisualWidth: number = 40, tailChars: number = 7): string {
@@ -319,9 +360,7 @@
                       : 'text-muted-foreground group-hover:text-foreground'}"
                   />
                 {:else}
-                  <div
-                    class="mr-2 h-1.5 w-1.5 flex-shrink-0 rounded-full {item.colorClass || 'bg-muted-foreground'}"
-                  ></div>
+                  <div class="mr-2 h-1.5 w-1.5 flex-0 rounded-full {item.colorClass || 'bg-muted-foreground'}"></div>
                 {/if}
                 <span class="truncate">{item.label || item.name}</span>
               </button>
@@ -446,28 +485,75 @@
     </div>
   {/snippet}
 
-  {#snippet macOSFile(className = 'h-16 w-16', icon: any = null)}
+  {#snippet macOSFile(className = 'h-16 w-16', icon: any = null, isText: boolean = false)}
     <div class="relative {className} flex items-center justify-center">
-      <div
-        class="relative h-full w-[80%] rounded-[4px] border border-gray-200 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.1),0_1px_2px_rgba(0,0,0,0.06)] dark:border-gray-700 dark:bg-gray-100"
-      >
-        <div class="absolute top-0 right-0 h-[20%] w-[30%]">
-          <svg viewBox="0 0 30 20" class="h-full w-full">
-            <path
-              d="M0,0 L0,20 L30,20 Z"
-              fill="white"
-              stroke="#e5e7eb"
-              stroke-width="0.5"
-              class="dark:fill-gray-100 dark:stroke-gray-300"
-            />
-          </svg>
+      <div class="relative h-full w-[76%]">
+        <!-- Unified SVG for perfect alignment and realistic shadows -->
+        <svg viewBox="0 0 82 100" class="h-full w-full drop-shadow-[0_1px_1.5px_rgba(0,0,0,0.12)]">
+          <defs>
+            <linearGradient id="flapGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#ffffff" />
+              <stop offset="40%" stop-color="#f3f4f6" />
+              <stop offset="100%" stop-color="#d1d5db" />
+            </linearGradient>
+            <linearGradient id="bodyGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#ffffff" />
+              <stop offset="100%" stop-color="#f8fafc" />
+            </linearGradient>
+            <!-- Shadow cast by the fold -->
+            <filter id="softShadow" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="2" />
+              <feOffset dx="-2" dy="2" result="offsetblur" />
+              <feComponentTransfer>
+                <feFuncA type="linear" slope="0.4" />
+              </feComponentTransfer>
+              <feMerge>
+                <feMergeNode />
+              </feMerge>
+            </filter>
+          </defs>
+          <!-- Page Body -->
+          <path
+            d="M0,2 Q0,0 2,0 L58,0 L82,24 L82,98 Q82,100 80,100 L2,100 Q0,100 0,98 Z"
+            fill="url(#bodyGrad)"
+            stroke="#cbd5e1"
+            stroke-width="0.5"
+            class="dark:fill-gray-100 dark:stroke-gray-500"
+          />
+
+          <!-- Crease Shadow (Cast on body) -->
+          <path d="M58,0 L82,24 L58,24 Z" fill="black" filter="url(#softShadow)" />
+
+          <!-- The Fold (Flap) -->
+          <path
+            d="M58,0 L58,22 Q58,24 60,24 L82,24 Z"
+            fill="url(#flapGrad)"
+            stroke="#cbd5e1"
+            stroke-width="0.4"
+            class="dark:fill-gray-200 dark:stroke-gray-400"
+          />
+        </svg>
+
+        <!-- Overlays (Text/Icon) -->
+        <div class="absolute inset-0">
+          {#if isText}
+            <div class="flex h-full w-full flex-col gap-[3px] p-[18%] pt-[38%] opacity-[0.25] dark:opacity-[0.35]">
+              <div class="h-[1.5px] w-full bg-black/60"></div>
+              <div class="h-[1.5px] w-[90%] bg-black/60"></div>
+              <div class="h-[1.5px] w-full bg-black/60"></div>
+              <div class="h-[1.5px] w-[80%] bg-black/60"></div>
+              <div class="h-[1.5px] w-full bg-black/60"></div>
+              <div class="h-[1.5px] w-[95%] bg-black/60"></div>
+              <div class="h-[1.5px] w-full bg-black/60"></div>
+              <div class="h-[1.5px] w-[70%] bg-black/60"></div>
+            </div>
+          {:else if icon}
+            {@const IconComp = icon}
+            <div class="absolute inset-0 flex items-center justify-center opacity-20 dark:opacity-40">
+              <IconComp class={className.includes('h-6') ? 'h-3 w-3' : 'h-10 w-10'} />
+            </div>
+          {/if}
         </div>
-        {#if icon}
-          {@const IconComp = icon}
-          <div class="absolute inset-0 flex items-center justify-center opacity-20 dark:opacity-40">
-            <IconComp class={className.includes('h-6') ? 'h-3 w-3' : 'h-10 w-10'} />
-          </div>
-        {/if}
       </div>
     </div>
   {/snippet}
@@ -708,27 +794,27 @@
                           >
                             {#snippet child({ props })}
                               <tr {...props} onclick={() => handleRowClick(item)}>
-                                <td class="flex w-12 flex-shrink-0 items-center justify-center p-2">
+                                <td class="flex w-14 flex-0 items-center justify-center p-2">
                                   {#if item.type === 'dir'}
                                     {@render macOSFolder('h-5 w-5', !!item.has_children)}
                                   {:else if item.type === 'linkdir'}
                                     {@render macOSFolder('h-5 w-5', !!item.has_children, Link)}
                                   {:else if item.type === 'linkfile'}
-                                    {@render macOSFile('h-5 w-5', Link)}
+                                    {@render macOSFile('h-5 w-5', Link, isTextFile(item.name))}
                                   {:else}
-                                    {@render macOSFile('h-5 w-5')}
+                                    {@render macOSFile('h-5 w-5', null, isTextFile(item.name))}
                                   {/if}
                                 </td>
                                 <td class="flex flex-1 items-center truncate p-2 font-medium">
                                   {item.name}
                                 </td>
                                 <td
-                                  class="flex w-24 flex-shrink-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
+                                  class="flex w-24 flex-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
                                 >
                                   {formatSize(item.size)}
                                 </td>
                                 <td
-                                  class="flex w-40 flex-shrink-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
+                                  class="flex w-40 flex-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
                                 >
                                   {#if item.modified}
                                     {new Date(item.modified * 1000).toLocaleString()}
@@ -749,51 +835,70 @@
                       <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
                     {/if}
                     {#each displayedItems as item}
-                      <ContextMenu.Root>
-                        <ContextMenu.Trigger>
-                          {#snippet child({ props })}
-                            <button
-                              {...props}
-                              class="group flex flex-col items-center gap-1 rounded-lg border border-transparent p-2 transition-all hover:bg-muted/30 hover:shadow-sm"
-                              onclick={() => handleRowClick(item)}
-                            >
-                              <div
-                                class="flex h-[72px] w-20 items-end justify-center transition-transform group-hover:scale-105"
+                      <div class="flex flex-col items-center gap-0">
+                        <ContextMenu.Root>
+                          <ContextMenu.Trigger>
+                            {#snippet child({ props })}
+                              <button
+                                {...props}
+                                class="group/icon flex h-20 w-20 items-center justify-center rounded-xl transition-all hover:bg-black/5 active:bg-blue-500/20 dark:hover:bg-white/5 {selectedItem ===
+                                item
+                                  ? 'bg-black/10 dark:bg-white/10'
+                                  : ''}"
+                                onclick={() => handleRowClick(item)}
+                                ondblclick={() => handleRowDoubleClick(item)}
                               >
-                                {#if item.type === 'dir'}
-                                  {@render macOSFolder('h-16 w-16', !!item.has_children)}
-                                {:else if item.type === 'linkdir'}
-                                  {@render macOSFolder('h-16 w-16', !!item.has_children, Link)}
-                                {:else if item.type === 'linkfile'}
-                                  {@render macOSFile('h-16 w-16', Link)}
-                                {:else}
-                                  {@render macOSFile('h-16 w-16')}
+                                <div class="transition-transform group-hover/icon:scale-105">
+                                  {#if item.type === 'dir'}
+                                    {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children)}
+                                  {:else if item.type === 'linkdir'}
+                                    {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children, Link)}
+                                  {:else if item.type === 'linkfile'}
+                                    {@render macOSFile('h-[62px] w-[62px]', Link, isTextFile(item.name))}
+                                  {:else}
+                                    {@render macOSFile('h-[62px] w-[62px]', null, isTextFile(item.name))}
+                                  {/if}
+                                </div>
+                              </button>
+                            {/snippet}
+                          </ContextMenu.Trigger>
+                          {@render itemContextMenu(item)}
+                        </ContextMenu.Root>
+
+                        <ContextMenu.Root>
+                          <ContextMenu.Trigger>
+                            {#snippet child({ props })}
+                              <div {...props} class="flex flex-col items-center">
+                                <button
+                                  class="line-clamp-2 inline-block max-w-[124px] rounded-[3px] px-1.5 py-0.5 text-center text-[10.5px] leading-tight font-medium wrap-anywhere [word-break:normal] transition-colors {selectedItem ===
+                                  item
+                                    ? 'bg-[#0060df] text-white'
+                                    : 'hover:bg-blue-500 hover:text-white active:bg-blue-600'}"
+                                  onclick={() => handleRowClick(item)}
+                                  ondblclick={() => handleRowDoubleClick(item)}
+                                  title={item.name}
+                                >
+                                  {truncateMiddle(item.name, 28, 9).replace(/(.)([_-])/g, '$1\u200B$2')}
+                                </button>
+                                {#if (item.type === 'dir' || item.type === 'linkdir') && item.child_count != null}
+                                  {@const count =
+                                    (showHidden
+                                      ? (item.child_count ?? 0)
+                                      : (item.child_count ?? 0) - (item.hidden_child_count ?? 0)) ?? 0}
+                                  <span class="mt-0.5 text-[9.5px] font-medium text-muted-foreground/80">
+                                    {count === 0 ? '无项目' : `${count} 个项目`}
+                                  </span>
+                                {:else if item.size}
+                                  <span class="mt-0.5 text-[9.5px] font-medium text-muted-foreground/80">
+                                    {formatSize(item.size)}
+                                  </span>
                                 {/if}
                               </div>
-                              <span
-                                class="line-clamp-2 min-h-[2.2em] w-full text-center text-[10.5px] leading-[1.1] font-medium [overflow-wrap:anywhere] [word-break:normal]"
-                                title={item.name}
-                              >
-                                {truncateMiddle(item.name, 28, 9).replace(/(.)([_-])/g, '$1\u200B$2')}
-                              </span>
-                              {#if item.type === 'dir' || item.type === 'linkdir'}
-                                {@const count =
-                                  (showHidden
-                                    ? item.child_count
-                                    : (item.child_count ?? 0) - (item.hidden_child_count ?? 0)) ?? 0}
-                                <span class="text-[10px] font-medium text-blue-500/80">
-                                  {count === 0 ? '无项目' : `${count} 个项目`}
-                                </span>
-                              {:else if item.size}
-                                <span class="text-[10px] font-medium text-blue-500/80">
-                                  {formatSize(item.size)}
-                                </span>
-                              {/if}
-                            </button>
-                          {/snippet}
-                        </ContextMenu.Trigger>
-                        {@render itemContextMenu(item)}
-                      </ContextMenu.Root>
+                            {/snippet}
+                          </ContextMenu.Trigger>
+                          {@render itemContextMenu(item)}
+                        </ContextMenu.Root>
+                      </div>
                     {/each}
                   </div>
                 {/if}

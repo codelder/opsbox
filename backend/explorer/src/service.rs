@@ -102,53 +102,25 @@ impl ExplorerService {
       return Err(format!("Path does not exist: {}", path_str));
     }
 
-    let mut entries = tokio::fs::read_dir(&path).await.map_err(|e| e.to_string())?;
     let mut items = Vec::new();
 
-    while let Some(entry) = entries.next_entry().await.map_err(|e| e.to_string())? {
-      let entry_type = entry.file_type().await.map_err(|e| e.to_string())?;
-      let (r_type, meta) = if entry_type.is_symlink() {
-        // For symlinks, entry.metadata() should follow the link, but let's be explicit
-        let path = entry.path();
-        match tokio::fs::metadata(&path).await {
-          Ok(target_meta) => {
-            let t = if target_meta.is_dir() {
-              ResourceType::LinkDir
-            } else {
-              ResourceType::LinkFile
-            };
-            (t, target_meta)
-          }
-          Err(_) => {
-            // Broken link or restricted? Treat as link file
-            (
-              ResourceType::LinkFile,
-              entry.metadata().await.map_err(|e| e.to_string())?,
-            )
-          }
-        }
-      } else {
-        let meta = entry.metadata().await.map_err(|e| e.to_string())?;
-        let t = if meta.is_dir() {
-          ResourceType::Dir
-        } else {
-          ResourceType::File
-        };
-        (t, meta)
+    let list_items = opsbox_core::fs::list_directory(&path)
+      .await
+      .map_err(|e| e.to_string())?;
+
+    for item in list_items {
+      let r_type = match (item.is_dir, item.is_symlink) {
+        (true, true) => ResourceType::LinkDir,
+        (true, false) => ResourceType::Dir,
+        (false, true) => ResourceType::LinkFile,
+        (false, false) => ResourceType::File,
       };
-
-      let name = entry.file_name().to_string_lossy().to_string();
-
-      // Construct child ODFI? Or just return name?
-      // Frontend might need full path to navigate.
-      // Let's return the full ODFI path string for the item.
-      // Actually, `path` field in ResourceItem should be the ODFI string.
 
       // Construct child path
       let child_path = if path_str == "/" {
-        name.to_string()
+        item.name.to_string()
       } else {
-        format!("{}/{}", odfi.path.trim_start_matches('/'), name)
+        format!("{}/{}", odfi.path.trim_start_matches('/'), item.name)
       };
 
       // Reconstruct ODFI for the child
@@ -160,58 +132,17 @@ impl ExplorerService {
         None,
       );
 
-      let (has_children, child_count, hidden_child_count) =
-        if r_type == ResourceType::Dir || r_type == ResourceType::LinkDir {
-          if let Ok(mut d) = tokio::fs::read_dir(entry.path()).await {
-            let mut count = 0;
-            let mut hidden = 0;
-            while let Ok(Some(e)) = d.next_entry().await {
-              count += 1;
-              if e.file_name().to_string_lossy().starts_with('.') {
-                hidden += 1;
-              }
-            }
-            (count > 0, Some(count), Some(hidden))
-          } else {
-            (false, Some(0), Some(0))
-          }
-        } else {
-          (false, None, None)
-        };
-
       items.push(ResourceItem {
-        name,
+        name: item.name,
         path: child_odfi.to_string(),
         r#type: r_type,
-        size: if r_type == ResourceType::File || r_type == ResourceType::LinkFile {
-          Some(meta.len())
-        } else {
-          None
-        },
-        modified: meta
-          .modified()
-          .ok()
-          .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-          .map(|d| d.as_secs() as i64),
-        has_children: Some(has_children),
-        child_count,
-        hidden_child_count,
+        size: item.size,
+        modified: item.modified,
+        has_children: Some(item.is_dir && item.child_count.unwrap_or(0) > 0),
+        child_count: item.child_count.map(|c| c as u64),
+        hidden_child_count: item.hidden_child_count.map(|c| c as u64),
       });
     }
-
-    // Sort: Directories first, then files
-    items.sort_by(|a, b| {
-      let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
-      let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
-
-      if a_is_dir == b_is_dir {
-        a.name.cmp(&b.name)
-      } else if a_is_dir {
-        std::cmp::Ordering::Less
-      } else {
-        std::cmp::Ordering::Greater
-      }
-    });
 
     Ok(items)
   }
@@ -313,16 +244,21 @@ impl ExplorerService {
         ResourceItem {
           name: item.name,
           path: child_odfi.to_string(),
-          r#type: if item.is_dir {
-            ResourceType::Dir
-          } else {
-            ResourceType::File
+          r#type: match (item.is_dir, item.is_symlink) {
+            (true, true) => ResourceType::LinkDir,
+            (true, false) => ResourceType::Dir,
+            (false, true) => ResourceType::LinkFile,
+            (false, false) => ResourceType::File,
           },
           size: item.size,
           modified: item.modified,
-          has_children: if item.is_dir { Some(true) } else { None },
-          child_count: None,
-          hidden_child_count: None,
+          has_children: if item.is_dir {
+            Some(item.child_count.unwrap_or(0) > 0)
+          } else {
+            None
+          },
+          child_count: item.child_count.map(|c| c as u64),
+          hidden_child_count: item.hidden_child_count.map(|c| c as u64),
         }
       })
       .collect();

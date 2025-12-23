@@ -154,10 +154,16 @@ pub struct AgentFileItem {
   pub path: String,
   /// 是否为目录
   pub is_dir: bool,
+  /// 是否为符号链接
+  pub is_symlink: bool,
   /// 文件大小
   pub size: Option<u64>,
   /// 修改时间 (Unix timestamp)
   pub modified: Option<i64>,
+  /// 子项目数量 (仅对目录有效)
+  pub child_count: Option<u32>,
+  /// 隐藏子项目数量 (仅对目录有效)
+  pub hidden_child_count: Option<u32>,
 }
 
 /// Agent 文件列表响应

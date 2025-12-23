@@ -8,12 +8,12 @@ use opsbox_core::{Module, SqlitePool, register_module};
 use std::sync::Arc;
 
 #[derive(Default)]
-pub struct ResourceExplorerModule;
+pub struct ExplorerModule;
 
 #[async_trait]
-impl Module for ResourceExplorerModule {
+impl Module for ExplorerModule {
   fn name(&self) -> &'static str {
-    "resource-explorer"
+    "explorer"
   }
 
   fn api_prefix(&self) -> &'static str {
@@ -30,4 +30,4 @@ impl Module for ResourceExplorerModule {
   }
 }
 
-register_module!(ResourceExplorerModule);
+register_module!(ExplorerModule);
