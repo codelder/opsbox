@@ -12,6 +12,7 @@ pub struct DiskItem {
   pub modified: Option<i64>,
   pub child_count: Option<u32>,
   pub hidden_child_count: Option<u32>,
+  pub mime_type: Option<String>,
 }
 
 pub async fn list_directory<P: AsRef<Path>>(path: P) -> Result<Vec<DiskItem>, String> {
@@ -71,6 +72,21 @@ pub async fn list_directory<P: AsRef<Path>>(path: P) -> Result<Vec<DiskItem>, St
       (None, None)
     };
 
+    let mime_type = if is_dir {
+      None
+    } else if let Ok(mut f) = tokio::fs::File::open(&entry_path).await {
+      use tokio::io::AsyncReadExt;
+      let mut buf = [0u8; 1024];
+      let n = f.read(&mut buf).await.unwrap_or(0);
+      if n > 0 {
+        infer::get(&buf[..n]).map(|m| m.mime_type().to_string())
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+
     items.push(DiskItem {
       name,
       path: entry_path.to_string_lossy().to_string(),
@@ -80,6 +96,7 @@ pub async fn list_directory<P: AsRef<Path>>(path: P) -> Result<Vec<DiskItem>, St
       modified,
       child_count,
       hidden_child_count,
+      mime_type,
     });
   }
 

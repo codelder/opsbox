@@ -19,4 +19,5 @@ pub struct ResourceItem {
   pub has_children: Option<bool>,
   pub child_count: Option<u64>,
   pub hidden_child_count: Option<u64>,
+  pub mime_type: Option<String>,
 }

@@ -183,6 +183,7 @@ pub async fn handle_list_files(
       modified: item.modified,
       child_count: item.child_count,
       hidden_child_count: item.hidden_child_count,
+      mime_type: item.mime_type,
     })
     .collect();
 

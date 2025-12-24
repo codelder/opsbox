@@ -77,6 +77,7 @@ impl ExplorerService {
           has_children: if meta.path.ends_with('/') { Some(true) } else { None }, // Assume dirs in archives are non-empty for now
           child_count: None,
           hidden_child_count: None,
+          mime_type: None,
         });
       }
 
@@ -141,6 +142,7 @@ impl ExplorerService {
         has_children: Some(item.is_dir && item.child_count.unwrap_or(0) > 0),
         child_count: item.child_count.map(|c| c as u64),
         hidden_child_count: item.hidden_child_count.map(|c| c as u64),
+        mime_type: item.mime_type,
       });
     }
 
@@ -179,6 +181,7 @@ impl ExplorerService {
               has_children: Some(true), // Agents presumably have files
               child_count: None,
               hidden_child_count: None,
+              mime_type: None,
             }
           })
           .collect();
@@ -259,6 +262,7 @@ impl ExplorerService {
           },
           child_count: item.child_count.map(|c| c as u64),
           hidden_child_count: item.hidden_child_count.map(|c| c as u64),
+          mime_type: item.mime_type,
         }
       })
       .collect();
@@ -292,6 +296,7 @@ impl ExplorerService {
             has_children: Some(true),
             child_count: None,
             hidden_child_count: None,
+            mime_type: None,
           }
         })
         .collect();
@@ -365,6 +370,7 @@ impl ExplorerService {
               has_children: Some(true),
               child_count: None,
               hidden_child_count: None,
+              mime_type: None,
             });
           }
         }
@@ -408,6 +414,7 @@ impl ExplorerService {
               has_children: None,
               child_count: None,
               hidden_child_count: None,
+              mime_type: None, // We don't sniff S3 contents here
             });
           }
         }
@@ -443,6 +450,7 @@ impl ExplorerService {
             has_children: Some(true),
             child_count: None,
             hidden_child_count: None,
+            mime_type: None,
           }
         })
         .collect();
