@@ -20,6 +20,7 @@ export interface ResourceItem {
   has_children?: boolean | null;
   child_count?: number | null;
   hidden_child_count?: number | null;
+  mime_type?: string | null;
 }
 
 export interface ResourceListRequest {

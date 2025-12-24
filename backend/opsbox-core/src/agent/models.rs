@@ -164,6 +164,8 @@ pub struct AgentFileItem {
   pub child_count: Option<u32>,
   /// 隐藏子项目数量 (仅对目录有效)
   pub hidden_child_count: Option<u32>,
+  /// MIME 类型
+  pub mime_type: Option<String>,
 }
 
 /// Agent 文件列表响应

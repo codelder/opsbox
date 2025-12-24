@@ -29,7 +29,14 @@
     Info,
     Music,
     Film,
-    Image as ImageIcon
+    Image as ImageIcon,
+    FileCode,
+    FileArchive,
+    FileAudio,
+    FileVideo,
+    FileImage,
+    FileJson,
+    FileText
   } from 'lucide-svelte';
   import * as ContextMenu from '$lib/components/ui/context-menu';
   import errorIcon from '$lib/assets/error.svg';
@@ -283,9 +290,44 @@
     'config'
   ]);
 
-  function isTextFile(name: string): boolean {
-    const ext = name.split('.').pop()?.toLowerCase();
+  function isTextFile(item: ResourceItem): boolean {
+    if (item.mime_type) {
+      return (
+        item.mime_type.startsWith('text/') ||
+        item.mime_type === 'application/json' ||
+        item.mime_type === 'application/javascript' ||
+        item.mime_type === 'application/xml' ||
+        item.mime_type.includes('script')
+      );
+    }
+    const ext = item.name.split('.').pop()?.toLowerCase();
     return !!ext && TEXT_EXTS.has(ext);
+  }
+
+  function getFileIcon(item: ResourceItem): any {
+    if (item.mime_type) {
+      if (item.mime_type.startsWith('image/')) return FileImage;
+      if (item.mime_type.startsWith('video/')) return FileVideo;
+      if (item.mime_type.startsWith('audio/')) return FileAudio;
+      if (item.mime_type === 'application/pdf') return FileText;
+      if (item.mime_type.includes('archive') || item.mime_type.includes('zip') || item.mime_type.includes('tar'))
+        return FileArchive;
+      if (
+        item.mime_type.includes('javascript') ||
+        item.mime_type.includes('typescript') ||
+        item.mime_type.includes('json')
+      )
+        return FileCode;
+    }
+    const ext = item.name.split('.').pop()?.toLowerCase();
+    if (ext === 'json') return FileJson;
+    if (['js', 'ts', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp', 'sh'].includes(ext || '')) return FileCode;
+    if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext || '')) return FileArchive;
+    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) return FileImage;
+    if (['mp4', 'mkv', 'avi', 'mov'].includes(ext || '')) return FileVideo;
+    if (['mp3', 'wav', 'ogg', 'flac'].includes(ext || '')) return FileAudio;
+
+    return null;
   }
 
   function truncateMiddle(str: string, maxVisualWidth: number = 40, tailChars: number = 7): string {
@@ -338,7 +380,7 @@
 
     <div class="sticky top-0 max-h-full space-y-6 overflow-y-auto pr-2">
       <div>
-        <h3 class="mb-3 text-sm font-semibold text-foreground">Explorer</h3>
+        <h3 class="mb-3 text-sm font-light tracking-wider text-foreground uppercase opacity-70">Explorer</h3>
         <Separator class="mb-4" />
 
         {#snippet renderLevel(items: any[], depth: number)}
@@ -349,7 +391,7 @@
                 (depth === 1 && (activeId === item.name || currentOdfiStr.startsWith(item.path)))}
               <button
                 class="group flex w-full items-center rounded-md px-2 py-1.5 text-sm transition-colors {isActive
-                  ? 'bg-primary/10 font-medium text-primary'
+                  ? 'bg-primary/10 text-primary'
                   : 'text-foreground hover:bg-muted/50'}"
                 onclick={() => handleNavigate(item.path)}
               >
@@ -537,23 +579,78 @@
         <!-- Overlays (Text/Icon) -->
         <div class="absolute inset-0">
           {#if isText}
-            <div class="flex h-full w-full flex-col gap-[3px] p-[18%] pt-[38%] opacity-[0.25] dark:opacity-[0.35]">
-              <div class="h-[1.5px] w-full bg-black/60"></div>
-              <div class="h-[1.5px] w-[90%] bg-black/60"></div>
-              <div class="h-[1.5px] w-full bg-black/60"></div>
-              <div class="h-[1.5px] w-[80%] bg-black/60"></div>
-              <div class="h-[1.5px] w-full bg-black/60"></div>
-              <div class="h-[1.5px] w-[95%] bg-black/60"></div>
-              <div class="h-[1.5px] w-full bg-black/60"></div>
-              <div class="h-[1.5px] w-[70%] bg-black/60"></div>
+            <div class="flex h-full w-full flex-col gap-[3px] p-[18%] pt-[38%] opacity-45 dark:opacity-55">
+              <div class="h-[1.5px] w-full bg-slate-500"></div>
+              <div class="h-[1.5px] w-[90%] bg-slate-500"></div>
+              <div class="h-[1.5px] w-full bg-slate-500"></div>
+              <div class="h-[1.5px] w-[80%] bg-slate-500"></div>
+              <div class="h-[1.5px] w-full bg-slate-500"></div>
+              <div class="h-[1.5px] w-[95%] bg-slate-500"></div>
+              <div class="h-[1.5px] w-full bg-slate-500"></div>
+              <div class="h-[1.5px] w-[70%] bg-slate-500"></div>
             </div>
           {:else if icon}
             {@const IconComp = icon}
-            <div class="absolute inset-0 flex items-center justify-center opacity-20 dark:opacity-40">
-              <IconComp class={className.includes('h-6') ? 'h-3 w-3' : 'h-10 w-10'} />
+            <div class="absolute inset-0 flex items-center justify-center text-slate-500 opacity-55 dark:opacity-65">
+              <IconComp class={className.includes('h-5') ? 'h-3.5 w-3.5' : 'h-10 w-10'} />
             </div>
           {/if}
         </div>
+      </div>
+    </div>
+  {/snippet}
+
+  {#snippet macOSArchive(className = 'h-16 w-16', name = '')}
+    {@const ext = name.split('.').pop()?.toUpperCase() || ''}
+    <div class="relative {className} flex items-center justify-center">
+      <div class="relative h-full w-[76%]">
+        <svg viewBox="0 0 82 100" class="h-full w-full drop-shadow-[0_1px_1.5px_rgba(0,0,0,0.12)]">
+          <defs>
+            <linearGradient id="archiveBodyGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#ffffff" />
+              <stop offset="100%" stop-color="#f8fafc" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M0,2 Q0,0 2,0 L58,0 L82,24 L82,98 Q82,100 80,100 L2,100 Q0,100 0,98 Z"
+            fill="url(#archiveBodyGrad)"
+            stroke="#cbd5e1"
+            stroke-width="0.5"
+            class="dark:fill-gray-100 dark:stroke-gray-500"
+          />
+          <path
+            d="M58,0 L58,22 Q58,24 60,24 L82,24 Z"
+            fill="#f3f4f6"
+            stroke="#cbd5e1"
+            stroke-width="0.4"
+            class="dark:fill-gray-200 dark:stroke-gray-400"
+          />
+
+          <!-- Zipper Track -->
+          <g transform="translate(37, 24)">
+            {#each Array(10) as _, i}
+              <rect x={i % 2 === 0 ? 0 : 5} y={i * 4} width="3" height="1.6" fill="#94a3b8" rx="0.3" />
+            {/each}
+          </g>
+
+          <!-- Zipper Pull (At top) -->
+          <g transform="translate(35, 12)">
+            <rect x="0" y="0" width="12" height="16" rx="3.5" fill="#64748b" />
+            <circle cx="6" cy="11" r="2.2" fill="white" opacity="0.4" />
+          </g>
+
+          <!-- Extension Label -->
+          {#if ext}
+            <text
+              x="41"
+              y="86"
+              text-anchor="middle"
+              class="fill-slate-400 font-sans text-[11px] font-medium tracking-tighter uppercase"
+            >
+              {ext}
+            </text>
+          {/if}
+        </svg>
       </div>
     </div>
   {/snippet}
@@ -642,7 +739,7 @@
         class="flex flex-1 items-center rounded-md border border-border/40 bg-muted/50 px-3 py-1.5 focus-within:ring-1 focus-within:ring-ring dark:border-gray-700/50"
       >
         <input
-          class="w-full flex-1 border-none bg-transparent font-mono text-sm outline-none"
+          class="w-full flex-1 border-none bg-transparent font-mono text-sm font-light outline-none"
           bind:value={currentOdfiStr}
           onkeydown={(e) => e.key === 'Enter' && handleNavigate(currentOdfiStr)}
         />
@@ -700,7 +797,7 @@
                     <!-- Content -->
                     <div class="w-full flex-1 space-y-6 text-left">
                       <div>
-                        <h3 class="text-2xl font-semibold text-foreground">资源列举失败</h3>
+                        <h3 class="text-2xl font-normal text-foreground">资源列举失败</h3>
                         <p class="mt-2 text-muted-foreground">在访问指定的 ODFI 路径时发生了错误。</p>
                       </div>
 
@@ -708,7 +805,7 @@
                       <div class="rounded-md border border-border bg-background text-sm">
                         <details class="group border-border last:border-0" open>
                           <summary
-                            class="flex cursor-pointer items-center justify-between p-4 font-medium select-none hover:bg-muted/50"
+                            class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
                           >
                             <span>错误详情</span>
                             <ChevronDown
@@ -724,7 +821,7 @@
 
                         <details class="group border-t border-border last:border-0">
                           <summary
-                            class="flex cursor-pointer items-center justify-between p-4 font-medium select-none hover:bg-muted/50"
+                            class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
                           >
                             <span>排查建议</span>
                             <ChevronDown
@@ -765,18 +862,17 @@
                     <thead class="block w-full bg-muted/40">
                       <tr class="flex w-full">
                         <th
-                          class="flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle font-medium text-muted-foreground"
+                          class="flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle text-muted-foreground"
                         ></th>
-                        <th
-                          class="flex h-10 flex-1 items-center px-4 text-left align-middle font-medium text-muted-foreground"
+                        <th class="flex h-10 flex-1 items-center px-4 text-left align-middle text-muted-foreground"
                           >Name</th
                         >
                         <th
-                          class="flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle font-medium text-muted-foreground"
+                          class="flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
                           >Size</th
                         >
                         <th
-                          class="flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle font-medium text-muted-foreground"
+                          class="flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
                           >Modified</th
                         >
                       </tr>
@@ -800,21 +896,23 @@
                                   {:else if item.type === 'linkdir'}
                                     {@render macOSFolder('h-5 w-5', !!item.has_children, Link)}
                                   {:else if item.type === 'linkfile'}
-                                    {@render macOSFile('h-5 w-5', Link, isTextFile(item.name))}
+                                    {@render macOSFile('h-5 w-5', Link, isTextFile(item))}
+                                  {:else if getFileIcon(item) === FileArchive}
+                                    {@render macOSArchive('h-5 w-5', item.name)}
                                   {:else}
-                                    {@render macOSFile('h-5 w-5', null, isTextFile(item.name))}
+                                    {@render macOSFile('h-5 w-5', getFileIcon(item), isTextFile(item))}
                                   {/if}
                                 </td>
-                                <td class="flex flex-1 items-center truncate p-2 font-medium">
+                                <td class="flex flex-1 items-center truncate p-2">
                                   {item.name}
                                 </td>
                                 <td
-                                  class="flex w-24 flex-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
+                                  class="flex w-24 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
                                 >
                                   {formatSize(item.size)}
                                 </td>
                                 <td
-                                  class="flex w-40 flex-0 items-center justify-end p-2 font-mono text-xs text-muted-foreground"
+                                  class="flex w-40 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
                                 >
                                   {#if item.modified}
                                     {new Date(item.modified * 1000).toLocaleString()}
@@ -854,9 +952,11 @@
                                   {:else if item.type === 'linkdir'}
                                     {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children, Link)}
                                   {:else if item.type === 'linkfile'}
-                                    {@render macOSFile('h-[62px] w-[62px]', Link, isTextFile(item.name))}
+                                    {@render macOSFile('h-[62px] w-[62px]', Link, isTextFile(item))}
+                                  {:else if getFileIcon(item) === FileArchive}
+                                    {@render macOSArchive('h-[62px] w-[62px]', item.name)}
                                   {:else}
-                                    {@render macOSFile('h-[62px] w-[62px]', null, isTextFile(item.name))}
+                                    {@render macOSFile('h-[62px] w-[62px]', getFileIcon(item), isTextFile(item))}
                                   {/if}
                                 </div>
                               </button>
@@ -870,7 +970,7 @@
                             {#snippet child({ props })}
                               <div {...props} class="flex flex-col items-center">
                                 <button
-                                  class="line-clamp-2 inline-block max-w-[124px] rounded-[3px] px-1.5 py-0.5 text-center text-[10.5px] leading-tight font-medium wrap-anywhere [word-break:normal] transition-colors {selectedItem ===
+                                  class="block max-w-[124px] rounded-[3px] px-1.5 py-0.5 text-center text-[10.5px] leading-tight font-light break-all transition-colors {selectedItem ===
                                   item
                                     ? 'bg-[#0060df] text-white'
                                     : 'hover:bg-blue-500 hover:text-white active:bg-blue-600'}"
@@ -878,18 +978,18 @@
                                   ondblclick={() => handleRowDoubleClick(item)}
                                   title={item.name}
                                 >
-                                  {truncateMiddle(item.name, 28, 9).replace(/(.)([_-])/g, '$1\u200B$2')}
+                                  {truncateMiddle(item.name, 24, 8)}
                                 </button>
                                 {#if (item.type === 'dir' || item.type === 'linkdir') && item.child_count != null}
                                   {@const count =
                                     (showHidden
                                       ? (item.child_count ?? 0)
                                       : (item.child_count ?? 0) - (item.hidden_child_count ?? 0)) ?? 0}
-                                  <span class="mt-0.5 text-[9.5px] font-medium text-muted-foreground/80">
+                                  <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
                                     {count === 0 ? '无项目' : `${count} 个项目`}
                                   </span>
                                 {:else if item.size}
-                                  <span class="mt-0.5 text-[9.5px] font-medium text-muted-foreground/80">
+                                  <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
                                     {formatSize(item.size)}
                                   </span>
                                 {/if}
