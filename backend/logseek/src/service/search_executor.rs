@@ -301,7 +301,14 @@ impl SearchExecutor {
         file_url,
         res.lines.len()
       );
-      simple_cache().put_lines(&sid, &file_url, res.lines.clone()).await;
+      simple_cache()
+        .put_lines(
+          &sid,
+          &file_url,
+          res.lines.clone(),
+          res.encoding.clone().unwrap_or("UTF-8".to_string()),
+        )
+        .await;
 
       // 发送成功事件
       let success_event = SearchEvent::Success(crate::service::search::SearchResult {
@@ -476,7 +483,14 @@ impl SearchExecutor {
             };
 
             // 缓存结果（文件级明细，默认应保持低噪音）
-            simple_cache().put_lines(&sid_clone, &file_url, res.lines.clone()).await;
+            simple_cache()
+              .put_lines(
+                &sid_clone,
+                &file_url,
+                res.lines.clone(),
+                res.encoding.clone().unwrap_or("UTF-8".to_string()),
+              )
+              .await;
 
             // 更新 path 为完整的 Odfi 字符串
             res.path = file_id;

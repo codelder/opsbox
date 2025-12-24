@@ -176,6 +176,7 @@ export interface ViewCacheResponse {
   end: number;
   keywords: KeywordInfo[];
   lines: JsonLine[];
+  encoding?: string;
 }
 
 // ============ UI 状态类型 ============
@@ -221,6 +222,7 @@ export interface ViewState {
   lines: JsonLine[];
   loading: boolean;
   error: string | null;
+  encoding?: string;
 }
 
 // ============ 搜索事件类型 ============

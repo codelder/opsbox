@@ -191,9 +191,9 @@ impl ExplorerService {
       }
     }
 
-    let endpoint = if let Some(manager) = get_global_agent_manager() {
+    let (agent, endpoint) = if let Some(manager) = get_global_agent_manager() {
       if let Some(agent) = manager.get_agent(agent_id).await {
-        agent.get_base_url()
+        (agent.clone(), agent.get_base_url())
       } else {
         return Err(format!("Agent {} not found or offline", agent_id));
       }
@@ -202,11 +202,8 @@ impl ExplorerService {
     };
 
     use opsbox_core::agent::AgentClient;
+    // Note: timeout is optional
     let client = AgentClient::new(agent_id.clone(), endpoint, Some(std::time::Duration::from_secs(10)));
-
-    // Call Agent API
-    // API path: /api/v1/list_files?path=<path>
-    // We need to define this API on Agent side.
 
     let path_str = if odfi.path.is_empty() {
       "/".to_string()
@@ -215,6 +212,38 @@ impl ExplorerService {
     } else {
       format!("/{}", odfi.path)
     };
+
+    // If listing root of the agent, return search roots instead of calling agent list API
+    // (Agent list API might fail if / is not in whitelist)
+    if path_str == "/" {
+      let items = agent
+        .search_roots
+        .into_iter()
+        .map(|root| {
+          // Ensure root has leading slash for ODFI consistency if needed, but usually search_roots are absolute
+          let name = root.clone();
+          let child_odfi = Odfi::new(
+            EndpointType::Agent,
+            agent_id.clone(),
+            TargetType::Dir,
+            root, // Use root path as is
+            None,
+          );
+          ResourceItem {
+            name,
+            path: child_odfi.to_string(),
+            r#type: ResourceType::Dir,
+            size: None,
+            modified: None,
+            has_children: Some(true),
+            child_count: None,
+            hidden_child_count: None,
+            mime_type: None,
+          }
+        })
+        .collect();
+      return Ok(items);
+    }
 
     let url = format!("/api/v1/list_files?path={}", urlencoding::encode(&path_str));
 
@@ -233,14 +262,7 @@ impl ExplorerService {
           agent_id.clone(),
           TargetType::Dir,
           item.path.trim_start_matches('/').to_string(), // ODFI path usually relative to root?
-          // Wait, Agent returns absolute path. ODFI path should match what's needed for next request.
-          // If next request uses ODFI path, and we send it to agent...
-          // If agent expects absolute path, we should keep it absolute?
-          // ODFI usually strips leading slash in string representation but `path` field has it?
-          // opsbox-core ODFI implementation: path is stored as string.
-          // Let's stick to: ODFI path does NOT have leading slash for root relative.
-          // But for agent, if it's absolute path /var/log, ODFI is agent://id/var/log.
-          // So we keep it as is, maybe trim start slash if ODFI display adds it.
+          // We keep path consistent with what agent returns
           None,
         );
 
