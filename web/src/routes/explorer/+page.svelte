@@ -322,7 +322,7 @@
 
 <svelte:window onmousemove={handleMouseMove} onmouseup={stopResizing} />
 
-<div class="flex h-[calc(100vh-4rem)] gap-8 overflow-hidden px-6 py-6">
+<div class="flex h-screen gap-8 overflow-hidden px-6 py-6">
   <!-- Sidebar -->
   <aside
     class="group/sidebar relative hidden h-full border-r border-border pr-6 md:block"
