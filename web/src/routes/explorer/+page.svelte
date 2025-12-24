@@ -29,13 +29,10 @@
     Info,
     Music,
     Film,
-    Image as ImageIcon,
+    Image,
     FileCode,
     FileArchive,
-    FileAudio,
-    FileVideo,
-    FileImage,
-    FileJson,
+    FileBraces,
     FileText
   } from 'lucide-svelte';
   import * as ContextMenu from '$lib/components/ui/context-menu';
@@ -145,14 +142,16 @@
     }
   }
 
-  async function loadResources(odfi: string) {
+  async function loadResources(odfi: string): Promise<boolean> {
     loading = true;
     error = null;
     try {
       items = await listResources(odfi);
+      return true;
     } catch (e: any) {
       error = e.message;
       items = [];
+      return false;
     } finally {
       loading = false;
     }
@@ -175,14 +174,14 @@
     }
   }
 
-  function handleNavigate(newOdfi: string) {
+  async function handleNavigate(newOdfi: string): Promise<boolean> {
     currentOdfiStr = newOdfi;
     // Update URL without reload
     const url = new URL(window.location.href);
     url.searchParams.set('odfi', newOdfi);
     // Remove title query if present to clean up
     goto(url.toString(), { keepFocus: true, noScroll: true });
-    loadResources(newOdfi);
+    return await loadResources(newOdfi);
   }
 
   let selectedItem: ResourceItem | null = $state(null);
@@ -194,8 +193,10 @@
   function handleRowDoubleClick(item: ResourceItem) {
     if (item.type === 'dir' || item.type === 'linkdir') {
       handleNavigate(item.path);
+    } else if (isTextFile(item)) {
+      const url = `/view?sid=explorer&file=${encodeURIComponent(item.path)}`;
+      window.open(url, '_blank');
     } else {
-      // Default action for files could be preview or download
       console.log('File double-clicked:', item.path);
     }
   }
@@ -213,7 +214,7 @@
     console.log('Downloading:', item.path);
   }
 
-  function goUp() {
+  async function goUp() {
     try {
       let urlStr = currentOdfiStr;
       const url = new URL(urlStr);
@@ -237,7 +238,21 @@
       if (pathParts.length > 0) {
         pathParts.pop();
         url.pathname = '/' + pathParts.join('/');
-        handleNavigate(url.toString());
+
+        const targetOdfi = url.toString();
+        const success = await handleNavigate(targetOdfi);
+
+        // If navigation failed (e.g. 404/Access Denied) and we are in Agent mode,
+        // it likely means we went up to a directory not in search_roots.
+        // Fallback to Agent Root to show list of search roots.
+        if (!success && activeType === 'agent' && activeId) {
+          const rootOdfi = `odfi://${activeId}@agent/`;
+          // Only redirect if we aren't already trying to go to root
+          if (targetOdfi !== rootOdfi) {
+            console.log('Navigation failed in Agent, falling back to root');
+            handleNavigate(rootOdfi);
+          }
+        }
       }
     } catch (e) {
       console.error('Failed to parse ODFI for parent navigation', e);
@@ -280,6 +295,8 @@
     'hpp',
     'go',
     'java',
+    'tsx',
+    'jsx',
     'xml',
     'html',
     'css',
@@ -292,13 +309,15 @@
 
   function isTextFile(item: ResourceItem): boolean {
     if (item.mime_type) {
-      return (
+      if (
         item.mime_type.startsWith('text/') ||
         item.mime_type === 'application/json' ||
         item.mime_type === 'application/javascript' ||
         item.mime_type === 'application/xml' ||
         item.mime_type.includes('script')
-      );
+      ) {
+        return true;
+      }
     }
     const ext = item.name.split('.').pop()?.toLowerCase();
     return !!ext && TEXT_EXTS.has(ext);
@@ -306,9 +325,9 @@
 
   function getFileIcon(item: ResourceItem): any {
     if (item.mime_type) {
-      if (item.mime_type.startsWith('image/')) return FileImage;
-      if (item.mime_type.startsWith('video/')) return FileVideo;
-      if (item.mime_type.startsWith('audio/')) return FileAudio;
+      if (item.mime_type.startsWith('image/')) return Image;
+      if (item.mime_type.startsWith('video/')) return Film;
+      if (item.mime_type.startsWith('audio/')) return Music;
       if (item.mime_type === 'application/pdf') return FileText;
       if (item.mime_type.includes('archive') || item.mime_type.includes('zip') || item.mime_type.includes('tar'))
         return FileArchive;
@@ -320,12 +339,12 @@
         return FileCode;
     }
     const ext = item.name.split('.').pop()?.toLowerCase();
-    if (ext === 'json') return FileJson;
+    if (ext === 'json') return FileBraces;
     if (['js', 'ts', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp', 'sh'].includes(ext || '')) return FileCode;
     if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext || '')) return FileArchive;
-    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) return FileImage;
-    if (['mp4', 'mkv', 'avi', 'mov'].includes(ext || '')) return FileVideo;
-    if (['mp3', 'wav', 'ogg', 'flac'].includes(ext || '')) return FileAudio;
+    if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) return Image;
+    if (['mp4', 'mkv', 'avi', 'mov'].includes(ext || '')) return Film;
+    if (['mp3', 'wav', 'ogg', 'flac'].includes(ext || '')) return Music;
 
     return null;
   }
@@ -658,12 +677,16 @@
   {#snippet itemContextMenu(item: ResourceItem)}
     {#if item && item.name}
       <ContextMenu.Content class="w-64 text-[13px]">
-        <ContextMenu.Item class="h-8 py-0 focus:bg-[#007aff] focus:text-white" onclick={() => handleRowClick(item)}>
-          <ExternalLink class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
-          <span>打开</span>
-        </ContextMenu.Item>
-
-        <ContextMenu.Separator class="bg-black/5 dark:bg-white/10" />
+        {#if item.type === 'dir' || item.type === 'linkdir' || isTextFile(item)}
+          <ContextMenu.Item
+            class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
+            onclick={() => handleRowDoubleClick(item)}
+          >
+            <ExternalLink class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
+            <span>打开</span>
+          </ContextMenu.Item>
+          <ContextMenu.Separator class="bg-black/5 dark:bg-white/10" />
+        {/if}
 
         <ContextMenu.Item
           class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
@@ -783,7 +806,14 @@
     <ContextMenu.Root>
       <ContextMenu.Trigger>
         {#snippet child({ props })}
-          <div {...props} class="flex-1 overflow-auto p-4">
+          <div
+            {...props}
+            class="flex-1 overflow-auto p-4"
+            onclick={() => (selectedItem = null)}
+            role="button"
+            tabindex="0"
+            onkeydown={() => {}}
+          >
             {#if error}
               <div class="mx-auto w-full max-w-5xl py-12">
                 <div class="rounded-lg border border-border bg-card p-10 md:p-14">
@@ -889,7 +919,14 @@
                             class="flex w-full cursor-pointer border-t border-border/40 hover:bg-muted/50 dark:border-gray-700/50"
                           >
                             {#snippet child({ props })}
-                              <tr {...props} onclick={() => handleRowClick(item)}>
+                              <tr
+                                {...props}
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  handleRowClick(item);
+                                }}
+                                ondblclick={() => handleRowDoubleClick(item)}
+                              >
                                 <td class="flex w-14 flex-0 items-center justify-center p-2">
                                   {#if item.type === 'dir'}
                                     {@render macOSFolder('h-5 w-5', !!item.has_children)}
@@ -943,7 +980,10 @@
                                 item
                                   ? 'bg-black/10 dark:bg-white/10'
                                   : ''}"
-                                onclick={() => handleRowClick(item)}
+                                onclick={(e) => {
+                                  e.stopPropagation();
+                                  handleRowClick(item);
+                                }}
                                 ondblclick={() => handleRowDoubleClick(item)}
                               >
                                 <div class="transition-transform group-hover/icon:scale-105">
@@ -974,7 +1014,10 @@
                                   item
                                     ? 'bg-[#0060df] text-white'
                                     : 'hover:bg-blue-500 hover:text-white active:bg-blue-600'}"
-                                  onclick={() => handleRowClick(item)}
+                                  onclick={(e) => {
+                                    e.stopPropagation();
+                                    handleRowClick(item);
+                                  }}
                                   ondblclick={() => handleRowDoubleClick(item)}
                                   title={item.name}
                                 >

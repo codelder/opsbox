@@ -33,6 +33,7 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let fontSize = $state('sm');
+  let encoding = $state<string | undefined>(undefined);
 
   // 字体大小类映射
   let fontSizeClass = $state('text-base whitespace-pre-wrap');
@@ -392,6 +393,9 @@
       // 获取文件元数据
       const meta = await fetchRange(1, 1);
       total = meta.total;
+      if (meta.encoding) {
+        encoding = meta.encoding;
+      }
 
       if (total <= 0) {
         end = 0;
@@ -643,6 +647,7 @@
             onDownload={downloadCurrentFile}
             {fontSize}
             onFontSizeChange={handleFontSizeChange}
+            {encoding}
           />
 
           <!-- 虚拟滚动内容区域 -->

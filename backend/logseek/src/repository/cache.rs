@@ -14,10 +14,11 @@ use crate::{domain::Odfi, query::KeywordHighlight};
 pub struct CompactLines {
   content: String,
   line_starts: Vec<usize>,
+  encoding: String,
 }
 
 impl CompactLines {
-  fn from_lines(lines: Vec<String>) -> Self {
+  fn from_lines(lines: Vec<String>, encoding: String) -> Self {
     // 预分配内存：总字符数 + 少量额外空间
     let total_len: usize = lines.iter().map(|s| s.len()).sum();
     let mut content = String::with_capacity(total_len);
@@ -29,7 +30,11 @@ impl CompactLines {
     }
     line_starts.push(content.len()); // 哨兵，标记最后一个行的结束位置
 
-    Self { content, line_starts }
+    Self {
+      content,
+      line_starts,
+      encoding,
+    }
   }
 
   fn get_slice(&self, start: usize, end: usize) -> Vec<String> {
@@ -217,7 +222,7 @@ impl Cache {
     None
   }
 
-  pub async fn put_lines(&self, sid: &str, file_url: &Odfi, lines: Vec<String>) {
+  pub async fn put_lines(&self, sid: &str, file_url: &Odfi, lines: Vec<String>, encoding: String) {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -237,7 +242,7 @@ impl Cache {
     );
 
     // 使用 CompactLines 优化存储
-    let compact = CompactLines::from_lines(lines);
+    let compact = CompactLines::from_lines(lines, encoding);
     session.files.insert(file_url.clone(), compact);
 
     tracing::debug!("🔍 Cache当前会话文件数: {}", session.files.len());
@@ -249,7 +254,7 @@ impl Cache {
     file_url: &Odfi,
     start: usize,
     end: usize,
-  ) -> Option<(usize, Vec<String>)> {
+  ) -> Option<(usize, Vec<String>, String)> {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -265,13 +270,13 @@ impl Cache {
       if let Some(compact_lines) = session.files.get(file_url) {
         let total = compact_lines.len();
         if total == 0 {
-          return Some((0, Vec::new()));
+          return Some((0, Vec::new(), compact_lines.encoding.clone()));
         }
         let s = start.max(1).min(total.max(1));
         let eidx = end.max(s).min(total);
 
         let slice = compact_lines.get_slice(s, eidx);
-        return Some((total, slice));
+        return Some((total, slice, compact_lines.encoding.clone()));
       }
     }
 
@@ -353,13 +358,14 @@ mod tests {
     );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, &file_url, lines.clone()).await;
+    c.put_lines(&sid, &file_url, lines.clone(), "UTF-8".to_string()).await;
     let result = c.get_lines_slice(&sid, &file_url, 1, 2).await;
 
     assert!(result.is_some());
-    let (total, slice) = result.unwrap();
+    let (total, slice, encoding) = result.unwrap();
     assert_eq!(total, 2);
     assert_eq!(slice, lines);
+    assert_eq!(encoding, "UTF-8");
   }
 
   #[tokio::test]
@@ -425,11 +431,19 @@ mod tests {
       None,
     );
 
-    c.put_lines(&sid, &file_url1, vec!["a".to_string()]).await;
-    c.put_lines(&sid, &file_url2, vec!["b".to_string()]).await;
+    c.put_lines(&sid, &file_url1, vec!["a".to_string()], "UTF-8".to_string())
+      .await;
+    c.put_lines(&sid, &file_url2, vec!["b".to_string()], "UTF-8".to_string())
+      .await;
 
-    let result1 = c.get_lines_slice(&sid, &file_url1, 1, 1).await.map(|(_, lines)| lines);
-    let result2 = c.get_lines_slice(&sid, &file_url2, 1, 1).await.map(|(_, lines)| lines);
+    let result1 = c
+      .get_lines_slice(&sid, &file_url1, 1, 1)
+      .await
+      .map(|(_, lines, _)| lines);
+    let result2 = c
+      .get_lines_slice(&sid, &file_url2, 1, 1)
+      .await
+      .map(|(_, lines, _)| lines);
 
     assert_eq!(result1, Some(vec!["a".to_string()]));
     assert_eq!(result2, Some(vec!["b".to_string()]));
@@ -448,11 +462,19 @@ mod tests {
       None,
     );
 
-    c.put_lines(&sid1, &file_url, vec!["content1".to_string()]).await;
-    c.put_lines(&sid2, &file_url, vec!["content2".to_string()]).await;
+    c.put_lines(&sid1, &file_url, vec!["content1".to_string()], "UTF-8".to_string())
+      .await;
+    c.put_lines(&sid2, &file_url, vec!["content2".to_string()], "UTF-8".to_string())
+      .await;
 
-    let result1 = c.get_lines_slice(&sid1, &file_url, 1, 1).await.map(|(_, lines)| lines);
-    let result2 = c.get_lines_slice(&sid2, &file_url, 1, 1).await.map(|(_, lines)| lines);
+    let result1 = c
+      .get_lines_slice(&sid1, &file_url, 1, 1)
+      .await
+      .map(|(_, lines, _)| lines);
+    let result2 = c
+      .get_lines_slice(&sid2, &file_url, 1, 1)
+      .await
+      .map(|(_, lines, _)| lines);
 
     assert_eq!(result1, Some(vec!["content1".to_string()]));
     assert_eq!(result2, Some(vec!["content2".to_string()]));
@@ -471,13 +493,13 @@ mod tests {
     );
     let lines: Vec<String> = (1..=10).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, &file_url, lines).await;
+    c.put_lines(&sid, &file_url, lines, "UTF-8".to_string()).await;
 
     // 获取第 3-5 行 (1-based indexing)
     let result = c.get_lines_slice(&sid, &file_url, 3, 5).await;
 
     assert!(result.is_some());
-    let (total, slice) = result.unwrap();
+    let (total, slice, _) = result.unwrap();
     assert_eq!(total, 10);
     assert_eq!(slice.len(), 3);
     assert_eq!(slice[0], "line 3");
@@ -497,13 +519,13 @@ mod tests {
     );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, &file_url, lines).await;
+    c.put_lines(&sid, &file_url, lines, "UTF-8".to_string()).await;
 
     // 请求超出范围的行
     let result = c.get_lines_slice(&sid, &file_url, 1, 100).await;
 
     assert!(result.is_some());
-    let (total, slice) = result.unwrap();
+    let (total, slice, _) = result.unwrap();
     assert_eq!(total, 2);
     assert_eq!(slice.len(), 2); // 应该只返回实际存在的行
   }
@@ -619,25 +641,25 @@ mod tests {
     );
     let lines: Vec<String> = (1..=5).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, &file_url, lines).await;
+    c.put_lines(&sid, &file_url, lines, "UTF-8".to_string()).await;
 
     // 测试边界条件：start=0（应该被调整为1）
     let result = c.get_lines_slice(&sid, &file_url, 0, 2).await;
     assert!(result.is_some());
-    let (_, slice) = result.unwrap();
+    let (_, slice, _) = result.unwrap();
     assert_eq!(slice[0], "line 1");
 
     // 测试边界条件：end > total（应该被限制）
     let result = c.get_lines_slice(&sid, &file_url, 1, 1000).await;
     assert!(result.is_some());
-    let (total, slice) = result.unwrap();
+    let (total, slice, _) = result.unwrap();
     assert_eq!(total, 5);
     assert_eq!(slice.len(), 5);
 
     // 测试边界条件：start > end（应该返回空或最小范围）
     let result = c.get_lines_slice(&sid, &file_url, 3, 2).await;
     assert!(result.is_some());
-    let (_, slice) = result.unwrap();
+    let (_, slice, _) = result.unwrap();
     // start 会被调整，应该至少返回一行
     assert!(!slice.is_empty());
   }
@@ -667,12 +689,12 @@ mod tests {
     );
 
     // 存储空行列表
-    c.put_lines(&sid, &file_url, vec![]).await;
+    c.put_lines(&sid, &file_url, vec![], "UTF-8".to_string()).await;
 
     let result = c.get_lines_slice(&sid, &file_url, 1, 10).await;
     // 空文件应该返回 None 或空结果
     // 根据实现，可能需要调整断言
-    if let Some((total, slice)) = result {
+    if let Some((total, slice, _)) = result {
       assert_eq!(total, 0);
       assert_eq!(slice.len(), 0);
     }
@@ -718,7 +740,8 @@ mod tests {
       None,
     );
 
-    c.put_lines(&sid, &file_url, vec!["line 1".to_string()]).await;
+    c.put_lines(&sid, &file_url, vec!["line 1".to_string()], "UTF-8".to_string())
+      .await;
 
     let result = c.get_lines_slice(&sid, &file_url, 1, 1).await;
     assert!(result.is_some());
@@ -738,7 +761,8 @@ mod tests {
 
     c.put_keywords(&sid, vec![KeywordHighlight::Literal("test".to_string())])
       .await;
-    c.put_lines(&sid, &file_url, vec!["line 1".to_string()]).await;
+    c.put_lines(&sid, &file_url, vec!["line 1".to_string()], "UTF-8".to_string())
+      .await;
 
     // Verify existence
     assert!(c.get_keywords(&sid).await.is_some());

@@ -130,12 +130,13 @@ async fn test_cache_functionality() {
     None,
   );
   let lines = vec!["line 1".to_string(), "line 2".to_string()];
-  c.put_lines(&sid, &file_url, lines.clone()).await;
+  c.put_lines(&sid, &file_url, lines.clone(), "UTF-8".to_string()).await;
 
-  let cached_lines = c.get_lines_slice(&sid, &file_url, 1, 2).await;
+  let cached_lines = c.get_lines_slice(&sid, &file_url, 1, 100).await;
   assert!(cached_lines.is_some());
 
-  let (total, slice) = cached_lines.unwrap();
+  // Verify content
+  let (total, slice, _) = cached_lines.unwrap();
   assert_eq!(total, 2);
   assert_eq!(slice, lines);
 }

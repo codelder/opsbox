@@ -45,6 +45,10 @@
      * 字体大小改变回调
      */
     onFontSizeChange?: (size: string) => void;
+    /**
+     * 文件编码
+     */
+    encoding?: string;
   }
 
   let {
@@ -55,7 +59,8 @@
     loading = false,
     onDownload,
     fontSize = 'base',
-    onFontSizeChange
+    onFontSizeChange,
+    encoding
   }: Props = $props();
 
   // Svelte 5 类型导出
@@ -239,6 +244,16 @@
             {/if}
           </div>
         </div>
+      {/if}
+
+      <!-- 编码 -->
+      {#if encoding}
+        <Badge
+          variant="outline"
+          class="h-5 border-blue-200/50 bg-blue-50/50 px-2 text-[10px] font-medium text-blue-700 dark:border-blue-800/30 dark:bg-blue-900/20 dark:text-blue-400/80"
+        >
+          {encoding}
+        </Badge>
       {/if}
     </div>
   </div>

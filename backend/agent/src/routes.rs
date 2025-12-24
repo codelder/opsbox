@@ -154,16 +154,23 @@ pub async fn update_log_retention(
 
 /// 列出目录文件
 pub async fn handle_list_files(
-  State(_state): State<AppState>,
+  State(state): State<AppState>,
   Query(req): Query<AgentListRequest>,
 ) -> Result<Json<AgentListResponse>, ApiError> {
   let path_str = req.path;
   let path = std::path::Path::new(&path_str);
 
   // Security check: ensure path is within allowed directories or subdirectories
-  // This is simplified. Real implementation should check `state.config.search_dirs`
-  // assuming agent config has allowed paths.
+  use crate::path::resolve_directory_path;
+  match resolve_directory_path(&state.config, &path_str) {
+    Ok(_) => {}
+    Err(e) => {
+      // 访问被拒绝或路径不在允许范围内，统一返回 NotFound 避免泄露信息
+      return Err(ApiError::NotFound(format!("Access denied or path not found: {}", e)));
+    }
+  }
 
+  // Double check existence (resolve_directory_path already checks existence)
   if !path.exists() {
     return Err(ApiError::NotFound(format!("Path not found: {}", path_str)));
   }
