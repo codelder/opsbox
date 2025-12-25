@@ -92,11 +92,25 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
     exclude_contains,
   };
 
+  let byte_matchers = terms
+    .iter()
+    .map(|t| match t {
+      Term::Literal(s) => regex::bytes::RegexBuilder::new(&regex::escape(s))
+        .case_insensitive(true)
+        .build()
+        .ok(),
+      Term::Phrase(s) => regex::bytes::RegexBuilder::new(&regex::escape(s)).build().ok(),
+      Term::RegexStd { pattern, .. } => regex::bytes::Regex::new(pattern).ok(),
+      Term::RegexFancy { .. } => None,
+    })
+    .collect();
+
   Ok(Query {
     terms,
     expr,
     path_filter,
     highlights,
+    byte_matchers,
   })
 }
 

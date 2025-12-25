@@ -6,6 +6,7 @@ use std::{
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
 use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
+use memchr::memchr_iter;
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tracing::{debug, trace, warn};
@@ -110,6 +111,36 @@ impl SearchProcessor {
     path: String,
     reader: &mut R,
   ) -> Result<Option<SearchResult>, SearchError> {
+    // 尝试快速通道 (Fast Path)
+    // 仅针对本地文件有效（通过尝试打开文件判断）
+    // 如果能够打开文件，则先进行快速扫描；如果未命中，则直接返回 None，避免从 reader 读取数据（从而避免内存分配）
+    if self.can_use_fast_path(&path).await {
+      match self.fast_scan_file(&path).await {
+        Ok(false) => {
+          // 快速扫描确认无匹配，跳过
+          debug!("快速扫描未命中，跳过: {}", path);
+          return Ok(None);
+        }
+        Ok(true) => {
+          debug!("快速扫描命中，加载全文: {}", path);
+          // 命中，继续执行后续的 grep_context (Slow Path) 加载全文
+        }
+        Err(e) => {
+          // 如果是文件未找到（常用于 S3 路径或归档内路径），使用 debug 日志
+          // 其他 IO 错误使用 warn
+          if matches!(e, SearchError::Io { ref error, .. } if error.contains("No such file") || error.contains("系统找不到"))
+          {
+            debug!(
+              "快速扫描无法打开文件（可能是非本地文件），回退到慢速通道 {}: {}",
+              path, e
+            );
+          } else {
+            warn!("快速扫描失败，回退到慢速通道 {}: {}", path, e);
+          }
+        }
+      }
+    }
+
     match grep_context(reader, &self.spec, self.context_lines, self.encoding.as_deref()).await? {
       Some((lines, merged, encoding)) => {
         debug!("找到匹配: {} ({} 行)", path, merged.len());
@@ -119,7 +150,175 @@ impl SearchProcessor {
     }
   }
 
-  /// 发送结果到 channel（可单独测试）
+  /// 检查是否可以使用快速通道
+  async fn can_use_fast_path(&self, _path: &str) -> bool {
+    // 必须有 byte_matchers 且不包含 Fancy Regex
+    // 如果存在 None 的 matcher (即 RegexFancy)，则不能使用 byte matching
+    if self.spec.byte_matchers.is_empty() || self.spec.byte_matchers.iter().any(|m| m.is_none()) {
+      return false;
+    }
+
+    // 尝试判断路径是否存在且为文件（简单检查）
+    // 实际的 File::open 会再次检查
+    true
+  }
+
+  /// 快速扫描文件 (SIMD / Zero Copy)
+  async fn fast_scan_file(&self, path: &str) -> Result<bool, SearchError> {
+    let file = tokio::fs::File::open(path).await.map_err(|e| SearchError::Io {
+      path: path.to_string(),
+      error: e.to_string(),
+    })?;
+
+    // 使用 buffer 扫描
+    // 注意：这里是一个简化的实现，为了极致性能应该使用 Mmap 或大块读取
+    // 为安全起见这里使用 BufReader 配合 buffer
+    let mut reader = BufReader::new(file);
+    let mut buffer = vec![0u8; 64 * 1024]; // 64KB buffer
+    let mut offset;
+
+    // 读取首块检测编码
+    let n = reader.read(&mut buffer).await?;
+    if n == 0 {
+      return Ok(false);
+    }
+    // 简单检测是否为二进制或非 UTF-8 (Fast Path 仅支持类 UTF-8/ASCII)
+    if !is_probably_text_bytes(&buffer[..n]) {
+      return Ok(false); // 不是文本，认为不匹配 (grep_context 也会跳过)
+    }
+    // 注意：如果是 GBK，is_probably_text_bytes 可能返回 true
+    // 但 byte regex 默认是 UTF-8 模式，或者 raw bytes 匹配
+    // 如果用户搜索的是中文字符串，而文件是 GBK，由于编码不一致，byte match 会失败
+    // 这会导致 False Negative (本该命中却没命中)
+    // 所以 Fast Path **必须** 确信编码一致
+    //
+    // 安全策略：如果检测到 UTF-8 BOM 或内容看起来像 UTF-8，则继续
+    // 如果 chardetng 认为不是 UTF-8/ASCII，则应当回退
+    if let Some(enc) = detect_encoding(&buffer[..n])
+      && enc != UTF_8
+      && enc != encoding_rs::WINDOWS_1252
+    {
+      // 非 UTF-8 编码，Fast Path 可能会漏检（因为查询串是 UTF-8 编译 de bytes）
+      // 回退到慢速通道
+      return Err(SearchError::Io {
+        path: path.to_string(),
+        error: "Encoding mismatch for fast path".to_string(),
+      });
+    }
+
+    // 重置状态
+    let mut valid_len = n;
+    let mut _current_pos = 0;
+
+    // 初始化匹配状态 (用于 eval_file)
+    // 我们需要统计所有 term 的命中情况
+    let mut occurs = vec![false; self.spec.terms.len()];
+    let positive_indices = self.spec.positive_term_indices();
+    let mut has_positive_match = false;
+
+    loop {
+      let chunk = &buffer[..valid_len];
+
+      // 我们需要按行处理
+      // 或者，更进一步优化：不按行，直接在块中搜索 terms?
+      // 不行，Query 语义是 Line-based (Term matches line)。
+      // 比如 regex "^foo$" 必须匹配行。
+      // 所以必须切行。
+
+      let mut last_newline_pos = 0;
+      for newline_pos in memchr_iter(b'\n', chunk) {
+        let line = &chunk[last_newline_pos..newline_pos];
+        let line_end = newline_pos + 1;
+
+        // 对当前行进行检查
+        self.check_line_bytes(line, &mut occurs, &positive_indices, &mut has_positive_match);
+
+        last_newline_pos = line_end;
+      }
+
+      // 处理剩余部分 (incomplete line)
+      if last_newline_pos < valid_len {
+        let remaining = &chunk[last_newline_pos..];
+        // 把剩余部分移到 buffer 开头
+        // 如果 buffer 满了且没有换行符（超长行），则不得不处理
+        let len = remaining.len();
+        buffer.copy_within(last_newline_pos.., 0);
+
+        // 读取更多数据
+        offset = len;
+        let n = reader.read(&mut buffer[offset..]).await?;
+        if n == 0 {
+          // EOF，处理最后一行
+          if offset > 0 {
+            self.check_line_bytes(
+              &buffer[..offset],
+              &mut occurs,
+              &positive_indices,
+              &mut has_positive_match,
+            );
+          }
+          break;
+        }
+        valid_len = offset + n;
+      } else {
+        let n = reader.read(&mut buffer).await?;
+        if n == 0 {
+          break;
+        }
+        valid_len = n;
+      }
+    }
+
+    // 检查结果
+    if self.spec.eval_file(&occurs) && has_positive_match {
+      Ok(true)
+    } else {
+      Ok(false)
+    }
+  }
+
+  #[inline]
+  fn check_line_bytes(
+    &self,
+    line: &[u8],
+    occurs: &mut [bool],
+    positive_indices: &[usize],
+    has_positive_match: &mut bool,
+  ) {
+    if *has_positive_match && occurs.iter().all(|&x| x) {
+      // 优化：如果已经全部命中了，且有 positive match，其实不需要再检查了?
+      // 不，可能还要找 context ranges (但 Fast Path 不关心 ranges)
+      // 是的，对于 Fast scan，如果条件都满足了，其实可以早退?
+      // 但是 eval_file 可能是复杂的 boolean 逻辑。
+      // 简单起见，继续跑完。
+      return;
+    }
+
+    // Check each term
+    // self.spec.terms 和 self.spec.byte_matchers 是一一对应的
+    for (i, matcher) in self.spec.byte_matchers.iter().enumerate() {
+      if occurs[i] {
+        continue;
+      }
+      if let Some(re) = matcher
+        && re.is_match(line)
+      {
+        occurs[i] = true;
+      }
+    }
+
+    // Check positive match
+    if !*has_positive_match {
+      for &pi in positive_indices {
+        if let Some(Some(re)) = self.spec.byte_matchers.get(pi)
+          && re.is_match(line)
+        {
+          *has_positive_match = true;
+          break;
+        }
+      }
+    }
+  }
   ///
   /// # 返回
   /// - `Ok(())`: 发送成功

@@ -42,6 +42,8 @@ problemdetails = { version = "0.6", features = ["axum"] }
 regex = "1"
 fancy-regex = "0.11"
 globset = "0.4"
+memchr = "2.7"
+aho-corasick = "1.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.8"
 # 为跨平台交叉编译启用 OpenSSL 源码内置编译（避免目标系统缺失 OpenSSL 开发包）

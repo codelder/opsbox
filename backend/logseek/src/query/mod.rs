@@ -112,6 +112,7 @@ pub struct Query {
   pub expr: Option<Expr>,
   pub path_filter: PathFilter,
   pub highlights: Vec<KeywordHighlight>, // 带类型信息的高亮列表（仅正向项）
+  pub byte_matchers: Vec<Option<regex::bytes::Regex>>,
 }
 
 impl Query {
@@ -136,6 +137,16 @@ impl Query {
       expr,
       path_filter: PathFilter::default(),
       highlights,
+      byte_matchers: keywords
+        .iter()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+          regex::bytes::RegexBuilder::new(&regex::escape(s))
+            .case_insensitive(true)
+            .build()
+            .ok()
+        })
+        .collect(),
     }
   }
 
