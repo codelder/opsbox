@@ -30,10 +30,11 @@
     Music,
     Film,
     Image,
-    FileCode,
+    Code,
     FileArchive,
     FileBraces,
-    FileText
+    FileText,
+    Terminal
   } from 'lucide-svelte';
   import * as ContextMenu from '$lib/components/ui/context-menu';
   import errorIcon from '$lib/assets/error.svg';
@@ -318,9 +319,27 @@
       ) {
         return true;
       }
+      // If content detection says it's something else (like binary), trust it.
+      // Specifically, if it's an executable, it's not a text file.
+      if (
+        item.mime_type.includes('executable') ||
+        item.mime_type.includes('mach-binary') ||
+        item.mime_type.includes('elf')
+      ) {
+        return false;
+      }
+      return false;
     }
-    const ext = item.name.split('.').pop()?.toLowerCase();
-    return !!ext && TEXT_EXTS.has(ext);
+
+    const lastDotIndex = item.name.lastIndexOf('.');
+    if (lastDotIndex === -1) {
+      // No extension: check known full names
+      const name = item.name.toLowerCase();
+      return ['makefile', 'dockerfile', 'readme', 'license', 'ignore'].includes(name);
+    }
+
+    const ext = item.name.slice(lastDotIndex + 1).toLowerCase();
+    return TEXT_EXTS.has(ext);
   }
 
   function getFileIcon(item: ResourceItem): any {
@@ -336,11 +355,47 @@
         item.mime_type.includes('typescript') ||
         item.mime_type.includes('json')
       )
-        return FileCode;
+        return Code;
+
+      // Executables
+      if (
+        item.mime_type.includes('executable') ||
+        item.mime_type.includes('mach-binary') ||
+        item.mime_type.includes('elf')
+      )
+        return Terminal;
     }
-    const ext = item.name.split('.').pop()?.toLowerCase();
+
+    const lastDotIndex = item.name.lastIndexOf('.');
+    if (lastDotIndex === -1) return null;
+
+    const ext = item.name.slice(lastDotIndex + 1).toLowerCase();
     if (ext === 'json') return FileBraces;
-    if (['js', 'ts', 'py', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'hpp', 'sh'].includes(ext || '')) return FileCode;
+    if (
+      [
+        'js',
+        'ts',
+        'tsx',
+        'jsx',
+        'py',
+        'rs',
+        'go',
+        'java',
+        'c',
+        'cpp',
+        'h',
+        'hpp',
+        'sh',
+        'bash',
+        'zsh',
+        'yaml',
+        'yml',
+        'toml',
+        'sql',
+        'svelte'
+      ].includes(ext || '')
+    )
+      return Code;
     if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'].includes(ext || '')) return FileArchive;
     if (['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp'].includes(ext || '')) return Image;
     if (['mp4', 'mkv', 'avi', 'mov'].includes(ext || '')) return Film;
@@ -597,7 +652,12 @@
 
         <!-- Overlays (Text/Icon) -->
         <div class="absolute inset-0">
-          {#if isText}
+          {#if icon}
+            {@const IconComp = icon}
+            <div class="absolute inset-0 flex items-center justify-center text-slate-500 opacity-55 dark:opacity-65">
+              <IconComp class={className.includes('h-5') ? 'h-3.5 w-3.5' : 'h-10 w-10'} />
+            </div>
+          {:else if isText}
             <div class="flex h-full w-full flex-col gap-[3px] p-[18%] pt-[38%] opacity-45 dark:opacity-55">
               <div class="h-[1.5px] w-full bg-slate-500"></div>
               <div class="h-[1.5px] w-[90%] bg-slate-500"></div>
@@ -607,11 +667,6 @@
               <div class="h-[1.5px] w-[95%] bg-slate-500"></div>
               <div class="h-[1.5px] w-full bg-slate-500"></div>
               <div class="h-[1.5px] w-[70%] bg-slate-500"></div>
-            </div>
-          {:else if icon}
-            {@const IconComp = icon}
-            <div class="absolute inset-0 flex items-center justify-center text-slate-500 opacity-55 dark:opacity-65">
-              <IconComp class={className.includes('h-5') ? 'h-3.5 w-3.5' : 'h-10 w-10'} />
             </div>
           {/if}
         </div>

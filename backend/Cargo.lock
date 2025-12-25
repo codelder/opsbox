@@ -2791,6 +2791,7 @@ name = "logseek"
 version = "0.1.1"
 dependencies = [
  "agent-manager",
+ "aho-corasick",
  "async-compression",
  "async-stream",
  "async-tar",
@@ -2812,6 +2813,7 @@ dependencies = [
  "inventory",
  "libmimalloc-sys",
  "libsqlite3-sys",
+ "memchr",
  "mimalloc",
  "num_cpus",
  "once_cell",
