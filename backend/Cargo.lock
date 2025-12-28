@@ -2969,6 +2969,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+ "urlencoding",
  "uuid",
 ]
 
@@ -3334,6 +3335,7 @@ dependencies = [
  "globset",
  "hostname",
  "logseek",
+ "mime_guess",
  "nix 0.28.0",
  "num_cpus",
  "opsbox-core",

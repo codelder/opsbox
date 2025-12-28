@@ -254,15 +254,17 @@ fn odfi_to_source(odfi: &Odfi) -> Result<crate::domain::config::Source, String> 
       Endpoint::Local { root: "/".to_string() }
     }
     EndpointType::S3 => {
-      // S3: id 是 profile, path 是 bucket/key
-      // 分割 bucket 和 key
-      let parts: Vec<&str> = odfi.path.splitn(2, '/').collect();
-      if parts.len() != 2 {
-        return Err(format!("S3 路径格式错误 (需要 bucket/key): {}", odfi.path));
-      }
-      Endpoint::S3 {
-        profile: odfi.endpoint_id.clone(),
-        bucket: parts[0].to_string(),
+      // S3: Odfi 解析逻辑中，endpoint_id 格式为 "profile:bucket"，path 为 object key
+      if let Some((profile, bucket)) = odfi.endpoint_id.split_once(':') {
+        Endpoint::S3 {
+          profile: profile.to_string(),
+          bucket: bucket.to_string(),
+        }
+      } else {
+        return Err(format!(
+          "Invalid S3 endpoint ID (expected profile:bucket): {}",
+          odfi.endpoint_id
+        ));
       }
     }
     EndpointType::Agent => {
@@ -294,25 +296,10 @@ fn odfi_to_source(odfi: &Odfi) -> Result<crate::domain::config::Source, String> 
           }
         }
         TargetType::Archive => {
-          // 如果是归档，path 是归档文件路径
-          // 如果有 entry_path，目前 EntryStream 处理整个归档流
-          // 我们的 view 逻辑需要过滤吗？
-          // 目前 EntryStream 会 yield 归档内所有文件。
-          // 这是一个潜在性能问题：回源读取大归档只为一个文件。
-          // 但根据目前架构，EntryStream 就是这样工作的。
-          // 至少 S3 需要 Target::Archive 才能工作。
-          // 对于 S3，如果 path 是 bucket/key，这里 target path 应该是 key
-          let parts: Vec<&str> = odfi.path.splitn(2, '/').collect();
-          let path = if let Endpoint::S3 { .. } = endpoint {
-            if parts.len() == 2 {
-              parts[1].to_string()
-            } else {
-              odfi.path.clone()
-            }
-          } else {
-            odfi.path.clone()
-          };
-          Target::Archive { path }
+          // 如果是归档，path 是归档文件路径（对于 S3 就是 Key）
+          Target::Archive {
+            path: odfi.path.clone(),
+          }
         }
       }
     }
@@ -436,4 +423,129 @@ pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpRespo
     .header(CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8"))
     .body(Body::from(content))
     .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建下载响应失败: {}", e))))
+}
+
+/// 流式传输文件原始内容（用于图片查看等）
+///
+/// 直接从 Source 读取文件流，不经过缓存，支持二进制文件
+pub async fn view_raw_file(
+  State(pool): State<SqlitePool>,
+  Query(params): Query<ViewParams>,
+) -> Result<HttpResponse<Body>, LogSeekApiError> {
+  tracing::debug!("view-raw-request: sid={} file={}", params.sid, params.file);
+
+  // 1. 解析 Odfi
+  let file_url: Odfi = params.file.parse().map_err(LogSeekApiError::Domain)?;
+
+  // 2. 构造 Source
+  let source = odfi_to_source(&file_url)
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法解析源信息: {}", e))))?;
+
+  // 3. 检查来源类型
+  match source.endpoint {
+    Endpoint::Agent { agent_id, .. } => {
+      // 创建 Agent 客户端
+      let client = crate::agent::create_agent_client_by_id(agent_id.clone())
+        .await
+        .map_err(|e| {
+          LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
+        })?;
+
+      // 构造请求路径
+      // 注意：odfi_to_source 中将 path 处理为了绝对路径，例如 /Users/...
+      // Agent 的 /api/v1/file_raw 需要 query 参数 path=...
+      // 使用 URL 编码
+      let target_path = if let Target::Files { paths } = source.target {
+        paths.first().cloned().unwrap_or_default()
+      } else {
+        file_url.path.clone()
+      };
+
+      let query_path = format!("/api/v1/file_raw?path={}", urlencoding::encode(&target_path));
+
+      tracing::debug!("Agent 原始文件请求: agent_id={}, query={}", agent_id, query_path);
+
+      // 调用 Agent API
+      let response = client
+        .get_raw(&query_path)
+        .await
+        .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 请求失败: {}", e))))?;
+
+      // 代理响应
+      let headers = response.headers().clone();
+      let content_type = headers
+        .get(CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_else(|| HeaderValue::from_static("application/octet-stream"));
+
+      use futures::TryStreamExt;
+      let stream = response.bytes_stream().map_err(std::io::Error::other);
+      let body = Body::from_stream(stream);
+
+      HttpResponse::builder()
+        .status(200)
+        .header(CONTENT_TYPE, content_type)
+        .body(body)
+        .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建响应失败: {}", e))))
+    }
+    _ => {
+      // Local / S3
+      let factory = EntryStreamFactory::new(pool);
+      let mut stream = factory
+        .create_stream(source)
+        .await
+        .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
+
+      // 读取第一个条目
+      if let Some((meta, reader)) = stream
+        .next_entry()
+        .await
+        .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
+      {
+        // 猜测 MIME 类型
+        let mime = guess_mime(&meta.path);
+
+        // 转换为 Stream
+        let stream = tokio_util::io::ReaderStream::new(reader);
+
+        tracing::debug!("开始流式传输文件: {}, mime={}", meta.path, mime);
+
+        HttpResponse::builder()
+          .status(200)
+          .header(CONTENT_TYPE, HeaderValue::from_str(mime).unwrap())
+          // .header("Cache-Control", "public, max-age=3600") // 可选：添加缓存控制
+          .body(Body::from_stream(stream))
+          .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建响应失败: {}", e))))
+      } else {
+        Err(LogSeekApiError::Repository(RepositoryError::NotFound(
+          "文件未找到或为空".to_string(),
+        )))
+      }
+    }
+  }
+}
+
+fn guess_mime(path: &str) -> &'static str {
+  let lower = path.to_lowercase();
+  if lower.ends_with(".png") {
+    "image/png"
+  } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+    "image/jpeg"
+  } else if lower.ends_with(".gif") {
+    "image/gif"
+  } else if lower.ends_with(".svg") {
+    "image/svg+xml"
+  } else if lower.ends_with(".webp") {
+    "image/webp"
+  } else if lower.ends_with(".bmp") {
+    "image/bmp"
+  } else if lower.ends_with(".ico") {
+    "image/x-icon"
+  } else if lower.ends_with(".tiff") || lower.ends_with(".tif") {
+    "image/tiff"
+  } else if lower.ends_with(".pdf") {
+    "application/pdf"
+  } else {
+    "application/octet-stream"
+  }
 }
