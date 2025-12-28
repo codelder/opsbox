@@ -135,4 +135,25 @@ impl AgentClient {
       .await
       .map_err(|e| AgentClientError::Other(format!("解析响应失败: {}", e)))
   }
+
+  /// 获取原始响应流（用于下载文件等）
+  pub async fn get_raw(&self, path: &str) -> Result<reqwest::Response, AgentClientError> {
+    let url = format!("{}{}", self.endpoint, path);
+    let response = self
+      .client
+      .get(&url)
+      .timeout(self.timeout)
+      .send()
+      .await
+      .map_err(|e| AgentClientError::ConnectionError(e.to_string()))?;
+
+    if !response.status().is_success() {
+      return Err(AgentClientError::Other(format!(
+        "Agent 返回错误状态: {}",
+        response.status()
+      )));
+    }
+
+    Ok(response)
+  }
 }

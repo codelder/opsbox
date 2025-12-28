@@ -439,8 +439,67 @@ impl EntryStreamFactory {
         };
         create_archive_stream_from_reader(reader, Some(path)).await
       }
-      (Endpoint::S3 { .. }, _) => Err("S3 仅支持 archive 目标".to_string()),
+      (Endpoint::S3 { profile, bucket }, Target::Files { paths }) => {
+        // 加载 Profile
+        let profile_row = crate::repository::s3::load_s3_profile(&self.db_pool, profile)
+          .await
+          .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+          .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
+
+        // 构造 S3 客户端
+        use crate::utils::storage::{ReaderProvider as _, S3ReaderProvider, get_or_create_s3_client};
+        let _ = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
+          .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
+
+        if let Some(path) = paths.first() {
+          let provider = S3ReaderProvider::new(
+            &profile_row.endpoint,
+            &profile_row.access_key,
+            &profile_row.secret_key,
+            bucket,
+            path,
+          );
+          let reader = provider
+            .open()
+            .await
+            .map_err(|e| format!("打开 S3 对象失败: {:?}", e))?;
+
+          Ok(Box::new(S3FileEntryStream {
+            reader: Some(reader),
+            path: path.clone(),
+          }))
+        } else {
+          Err("S3 文件列表为空".to_string())
+        }
+      }
+      (Endpoint::S3 { .. }, _) => Err("S3 仅支持 archive/files 目标".to_string()),
       (Endpoint::Agent { .. }, _) => Err("Agent 来源请通过远程 SearchService 处理".to_string()),
+    }
+  }
+}
+
+/// S3 单文件流（临时定义，建议移至 opsbox_core）
+pub struct S3FileEntryStream<R> {
+  reader: Option<R>,
+  path: String,
+}
+
+#[async_trait::async_trait]
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for S3FileEntryStream<R> {
+  async fn next_entry(
+    &mut self,
+  ) -> io::Result<Option<(opsbox_core::fs::EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+    if let Some(reader) = self.reader.take() {
+      let meta = opsbox_core::fs::EntryMeta {
+        path: self.path.clone(),
+        container_path: None,
+        size: None,
+        is_compressed: false,
+        source: opsbox_core::fs::EntrySource::File,
+      };
+      Ok(Some((meta, Box::new(reader))))
+    } else {
+      Ok(None)
     }
   }
 }

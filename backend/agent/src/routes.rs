@@ -198,6 +198,92 @@ pub async fn handle_list_files(
   Ok(Json(AgentListResponse { items }))
 }
 
+use axum::body::Body;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct GetFileRequest {
+  pub path: String,
+}
+
+/// GET 原始文件内容
+pub async fn handle_get_file_raw(
+  State(state): State<AppState>,
+  Query(req): Query<GetFileRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+  let path_str = req.path;
+
+  // Security check: ensure path is within allowed directories or subdirectories
+  // This will check if path is within allowed dirs and if it exists
+  // For files, we might need a resolve_file_path equivalent, or check parent dir
+  // Actually resolve_directory_path currently checks if path exists and is a DIR.
+  // So we probably need to check if the file's parent is allowed.
+
+  let path = std::path::Path::new(&path_str);
+
+  info!("RawFile: Request path: {}", path_str);
+
+  // Security check: ensure file is under search_roots
+  use crate::path::{canonicalize_existing, canonicalize_roots, is_under_any_root};
+
+  let canon_roots = canonicalize_roots(&state.config.search_roots);
+
+  // Check if file exists and canonicalize
+  if !path.exists() {
+    warn!("RawFile: File does not exist: {}", path_str);
+    return Err(ApiError::NotFound(format!("File not found: {}", path_str)));
+  }
+
+  let canonical_path = match canonicalize_existing(path) {
+    Ok(p) => p,
+    Err(e) => {
+      warn!("RawFile: Canonicalize failed for {}: {}", path_str, e);
+      return Err(ApiError::NotFound(format!("Path error: {}", e)));
+    }
+  };
+
+  info!("RawFile: Canonical path: {:?}", canonical_path);
+
+  if !is_under_any_root(&canonical_path, &canon_roots) {
+    warn!(
+      "RawFile: Access denied for {:?}. Not under any root: {:?}",
+      canonical_path, canon_roots
+    );
+    return Err(ApiError::NotFound(format!("Access denied: {}", path_str)));
+  }
+
+  if !path.exists() || !path.is_file() {
+    warn!(
+      "RawFile: File check failed for {}: exists={}, is_file={}",
+      path_str,
+      path.exists(),
+      path.is_file()
+    );
+    return Err(ApiError::NotFound(format!(
+      "File not found or not a file: {}",
+      path_str
+    )));
+  }
+
+  // Open file
+  let file = tokio::fs::File::open(path)
+    .await
+    .map_err(|e| ApiError::Internal(e.to_string()))?;
+  let stream = tokio_util::io::ReaderStream::new(file);
+  let body = Body::from_stream(stream);
+
+  // Guess mime
+  let mime = mime_guess::from_path(path).first_or_octet_stream().as_ref().to_string();
+
+  Ok(
+    axum::response::Response::builder()
+      .status(StatusCode::OK)
+      .header(axum::http::header::CONTENT_TYPE, mime)
+      .body(body)
+      .unwrap(),
+  )
+}
+
 /// 创建 Agent 路由
 pub fn create_router(config: Arc<AgentConfig>) -> Router {
   Router::new()
@@ -210,5 +296,6 @@ pub fn create_router(config: Arc<AgentConfig>) -> Router {
     .route("/api/v1/log/level", put(update_log_level))
     .route("/api/v1/log/retention", put(update_log_retention))
     .route("/api/v1/list_files", get(handle_list_files))
+    .route("/api/v1/file_raw", get(handle_get_file_raw))
     .with_state(AppState { config })
 }

@@ -6,6 +6,7 @@
     ref = $bindable(null),
     class: className,
     inset,
+    children,
     ...restProps
   }: ContextMenuPrimitive.ItemProps & { inset?: boolean } = $props();
 </script>
@@ -13,11 +14,13 @@
 <ContextMenuPrimitive.Item
   bind:ref
   class={cn(
-    'relative flex cursor-default items-center rounded-md px-2 py-1.5 text-sm transition-colors outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+    'relative flex cursor-default items-center rounded-md px-2 py-1.5 text-sm transition-colors outline-none select-none data-disabled:pointer-events-none data-disabled:opacity-50',
     inset && 'pl-8',
     className
   )}
   {...restProps}
 >
-  {@render restProps.children?.()}
+  <div class="pointer-events-auto contents">
+    {@render children?.()}
+  </div>
 </ContextMenuPrimitive.Item>

@@ -36,7 +36,8 @@
     FileText,
     Terminal
   } from 'lucide-svelte';
-  import * as ContextMenu from '$lib/components/ui/context-menu';
+  import { ContextMenu } from 'bits-ui';
+  import { cn } from '$lib/utils';
   import errorIcon from '$lib/assets/error.svg';
   import errorDarkIcon from '$lib/assets/error-dark.svg';
 
@@ -197,6 +198,9 @@
     } else if (isTextFile(item)) {
       const url = `/view?sid=explorer&file=${encodeURIComponent(item.path)}`;
       window.open(url, '_blank');
+    } else if (isImageFile(item)) {
+      const url = `/image-view?sid=explorer&file=${encodeURIComponent(item.path)}`;
+      window.open(url, '_blank');
     } else {
       console.log('File double-clicked:', item.path);
     }
@@ -305,7 +309,8 @@
     'toml',
     'gitconfig',
     'env',
-    'config'
+    'config',
+    'csv'
   ]);
 
   function isTextFile(item: ResourceItem): boolean {
@@ -340,6 +345,16 @@
 
     const ext = item.name.slice(lastDotIndex + 1).toLowerCase();
     return TEXT_EXTS.has(ext);
+  }
+
+  function isImageFile(item: ResourceItem): boolean {
+    if (item.mime_type) {
+      return item.mime_type.startsWith('image/');
+    }
+    const lastDotIndex = item.name.lastIndexOf('.');
+    if (lastDotIndex === -1) return false;
+    const ext = item.name.slice(lastDotIndex + 1).toLowerCase();
+    return ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'bmp', 'ico', 'tiff'].includes(ext);
   }
 
   function getFileIcon(item: ResourceItem): any {
@@ -731,44 +746,52 @@
 
   {#snippet itemContextMenu(item: ResourceItem)}
     {#if item && item.name}
-      <ContextMenu.Content class="w-64 text-[13px]">
-        {#if item.type === 'dir' || item.type === 'linkdir' || isTextFile(item)}
+      <ContextMenu.Content
+        class="z-50 min-w-[200px] overflow-hidden rounded-md border border-black/10 bg-white/95 p-1 text-neutral-900 shadow-lg backdrop-blur-xl dark:border-white/10 dark:bg-[#1c1c1e]/95 dark:text-white/90"
+      >
+        {#if item.type === 'dir' || item.type === 'linkdir' || isTextFile(item) || isImageFile(item)}
           <ContextMenu.Item
-            class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
-            onclick={() => handleRowDoubleClick(item)}
+            class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
+            onSelect={() => handleRowDoubleClick(item)}
           >
             <ExternalLink class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
             <span>打开</span>
           </ContextMenu.Item>
-          <ContextMenu.Separator class="bg-black/5 dark:bg-white/10" />
+          <ContextMenu.Separator class="my-1 h-px bg-black/5 dark:bg-white/10" />
         {/if}
 
         <ContextMenu.Item
-          class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
-          onclick={() => copyToClipboard(item.path)}
+          class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
+          onSelect={() => copyToClipboard(item.path)}
         >
           <Link class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>复制 ODFI 路径</span>
         </ContextMenu.Item>
 
         <ContextMenu.Item
-          class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
-          onclick={() => copyToClipboard(item.name)}
+          class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
+          onSelect={() => copyToClipboard(item.name)}
         >
           <Copy class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>复制名称</span>
         </ContextMenu.Item>
 
         {#if item.type === 'file' || item.type === 'linkfile'}
-          <ContextMenu.Item class="h-8 py-0 focus:bg-[#007aff] focus:text-white" onclick={() => handleDownload(item)}>
+          <ContextMenu.Separator class="my-1 h-px bg-black/5 dark:bg-white/10" />
+          <ContextMenu.Item
+            class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
+            onSelect={() => handleDownload(item)}
+          >
             <Download class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
             <span>下载</span>
           </ContextMenu.Item>
         {/if}
 
-        <ContextMenu.Separator class="bg-black/5 dark:bg-white/10" />
+        <ContextMenu.Separator class="my-1 h-px bg-black/5 dark:bg-white/10" />
 
-        <ContextMenu.Item class="h-8 py-0 focus:bg-[#007aff] focus:text-white">
+        <ContextMenu.Item
+          class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
+        >
           <Info class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>属性</span>
         </ContextMenu.Item>
@@ -792,10 +815,12 @@
   {/snippet}
 
   {#snippet containerContextMenu()}
-    <ContextMenu.Content class="w-48 text-[13px]">
+    <ContextMenu.Content
+      class="z-50 min-w-[200px] overflow-hidden rounded-md border border-black/10 bg-white/95 p-1 text-neutral-900 shadow-lg backdrop-blur-xl dark:border-white/10 dark:bg-[#1c1c1e]/95 dark:text-white/90"
+    >
       <ContextMenu.Item
-        class="h-8 py-0 focus:bg-[#007aff] focus:text-white"
-        onclick={() => loadResources(currentOdfiStr)}
+        class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
+        onSelect={() => loadResources(currentOdfiStr)}
       >
         <RefreshCw class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
         <span>刷新</span>
@@ -858,254 +883,279 @@
     </div>
 
     <!-- Content Area -->
-    <ContextMenu.Root>
-      <ContextMenu.Trigger>
-        {#snippet child({ props })}
-          <div
-            {...props}
-            class="flex-1 overflow-auto p-4"
-            onclick={() => (selectedItem = null)}
-            role="button"
-            tabindex="0"
-            onkeydown={() => {}}
-          >
-            {#if error}
-              <div class="mx-auto w-full max-w-5xl py-12">
-                <div class="rounded-lg border border-border bg-card p-10 md:p-14">
-                  <div class="flex flex-col items-center gap-10 md:flex-row md:items-start md:gap-14">
-                    <!-- Illustration -->
-                    <div class="shrink-0">
-                      <img src={errorIcon} alt="Error" class="w-48 md:w-60 dark:hidden" />
-                      <img src={errorDarkIcon} alt="Error" class="hidden w-48 md:w-60 dark:block" />
-                    </div>
+    <div
+      class="relative flex-1 overflow-auto p-4"
+      onclick={() => (selectedItem = null)}
+      role="button"
+      tabindex="0"
+      onkeydown={() => {}}
+    >
+      <!-- Layer 1: Background Context Menu (Container Actions) -->
+      <ContextMenu.Root>
+        <ContextMenu.Trigger>
+          {#snippet child({ props })}
+            <div
+              {...props}
+              class="absolute inset-0 z-0 h-full w-full cursor-default"
+              data-menu-trigger="container"
+            ></div>
+          {/snippet}
+        </ContextMenu.Trigger>
+        {@render containerContextMenu()}
+      </ContextMenu.Root>
 
-                    <!-- Content -->
-                    <div class="w-full flex-1 space-y-6 text-left">
-                      <div>
-                        <h3 class="text-2xl font-normal text-foreground">资源列举失败</h3>
-                        <p class="mt-2 text-muted-foreground">在访问指定的 ODFI 路径时发生了错误。</p>
+      <!-- Layer 2: Content (Foreground) -->
+      <div class="pointer-events-none relative z-10 min-h-full">
+        {#if error}
+          <div class="pointer-events-auto mx-auto w-full max-w-5xl py-12">
+            <div class="rounded-lg border border-border bg-card p-10 md:p-14">
+              <div class="flex flex-col items-center gap-10 md:flex-row md:items-start md:gap-14">
+                <!-- Illustration -->
+                <div class="shrink-0">
+                  <img src={errorIcon} alt="Error" class="w-48 md:w-60 dark:hidden" />
+                  <img src={errorDarkIcon} alt="Error" class="hidden w-48 md:w-60 dark:block" />
+                </div>
+
+                <!-- Content -->
+                <div class="w-full flex-1 space-y-6 text-left">
+                  <div>
+                    <h3 class="text-2xl font-normal text-foreground">资源列举失败</h3>
+                    <p class="mt-2 text-muted-foreground">在访问指定的 ODFI 路径时发生了错误。</p>
+                  </div>
+
+                  <!-- Error Details Box -->
+                  <div class="rounded-md border border-border bg-background text-sm">
+                    <details class="group border-border last:border-0" open>
+                      <summary
+                        class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
+                      >
+                        <span>错误详情</span>
+                        <ChevronDown
+                          class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
+                        />
+                      </summary>
+                      <div class="px-4 pt-0 pb-4 text-muted-foreground">
+                        <p class="rounded bg-muted p-3 font-mono text-xs leading-relaxed break-all">
+                          {error}
+                        </p>
                       </div>
+                    </details>
 
-                      <!-- Error Details Box -->
-                      <div class="rounded-md border border-border bg-background text-sm">
-                        <details class="group border-border last:border-0" open>
-                          <summary
-                            class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
-                          >
-                            <span>错误详情</span>
-                            <ChevronDown
-                              class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
-                            />
-                          </summary>
-                          <div class="px-4 pt-0 pb-4 text-muted-foreground">
-                            <p class="rounded bg-muted p-3 font-mono text-xs leading-relaxed break-all">
-                              {error}
-                            </p>
-                          </div>
-                        </details>
-
-                        <details class="group border-t border-border last:border-0">
-                          <summary
-                            class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
-                          >
-                            <span>排查建议</span>
-                            <ChevronDown
-                              class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
-                            />
-                          </summary>
-                          <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
-                            <ul class="ml-2 list-inside list-disc space-y-1">
-                              <li>检查 ODFI 语法是否正确</li>
-                              <li>确保远程代理 (Agent) 处于在线状态</li>
-                              <li>如果是 S3，请检查子账户是否有对应 Bucket 的权限 (ListBuckets/ListObjects)</li>
-                              <li>检查网络连接是否正常</li>
-                            </ul>
-                          </div>
-                        </details>
-
-                        <!-- Retry action -->
-                        <div class="border-t border-border p-4">
-                          <Button
-                            variant="default"
-                            size="sm"
-                            onclick={() => loadResources(currentOdfiStr)}
-                            disabled={loading}
-                          >
-                            <RefreshCw class="mr-2 h-4 w-4 {loading ? 'animate-spin' : ''}" />
-                            重试
-                          </Button>
-                        </div>
+                    <details class="group border-t border-border last:border-0">
+                      <summary
+                        class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
+                      >
+                        <span>排查建议</span>
+                        <ChevronDown
+                          class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
+                        />
+                      </summary>
+                      <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
+                        <ul class="ml-2 list-inside list-disc space-y-1">
+                          <li>检查 ODFI 语法是否正确</li>
+                          <li>确保远程代理 (Agent) 处于在线状态</li>
+                          <li>如果是 S3，请检查子账户是否有对应 Bucket 的权限 (ListBuckets/ListObjects)</li>
+                          <li>检查网络连接是否正常</li>
+                        </ul>
                       </div>
+                    </details>
+
+                    <!-- Retry action -->
+                    <div class="border-t border-border p-4">
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onclick={() => loadResources(currentOdfiStr)}
+                        disabled={loading}
+                      >
+                        <RefreshCw class="mr-2 h-4 w-4 {loading ? 'animate-spin' : ''}" />
+                        重试
+                      </Button>
                     </div>
                   </div>
                 </div>
               </div>
-            {:else}
-              <div class="rounded-md border border-border/40 dark:border-gray-700/50">
-                {#if viewMode === 'table'}
-                  <table class="w-full text-sm">
-                    <thead class="block w-full bg-muted/40">
-                      <tr class="flex w-full">
-                        <th
-                          class="flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle text-muted-foreground"
-                        ></th>
-                        <th class="flex h-10 flex-1 items-center px-4 text-left align-middle text-muted-foreground"
-                          >Name</th
-                        >
-                        <th
-                          class="flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
-                          >Size</th
-                        >
-                        <th
-                          class="flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
-                          >Modified</th
-                        >
-                      </tr>
-                    </thead>
-                    <tbody class="block max-h-[calc(100vh-16rem)] w-full overflow-y-auto">
-                      {#if displayedItems.length === 0 && !loading}
-                        <tr class="flex w-full border-t border-border/40 dark:border-gray-700/50">
-                          <td class="w-full p-8 text-center text-muted-foreground"> This directory is empty. </td>
-                        </tr>
-                      {/if}
-                      {#each displayedItems as item}
-                        <ContextMenu.Root>
-                          <ContextMenu.Trigger
-                            class="flex w-full cursor-pointer border-t border-border/40 hover:bg-muted/50 dark:border-gray-700/50"
+            </div>
+          </div>
+        {:else}
+          <div class="rounded-md border border-border/40 dark:border-gray-700/50">
+            {#if viewMode === 'table'}
+              <table class="w-full text-sm">
+                <thead class="block w-full bg-muted/40">
+                  <tr class="flex w-full">
+                    <th
+                      class="flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle text-muted-foreground"
+                    ></th>
+                    <th class="flex h-10 flex-1 items-center px-4 text-left align-middle text-muted-foreground">Name</th
+                    >
+                    <th
+                      class="flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
+                      >Size</th
+                    >
+                    <th
+                      class="flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
+                      >Modified</th
+                    >
+                  </tr>
+                </thead>
+                <tbody class="block max-h-[calc(100vh-16rem)] w-full overflow-y-auto">
+                  {#if displayedItems.length === 0 && !loading}
+                    <tr class="flex w-full border-t border-border/40 dark:border-gray-700/50">
+                      <td class="w-full p-8 text-center text-muted-foreground"> This directory is empty. </td>
+                    </tr>
+                  {/if}
+                  {#each displayedItems as item}
+                    <ContextMenu.Root>
+                      <ContextMenu.Trigger
+                        class="pointer-events-auto flex w-full cursor-pointer border-t border-border/40 hover:bg-muted/50 dark:border-gray-700/50"
+                      >
+                        {#snippet child({ props })}
+                          <tr
+                            {...props}
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              handleRowClick(item);
+                            }}
+                            oncontextmenu={(e) => {
+                              handleRowClick(item);
+                              (props as any).oncontextmenu?.(e);
+                            }}
+                            ondblclick={() => handleRowDoubleClick(item)}
                           >
-                            {#snippet child({ props })}
-                              <tr
-                                {...props}
-                                onclick={(e) => {
-                                  e.stopPropagation();
-                                  handleRowClick(item);
-                                }}
-                                ondblclick={() => handleRowDoubleClick(item)}
-                              >
-                                <td class="flex w-14 flex-0 items-center justify-center p-2">
-                                  {#if item.type === 'dir'}
-                                    {@render macOSFolder('h-5 w-5', !!item.has_children)}
-                                  {:else if item.type === 'linkdir'}
-                                    {@render macOSFolder('h-5 w-5', !!item.has_children, Link)}
-                                  {:else if item.type === 'linkfile'}
-                                    {@render macOSFile('h-5 w-5', Link, isTextFile(item))}
-                                  {:else if getFileIcon(item) === FileArchive}
-                                    {@render macOSArchive('h-5 w-5', item.name)}
-                                  {:else}
-                                    {@render macOSFile('h-5 w-5', getFileIcon(item), isTextFile(item))}
-                                  {/if}
-                                </td>
-                                <td class="flex flex-1 items-center truncate p-2">
-                                  {item.name}
-                                </td>
-                                <td
-                                  class="flex w-24 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
-                                >
-                                  {formatSize(item.size)}
-                                </td>
-                                <td
-                                  class="flex w-40 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
-                                >
-                                  {#if item.modified}
-                                    {new Date(item.modified * 1000).toLocaleString()}
-                                  {/if}
-                                </td>
-                              </tr>
-                            {/snippet}
-                          </ContextMenu.Trigger>
-                          {@render itemContextMenu(item)}
-                        </ContextMenu.Root>
-                      {/each}
-                    </tbody>
-                  </table>
-                {:else}
-                  <!-- Grid View (Auto-fill) -->
-                  <div class="grid gap-2 p-2" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));">
-                    {#if displayedItems.length === 0 && !loading}
-                      <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
-                    {/if}
-                    {#each displayedItems as item}
-                      <div class="flex flex-col items-center gap-0">
-                        <ContextMenu.Root>
-                          <ContextMenu.Trigger>
-                            {#snippet child({ props })}
-                              <button
-                                {...props}
-                                class="group/icon flex h-20 w-20 items-center justify-center rounded-xl transition-all hover:bg-black/5 active:bg-blue-500/20 dark:hover:bg-white/5 {selectedItem ===
-                                item
-                                  ? 'bg-black/10 dark:bg-white/10'
-                                  : ''}"
-                                onclick={(e) => {
-                                  e.stopPropagation();
-                                  handleRowClick(item);
-                                }}
-                                ondblclick={() => handleRowDoubleClick(item)}
-                              >
-                                <div class="transition-transform group-hover/icon:scale-105">
-                                  {#if item.type === 'dir'}
-                                    {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children)}
-                                  {:else if item.type === 'linkdir'}
-                                    {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children, Link)}
-                                  {:else if item.type === 'linkfile'}
-                                    {@render macOSFile('h-[62px] w-[62px]', Link, isTextFile(item))}
-                                  {:else if getFileIcon(item) === FileArchive}
-                                    {@render macOSArchive('h-[62px] w-[62px]', item.name)}
-                                  {:else}
-                                    {@render macOSFile('h-[62px] w-[62px]', getFileIcon(item), isTextFile(item))}
-                                  {/if}
-                                </div>
-                              </button>
-                            {/snippet}
-                          </ContextMenu.Trigger>
-                          {@render itemContextMenu(item)}
-                        </ContextMenu.Root>
-
-                        <ContextMenu.Root>
-                          <ContextMenu.Trigger>
-                            {#snippet child({ props })}
-                              <div {...props} class="flex flex-col items-center">
-                                <button
-                                  class="block max-w-[124px] rounded-[3px] px-1.5 py-0.5 text-center text-[10.5px] leading-tight font-light break-all transition-colors {selectedItem ===
-                                  item
-                                    ? 'bg-[#0060df] text-white'
-                                    : 'hover:bg-blue-500 hover:text-white active:bg-blue-600'}"
-                                  onclick={(e) => {
-                                    e.stopPropagation();
-                                    handleRowClick(item);
-                                  }}
-                                  ondblclick={() => handleRowDoubleClick(item)}
-                                  title={item.name}
-                                >
-                                  {truncateMiddle(item.name, 24, 8)}
-                                </button>
-                                {#if (item.type === 'dir' || item.type === 'linkdir') && item.child_count != null}
-                                  {@const count =
-                                    (showHidden
-                                      ? (item.child_count ?? 0)
-                                      : (item.child_count ?? 0) - (item.hidden_child_count ?? 0)) ?? 0}
-                                  <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
-                                    {count === 0 ? '无项目' : `${count} 个项目`}
-                                  </span>
-                                {:else if item.size}
-                                  <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
-                                    {formatSize(item.size)}
-                                  </span>
-                                {/if}
-                              </div>
-                            {/snippet}
-                          </ContextMenu.Trigger>
-                          {@render itemContextMenu(item)}
-                        </ContextMenu.Root>
-                      </div>
-                    {/each}
-                  </div>
+                            <td class="flex w-14 flex-0 items-center justify-center p-2">
+                              {#if item.type === 'dir'}
+                                {@render macOSFolder('h-5 w-5', !!item.has_children)}
+                              {:else if item.type === 'linkdir'}
+                                {@render macOSFolder('h-5 w-5', !!item.has_children, Link)}
+                              {:else if item.type === 'linkfile'}
+                                {@render macOSFile('h-5 w-5', Link, isTextFile(item))}
+                              {:else if getFileIcon(item) === FileArchive}
+                                {@render macOSArchive('h-5 w-5', item.name)}
+                              {:else}
+                                {@render macOSFile('h-5 w-5', getFileIcon(item), isTextFile(item))}
+                              {/if}
+                            </td>
+                            <td class="flex flex-1 items-center truncate p-2">
+                              {item.name}
+                            </td>
+                            <td
+                              class="flex w-24 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
+                            >
+                              {formatSize(item.size)}
+                            </td>
+                            <td
+                              class="flex w-40 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
+                            >
+                              {#if item.modified}
+                                {new Date(item.modified * 1000).toLocaleString()}
+                              {/if}
+                            </td>
+                          </tr>
+                        {/snippet}
+                      </ContextMenu.Trigger>
+                      {@render itemContextMenu(item)}
+                    </ContextMenu.Root>
+                  {/each}
+                </tbody>
+              </table>
+            {:else}
+              <!-- Grid View (Auto-fill) -->
+              <div class="grid gap-2 p-2" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));">
+                {#if displayedItems.length === 0 && !loading}
+                  <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
                 {/if}
+                {#each displayedItems as item}
+                  <div class="flex flex-col items-center gap-0">
+                    <ContextMenu.Root>
+                      <ContextMenu.Trigger>
+                        {#snippet child({ props })}
+                          <div
+                            {...props}
+                            class="group/icon pointer-events-auto flex h-20 w-20 cursor-pointer items-center justify-center rounded-xl transition-all hover:bg-black/5 active:bg-blue-500/20 dark:hover:bg-white/5 {selectedItem ===
+                            item
+                              ? 'bg-black/10 dark:bg-white/10'
+                              : ''}"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              handleRowClick(item);
+                            }}
+                            oncontextmenu={(e) => {
+                              handleRowClick(item);
+                              (props as any).oncontextmenu?.(e);
+                            }}
+                            ondblclick={() => handleRowDoubleClick(item)}
+                            role="button"
+                            tabindex="0"
+                          >
+                            <div class="transition-transform group-hover/icon:scale-105">
+                              {#if item.type === 'dir'}
+                                {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children)}
+                              {:else if item.type === 'linkdir'}
+                                {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children, Link)}
+                              {:else if item.type === 'linkfile'}
+                                {@render macOSFile('h-[62px] w-[62px]', Link, isTextFile(item))}
+                              {:else if getFileIcon(item) === FileArchive}
+                                {@render macOSArchive('h-[62px] w-[62px]', item.name)}
+                              {:else}
+                                {@render macOSFile('h-[62px] w-[62px]', getFileIcon(item), isTextFile(item))}
+                              {/if}
+                            </div>
+                          </div>
+                        {/snippet}
+                      </ContextMenu.Trigger>
+                      {@render itemContextMenu(item)}
+                    </ContextMenu.Root>
+
+                    <ContextMenu.Root>
+                      <ContextMenu.Trigger>
+                        {#snippet child({ props })}
+                          <div
+                            {...props}
+                            class="flex flex-col items-center"
+                            oncontextmenu={(e) => {
+                              handleRowClick(item);
+                              (props as any).oncontextmenu?.(e);
+                            }}
+                          >
+                            <button
+                              class="pointer-events-auto block max-w-[124px] rounded-[3px] px-1.5 py-0.5 text-center text-[10.5px] leading-tight font-light break-all transition-colors {selectedItem ===
+                              item
+                                ? 'bg-[#0060df] text-white'
+                                : 'hover:bg-blue-500 hover:text-white active:bg-blue-600'}"
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                handleRowClick(item);
+                              }}
+                              ondblclick={() => handleRowDoubleClick(item)}
+                              title={item.name}
+                            >
+                              {truncateMiddle(item.name, 24, 8)}
+                            </button>
+                            {#if (item.type === 'dir' || item.type === 'linkdir') && item.child_count != null}
+                              {@const count =
+                                (showHidden
+                                  ? (item.child_count ?? 0)
+                                  : (item.child_count ?? 0) - (item.hidden_child_count ?? 0)) ?? 0}
+                              <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
+                                {count === 0 ? '无项目' : `${count} 个项目`}
+                              </span>
+                            {:else if item.size}
+                              <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
+                                {formatSize(item.size)}
+                              </span>
+                            {/if}
+                          </div>
+                        {/snippet}
+                      </ContextMenu.Trigger>
+                      {@render itemContextMenu(item)}
+                    </ContextMenu.Root>
+                  </div>
+                {/each}
               </div>
             {/if}
           </div>
-        {/snippet}
-      </ContextMenu.Trigger>
-      {@render containerContextMenu()}
-    </ContextMenu.Root>
+        {/if}
+      </div>
+    </div>
   </div>
 </div>
