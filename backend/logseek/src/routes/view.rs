@@ -185,7 +185,7 @@ pub async fn view_cache_json(
       let total = all_lines.len();
       debug!("✅ 回源读取成功: lines={}", total);
       simple_cache()
-        .put_lines(&params.sid, &file_url, all_lines.clone(), encoding_name.clone())
+        .put_lines(&params.sid, &file_url, &all_lines, encoding_name.clone())
         .await;
 
       // 从全量数据中切片返回

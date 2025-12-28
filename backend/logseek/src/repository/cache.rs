@@ -18,7 +18,7 @@ pub struct CompactLines {
 }
 
 impl CompactLines {
-  fn from_lines(lines: Vec<String>, encoding: String) -> Self {
+  fn from_slice(lines: &[String], encoding: String) -> Self {
     // 预分配内存：总字符数 + 少量额外空间
     let total_len: usize = lines.iter().map(|s| s.len()).sum();
     let mut content = String::with_capacity(total_len);
@@ -26,7 +26,7 @@ impl CompactLines {
 
     for line in lines {
       line_starts.push(content.len());
-      content.push_str(&line);
+      content.push_str(line);
     }
     line_starts.push(content.len()); // 哨兵，标记最后一个行的结束位置
 
@@ -222,7 +222,7 @@ impl Cache {
     None
   }
 
-  pub async fn put_lines(&self, sid: &str, file_url: &Odfi, lines: Vec<String>, encoding: String) {
+  pub async fn put_lines(&self, sid: &str, file_url: &Odfi, lines: &[String], encoding: String) {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -242,7 +242,7 @@ impl Cache {
     );
 
     // 使用 CompactLines 优化存储
-    let compact = CompactLines::from_lines(lines, encoding);
+    let compact = CompactLines::from_slice(lines, encoding);
     session.files.insert(file_url.clone(), compact);
 
     tracing::debug!("🔍 Cache当前会话文件数: {}", session.files.len());
@@ -358,7 +358,7 @@ mod tests {
     );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, &file_url, lines.clone(), "UTF-8".to_string()).await;
+    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
     let result = c.get_lines_slice(&sid, &file_url, 1, 2).await;
 
     assert!(result.is_some());
@@ -431,9 +431,9 @@ mod tests {
       None,
     );
 
-    c.put_lines(&sid, &file_url1, vec!["a".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, &file_url1, &["a".to_string()], "UTF-8".to_string())
       .await;
-    c.put_lines(&sid, &file_url2, vec!["b".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, &file_url2, &["b".to_string()], "UTF-8".to_string())
       .await;
 
     let result1 = c
@@ -462,9 +462,9 @@ mod tests {
       None,
     );
 
-    c.put_lines(&sid1, &file_url, vec!["content1".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid1, &file_url, &["content1".to_string()], "UTF-8".to_string())
       .await;
-    c.put_lines(&sid2, &file_url, vec!["content2".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid2, &file_url, &["content2".to_string()], "UTF-8".to_string())
       .await;
 
     let result1 = c
@@ -493,7 +493,7 @@ mod tests {
     );
     let lines: Vec<String> = (1..=10).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, &file_url, lines, "UTF-8".to_string()).await;
+    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
 
     // 获取第 3-5 行 (1-based indexing)
     let result = c.get_lines_slice(&sid, &file_url, 3, 5).await;
@@ -519,7 +519,7 @@ mod tests {
     );
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, &file_url, lines, "UTF-8".to_string()).await;
+    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
 
     // 请求超出范围的行
     let result = c.get_lines_slice(&sid, &file_url, 1, 100).await;
@@ -641,7 +641,7 @@ mod tests {
     );
     let lines: Vec<String> = (1..=5).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, &file_url, lines, "UTF-8".to_string()).await;
+    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
 
     // 测试边界条件：start=0（应该被调整为1）
     let result = c.get_lines_slice(&sid, &file_url, 0, 2).await;
@@ -689,7 +689,7 @@ mod tests {
     );
 
     // 存储空行列表
-    c.put_lines(&sid, &file_url, vec![], "UTF-8".to_string()).await;
+    c.put_lines(&sid, &file_url, &[], "UTF-8".to_string()).await;
 
     let result = c.get_lines_slice(&sid, &file_url, 1, 10).await;
     // 空文件应该返回 None 或空结果
@@ -740,7 +740,7 @@ mod tests {
       None,
     );
 
-    c.put_lines(&sid, &file_url, vec!["line 1".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, &file_url, &["line 1".to_string()], "UTF-8".to_string())
       .await;
 
     let result = c.get_lines_slice(&sid, &file_url, 1, 1).await;
@@ -761,7 +761,7 @@ mod tests {
 
     c.put_keywords(&sid, vec![KeywordHighlight::Literal("test".to_string())])
       .await;
-    c.put_lines(&sid, &file_url, vec!["line 1".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, &file_url, &["line 1".to_string()], "UTF-8".to_string())
       .await;
 
     // Verify existence

@@ -79,8 +79,9 @@ pub async fn handle_search(
   // 将 channel 转换为 NDJSON 流
   let stream = ReceiverStream::new(rx).map(move |msg| {
     let _ = &_cancel_guard; // 捕获 guard
-    let json = serde_json::to_string(&msg).unwrap_or_else(|_| "{}".to_string());
-    Ok::<_, std::convert::Infallible>(format!("{}\n", json))
+    let mut json = serde_json::to_vec(&msg).unwrap_or_else(|_| b"{}".to_vec());
+    json.push(b'\n');
+    Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(json))
   });
 
   axum::response::Response::builder()

@@ -21,20 +21,24 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 // 搜索（多存储源并行搜索）
 // ============================================================================
 
-/// 序列化事件为 NDJSON 字节
-fn serialize_event(value: &serde_json::Value) -> Option<Bytes> {
-  match serde_json::to_vec(value) {
-    Ok(mut v) => {
-      v.push(b'\n');
-      Some(Bytes::from(v))
-    }
-    Err(e) => {
-      tracing::warn!("[Search] 序列化失败: {}", e);
-      None
-    }
-  }
+#[derive(serde::Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum SearchResponse<'a> {
+  Result {
+    data: crate::utils::renderer::SearchJsonResult<'a>,
+  },
+  Error {
+    source: String,
+    message: String,
+    recoverable: bool,
+  },
+  Complete {
+    source: String,
+    elapsed_ms: u64,
+  },
 }
 
+/// 构建 NDJSON HTTP 响应（包含 X-Logseek-SID 头）
 /// 将 SearchEvent 流转换为 NDJSON 字节流
 fn convert_to_ndjson_stream(
   mut rx: mpsc::Receiver<SearchEvent>,
@@ -53,30 +57,30 @@ fn convert_to_ndjson_stream(
         }
       );
 
-      let json_value = match event {
+      let json_vec = match event {
         SearchEvent::Success(res) => {
           let json_obj = crate::utils::renderer::render_json_chunks(
             &res.path,
             res.merged.clone(),
-            res.lines.clone(),
+            &res.lines, // Pass ref
             &highlights,
-            res.encoding.clone(),
+            &res.encoding, // Pass ref
           );
-          Some(serde_json::json!({"type": "result", "data": json_obj}))
+          serde_json::to_vec(&SearchResponse::Result { data: json_obj }).ok()
         }
         SearchEvent::Error { source, message, recoverable } => {
           tracing::debug!("[Search Route] 错误事件: source={}, msg={}", source, message);
-          serde_json::to_value(SearchEvent::Error { source, message, recoverable }).ok()
+          serde_json::to_vec(&SearchResponse::Error { source, message, recoverable }).ok()
         }
         SearchEvent::Complete { source, elapsed_ms } => {
           tracing::debug!("[Search Route] 完成事件: source={}, elapsed={}ms", source, elapsed_ms);
-          serde_json::to_value(SearchEvent::Complete { source, elapsed_ms }).ok()
+          serde_json::to_vec(&SearchResponse::Complete { source, elapsed_ms }).ok()
         }
       };
 
-      if let Some(value) = json_value
-        && let Some(bytes) = serialize_event(&value) {
-          yield Ok(bytes);
+      if let Some(mut bytes) = json_vec {
+          bytes.push(b'\n');
+          yield Ok(Bytes::from(bytes));
         } else {
           tracing::warn!("[Search Route] 序列化失败，跳过事件");
         }
@@ -122,12 +126,23 @@ pub async fn stream_search(
   };
 
   let executor = SearchExecutor::new(pool, config);
-  let (result_rx, sid) = executor.search(&body.q, ctx).await?;
+  let cancel_token = tokio_util::sync::CancellationToken::new();
+  let token_for_drop = cancel_token.clone();
+
+  let (result_rx, sid) = executor.search(&body.q, ctx, Some(cancel_token)).await?;
 
   let query = crate::query::Query::parse_github_like(&body.q).unwrap_or_default();
   let highlights = query.highlights.clone();
 
-  let stream = convert_to_ndjson_stream(result_rx, highlights);
+  let inner_stream = convert_to_ndjson_stream(result_rx, highlights);
+  let stream = async_stream::stream! {
+    // 使用变量持有 Guard，确保 stream 被 drop 时调用 cancel
+    let _guard = token_for_drop.drop_guard();
+    for await item in inner_stream {
+      yield item;
+    }
+  };
+
   build_ndjson_response(stream, sid)
 }
 
