@@ -70,6 +70,10 @@ chardetng = "0.1"
 mimalloc = "0.1.48"
 libmimalloc-sys = { version = "0.1.44", features = ["extended"] }
 url = "2.5.7"
+grep = "0.3"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+grep-matcher = "0.1"
 
 [features]
 # 是否在缓存清理后调用 mimalloc 的 mi_collect(true) 主动尝试归还空闲内存
