@@ -6,7 +6,9 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
-use opsbox_core::fs::{EntryStream, FsEntryStream, MultiFileEntryStream, create_archive_stream_from_reader};
+use opsbox_core::fs::{
+  EntrySource, EntryStream, FsEntryStream, MultiFileEntryStream, create_archive_stream_from_reader,
+};
 
 use super::search::{SearchEvent, SearchProcessor};
 
@@ -204,10 +206,10 @@ impl EntryStreamProcessor {
         continue;
       }
 
-      if meta.is_compressed {
+      if meta.is_compressed || meta.source == EntrySource::Tar || meta.source == EntrySource::TarGz {
         // tar.gz 等共享底层读取器的来源：必须保证串行读取，但可以预读小文件到内存后并发处理
         // 优化：对于小文件（< 10MB），预读到内存后允许并发处理，充分利用多核 CPU
-        const MAX_PRELOAD_SIZE: usize = 1000 * 1024 * 1024; // 10MB
+        const MAX_PRELOAD_SIZE: usize = 10 * 1024 * 1024; // 10MB
 
         // 尝试预读文件到内存
         match preload_entry(&mut reader, MAX_PRELOAD_SIZE).await {

@@ -159,7 +159,21 @@ impl SearchProcessor {
     if std::fs::metadata(path).is_err() {
       return false;
     }
-    // 2. 检查是否有 Fancy Regex
+
+    // 2. 排除归档和压缩文件，因为它们需要进行解压处理，直接搜索原始文件会得到错误结果
+    let lower = path.to_lowercase();
+    if lower.ends_with(".gz")
+      || lower.ends_with(".tgz")
+      || lower.ends_with(".tar")
+      || lower.ends_with(".zip")
+      || lower.ends_with(".bz2")
+      || lower.ends_with(".xz")
+      || lower.ends_with(".zst")
+    {
+      return false;
+    }
+
+    // 3. 检查是否有 Fancy Regex
     for term in &self.spec.terms {
       if matches!(term, crate::query::Term::RegexFancy { .. }) {
         return false;
@@ -690,9 +704,6 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   // 检查是否为文本文件
   if !is_probably_text_bytes(&sample) {
     debug!("文件不是文本格式，跳过搜索");
-
-    // 添加详细诊断信息
-    trace!("文本检测诊断信息 - 样本大小: {} 字节", sample.len());
 
     if sample.is_empty() {
       warn!("样本为空，但 is_probably_text_bytes 应返回 true（代码逻辑异常）");
@@ -2241,5 +2252,32 @@ foo lower
     let processor3 = SearchProcessor::new_with_encoding(spec, 1, None);
     assert_eq!(processor3.context_lines, 1);
     assert!(processor3.encoding.is_none());
+  }
+}
+
+#[cfg(test)]
+mod tests_gzip {
+  use super::*;
+  use crate::query::Query;
+  use tokio::io::AsyncWriteExt;
+
+  #[tokio::test]
+  async fn test_grep_context_gzip() {
+    let content = "2025-01-01 [INFO] Test log entry UNIQUE_ID_123\n";
+    let mut encoder = async_compression::tokio::write::GzipEncoder::new(Vec::new());
+    encoder.write_all(content.as_bytes()).await.unwrap();
+    encoder.shutdown().await.unwrap();
+    let compressed = encoder.into_inner();
+
+    let spec = Arc::new(Query::parse_github_like("UNIQUE_ID_123").unwrap());
+    let mut reader = async_compression::tokio::bufread::GzipDecoder::new(&compressed[..]);
+
+    let result = grep_context(&mut reader, &spec, 0, None).await.unwrap();
+    assert!(result.is_some());
+    let (lines, merged, _) = result.unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0], content.trim_end());
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0], (0, 0));
   }
 }
