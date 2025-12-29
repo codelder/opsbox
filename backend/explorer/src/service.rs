@@ -48,37 +48,81 @@ impl ExplorerService {
 
       let mut items = Vec::new();
 
+      let entry_prefix = odfi.entry_path.clone().unwrap_or_default();
+      // Ensure prefix ends with / if not empty to match directories correctly
+      let filter_prefix = if entry_prefix.is_empty() {
+        "".to_string()
+      } else if entry_prefix.ends_with('/') {
+        entry_prefix.clone()
+      } else {
+        format!("{}/", entry_prefix)
+      };
+
+      let mut synthetic_dirs = std::collections::HashSet::new();
+
       // Iterate entries
       while let Ok(Some((meta, _reader))) = stream.next_entry().await {
-        // _reader is a Box<dyn AsyncRead> which we drop immediately, skipping content.
-        // Ideally we'd skip content efficiently, but dropping the reader might trigger skip.
-        // For async-tar, dropping the entry/reader should advance to next header?
-        // OpsBox's EntryStream consumes the reader?
-        // No, standard async-tar Entry needs to be read or dropped. Dropping might not skip?
-        // WARNING: If we don't read the reader, async-tar might desync?
-        // Let's check opsbox-core implementation.
-        // TarEntryStream uses entries.next(). entries owns the archive.
-        // If we drop the reader (which is compat wrapper around entry), does it advance?
-        // async-tar documentation says: "The returned entry... can be read...".
-        // "When the entry is dropped, the underlying stream is advanced to the next entry." (Usually true for tar iterators).
-        // Let's assume it works.
+        let path = meta.path.clone();
 
-        items.push(ResourceItem {
-          name: meta.path.clone(),
-          // Use hash fragment to denote internal path for now
-          path: format!("{}#{}", odfi, meta.path),
-          r#type: if meta.path.ends_with('/') {
-            ResourceType::Dir
-          } else {
-            ResourceType::File
-          },
-          size: meta.size,
-          modified: None, // Archives often store mtime but EntryMeta might not expose it yet? opsbox-core EntryMeta has no mtime.
-          has_children: if meta.path.ends_with('/') { Some(true) } else { None }, // Assume dirs in archives are non-empty for now
-          child_count: None,
-          hidden_child_count: None,
-          mime_type: None,
-        });
+        if !path.starts_with(&filter_prefix) {
+          continue;
+        }
+
+        // Get relative path
+        let rel_path = &path[filter_prefix.len()..];
+        if rel_path.is_empty() {
+          continue; // Directory itself
+        }
+
+        // Check if it's a direct child or subdirectory
+        let parts: Vec<&str> = rel_path.splitn(2, '/').collect();
+        // If it has a slash (parts > 1) OR it ends with slash (parts=1 but split result might vary depending on trailing slash, safer to check logic)
+        // If "subdir/file", parts=["subdir", "file"]
+        // If "subdir/", parts=["subdir", ""]
+
+        let is_subdir = parts.len() > 1;
+
+        if is_subdir {
+          let dir_name = parts[0];
+          if synthetic_dirs.contains(dir_name) {
+            continue;
+          }
+          synthetic_dirs.insert(dir_name.to_string());
+
+          let mut child_odfi = odfi.clone();
+          let child_entry = format!("{}{}/", filter_prefix, dir_name);
+          child_odfi.entry_path = Some(child_entry);
+          child_odfi.target_type = TargetType::Archive;
+
+          items.push(ResourceItem {
+            name: dir_name.to_string(),
+            path: child_odfi.to_string(),
+            r#type: ResourceType::Dir,
+            size: None,
+            modified: None,
+            has_children: Some(true),
+            child_count: None,
+            hidden_child_count: None,
+            mime_type: None,
+          });
+        } else {
+          // Direct file
+          let mut child_odfi = odfi.clone();
+          child_odfi.entry_path = Some(path.clone());
+          child_odfi.target_type = TargetType::Archive;
+
+          items.push(ResourceItem {
+            name: rel_path.to_string(),
+            path: child_odfi.to_string(),
+            r#type: ResourceType::File,
+            size: meta.size,
+            modified: None,
+            has_children: None,
+            child_count: None,
+            hidden_child_count: None,
+            mime_type: None,
+          });
+        }
       }
 
       // Sort items
@@ -534,7 +578,7 @@ mod tests {
     let foo = items.iter().find(|i| i.name == "foo.txt").unwrap();
     assert_eq!(foo.r#type, ResourceType::File);
 
-    let bar = items.iter().find(|i| i.name == "bar/").unwrap();
+    let bar = items.iter().find(|i| i.name == "bar").unwrap();
     assert_eq!(bar.r#type, ResourceType::Dir);
   }
 }
