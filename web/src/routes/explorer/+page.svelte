@@ -38,6 +38,7 @@
   } from 'lucide-svelte';
   import { ContextMenu } from 'bits-ui';
   import { cn } from '$lib/utils';
+  import { isTextFile, isImageFile, isArchiveFile, truncateMiddle } from '$lib/modules/explorer/utils';
   import errorIcon from '$lib/assets/error.svg';
   import errorDarkIcon from '$lib/assets/error-dark.svg';
 
@@ -195,6 +196,11 @@
   function handleRowDoubleClick(item: ResourceItem) {
     if (item.type === 'dir' || item.type === 'linkdir') {
       handleNavigate(item.path);
+    } else if (isArchiveFile(item)) {
+      // For archives, we append ?entry=/ to tell the backend to treat it as an archive
+      // The backend ODFI parser infers TargetType::Archive from the presence of 'entry' param
+      const separator = item.path.includes('?') ? '&' : '?';
+      handleNavigate(`${item.path}${separator}entry=/`);
     } else if (isTextFile(item)) {
       const url = `/view?sid=explorer&file=${encodeURIComponent(item.path)}`;
       window.open(url, '_blank');
@@ -280,83 +286,6 @@
     return `${bytes.toFixed(1)} ${units[i]}`;
   }
 
-  const TEXT_EXTS = new Set([
-    'txt',
-    'log',
-    'md',
-    'json',
-    'yaml',
-    'yml',
-    'sh',
-    'bash',
-    'zsh',
-    'py',
-    'js',
-    'ts',
-    'rs',
-    'c',
-    'cpp',
-    'h',
-    'hpp',
-    'go',
-    'java',
-    'tsx',
-    'jsx',
-    'xml',
-    'html',
-    'css',
-    'sql',
-    'toml',
-    'gitconfig',
-    'env',
-    'config',
-    'csv'
-  ]);
-
-  function isTextFile(item: ResourceItem): boolean {
-    if (item.mime_type) {
-      if (
-        item.mime_type.startsWith('text/') ||
-        item.mime_type === 'application/json' ||
-        item.mime_type === 'application/javascript' ||
-        item.mime_type === 'application/xml' ||
-        item.mime_type.includes('script')
-      ) {
-        return true;
-      }
-      // If content detection says it's something else (like binary), trust it.
-      // Specifically, if it's an executable, it's not a text file.
-      if (
-        item.mime_type.includes('executable') ||
-        item.mime_type.includes('mach-binary') ||
-        item.mime_type.includes('elf')
-      ) {
-        return false;
-      }
-      return false;
-    }
-
-    const lastDotIndex = item.name.lastIndexOf('.');
-    if (lastDotIndex === -1) {
-      // No extension: check known full names
-      const name = item.name.toLowerCase();
-      return ['makefile', 'dockerfile', 'readme', 'license', 'ignore'].includes(name);
-    }
-
-    const ext = item.name.slice(lastDotIndex + 1).toLowerCase();
-    return TEXT_EXTS.has(ext);
-  }
-
-  function isImageFile(item: ResourceItem): boolean {
-    if (item.mime_type) {
-      return item.mime_type.startsWith('image/');
-    }
-    const lastDotIndex = item.name.lastIndexOf('.');
-    if (lastDotIndex === -1) return false;
-    const ext = item.name.slice(lastDotIndex + 1).toLowerCase();
-    return ['jpg', 'jpeg', 'png', 'gif', 'svg', 'webp', 'bmp', 'ico', 'tiff'].includes(ext);
-  }
-
   function getFileIcon(item: ResourceItem): any {
     if (item.mime_type) {
       if (item.mime_type.startsWith('image/')) return Image;
@@ -417,37 +346,6 @@
     if (['mp3', 'wav', 'ogg', 'flac'].includes(ext || '')) return Music;
 
     return null;
-  }
-
-  function truncateMiddle(str: string, maxVisualWidth: number = 40, tailChars: number = 7): string {
-    let visualWidth = 0;
-    for (let i = 0; i < str.length; i++) {
-      visualWidth += str.charCodeAt(i) > 255 ? 2 : 1;
-    }
-
-    if (visualWidth <= maxVisualWidth) return str;
-
-    const ellipsis = '...';
-    const tailStr = str.slice(-tailChars);
-
-    let tailWidth = 0;
-    for (let i = 0; i < tailStr.length; i++) {
-      tailWidth += tailStr.charCodeAt(i) > 255 ? 2 : 1;
-    }
-
-    const availableHeadWidth = maxVisualWidth - tailWidth - 3;
-    if (availableHeadWidth <= 0) return '...' + tailStr;
-
-    let headStr = '';
-    let headWidth = 0;
-    for (let i = 0; i < str.length - tailChars; i++) {
-      const charWidth = str.charCodeAt(i) > 255 ? 2 : 1;
-      if (headWidth + charWidth > availableHeadWidth) break;
-      headStr += str[i];
-      headWidth += charWidth;
-    }
-
-    return headStr + ellipsis + tailStr;
   }
 </script>
 
