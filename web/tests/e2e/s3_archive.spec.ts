@@ -347,6 +347,7 @@ SOURCES = [{
 
     const entryLink = page.getByRole('link', { name: 'archived-tgz.log' });
     await expect(entryLink).toBeVisible();
+    await expect(entryLink).toHaveAttribute('href', /file=odfi%3A%2F%2F.*app\.tar\.gz%3Fentry%3Darchived-tgz\.log/);
     await expect(page.locator('mark.highlight', { hasText: UNI_ID })).toHaveCount(1);
   });
 });

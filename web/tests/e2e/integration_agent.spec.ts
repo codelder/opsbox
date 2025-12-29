@@ -481,7 +481,9 @@ SOURCES = [{
     const entryLink = page.getByRole('link', { name: 'archived.log' });
     await expect(entryLink).toHaveAttribute(
       'href',
-      new RegExp(`file=ls%3A%2F%2Fagent%2F${encodeURIComponent(AGENT_ID)}%2Farchive%2F.*agent-archive\\.tar`)
+      new RegExp(
+        `file=odfi%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar%3Fentry%3Dinternal.*archived\\.log`
+      )
     );
   });
 
@@ -518,7 +520,9 @@ SOURCES = [{
     const entryLink = page.getByRole('link', { name: 'archived-tgz.log' });
     await expect(entryLink).toHaveAttribute(
       'href',
-      new RegExp(`file=ls%3A%2F%2Fagent%2F${encodeURIComponent(AGENT_ID)}%2Farchive%2F.*agent-archive\\.tar\\.gz`)
+      new RegExp(
+        `file=odfi%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar\\.gz%3Fentry%3Dinternal.*archived-tgz\\.log`
+      )
     );
   });
 
