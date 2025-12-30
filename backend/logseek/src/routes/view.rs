@@ -150,19 +150,36 @@ pub async fn view_cache_json(
           let factory = EntryStreamFactory::new(pool.clone());
 
           let mut stream = factory
-            .create_stream(source)
+            .create_stream(source.clone())
             .await
             .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
-          // 读取条目（预期只有一个文件）
-          if let Some(entry_res) = stream
+          // 获取要查找的 entry 路径（如果有）
+          let target_entry = match &source.target {
+            Target::Archive { entry, .. } => entry.clone(),
+            _ => None,
+          };
+
+          // 读取条目
+          let mut found = false;
+          while let Some(entry_res) = stream
             .next_entry()
             .await
             .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
           {
-            let (_, mut reader) = entry_res;
-            // 读取所有行
-            // 读取所有行（带编码检测）
+            let (meta, mut reader) = entry_res;
+
+            // 如果指定了 entry 路径，检查是否匹配
+            if let Some(ref target) = target_entry {
+              // 规范化路径比较（去除开头的 /）
+              let meta_path = meta.path.trim_start_matches('/');
+              let target_path = target.trim_start_matches('/');
+              if meta_path != target_path {
+                continue; // 跳过不匹配的条目
+              }
+            }
+
+            // 读取匹配条目的内容
             let result = crate::service::encoding::read_text_file(&mut reader, None)
               .await
               .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
@@ -171,12 +188,17 @@ pub async fn view_cache_json(
               tracing::debug!("文件编码: {}", encoding);
               all_lines = lines;
               encoding_name = encoding;
+              found = true;
             } else {
               tracing::warn!("文件被检测为二进制或为空: {}", file_url);
             }
-          } else {
+            break; // 找到第一个匹配的条目后停止
+          }
+
+          if !found && target_entry.is_some() {
+            tracing::warn!("在归档中未找到指定条目: {:?}", target_entry);
+          } else if !found {
             tracing::warn!("流未返回任何条目: {}", file_url);
-            // 空文件?
           }
         }
       }
@@ -297,8 +319,10 @@ fn odfi_to_source(odfi: &Odfi) -> Result<crate::domain::config::Source, String> 
         }
         TargetType::Archive => {
           // 如果是归档，path 是归档文件路径（对于 S3 就是 Key）
+          // entry_path 是归档内的文件路径
           Target::Archive {
             path: odfi.path.clone(),
+            entry: odfi.entry_path.clone(),
           }
         }
       }

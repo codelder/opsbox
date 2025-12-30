@@ -36,7 +36,12 @@ pub enum Target {
   /// 文件清单
   Files { paths: Vec<String> },
   /// 归档（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
-  Archive { path: String },
+  Archive {
+    path: String,
+    /// 归档内的条目路径（如果要读取归档内的特定文件）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entry: Option<String>,
+  },
 }
 
 fn default_true() -> bool {
