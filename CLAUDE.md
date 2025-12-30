@@ -17,6 +17,20 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **Font System**: Maple Mono NF CN (5 font weights, ~31MB embedded)
 - **Version**: 0.1.1
 
+**Key Backend Dependencies:**
+- `starlark = "0.13"` - Scriptable source planning
+- `chrono-tz = "0.8"` - Timezone support (Beijing)
+- `chardetng = "0.1"` - Character encoding detection
+- `grep = "0.3"` - Byte-level regex search
+- `urlencoding = "2.1.3"` - URL encoding
+
+**Key Frontend Dependencies:**
+- `@tanstack/svelte-virtual = "^3.13.12"` - Virtual scrolling
+- `lucide-svelte = "^0.554.0"` - Icons
+- `marked = "^17.0.0"` - Markdown rendering
+- `bits-ui = "^2.14.4"` - UI components
+- `mode-watcher = "^1.1.0"` - Dark mode watcher
+
 ### Core Architecture
 
 - **Monorepo Structure**: Rust backend (`backend/`) + SvelteKit frontend (`web/`)
@@ -52,15 +66,28 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
   - Agent client (`agent/`) - HTTP client for agent communication
 
 - **logseek**: Log search module with layered architecture:
-  - API layer (`routes/`, `api/`)
-  - Service layer (`service/`)
-  - Repository layer (`repository/`)
-  - Domain layer (`domain/`, `domain/source_planner/`)
+  - API layer (`routes/`, `api.rs`) - Dual layer pattern for backward compatibility
+  - Service layer (`service/`) including:
+    - `encoding.rs` - GBK and multi-encoding detection
+    - `entry_stream.rs` - Archive streaming for 25KB+ files
+    - `nl2q.rs` - Natural language to query conversion
+    - `search_executor.rs` - Search orchestration (103KB)
+    - `planners.rs` - Planner script management
+    - `profiles.rs` - S3 profile management
+    - `s3.rs` - S3-related service layer
+  - Repository layer (`repository/`) including:
+    - `cache.rs` - Search result caching
+    - `llm.rs` - LLM backend management
+    - `planners.rs` - Planner script persistence
+    - `s3.rs` - S3 profile persistence
+  - Domain layer (`domain/`) including:
+    - `config.rs` - Source/Endpoint/Target models
+    - `odfi_builder.rs` - ODFI URL construction
+    - `source_planner/` - Starlark runtime for intelligent source planning
   - Source planners (`planners/`)
   - Utilities (`utils/`)
   - Query parser (`query/`)
   - Agent integration (`agent/`)
-  - Encoding support (`service/encoding.rs`) - GBK and multi-encoding detection
   - Byte-level regex search using `grep` crate
 
 - **explorer**: Distributed resource browser module:
@@ -85,16 +112,27 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 - **SvelteKit SPA** with `adapter-static`
 - **Modular architecture** under `src/lib/modules/`:
-  - `logseek/`: Types, API clients, utilities, composables, components
+  - `logseek/`:
+    - `api/`: API clients (nl2q, planners, llm, search, view, settings)
+    - `types/`: TypeScript type definitions
+    - `composables/`: Svelte composables
+    - `components/`: Svelte components
   - `agent/`: Agent management APIs and composables
   - `explorer/`: File explorer UI, API client, grid/list views
 - **Routes**:
   - `/`: Home page
   - `/search`: Log search interface
+  - `/search/SearchEmptyState.svelte`: Empty state component
+  - `/search/SearchResultCard.svelte`: Search result card component
   - `/view`: File viewer with FileHeader component
   - `/image-view`: Image viewing page
   - `/explorer`: Distributed file explorer
   - `/settings`: Settings page
+  - `/settings/PlannerManagement.svelte`: Planner script management UI
+  - `/settings/LlmManagement.svelte`: LLM backend configuration UI
+  - `/settings/ProfileManagement.svelte`: S3 profile management UI
+  - `/settings/AgentManagement.svelte`: Agent management UI
+  - `/settings/ServerLogSettings.svelte`: Server log settings UI
   - `/prompt`: Prompt configuration
 - **Vite dev server** with proxy to backend (`/api` → `http://127.0.0.1:4000`)
 - **Built assets** output to `backend/opsbox-server/static`
@@ -132,9 +170,12 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 - **API Prefixes**: Each module has its own prefix (`/api/v1/logseek`, `/api/v1/agents`, `/api/v1/explorer`)
 - **Database**: Single SQLite file (`$HOME/.opsbox/opsbox.db`) shared across modules
-- **LLM Integration**: Configurable via environment variables (`LLM_PROVIDER`, `OLLAMA_BASE_URL`, etc.)
+- **LLM Integration**: Configurable via environment variables (`LLM_PROVIDER`, `OLLAMA_BASE_URL`, etc.) and database-persistent backends
 - **S3 Profiles**: Multiple S3 configurations managed via profiles API
 - **Agent Communication**: HTTP-based with health monitoring and tags
+- **Query Qualifiers**:
+  - `app:<appname>` - Select planner script by application name for intelligent source planning
+  - `dt:/fdt:/tdt:` - Date/time directives for time-range filtering in queries
 - **ODFI Protocol**: Unified resource identifiers in format `odfi://[id]@[type][.server_addr]/[path]?entry=[entry_path]`
   - Local: `odfi://local/var/log/nginx/access.log`
   - Agent: `odfi://web-01@agent/app/logs/error.log`
@@ -215,9 +256,145 @@ odfi://web-01@agent.192.168.1.100:4001/app/logs/error.log
 odfi://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
 ```
 
+## API Endpoints
+
+### LogSeek Module (`/api/v1/logseek`)
+
+**Search:**
+- `POST /api/v1/logseek/search.ndjson` - Stream search results in NDJSON format
+- `DELETE /api/v1/logseek/search/session/{sid}` - Delete/cancel search session
+
+**View:**
+- `GET /api/v1/logseek/view.cache.json` - Get cached view data
+- `GET /api/v1/logseek/view/download` - Download file
+- `GET /api/v1/logseek/view/raw` - View raw file content
+- `GET /api/v1/logseek/view.files.json` - List files in directory/archive
+
+**S3 Profiles:**
+- `GET /api/v1/logseek/profiles` - List S3 profiles
+- `POST /api/v1/logseek/profiles` - Create/update S3 profile
+- `DELETE /api/v1/logseek/profiles/{name}` - Delete S3 profile
+
+**S3 Settings:**
+- `GET /api/v1/logseek/settings/s3` - Get S3 settings
+- `POST /api/v1/logseek/settings/s3` - Update S3 settings
+
+**LLM Backends:**
+- `GET /api/v1/logseek/settings/llm/backends` - List LLM backends
+- `POST /api/v1/logseek/settings/llm/backends` - Create LLM backend
+- `DELETE /api/v1/logseek/settings/llm/backends/{name}` - Delete LLM backend
+- `GET /api/v1/logseek/settings/llm/backends/{name}/models` - List models for backend
+
+**LLM Models:**
+- `POST /api/v1/logseek/settings/llm/models` - Add/remove available models
+
+**LLM Default:**
+- `GET /api/v1/logseek/settings/llm/default` - Get default LLM backend
+- `POST /api/v1/logseek/settings/llm/default` - Set default LLM backend
+
+**Planner Scripts:**
+- `GET /api/v1/logseek/settings/planners/scripts` - List planner scripts
+- `POST /api/v1/logseek/settings/planners/scripts` - Save planner script
+- `GET /api/v1/logseek/settings/planners/scripts/{app}` - Get script by app name
+- `DELETE /api/v1/logseek/settings/planners/scripts/{app}` - Delete script
+- `POST /api/v1/logseek/settings/planners/test` - Test planner script
+- `GET /api/v1/logseek/settings/planners/readme` - Get planner documentation
+- `GET /api/v1/logseek/settings/planners/default` - Get default planner
+- `POST /api/v1/logseek/settings/planners/default` - Set default planner
+
+**NL2Q (Natural Language to Query):**
+- `POST /api/v1/logseek/nl2q` - Convert natural language to query syntax
+
+### Agent Manager Module (`/api/v1/agents`)
+
+**Agent Registry:**
+- `POST /api/v1/agents/register` - Register new agent
+- `GET /api/v1/agents/` - List all agents
+- `GET /api/v1/agents/tags` - List all tags
+- `GET /api/v1/agents/{agent_id}` - Get agent details
+- `DELETE /api/v1/agents/{agent_id}` - Remove agent
+
+**Heartbeat:**
+- `POST /api/v1/agents/{agent_id}/heartbeat` - Agent heartbeat
+
+**Tag Management:**
+- `GET /api/v1/agents/{agent_id}/tags` - Get agent tags
+- `POST /api/v1/agents/{agent_id}/tags` - Set agent tags
+- `POST /api/v1/agents/{agent_id}/tags/add` - Add tags
+- `DELETE /api/v1/agents/{agent_id}/tags/remove` - Remove tags
+- `DELETE /api/v1/agents/{agent_id}/tags/clear` - Clear all tags
+
+**Log Configuration (Agent Proxy):**
+- `GET /api/v1/agents/{agent_id}/log/config` - Get agent log config
+- `PUT /api/v1/agents/{agent_id}/log/level` - Set agent log level
+- `PUT /api/v1/agents/{agent_id}/log/retention` - Set agent log retention
+
+### Explorer Module (`/api/v1/explorer`)
+
+- `POST /api/v1/explorer/list` - List resources (Local/S3/Agent)
+
+### System Log Routes (`/api/v1/log`)
+
+- `GET /api/v1/log/config` - Get log configuration
+- `PUT /api/v1/log/level` - Set log level
+- `PUT /api/v1/log/retention` - Set log retention
+
+## Source Planning with Starlark
+
+LogSeek supports scriptable source planning using Starlark for intelligent log source selection.
+
+**Location:** `backend/logseek/src/domain/source_planner/`
+
+**Features:**
+- Script-based source configuration with injected context variables
+- Dynamic date range parsing with `dt:/fdt:/tdt:` directives
+- Agent tag filtering capabilities
+- S3 profile integration
+
+**Context Variables Available to Scripts:**
+- `CLEANED_QUERY`: Query with date directives removed
+- `TODAY`: Current date in YYYY-MM-DD format (Beijing timezone)
+- `DATE_RANGE`: Dict with `start` and `end` dates
+- `DATES`: List of daily objects with `iso`, `yyyymmdd`, `next_yyyymmdd`
+- `AGENTS`: List of online agents with their tags
+- `S3_PROFILES`: List of configured S3 profiles (non-sensitive fields)
+
+**Query Qualifier:**
+- `app:<appname>` - Select planner script by application name
+
+## Natural Language to Query (NL2Q)
+
+Convert natural language queries to LogSeek query syntax using LLM.
+
+**Endpoint:** `POST /api/v1/logseek/nl2q`
+
+**Request:**
+```json
+{"nl": "查找最近的错误日志"}
+```
+
+**Response:**
+```json
+{"q": "error AND level:error"}
+```
+
+**Features:**
+- System prompt with query syntax guide
+- Automatic cleanup of LLM thinking tags
+- Support for Ollama and OpenAI providers
+- Database-persistent LLM backend configuration
+
 ## Recent Updates
 
-- **Explorer module**: New distributed file/resource browser supporting Local, S3, and Agent endpoints
+- **Starlark Source Planning**: Scriptable source planning with intelligent log source selection using Starlark scripts
+- **NL2Q (Natural Language to Query)**: Convert natural language queries to LogSeek syntax using LLM
+- **Search Session Management**: Support for cancelling running searches via session IDs
+- **Starlark Runtime**: Context variables (CLEANED_QUERY, TODAY, DATE_RANGE, AGENTS, S3_PROFILES) injected into scripts
+- **Planner Script Management UI**: Full CRUD interface for managing planner scripts
+- **LLM Backend Management**: Database-persistent LLM backend configuration with Ollama/OpenAI support
+- **Agent Tag Management**: Full tag CRUD operations (add/remove/clear) for agent organization
+- **System Log Routes**: API endpoints for configuring server log level and retention
+- **Explorer module**: Distributed file/resource browser supporting Local, S3, and Agent endpoints
 - **ODFI protocol**: Unified resource identifier scheme for cross-endpoint addressing
 - **Archive browsing**: Deep navigation into tar, tar.gz, gzip, tgz archives with auto-detection
 - **S3 archive support**: Browse and view files inside S3-hosted archives
