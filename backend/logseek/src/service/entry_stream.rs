@@ -475,6 +475,33 @@ impl EntryStreamFactory {
         }
       }
       (Endpoint::S3 { .. }, _) => Err("S3 仅支持 archive/files 目标".to_string()),
+      (Endpoint::Agent { agent_id, .. }, Target::Archive { path, entry: _entry }) => {
+        // Agent 归档：从 Agent 下载归档文件，然后创建归档流
+        let client = crate::agent::create_agent_client_by_id(agent_id.clone())
+          .await
+          .map_err(|e| format!("无法创建 Agent 客户端: {}", e))?;
+
+        // 下载归档文件
+        let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(path));
+        tracing::debug!("从 Agent 下载归档: agent_id={}, path={}", agent_id, path);
+
+        let response = client
+          .get_raw(&url)
+          .await
+          .map_err(|e| format!("从 Agent 下载归档失败: {}", e))?;
+
+        // 将响应转换为字节流
+        use futures_util::TryStreamExt;
+        let bytes_stream = response
+          .bytes_stream()
+          .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+
+        // 使用 StreamReader 将字节流转换为 AsyncRead
+        let reader = tokio_util::io::StreamReader::new(bytes_stream);
+
+        // 创建归档流
+        create_archive_stream_from_reader(reader, Some(path)).await
+      }
       (Endpoint::Agent { .. }, _) => Err("Agent 来源请通过远程 SearchService 处理".to_string()),
     }
   }

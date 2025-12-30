@@ -29,6 +29,7 @@ urlencoding = "2"
 inventory = "0.3"
 async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
+futures-util = "0.3"
 
 [dev-dependencies]
 tar = "0.4"
