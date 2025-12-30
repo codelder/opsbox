@@ -399,7 +399,7 @@ impl EntryStreamFactory {
           .collect();
         Ok(Box::new(MultiFileEntryStream::new(files)))
       }
-      (Endpoint::Local { root }, Target::Archive { path }) => {
+      (Endpoint::Local { root }, Target::Archive { path, entry: _entry }) => {
         let full = if path.starts_with('/') {
           path.clone()
         } else {
@@ -410,7 +410,7 @@ impl EntryStreamFactory {
           .map_err(|e| format!("无法打开归档文件 {}: {}", full, e))?;
         create_archive_stream_from_reader(file, Some(&full)).await
       }
-      (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
+      (Endpoint::S3 { profile, bucket }, Target::Archive { path, entry: _entry }) => {
         // 加载 Profile
         let profile_row = crate::repository::s3::load_s3_profile(&self.db_pool, profile)
           .await
@@ -535,7 +535,7 @@ pub async fn build_local_entry_stream(
           .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
         return Ok(Box::new(stream));
       }
-      Target::Archive { path } => {
+      Target::Archive { path, entry: _entry } => {
         // Archive 类型：处理归档文件
         // 如果 root_or_file 本身已经是归档文件（通过扩展名判断），直接使用它
         // 否则拼接 path（适用于 root_or_file 是目录的情况）

@@ -90,7 +90,7 @@ fn build_odfi_for_result_with_source_type_and_archive_path(
       }
       Some((odfi.clone(), odfi.to_string()))
     }
-    Target::Archive { path } => {
+    Target::Archive { path, .. } => {
       let mut archive_path = if let Some(override_path) = archive_path_override
         && endpoint_type != EndpointType::S3
       {

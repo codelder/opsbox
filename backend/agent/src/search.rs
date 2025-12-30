@@ -139,9 +139,12 @@ pub async fn execute_search(
           recursive: *recursive,
         })
       }
-      ConfigTarget::Archive { path } => {
+      ConfigTarget::Archive { path, .. } => {
         // Archive 类型：传递相对路径
-        Some(ConfigTarget::Archive { path: path.clone() })
+        Some(ConfigTarget::Archive {
+          path: path.clone(),
+          entry: None,
+        })
       }
     };
     let mut estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, target_hint).await {

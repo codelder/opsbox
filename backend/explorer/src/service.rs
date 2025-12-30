@@ -404,8 +404,22 @@ impl ExplorerService {
       .map_err(|e| format!("Failed to create S3 client: {}", e))?;
 
     if let Some(bucket_name) = bucket {
-      // Level 3: Bucket - List Objects
-      // ... existing object listing logic ...
+      // Check if path points to an archive file (auto-detect)
+      let lower_path = odfi.path.to_lowercase();
+      let is_archive = odfi.target_type == TargetType::Archive
+        || lower_path.ends_with(".tar")
+        || lower_path.ends_with(".tar.gz")
+        || lower_path.ends_with(".tgz")
+        || lower_path.ends_with(".gz");
+
+      if is_archive && !odfi.path.is_empty() {
+        // Handle S3 archive browsing
+        return self
+          .list_s3_archive(&profile_row, bucket_name, &odfi.path, odfi.entry_path.as_deref())
+          .await;
+      }
+
+      // Level 3: Bucket - List Objects (directory mode)
 
       let prefix = if odfi.path.is_empty() {
         "".to_string()
@@ -536,6 +550,131 @@ impl ExplorerService {
         .collect();
       Ok(items)
     }
+  }
+
+  /// List contents of an archive file stored in S3
+  async fn list_s3_archive(
+    &self,
+    profile: &opsbox_core::repository::s3::S3Profile,
+    bucket: &str,
+    key: &str,
+    entry_path: Option<&str>,
+  ) -> Result<Vec<ResourceItem>, String> {
+    use opsbox_core::storage::s3::get_or_create_s3_client;
+
+    let client = get_or_create_s3_client(&profile.endpoint, &profile.access_key, &profile.secret_key)
+      .map_err(|e| format!("Failed to create S3 client: {}", e))?;
+
+    // Download the archive from S3
+    let resp = client
+      .get_object()
+      .bucket(bucket)
+      .key(key)
+      .send()
+      .await
+      .map_err(|e| format!("Failed to get S3 object: {}", format_s3_error(&e)))?;
+
+    // into_async_read() returns impl tokio::io::AsyncBufRead which implements AsyncRead
+    let reader = resp.body.into_async_read();
+
+    // Create archive stream
+    let mut stream = opsbox_core::fs::create_archive_stream_from_reader(reader, Some(key))
+      .await
+      .map_err(|e| format!("Failed to open archive stream: {}", e))?;
+
+    let mut items = Vec::new();
+
+    let entry_prefix = entry_path.unwrap_or_default().to_string();
+    let filter_prefix = if entry_prefix.is_empty() {
+      "".to_string()
+    } else if entry_prefix.ends_with('/') {
+      entry_prefix.clone()
+    } else {
+      format!("{}/", entry_prefix)
+    };
+
+    let mut synthetic_dirs = std::collections::HashSet::new();
+
+    // Iterate entries
+    while let Ok(Some((meta, _reader))) = stream.next_entry().await {
+      let path = meta.path.clone();
+
+      if !filter_prefix.is_empty() && !path.starts_with(&filter_prefix) {
+        continue;
+      }
+
+      let rel_path = &path[filter_prefix.len()..];
+      if rel_path.is_empty() {
+        continue;
+      }
+
+      let parts: Vec<&str> = rel_path.splitn(2, '/').collect();
+      let is_subdir = parts.len() > 1;
+
+      if is_subdir {
+        let dir_name = parts[0];
+        if synthetic_dirs.contains(dir_name) {
+          continue;
+        }
+        synthetic_dirs.insert(dir_name.to_string());
+
+        let child_odfi = Odfi::new(
+          EndpointType::S3,
+          format!("{}:{}", profile.profile_name, bucket),
+          TargetType::Archive,
+          key.to_string(),
+          Some(format!("{}{}/", filter_prefix, dir_name)),
+        );
+
+        items.push(ResourceItem {
+          name: dir_name.to_string(),
+          path: child_odfi.to_string(),
+          r#type: ResourceType::Dir,
+          size: None,
+          modified: None,
+          has_children: Some(true),
+          child_count: None,
+          hidden_child_count: None,
+          mime_type: None,
+        });
+      } else {
+        let child_odfi = Odfi::new(
+          EndpointType::S3,
+          format!("{}:{}", profile.profile_name, bucket),
+          TargetType::Archive,
+          key.to_string(),
+          Some(path.clone()),
+        );
+
+        items.push(ResourceItem {
+          name: rel_path.to_string(),
+          path: child_odfi.to_string(),
+          r#type: ResourceType::File,
+          size: meta.size,
+          modified: None,
+          has_children: None,
+          child_count: None,
+          hidden_child_count: None,
+          mime_type: None,
+        });
+      }
+    }
+
+    // Sort items
+    items.sort_by(|a, b| {
+      let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
+      let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
+
+      if a_is_dir == b_is_dir {
+        a.name.cmp(&b.name)
+      } else if a_is_dir {
+        std::cmp::Ordering::Less
+      } else {
+        std::cmp::Ordering::Greater
+      }
+    });
+
+    Ok(items)
   }
 }
 #[cfg(test)]

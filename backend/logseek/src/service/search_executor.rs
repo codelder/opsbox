@@ -229,13 +229,16 @@ impl SearchExecutor {
           .collect();
         Target::Files { paths: ps }
       }
-      (Endpoint::Agent { subpath, .. }, Target::Archive { path }) => {
+      (Endpoint::Agent { subpath, .. }, Target::Archive { path, entry }) => {
         let joined = if path.starts_with('/') {
           path.clone()
         } else {
           format!("{}/{}", subpath, path)
         };
-        Target::Archive { path: joined }
+        Target::Archive {
+          path: joined,
+          entry: entry.clone(),
+        }
       }
       _ => source.target.clone(),
     };
@@ -390,7 +393,7 @@ impl SearchExecutor {
           let target_desc = match &source.target {
             Target::Dir { path, .. } => format!("dir:{}", path),
             Target::Files { paths } => format!("files:{}", paths.len()),
-            Target::Archive { path } => format!("archive:{}", path),
+            Target::Archive { path, .. } => format!("archive:{}", path),
           };
           format!("local:{}:{}", root, target_desc)
         }
@@ -398,7 +401,7 @@ impl SearchExecutor {
           let target_desc = match &source.target {
             Target::Dir { path, .. } => format!("dir:{}", path),
             Target::Files { paths } => format!("files:{}", paths.len()),
-            Target::Archive { path } => format!("archive:{}", path),
+            Target::Archive { path, .. } => format!("archive:{}", path),
           };
           format!("s3:{}:{}:{}", profile, bucket, target_desc)
         }
