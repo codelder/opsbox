@@ -96,51 +96,111 @@ pub async fn view_cache_json(
 
       match &source.endpoint {
         Endpoint::Agent { agent_id, .. } => {
-          // Agent 来源：使用 search API 读取
-          debug!(
-            "🚀 准备调用 Agent 读取文件: agent_id={}, path={}",
-            agent_id, file_url.path
-          );
+          // 检查是否是归档条目
+          let is_archive = matches!(source.target, Target::Archive { .. });
 
-          let client = crate::agent::create_agent_client_by_id(agent_id.clone())
-            .await
-            .map_err(|e| {
-              LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
-            })?;
+          if is_archive {
+            // 归档条目：使用 EntryStreamFactory 下载归档并读取条目
+            debug!(
+              "🚀 Agent 归档条目：使用 EntryStreamFactory 读取: agent_id={}, path={}",
+              agent_id, file_url.path
+            );
 
-          let options = crate::agent::SearchOptions {
-            path_filter: None, // Target::Files 已指定文件，无需额外路径过滤，避免 Glob 匹配问题
-            target: source.target.clone(),
-            timeout_secs: Some(30),
-            ..Default::default()
-          };
+            let factory = EntryStreamFactory::new(pool.clone());
+            let mut stream = factory
+              .create_stream(source.clone())
+              .await
+              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
-          debug!("📤 发送 Agent 搜索请求: query='/.*/', options={:?}", options);
+            // 获取要查找的 entry 路径
+            let target_entry = match &source.target {
+              Target::Archive { entry, .. } => entry.clone(),
+              _ => None,
+            };
 
-          // 使用通配符查询以匹配所有行 (regex /.*/)
-          // Agent 的 SearchService 返回 Result<Stream>
-          let mut stream = client
-            .search("/.*/", 0, options)
-            .await
-            .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 搜索失败: {}", e))))?;
+            // 读取条目
+            let mut found = false;
+            let mut checked_count = 0;
+            while let Some(entry_res) = stream
+              .next_entry()
+              .await
+              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
+            {
+              let (meta, mut reader) = entry_res;
+              checked_count += 1;
+              tracing::debug!("归档条目检查 #{}: meta.path={}, target={:?}", checked_count, meta.path, target_entry);
 
-          debug!("📥以此 Agent 搜索流建立成功，开始接收数据...");
-
-          while let Some(item) = stream.next().await {
-            match item {
-              Ok(res) => {
-                // 这里的 res.lines 是匹配的行，如果查询是 "."，则是所有非空行
-                // 注意：如果文件有空行，grep "." 可能会跳过。
-                // 但这是目前 Agent API 的限制，暂且接受
-                all_lines.extend(res.lines);
-                if let Some(enc) = res.encoding
-                  && encoding_name == "UTF-8"
-                {
-                  encoding_name = enc;
+              // 如果指定了 entry 路径，检查是否匹配
+              if let Some(ref target) = target_entry {
+                let meta_path = meta.path.trim_start_matches('/').trim_start_matches("./");
+                let target_path = target.trim_start_matches('/').trim_start_matches("./");
+                if meta_path != target_path {
+                  tracing::debug!("路径不匹配: meta_path={} != target_path={}", meta_path, target_path);
+                  continue;
                 }
+                tracing::debug!("路径匹配成功!");
               }
-              Err(e) => {
-                tracing::warn!("Agent 流返回错误: {}", e);
+
+              let result = crate::service::encoding::read_text_file(&mut reader, None)
+                .await
+                .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
+
+              if let Some((lines, encoding)) = result {
+                tracing::debug!("文件编码: {}", encoding);
+                all_lines = lines;
+                encoding_name = encoding;
+                found = true;
+              } else {
+                tracing::warn!("文件被检测为二进制或为空: {}", file_url);
+              }
+              break;
+            }
+
+            if !found && target_entry.is_some() {
+              tracing::warn!("在归档中未找到指定条目: {:?}, 共检查 {} 个条目", target_entry, checked_count);
+            }
+          } else {
+            // 普通文件：使用 search API 读取
+            debug!(
+              "🚀 准备调用 Agent 读取文件: agent_id={}, path={}",
+              agent_id, file_url.path
+            );
+
+            let client = crate::agent::create_agent_client_by_id(agent_id.clone())
+              .await
+              .map_err(|e| {
+                LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
+              })?;
+
+            let options = crate::agent::SearchOptions {
+              path_filter: None,
+              target: source.target.clone(),
+              timeout_secs: Some(30),
+              ..Default::default()
+            };
+
+            debug!("📤 发送 Agent 搜索请求: query='/.*/', options={:?}", options);
+
+            let mut stream = client
+              .search("/.*/", 0, options)
+              .await
+              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 搜索失败: {}", e))))?;
+
+            debug!("📥以此 Agent 搜索流建立成功，开始接收数据...");
+
+            while let Some(item) = stream.next().await {
+              match item {
+                Ok(res) => {
+                  all_lines.extend(res.lines);
+                  if let Some(enc) = res.encoding
+                    && encoding_name == "UTF-8"
+                  {
+                    encoding_name = enc;
+                  }
+                }
+                Err(e) => {
+                  tracing::warn!("Agent 流返回错误: {}", e);
+                }
               }
             }
           }
@@ -299,14 +359,33 @@ fn odfi_to_source(odfi: &Odfi) -> Result<crate::domain::config::Source, String> 
 
   let target = match odfi.endpoint_type {
     EndpointType::Agent => {
-      // Agent 总是使用 Files 目标以读取单文件
-      // 确保路径为绝对路径（ODFI 解析可能丢失开头的 /）
-      let path = if !odfi.path.starts_with('/') {
-        format!("/{}", odfi.path)
+      // 调试日志
+      tracing::debug!(
+        "odfi_to_source: agent_id={}, path={}, entry_path={:?}, target_type={:?}, is_archive_entry={}",
+        odfi.endpoint_id, odfi.path, odfi.entry_path, odfi.target_type, odfi.is_archive_entry()
+      );
+      // 检查是否是归档内的条目
+      if odfi.is_archive_entry() {
+        // 如果是归档，使用 Archive 目标
+        let path = if !odfi.path.starts_with('/') {
+          format!("/{}", odfi.path)
+        } else {
+          odfi.path.clone()
+        };
+        Target::Archive {
+          path,
+          entry: odfi.entry_path.clone(),
+        }
       } else {
-        odfi.path.clone()
-      };
-      Target::Files { paths: vec![path] }
+        // 普通文件：使用 Files 目标
+        // 确保路径为绝对路径（ODFI 解析可能丢失开头的 /）
+        let path = if !odfi.path.starts_with('/') {
+          format!("/{}", odfi.path)
+        } else {
+          odfi.path.clone()
+        };
+        Target::Files { paths: vec![path] }
+      }
     }
     _ => {
       match odfi.target_type {

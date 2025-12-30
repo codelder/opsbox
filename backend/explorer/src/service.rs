@@ -1,9 +1,11 @@
 use std::path::PathBuf;
 
 use crate::domain::{ResourceItem, ResourceType};
+use futures_util::TryStreamExt;
 use opsbox_core::SqlitePool;
 use opsbox_core::odfi::{EndpointType, Odfi, TargetType};
 use opsbox_core::storage::s3::format_s3_error;
+use tokio_util::io::StreamReader;
 
 pub struct ExplorerService {
   db_pool: SqlitePool,
@@ -263,13 +265,19 @@ impl ExplorerService {
     // Note: timeout is optional
     let client = AgentClient::new(agent_id.clone(), endpoint, Some(std::time::Duration::from_secs(10)));
 
-    let path_str = if odfi.path.is_empty() {
+    let odfi_path = odfi.path.clone();
+    let odfi_entry = odfi.entry_path.clone();
+    tracing::debug!("list_agent: agent_id={}, odfi.path={}, odfi.entry_path={:?}, odfi.target_type={:?}",
+      agent_id, odfi_path, odfi_entry, odfi.target_type);
+
+    let path_str = if odfi_path.is_empty() {
       "/".to_string()
-    } else if odfi.path.starts_with('/') {
-      odfi.path.clone()
+    } else if odfi_path.starts_with('/') {
+      odfi_path.clone()
     } else {
-      format!("/{}", odfi.path)
+      format!("/{}", odfi_path)
     };
+    tracing::debug!("list_agent: path_str={}", path_str);
 
     // If listing root of the agent, return search roots instead of calling agent list API
     // (Agent list API might fail if / is not in whitelist)
@@ -304,6 +312,21 @@ impl ExplorerService {
     }
 
     let url = format!("/api/v1/list_files?path={}", urlencoding::encode(&path_str));
+
+    // Check if path points to an archive file (auto-detect)
+    let lower_path = path_str.to_lowercase();
+    let is_archive = odfi.target_type == TargetType::Archive
+      || lower_path.ends_with(".tar")
+      || lower_path.ends_with(".tar.gz")
+      || lower_path.ends_with(".tgz")
+      || lower_path.ends_with(".gz");
+
+    if is_archive && !path_str.is_empty() && path_str != "/" {
+      // Handle agent archive browsing - need to download the archive and list its contents
+      return self
+        .list_agent_archive(&client, agent_id, &path_str, odfi.entry_path.as_deref())
+        .await;
+    }
 
     use opsbox_core::agent::models::AgentListResponse;
     let resp: AgentListResponse = client
@@ -597,13 +620,15 @@ impl ExplorerService {
 
     // Iterate entries
     while let Ok(Some((meta, _reader))) = stream.next_entry().await {
-      let path = meta.path.clone();
+      let raw_entry_path = meta.path.clone();
+      let trimmed = raw_entry_path.trim_start_matches("./");
+      let archive_entry_path = if trimmed.is_empty() { raw_entry_path.clone() } else { trimmed.to_string() };
 
-      if !filter_prefix.is_empty() && !path.starts_with(&filter_prefix) {
+      if !filter_prefix.is_empty() && !archive_entry_path.starts_with(&filter_prefix) {
         continue;
       }
 
-      let rel_path = &path[filter_prefix.len()..];
+      let rel_path = &archive_entry_path[filter_prefix.len()..];
       if rel_path.is_empty() {
         continue;
       }
@@ -642,8 +667,8 @@ impl ExplorerService {
           EndpointType::S3,
           format!("{}:{}", profile.profile_name, bucket),
           TargetType::Archive,
-          key.to_string(),
-          Some(path.clone()),
+          key.to_string(), // Use S3 object key as archive path
+          Some(archive_entry_path.clone()), // Use entry path inside the archive
         );
 
         items.push(ResourceItem {
@@ -659,6 +684,148 @@ impl ExplorerService {
         });
       }
     }
+
+    // Sort items
+    items.sort_by(|a, b| {
+      let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
+      let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
+
+      if a_is_dir == b_is_dir {
+        a.name.cmp(&b.name)
+      } else if a_is_dir {
+        std::cmp::Ordering::Less
+      } else {
+        std::cmp::Ordering::Greater
+      }
+    });
+
+    Ok(items)
+  }
+
+  /// List contents of an archive file from an Agent
+  async fn list_agent_archive(
+    &self,
+    client: &opsbox_core::agent::AgentClient,
+    agent_id: &str,
+    archive_path: &str,
+    filter_entry: Option<&str>,
+  ) -> Result<Vec<ResourceItem>, String> {
+    tracing::debug!("list_agent_archive: agent_id={}, archive_path={}, filter_entry={:?}", agent_id, archive_path, filter_entry);
+
+    // Download the archive from agent
+    let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(archive_path));
+    let response = client
+      .get_raw(&url)
+      .await
+      .map_err(|e| format!("Failed to download archive from agent: {}", e))?;
+
+    tracing::debug!("list_agent_archive: downloaded archive, status={}", response.status());
+
+    // Convert response body stream to AsyncRead using StreamReader
+    let stream = response.bytes_stream().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let reader = StreamReader::new(stream);
+
+    // Create archive stream
+    let mut stream = opsbox_core::fs::create_archive_stream_from_reader(reader, Some(archive_path))
+      .await
+      .map_err(|e| format!("Failed to open archive stream: {}", e))?;
+
+    tracing::debug!("list_agent_archive: archive stream created successfully");
+
+    let mut items = Vec::new();
+
+    let entry_prefix = filter_entry.unwrap_or_default().to_string();
+    let filter_prefix = if entry_prefix.is_empty() {
+      "".to_string()
+    } else if entry_prefix.ends_with('/') {
+      entry_prefix.clone()
+    } else {
+      format!("{}/", entry_prefix)
+    };
+
+    let mut synthetic_dirs = std::collections::HashSet::new();
+
+    tracing::debug!("list_agent_archive: starting to iterate entries, filter_prefix={}", filter_prefix);
+
+    // Iterate entries
+    while let Ok(Some((meta, _reader))) = stream.next_entry().await {
+      tracing::debug!("list_agent_archive: found entry path={}", meta.path);
+      // Remove leading "./" that tar sometimes includes
+      let raw_entry_path = meta.path.clone();
+      let cleaned_entry_path = raw_entry_path.trim_start_matches("./");
+      let entry_path = if cleaned_entry_path.is_empty() { raw_entry_path.clone() } else { cleaned_entry_path.to_string() };
+
+      if !filter_prefix.is_empty() && !entry_path.starts_with(&filter_prefix) {
+        tracing::debug!("list_agent_archive: skipping entry, doesn't match filter_prefix");
+        continue;
+      }
+
+      // Get relative path after filter_prefix
+      let rel_path = if filter_prefix.is_empty() {
+        entry_path.clone()
+      } else {
+        entry_path[filter_prefix.len()..].to_string()
+      };
+
+      tracing::debug!("list_agent_archive: rel_path={}", rel_path);
+
+      if rel_path.is_empty() {
+        continue;
+      }
+
+      let parts: Vec<&str> = rel_path.splitn(2, '/').collect();
+      let is_subdir = parts.len() > 1;
+
+      if is_subdir {
+        let dir_name = parts[0];
+        if synthetic_dirs.contains(dir_name) {
+          continue;
+        }
+        synthetic_dirs.insert(dir_name.to_string());
+
+        let child_odfi = Odfi::new(
+          EndpointType::Agent,
+          agent_id.to_string(),
+          TargetType::Archive,
+          archive_path.to_string(), // Original archive path
+          Some(format!("{}{}/", filter_prefix, dir_name)),
+        );
+
+        items.push(ResourceItem {
+          name: dir_name.to_string(),
+          path: child_odfi.to_string(),
+          r#type: ResourceType::Dir,
+          size: None,
+          modified: None,
+          has_children: Some(true),
+          child_count: None,
+          hidden_child_count: None,
+          mime_type: None,
+        });
+      } else {
+        let child_odfi = Odfi::new(
+          EndpointType::Agent,
+          agent_id.to_string(),
+          TargetType::Archive,
+          archive_path.to_string(), // Original archive path - NOT the entry path!
+          Some(entry_path.clone()), // Entry path inside the archive
+        );
+
+        items.push(ResourceItem {
+          name: rel_path.to_string(),
+          path: child_odfi.to_string(),
+          r#type: ResourceType::File,
+          size: meta.size,
+          modified: None,
+          has_children: None,
+          child_count: None,
+          hidden_child_count: None,
+          mime_type: None,
+        });
+      }
+    }
+
+    tracing::debug!("list_agent_archive: found {} items", items.len());
 
     // Sort items
     items.sort_by(|a, b| {
