@@ -34,8 +34,22 @@ impl ExplorerService {
       format!("/{}", odfi.path)
     };
 
+    let mut is_archive_target = odfi.target_type == TargetType::Archive;
+
+    // Auto-detect archive if pointing to a local file
+    if !is_archive_target {
+      let path = PathBuf::from(&path_str);
+      if path.is_file() {
+        // Simple extension check to decide if we should treat as archive navigation
+        let lower = path_str.to_lowercase();
+        if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".gz") {
+          is_archive_target = true;
+        }
+      }
+    }
+
     // Handle archive navigation
-    if odfi.target_type == TargetType::Archive {
+    if is_archive_target {
       let path = PathBuf::from(&path_str);
       if !path.exists() {
         return Err(format!("Archive file does not exist: {}", path_str));
@@ -580,5 +594,86 @@ mod tests {
 
     let bar = items.iter().find(|i| i.name == "bar").unwrap();
     assert_eq!(bar.r#type, ResourceType::Dir);
+  }
+
+  #[tokio::test]
+  async fn test_list_local_archive_auto_detect() {
+    // Create a temporary tar file
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("autodetect.tar");
+    let file = std::fs::File::create(&archive_path).unwrap();
+    let mut builder = tar::Builder::new(file);
+
+    // Add file
+    let mut header = tar::Header::new_gnu();
+    header.set_size(4);
+    header.set_cksum();
+    builder.append_data(&mut header, "auto.txt", "test".as_bytes()).unwrap();
+
+    builder.finish().unwrap();
+
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    // Create ODFI with TargetType::Dir (simulating user input or default traversal)
+    let odfi = Odfi::new(
+      EndpointType::Local,
+      "localhost".to_string(),
+      TargetType::Dir, // Intentionally not Archive
+      archive_path.to_string_lossy().to_string(),
+      None,
+    );
+
+    // List
+    let items = service.list(&odfi).await.unwrap();
+
+    // Verify it listed content inside tar
+    assert_eq!(items.len(), 1);
+    let auto = items.iter().find(|i| i.name == "auto.txt").unwrap();
+    assert_eq!(auto.r#type, ResourceType::File);
+  }
+
+  #[tokio::test]
+  async fn test_list_local_archive_targz_auto_detect() {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+
+    // Create a temporary tar.gz file
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("autodetect.tar.gz");
+    let file = std::fs::File::create(&archive_path).unwrap();
+    let enc = GzEncoder::new(file, Compression::default());
+    let mut builder = tar::Builder::new(enc);
+
+    // Add file
+    let mut header = tar::Header::new_gnu();
+    header.set_size(4);
+    header.set_cksum();
+    builder
+      .append_data(&mut header, "inner_gz.txt", "test".as_bytes())
+      .unwrap();
+
+    let enc = builder.into_inner().unwrap();
+    enc.finish().unwrap();
+
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    // Create ODFI with TargetType::Dir
+    let odfi = Odfi::new(
+      EndpointType::Local,
+      "localhost".to_string(),
+      TargetType::Dir,
+      archive_path.to_string_lossy().to_string(),
+      None,
+    );
+
+    // List
+    let items = service.list(&odfi).await.unwrap();
+
+    // Verify it listed content
+    assert_eq!(items.len(), 1);
+    let item = items.iter().find(|i| i.name == "inner_gz.txt").unwrap();
+    assert_eq!(item.r#type, ResourceType::File);
   }
 }
