@@ -353,20 +353,20 @@
 <div class="flex h-screen gap-8 overflow-hidden px-6 py-6">
   <!-- Sidebar -->
   <aside
-    class="group/sidebar border-border relative hidden h-full border-r pr-6 md:block"
+    class="group/sidebar relative hidden h-full border-r border-border pr-6 md:block"
     style="width: {sidebarWidth}px"
   >
     <!-- 拖动把手 -->
     <button
       type="button"
-      class="hover:bg-primary/20 absolute -right-1 top-0 z-10 h-full w-2 cursor-col-resize border-0 bg-transparent p-0 transition-colors"
+      class="absolute top-0 -right-1 z-10 h-full w-2 cursor-col-resize border-0 bg-transparent p-0 transition-colors hover:bg-primary/20"
       onmousedown={startResizing}
       aria-label="调整侧边栏宽度"
     ></button>
 
     <div class="sticky top-0 max-h-full space-y-6 overflow-y-auto pr-2">
       <div>
-        <h3 class="text-foreground mb-3 text-sm font-light uppercase tracking-wider opacity-70">Explorer</h3>
+        <h3 class="mb-3 text-sm font-light tracking-wider text-foreground uppercase opacity-70">Explorer</h3>
         <Separator class="mb-4" />
 
         {#snippet renderLevel(items: any[], depth: number)}
@@ -388,7 +388,7 @@
                       : 'text-muted-foreground group-hover:text-foreground'}"
                   />
                 {:else}
-                  <div class="flex-0 mr-2 h-1.5 w-1.5 rounded-full {item.colorClass || 'bg-muted-foreground'}"></div>
+                  <div class="mr-2 h-1.5 w-1.5 flex-0 rounded-full {item.colorClass || 'bg-muted-foreground'}"></div>
                 {/if}
                 <span class="truncate">{item.label || item.name}</span>
               </button>
@@ -410,9 +410,9 @@
                   1
                 )}
               {:else if sidebarLoading[activeRoot.key as 's3' | 'agent']}
-                <div class="text-muted-foreground mt-4 animate-pulse px-2 py-1 text-xs">Loading...</div>
+                <div class="mt-4 animate-pulse px-2 py-1 text-xs text-muted-foreground">Loading...</div>
               {:else}
-                <div class="text-muted-foreground mt-4 px-2 py-1 text-xs">
+                <div class="mt-4 px-2 py-1 text-xs text-muted-foreground">
                   {#if activeRoot.key === 's3'}No profiles found{:else}No online agents{/if}
                 </div>
               {/if}
@@ -497,7 +497,7 @@
       </svg>
       {#if icon}
         {@const IconComp = icon}
-        <div class="absolute left-0 right-0 top-[62%] flex -translate-y-1/2 items-center justify-center">
+        <div class="absolute top-[62%] right-0 left-0 flex -translate-y-1/2 items-center justify-center">
           <!-- Subtle bottom highlight -->
           <div
             class="absolute inset-0 flex translate-y-[0.5px] items-center justify-center opacity-20 mix-blend-overlay"
@@ -631,7 +631,7 @@
               x="41"
               y="86"
               text-anchor="middle"
-              class="fill-slate-400 font-sans text-[11px] font-medium uppercase tracking-tighter"
+              class="fill-slate-400 font-sans text-[11px] font-medium tracking-tighter uppercase"
             >
               {ext}
             </text>
@@ -648,7 +648,7 @@
       >
         {#if item.type === 'dir' || item.type === 'linkdir' || isTextFile(item) || isImageFile(item)}
           <ContextMenu.Item
-            class="data-highlighted:bg-[#007aff] data-highlighted:text-white flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm outline-none transition-colors"
+            class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
             onSelect={() => handleRowDoubleClick(item)}
           >
             <ExternalLink class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
@@ -658,7 +658,7 @@
         {/if}
 
         <ContextMenu.Item
-          class="data-highlighted:bg-[#007aff] data-highlighted:text-white flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm outline-none transition-colors"
+          class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
           onSelect={() => copyToClipboard(item.path)}
         >
           <Link class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
@@ -666,7 +666,7 @@
         </ContextMenu.Item>
 
         <ContextMenu.Item
-          class="data-highlighted:bg-[#007aff] data-highlighted:text-white flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm outline-none transition-colors"
+          class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
           onSelect={() => copyToClipboard(item.name)}
         >
           <Copy class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
@@ -676,7 +676,7 @@
         {#if item.type === 'file' || item.type === 'linkfile'}
           <ContextMenu.Separator class="my-1 h-px bg-black/5 dark:bg-white/10" />
           <ContextMenu.Item
-            class="data-highlighted:bg-[#007aff] data-highlighted:text-white flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm outline-none transition-colors"
+            class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
             onSelect={() => handleDownload(item)}
           >
             <Download class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
@@ -687,7 +687,7 @@
         <ContextMenu.Separator class="my-1 h-px bg-black/5 dark:bg-white/10" />
 
         <ContextMenu.Item
-          class="data-highlighted:bg-[#007aff] data-highlighted:text-white flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm outline-none transition-colors"
+          class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
         >
           <Info class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
           <span>属性</span>
@@ -716,7 +716,7 @@
       class="z-50 min-w-[200px] overflow-hidden rounded-md border border-black/10 bg-white/95 p-1 text-neutral-900 shadow-lg backdrop-blur-xl dark:border-white/10 dark:bg-[#1c1c1e]/95 dark:text-white/90"
     >
       <ContextMenu.Item
-        class="data-highlighted:bg-[#007aff] data-highlighted:text-white flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm outline-none transition-colors"
+        class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
         onSelect={() => loadResources(currentOdfiStr)}
       >
         <RefreshCw class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
@@ -726,9 +726,9 @@
   {/snippet}
 
   <!-- Main Content -->
-  <div class="bg-background flex flex-1 flex-col overflow-hidden">
+  <div class="flex flex-1 flex-col overflow-hidden bg-background">
     <!-- Toolbar -->
-    <div class="border-border/40 flex items-center space-x-2 border-b p-4 dark:border-gray-700/50">
+    <div class="flex items-center space-x-2 border-b border-border/40 p-4 dark:border-gray-700/50">
       <Button variant="ghost" size="icon" onclick={goUp} disabled={loading}>
         <ArrowLeft class="h-4 w-4" />
       </Button>
@@ -736,7 +736,7 @@
         <RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
       </Button>
       <div
-        class="border-border/40 bg-muted/50 focus-within:ring-ring flex flex-1 items-center rounded-md border px-3 py-1.5 focus-within:ring-1 dark:border-gray-700/50"
+        class="flex flex-1 items-center rounded-md border border-border/40 bg-muted/50 px-3 py-1.5 focus-within:ring-1 focus-within:ring-ring dark:border-gray-700/50"
       >
         <input
           class="w-full flex-1 border-none bg-transparent font-mono text-sm font-light outline-none"
@@ -745,7 +745,7 @@
         />
       </div>
 
-      <div class="border-border/40 flex items-center rounded-md border p-0.5 dark:border-gray-700/50">
+      <div class="flex items-center rounded-md border border-border/40 p-0.5 dark:border-gray-700/50">
         <Button
           variant="ghost"
           size="icon"
@@ -805,7 +805,7 @@
       <div class="pointer-events-none relative z-10 min-h-full">
         {#if error}
           <div class="pointer-events-auto mx-auto w-full max-w-5xl py-12">
-            <div class="border-border bg-card rounded-lg border p-10 md:p-14">
+            <div class="rounded-lg border border-border bg-card p-10 md:p-14">
               <div class="flex flex-col items-center gap-10 md:flex-row md:items-start md:gap-14">
                 <!-- Illustration -->
                 <div class="shrink-0">
@@ -816,38 +816,38 @@
                 <!-- Content -->
                 <div class="w-full flex-1 space-y-6 text-left">
                   <div>
-                    <h3 class="text-foreground text-2xl font-normal">资源列举失败</h3>
-                    <p class="text-muted-foreground mt-2">在访问指定的 ODFI 路径时发生了错误。</p>
+                    <h3 class="text-2xl font-normal text-foreground">资源列举失败</h3>
+                    <p class="mt-2 text-muted-foreground">在访问指定的 ODFI 路径时发生了错误。</p>
                   </div>
 
                   <!-- Error Details Box -->
-                  <div class="border-border bg-background rounded-md border text-sm">
-                    <details class="border-border group last:border-0" open>
+                  <div class="rounded-md border border-border bg-background text-sm">
+                    <details class="group border-border last:border-0" open>
                       <summary
-                        class="hover:bg-muted/50 flex cursor-pointer select-none items-center justify-between p-4"
+                        class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
                       >
                         <span>错误详情</span>
                         <ChevronDown
-                          class="text-muted-foreground h-4 w-4 transition-transform duration-200 group-open:rotate-180"
+                          class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
                         />
                       </summary>
-                      <div class="text-muted-foreground px-4 pb-4 pt-0">
-                        <p class="bg-muted break-all rounded p-3 font-mono text-xs leading-relaxed">
+                      <div class="px-4 pt-0 pb-4 text-muted-foreground">
+                        <p class="rounded bg-muted p-3 font-mono text-xs leading-relaxed break-all">
                           {error}
                         </p>
                       </div>
                     </details>
 
-                    <details class="border-border group border-t last:border-0">
+                    <details class="group border-t border-border last:border-0">
                       <summary
-                        class="hover:bg-muted/50 flex cursor-pointer select-none items-center justify-between p-4"
+                        class="flex cursor-pointer items-center justify-between p-4 select-none hover:bg-muted/50"
                       >
                         <span>排查建议</span>
                         <ChevronDown
-                          class="text-muted-foreground h-4 w-4 transition-transform duration-200 group-open:rotate-180"
+                          class="h-4 w-4 text-muted-foreground transition-transform duration-200 group-open:rotate-180"
                         />
                       </summary>
-                      <div class="text-muted-foreground space-y-2 px-4 pb-4 pt-0">
+                      <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
                         <ul class="ml-2 list-inside list-disc space-y-1">
                           <li>检查 ODFI 语法是否正确</li>
                           <li>确保远程代理 (Agent) 处于在线状态</li>
@@ -858,7 +858,7 @@
                     </details>
 
                     <!-- Retry action -->
-                    <div class="border-border border-t p-4">
+                    <div class="border-t border-border p-4">
                       <Button
                         variant="default"
                         size="sm"
@@ -875,36 +875,36 @@
             </div>
           </div>
         {:else}
-          <div class="border-border/40 rounded-md border dark:border-gray-700/50">
+          <div class="rounded-md border border-border/40 dark:border-gray-700/50">
             {#if viewMode === 'table'}
               <table class="w-full text-sm">
-                <thead class="bg-muted/40 block w-full">
+                <thead class="block w-full bg-muted/40">
                   <tr class="flex w-full">
                     <th
-                      class="text-muted-foreground flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle"
+                      class="flex h-10 w-12 shrink-0 items-center justify-center px-4 text-left align-middle text-muted-foreground"
                     ></th>
-                    <th class="text-muted-foreground flex h-10 flex-1 items-center px-4 text-left align-middle">Name</th
+                    <th class="flex h-10 flex-1 items-center px-4 text-left align-middle text-muted-foreground">Name</th
                     >
                     <th
-                      class="text-muted-foreground flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle"
+                      class="flex h-10 w-24 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
                       >Size</th
                     >
                     <th
-                      class="text-muted-foreground flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle"
+                      class="flex h-10 w-40 shrink-0 items-center justify-end px-4 text-right align-middle text-muted-foreground"
                       >Modified</th
                     >
                   </tr>
                 </thead>
                 <tbody class="block max-h-[calc(100vh-16rem)] w-full overflow-y-auto">
                   {#if displayedItems.length === 0 && !loading}
-                    <tr class="border-border/40 flex w-full border-t dark:border-gray-700/50">
-                      <td class="text-muted-foreground w-full p-8 text-center"> This directory is empty. </td>
+                    <tr class="flex w-full border-t border-border/40 dark:border-gray-700/50">
+                      <td class="w-full p-8 text-center text-muted-foreground"> This directory is empty. </td>
                     </tr>
                   {/if}
                   {#each displayedItems as item}
                     <ContextMenu.Root>
                       <ContextMenu.Trigger
-                        class="border-border/40 hover:bg-muted/50 pointer-events-auto flex w-full cursor-pointer border-t dark:border-gray-700/50"
+                        class="pointer-events-auto flex w-full cursor-pointer border-t border-border/40 hover:bg-muted/50 dark:border-gray-700/50"
                       >
                         {#snippet child({ props })}
                           <tr
@@ -919,7 +919,7 @@
                             }}
                             ondblclick={() => handleRowDoubleClick(item)}
                           >
-                            <td class="flex-0 flex w-14 items-center justify-center p-2">
+                            <td class="flex w-14 flex-0 items-center justify-center p-2">
                               {#if item.type === 'dir'}
                                 {@render macOSFolder('h-5 w-5', !!item.has_children)}
                               {:else if item.type === 'linkdir'}
@@ -936,12 +936,12 @@
                               {item.name}
                             </td>
                             <td
-                              class="flex-0 text-muted-foreground flex w-24 items-center justify-end p-2 font-mono text-xs font-light"
+                              class="flex w-24 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
                             >
                               {formatSize(item.size)}
                             </td>
                             <td
-                              class="flex-0 text-muted-foreground flex w-40 items-center justify-end p-2 font-mono text-xs font-light"
+                              class="flex w-40 flex-0 items-center justify-end p-2 font-mono text-xs font-light text-muted-foreground"
                             >
                               {#if item.modified}
                                 {new Date(item.modified * 1000).toLocaleString()}
@@ -959,7 +959,7 @@
               <!-- Grid View (Auto-fill) -->
               <div class="grid gap-2 p-2" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));">
                 {#if displayedItems.length === 0 && !loading}
-                  <div class="text-muted-foreground col-span-full p-8 text-center">This directory is empty.</div>
+                  <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
                 {/if}
                 {#each displayedItems as item}
                   <div class="flex flex-col items-center gap-0">
@@ -1015,7 +1015,7 @@
                             }}
                           >
                             <button
-                              class="pointer-events-auto block max-w-[124px] break-all rounded-[3px] px-1.5 py-0.5 text-center text-[10.5px] font-light leading-tight transition-colors {selectedItem ===
+                              class="pointer-events-auto block max-w-[124px] rounded-[3px] px-1.5 py-0.5 text-center text-[10.5px] leading-tight font-light break-all transition-colors {selectedItem ===
                               item
                                 ? 'bg-[#0060df] text-white'
                                 : 'hover:bg-blue-500 hover:text-white active:bg-blue-600'}"
@@ -1033,11 +1033,11 @@
                                 (showHidden
                                   ? (item.child_count ?? 0)
                                   : (item.child_count ?? 0) - (item.hidden_child_count ?? 0)) ?? 0}
-                              <span class="text-muted-foreground/80 mt-0.5 text-[9.5px]">
+                              <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
                                 {count === 0 ? '无项目' : `${count} 个项目`}
                               </span>
                             {:else if item.size}
-                              <span class="text-muted-foreground/80 mt-0.5 text-[9.5px]">
+                              <span class="mt-0.5 text-[9.5px] text-muted-foreground/80">
                                 {formatSize(item.size)}
                               </span>
                             {/if}
