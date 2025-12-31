@@ -11,6 +11,7 @@ pub mod agent;
 pub mod database;
 pub mod error;
 pub mod fs;
+pub mod odfs;
 pub mod repository;
 pub mod storage;
 
