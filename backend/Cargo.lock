@@ -1770,6 +1770,7 @@ dependencies = [
  "async-trait",
  "axum",
  "flate2",
+ "futures-util",
  "inventory",
  "opsbox-core",
  "serde",
