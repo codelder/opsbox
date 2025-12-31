@@ -384,7 +384,7 @@ impl EntryStreamFactory {
         let stream = FsEntryStream::new(PathBuf::from(joined), *recursive)
           .await
           .map_err(|e| format!("无法读取目录: {}", e))?;
-        Ok(Box::new(stream))
+        Ok(Box::new(stream) as Box<dyn EntryStream>)
       }
       (Endpoint::Local { root }, Target::Files { paths }) => {
         let files: Vec<String> = paths
@@ -397,7 +397,7 @@ impl EntryStreamFactory {
             }
           })
           .collect();
-        Ok(Box::new(MultiFileEntryStream::new(files)))
+        Ok(Box::new(MultiFileEntryStream::new(files)) as Box<dyn EntryStream>)
       }
       (Endpoint::Local { root }, Target::Archive { path, entry: _entry }) => {
         let full = if path.starts_with('/') {
@@ -469,7 +469,7 @@ impl EntryStreamFactory {
           Ok(Box::new(S3FileEntryStream {
             reader: Some(reader),
             path: path.clone(),
-          }))
+          }) as Box<dyn EntryStream>)
         } else {
           Err("S3 文件列表为空".to_string())
         }
@@ -492,9 +492,7 @@ impl EntryStreamFactory {
 
         // 将响应转换为字节流
         use futures_util::TryStreamExt;
-        let bytes_stream = response
-          .bytes_stream()
-          .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+        let bytes_stream = response.bytes_stream().map_err(std::io::Error::other);
 
         // 使用 StreamReader 将字节流转换为 AsyncRead
         let reader = tokio_util::io::StreamReader::new(bytes_stream);
@@ -547,7 +545,7 @@ pub async fn build_local_entry_stream(
     match target {
       Target::Files { paths } => {
         // Files 类型：直接使用 MultiFileEntryStream，与 Server 端一致
-        return Ok(Box::new(MultiFileEntryStream::new(paths)));
+        return Ok(Box::new(MultiFileEntryStream::new(paths)) as Box<dyn EntryStream>);
       }
       Target::Dir { path, recursive } => {
         // Dir 类型：直接使用 FsEntryStream，与 Server 端一致
@@ -560,7 +558,7 @@ pub async fn build_local_entry_stream(
         let stream = FsEntryStream::new(dir_path, recursive)
           .await
           .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
-        return Ok(Box::new(stream));
+        return Ok(Box::new(stream) as Box<dyn EntryStream>);
       }
       Target::Archive { path, entry: _entry } => {
         // Archive 类型：处理归档文件
@@ -606,13 +604,15 @@ pub async fn build_local_entry_stream(
 
   // 通过 metadata 检测文件或目录
   match tokio::fs::metadata(root_or_file).await {
-    Ok(meta) if meta.is_file() => Ok(Box::new(MultiFileEntryStream::new(vec![root_or_file.to_string()]))),
+    Ok(meta) if meta.is_file() => {
+      Ok(Box::new(MultiFileEntryStream::new(vec![root_or_file.to_string()])) as Box<dyn EntryStream>)
+    }
     Ok(meta) if meta.is_dir() => {
       // 默认递归（与 Server 端 Target::Dir 的默认行为一致）
       let stream = FsEntryStream::new(PathBuf::from(root_or_file), true)
         .await
         .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
-      Ok(Box::new(stream))
+      Ok(Box::new(stream) as Box<dyn EntryStream>)
     }
     Ok(_) => Err(format!("不支持的文件类型: {}", root_or_file)),
     Err(e) => Err(format!("无法访问路径 {}: {}", root_or_file, e)),
@@ -672,5 +672,49 @@ where
 
 #[cfg(test)]
 mod tests {
-  // Tests are temporarily removed.
+  use super::*;
+  use std::fs::File;
+  use std::io::Write;
+  use tempfile::tempdir;
+
+  #[tokio::test]
+  async fn test_build_local_entry_stream() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("test.log");
+    let mut file = File::create(&file_path).unwrap();
+    writeln!(file, "hello").unwrap();
+
+    // 测试文件路径
+    let stream_res = build_local_entry_stream(&file_path.to_string_lossy(), None).await;
+    assert!(stream_res.is_ok(), "文件路径应该能正常创建流: {:?}", stream_res.err());
+
+    // 测试目录路径
+    let stream_res = build_local_entry_stream(&dir.path().to_string_lossy(), None).await;
+    assert!(stream_res.is_ok(), "目录路径应该能正常创建流: {:?}", stream_res.err());
+  }
+
+  #[tokio::test]
+  async fn test_build_local_entry_stream_with_target() {
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("test.log");
+    let mut file = File::create(&file_path).unwrap();
+    writeln!(file, "hello").unwrap();
+
+    use crate::domain::config::Target;
+
+    // 测试 Target::Files
+    let target = Target::Files {
+      paths: vec![file_path.to_string_lossy().to_string()],
+    };
+    let stream_res = build_local_entry_stream(&file_path.to_string_lossy(), Some(target)).await;
+    assert!(stream_res.is_ok(), "Target::Files 应该能正常创建流");
+
+    // 测试 Target::Dir
+    let target = Target::Dir {
+      path: ".".to_string(),
+      recursive: true,
+    };
+    let stream_res = build_local_entry_stream(&dir.path().to_string_lossy(), Some(target)).await;
+    assert!(stream_res.is_ok(), "Target::Dir 应该能正常创建流");
+  }
 }

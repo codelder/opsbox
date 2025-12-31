@@ -267,8 +267,13 @@ impl ExplorerService {
 
     let odfi_path = odfi.path.clone();
     let odfi_entry = odfi.entry_path.clone();
-    tracing::debug!("list_agent: agent_id={}, odfi.path={}, odfi.entry_path={:?}, odfi.target_type={:?}",
-      agent_id, odfi_path, odfi_entry, odfi.target_type);
+    tracing::debug!(
+      "list_agent: agent_id={}, odfi.path={}, odfi.entry_path={:?}, odfi.target_type={:?}",
+      agent_id,
+      odfi_path,
+      odfi_entry,
+      odfi.target_type
+    );
 
     let path_str = if odfi_path.is_empty() {
       "/".to_string()
@@ -622,7 +627,11 @@ impl ExplorerService {
     while let Ok(Some((meta, _reader))) = stream.next_entry().await {
       let raw_entry_path = meta.path.clone();
       let trimmed = raw_entry_path.trim_start_matches("./");
-      let archive_entry_path = if trimmed.is_empty() { raw_entry_path.clone() } else { trimmed.to_string() };
+      let archive_entry_path = if trimmed.is_empty() {
+        raw_entry_path.clone()
+      } else {
+        trimmed.to_string()
+      };
 
       if !filter_prefix.is_empty() && !archive_entry_path.starts_with(&filter_prefix) {
         continue;
@@ -667,7 +676,7 @@ impl ExplorerService {
           EndpointType::S3,
           format!("{}:{}", profile.profile_name, bucket),
           TargetType::Archive,
-          key.to_string(), // Use S3 object key as archive path
+          key.to_string(),                  // Use S3 object key as archive path
           Some(archive_entry_path.clone()), // Use entry path inside the archive
         );
 
@@ -710,7 +719,12 @@ impl ExplorerService {
     archive_path: &str,
     filter_entry: Option<&str>,
   ) -> Result<Vec<ResourceItem>, String> {
-    tracing::debug!("list_agent_archive: agent_id={}, archive_path={}, filter_entry={:?}", agent_id, archive_path, filter_entry);
+    tracing::debug!(
+      "list_agent_archive: agent_id={}, archive_path={}, filter_entry={:?}",
+      agent_id,
+      archive_path,
+      filter_entry
+    );
 
     // Download the archive from agent
     let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(archive_path));
@@ -722,7 +736,7 @@ impl ExplorerService {
     tracing::debug!("list_agent_archive: downloaded archive, status={}", response.status());
 
     // Convert response body stream to AsyncRead using StreamReader
-    let stream = response.bytes_stream().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let stream = response.bytes_stream().map_err(std::io::Error::other);
     let reader = StreamReader::new(stream);
 
     // Create archive stream
@@ -745,7 +759,10 @@ impl ExplorerService {
 
     let mut synthetic_dirs = std::collections::HashSet::new();
 
-    tracing::debug!("list_agent_archive: starting to iterate entries, filter_prefix={}", filter_prefix);
+    tracing::debug!(
+      "list_agent_archive: starting to iterate entries, filter_prefix={}",
+      filter_prefix
+    );
 
     // Iterate entries
     while let Ok(Some((meta, _reader))) = stream.next_entry().await {
@@ -753,7 +770,11 @@ impl ExplorerService {
       // Remove leading "./" that tar sometimes includes
       let raw_entry_path = meta.path.clone();
       let cleaned_entry_path = raw_entry_path.trim_start_matches("./");
-      let entry_path = if cleaned_entry_path.is_empty() { raw_entry_path.clone() } else { cleaned_entry_path.to_string() };
+      let entry_path = if cleaned_entry_path.is_empty() {
+        raw_entry_path.clone()
+      } else {
+        cleaned_entry_path.to_string()
+      };
 
       if !filter_prefix.is_empty() && !entry_path.starts_with(&filter_prefix) {
         tracing::debug!("list_agent_archive: skipping entry, doesn't match filter_prefix");

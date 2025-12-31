@@ -128,7 +128,12 @@ pub async fn view_cache_json(
             {
               let (meta, mut reader) = entry_res;
               checked_count += 1;
-              tracing::debug!("归档条目检查 #{}: meta.path={}, target={:?}", checked_count, meta.path, target_entry);
+              tracing::debug!(
+                "归档条目检查 #{}: meta.path={}, target={:?}",
+                checked_count,
+                meta.path,
+                target_entry
+              );
 
               // 如果指定了 entry 路径，检查是否匹配
               if let Some(ref target) = target_entry {
@@ -157,7 +162,11 @@ pub async fn view_cache_json(
             }
 
             if !found && target_entry.is_some() {
-              tracing::warn!("在归档中未找到指定条目: {:?}, 共检查 {} 个条目", target_entry, checked_count);
+              tracing::warn!(
+                "在归档中未找到指定条目: {:?}, 共检查 {} 个条目",
+                target_entry,
+                checked_count
+              );
             }
           } else {
             // 普通文件：使用 search API 读取
@@ -362,7 +371,11 @@ fn odfi_to_source(odfi: &Odfi) -> Result<crate::domain::config::Source, String> 
       // 调试日志
       tracing::debug!(
         "odfi_to_source: agent_id={}, path={}, entry_path={:?}, target_type={:?}, is_archive_entry={}",
-        odfi.endpoint_id, odfi.path, odfi.entry_path, odfi.target_type, odfi.is_archive_entry()
+        odfi.endpoint_id,
+        odfi.path,
+        odfi.entry_path,
+        odfi.target_type,
+        odfi.is_archive_entry()
       );
       // 检查是否是归档内的条目
       if odfi.is_archive_entry() {
