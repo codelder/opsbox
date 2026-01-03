@@ -52,13 +52,14 @@ fn serve_embedded(path: &str) -> Option<Response> {
     // 识别 MIME 类型
     let mime = mime_guess::from_path(candidate).first_or_octet_stream();
 
-    // 缓存策略：对带哈希文件名启用长期缓存
-    let cache_header: Cow<'static, str> = if candidate.contains('.')
+    // 缓存策略：对带哈希文件名或静态字体启用长期缓存
+    let cache_header: Cow<'static, str> = if (candidate.contains('.')
       && candidate
         .split('.')
-        .any(|s| s.len() >= 8 && s.chars().all(|c| c.is_ascii_alphanumeric()))
+        .any(|s| s.len() >= 8 && s.chars().all(|c| c.is_ascii_alphanumeric())))
+      || candidate.ends_with(".woff2")
     {
-      // 构建产物通常带哈希，允许长缓存（1年）
+      // 构建产物或静态字体，允许长缓存（1年）
       Cow::from("public, max-age=31536000, immutable")
     } else {
       Cow::from("public, max-age=300")
@@ -190,11 +191,9 @@ pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Mod
   // 绑定监听
   let listener = tokio::net::TcpListener::bind(addr).await.expect("监听地址绑定失败");
 
-  tracing::info!("OpsBox 服务启动成功，访问地址: http://{}", addr);
-
-  // 启动服务器并支持优雅关闭（附带连接信息，以便业务侧获取客户端远端地址）
-
   let svc = app.into_make_service_with_connect_info::<SocketAddr>();
+
+  tracing::info!("OpsBox 服务启动成功，访问地址: http://{}", addr);
 
   // 与 Agent 对齐：使用 Notify 驱动优雅关闭
   let shutdown_notify = create_shutdown_notify(modules);

@@ -17,5 +17,5 @@ export function getApiBase(): string {
  */
 export const commonHeaders = {
   'Content-Type': 'application/json',
-  Accept: 'application/json'
+  Accept: 'application/json, application/x-ndjson'
 };

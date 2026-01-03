@@ -64,7 +64,6 @@
     "lucide-svelte": "^0.554.0",
     "marked": "^17.0.0",
     "mode-watcher": "^1.1.0",
-    "perfect-scrollbar": "^1.5.6",
     "tailwind-merge": "^3.4.0",
     "tailwind-variants": "^3.2.2"
   }

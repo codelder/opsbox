@@ -2,7 +2,6 @@
 
 use clap::Parser;
 use mimalloc::MiMalloc;
-use std::str::FromStr;
 
 // ⚠️ 重要：必须显式引用可选依赖，否则 inventory 机制在 release 模式下不生效
 // 原因：Rust linker 会移除未被引用的 crate，导致 inventory::submit! 不被执行
@@ -121,77 +120,10 @@ pub(crate) async fn async_main(addr: std::net::SocketAddr, db_url: String, confi
 
   tracing::info!("数据库连接池初始化成功");
 
-  // 初始化日志配置数据库
-  opsbox_core::logging::run_migration(&db_pool)
+  // 设置日志配置（从数据库读取或同步到数据库）
+  logging::setup_logging_config(&db_pool, config)
     .await
-    .expect("日志配置数据库迁移失败");
-
-  // 处理日志级别：命令行参数优先级最高
-  let repo = opsbox_core::logging::repository::LogConfigRepository::new(db_pool.clone());
-
-  // 确定实际使用的日志级别
-  let actual_level = if let Some(ref level_str) = config.log_level {
-    // 命令行参数指定了日志级别
-    if let Ok(level) = opsbox_core::logging::LogLevel::from_str(level_str) {
-      // 同步到数据库（命令行参数优先级最高）
-      if let Err(e) = repo.update_level("server", level).await {
-        tracing::warn!("同步日志级别到数据库失败: {}，继续使用命令行参数", e);
-      } else {
-        tracing::info!("已将命令行日志级别 '{}' 同步到数据库", level_str);
-      }
-      level
-    } else {
-      tracing::warn!("无效的日志级别 '{}'，使用默认值", level_str);
-      opsbox_core::logging::LogLevel::Info
-    }
-  } else {
-    // 根据 verbose 参数确定日志级别
-    match config.verbose {
-      0 => {
-        // verbose 为 0，从数据库读取
-        match repo.get("server").await {
-          Ok(log_config) => {
-            if let Ok(db_level) = opsbox_core::logging::LogLevel::from_str(&log_config.level) {
-              tracing::info!("从数据库加载日志级别: {}", log_config.level);
-              db_level
-            } else {
-              tracing::warn!("数据库中的日志级别 '{}' 无效，使用默认值", log_config.level);
-              opsbox_core::logging::LogLevel::Info
-            }
-          }
-          Err(e) => {
-            tracing::debug!("从数据库加载日志配置失败（将使用默认值）: {}", e);
-            opsbox_core::logging::LogLevel::Info
-          }
-        }
-      }
-      _ => {
-        // verbose 不为 0，使用 verbose 对应的级别并同步到数据库
-        let level = match config.verbose {
-          1 => opsbox_core::logging::LogLevel::Debug,
-          _ => opsbox_core::logging::LogLevel::Trace,
-        };
-        if let Err(e) = repo.update_level("server", level).await {
-          tracing::warn!("同步日志级别到数据库失败: {}，继续使用命令行参数", e);
-        } else {
-          tracing::info!("已将 verbose 参数对应的日志级别 '{}' 同步到数据库", level);
-        }
-        level
-      }
-    }
-  };
-
-  // 更新日志系统（如果与初始值不同）
-  let reload_handle = server::get_log_reload_handle();
-  if let Some(handle) = reload_handle {
-    // 检查当前日志级别（需要从初始配置获取）
-    // 由于日志系统已经初始化，我们需要更新它
-    if let Err(e) = handle.update_level(actual_level) {
-      tracing::warn!("更新日志级别失败: {}，使用初始级别", e);
-    } else {
-      tracing::info!("日志级别已设置为: {}", actual_level);
-    }
-  }
+    .expect("日志配置设置失败");
 
   // ✅ 自动发现所有已注册的模块
   let modules = opsbox_core::get_all_modules();
