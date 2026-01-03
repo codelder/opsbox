@@ -7,6 +7,30 @@ fn port_parser(s: &str) -> Result<u16, String> {
   s.parse::<u16>().map_err(|_| format!("无效的端口号：{s}"))
 }
 
+/// 验证主机地址（IPv4、IPv6 或主机名）
+fn host_parser(s: &str) -> Result<String, String> {
+  let s = s.trim();
+
+  if s.is_empty() {
+    return Err("主机地址不能为空".to_string());
+  }
+
+  // 尝试解析为 IP 地址（IPv4 或 IPv6）
+  if s.parse::<std::net::IpAddr>().is_ok() {
+    return Ok(s.to_string());
+  }
+
+  // 尝试解析为带方括号的 IPv6 地址（如 [::1]）
+  if let Some(ipv6_str) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+    if ipv6_str.parse::<std::net::Ipv6Addr>().is_ok() {
+      return Ok(s.to_string());
+    }
+  }
+
+  // 对于主机名，接受非空字符串，让系统在绑定的时候验证
+  Ok(s.to_string())
+}
+
 /// 将字符串解析为 SocketAddr
 fn addr_parser(s: &str) -> Result<SocketAddr, String> {
   s.parse::<SocketAddr>()
@@ -54,7 +78,8 @@ pub struct AppConfig {
     short = 'H',
     value_name = "HOST",
     default_value = "0.0.0.0",
-    help = "监听地址"
+    value_parser = host_parser,
+    help = "监听地址（IPv4、IPv6 或主机名）"
   )]
   pub host: String,
 
