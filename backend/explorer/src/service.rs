@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use crate::domain::{ResourceItem, ResourceType};
 use futures_util::TryStreamExt;
 use opsbox_core::SqlitePool;
+use opsbox_core::fs::create_archive_stream_from_reader;
 use opsbox_core::odfi::{EndpointType, Odfi, TargetType};
 use opsbox_core::storage::s3::format_s3_error;
+use tokio::io::AsyncRead;
 use tokio_util::io::StreamReader;
 
 pub struct ExplorerService {
@@ -21,6 +23,17 @@ impl ExplorerService {
       EndpointType::Local => self.list_local(odfi).await,
       EndpointType::Agent => self.list_agent(odfi).await,
       EndpointType::S3 => self.list_s3(odfi).await,
+    }
+  }
+
+  pub async fn download(
+    &self,
+    odfi: &Odfi,
+  ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
+    match odfi.endpoint_type {
+      EndpointType::Local => self.download_local(odfi).await,
+      EndpointType::Agent => self.download_agent(odfi).await,
+      EndpointType::S3 => self.download_s3(odfi).await,
     }
   }
 
@@ -863,6 +876,211 @@ impl ExplorerService {
     });
 
     Ok(items)
+  }
+
+  async fn download_local(
+    &self,
+    odfi: &Odfi,
+  ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
+    let path_str = if odfi.path.is_empty() {
+      "/".to_string()
+    } else if odfi.path.starts_with('/') {
+      odfi.path.clone()
+    } else {
+      format!("/{}", odfi.path)
+    };
+
+    // Check if it's an archive entry download
+    if odfi.target_type == TargetType::Archive {
+      let file = tokio::fs::File::open(&path_str).await.map_err(|e| e.to_string())?;
+      let entry_path = odfi
+        .entry_path
+        .clone()
+        .ok_or_else(|| "Archive entry path missing".to_string())?;
+
+      return self.download_archive_entry(file, &path_str, &entry_path).await;
+    }
+
+    let path = PathBuf::from(&path_str);
+    if !path.exists() {
+      return Err(format!("File does not exist: {}", path_str));
+    }
+    let meta = path.metadata().map_err(|e| e.to_string())?;
+    if meta.is_dir() {
+      return Err("Cannot download a directory".to_string());
+    }
+
+    let file = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
+    let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+
+    Ok((filename, Some(meta.len()), Box::new(tokio::io::BufReader::new(file))))
+  }
+
+  async fn download_agent(
+    &self,
+    odfi: &Odfi,
+  ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
+    let agent_id = &odfi.endpoint_id;
+    use agent_manager::get_global_agent_manager;
+    let (_agent, endpoint) = if let Some(manager) = get_global_agent_manager() {
+      if let Some(agent) = manager.get_agent(agent_id).await {
+        (agent.clone(), agent.get_base_url())
+      } else {
+        tracing::error!("Agent {} not found or offline during download", agent_id);
+        return Err(format!("Agent {} not found or offline", agent_id));
+      }
+    } else {
+      tracing::error!("Agent manager not initialized when downloading from agent {}", agent_id);
+      return Err("Agent manager not initialized".to_string());
+    };
+
+    use opsbox_core::agent::AgentClient;
+    let client = AgentClient::new(
+      agent_id.clone(),
+      endpoint,
+      Some(std::time::Duration::from_secs(30)), // Longer timeout for download
+    );
+
+    let path_str = if odfi.path.starts_with('/') {
+      odfi.path.clone()
+    } else {
+      format!("/{}", odfi.path)
+    };
+
+    // Archive entry
+    if odfi.target_type == TargetType::Archive {
+      let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(&path_str));
+      let response = client
+        .get_raw(&url)
+        .await
+        .map_err(|e| format!("Failed to download archive from agent: {}", e))?;
+
+      let stream = response.bytes_stream().map_err(std::io::Error::other);
+      let reader = StreamReader::new(stream);
+      let entry_path = odfi
+        .entry_path
+        .clone()
+        .ok_or_else(|| "Archive entry path missing".to_string())?;
+
+      return self.download_archive_entry(reader, &path_str, &entry_path).await;
+    }
+
+    // Normal file
+    let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(&path_str));
+    let response = client.get_raw(&url).await.map_err(|e| {
+      tracing::error!("Agent download failed for path {}: {}", path_str, e);
+      format!("Failed to download file from agent: {}", e)
+    })?;
+
+    let content_len = response.content_length();
+    let filename = std::path::Path::new(&path_str)
+      .file_name()
+      .unwrap_or_default()
+      .to_string_lossy()
+      .to_string();
+
+    let stream = response.bytes_stream().map_err(std::io::Error::other);
+    let reader = StreamReader::new(stream);
+
+    Ok((filename, content_len, Box::new(reader)))
+  }
+
+  async fn download_s3(&self, odfi: &Odfi) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
+    let (profile_name, bucket) = if let Some((p, b)) = odfi.endpoint_id.split_once(':') {
+      (p, Some(b))
+    } else {
+      (odfi.endpoint_id.as_str(), None)
+    };
+
+    if bucket.is_none() {
+      return Err("Cannot download a profile".to_string());
+    }
+    let bucket_name = bucket.unwrap();
+
+    let profile_row = opsbox_core::repository::s3::load_s3_profile(&self.db_pool, profile_name)
+      .await
+      .map_err(|e| format!("Database error: {}", e))?
+      .ok_or_else(|| format!("S3 Profile not found: {}", profile_name))?;
+
+    use opsbox_core::storage::s3::get_or_create_s3_client;
+    let client = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
+      .map_err(|e| format!("Failed to create S3 client: {}", e))?;
+
+    let key = odfi.path.trim_start_matches('/');
+
+    // Archive entry
+    if odfi.target_type == TargetType::Archive {
+      let resp = client
+        .get_object()
+        .bucket(bucket_name)
+        .key(key)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to get S3 object: {}", format_s3_error(&e)))?;
+
+      let reader = resp.body.into_async_read();
+      let entry_path = odfi
+        .entry_path
+        .clone()
+        .ok_or_else(|| "Archive entry path missing".to_string())?;
+
+      return self.download_archive_entry(reader, key, &entry_path).await;
+    }
+
+    // Normal file
+    let resp = client
+      .get_object()
+      .bucket(bucket_name)
+      .key(key)
+      .send()
+      .await
+      .map_err(|e| format!("Failed to get S3 object: {}", format_s3_error(&e)))?;
+
+    let size = resp.content_length.map(|s| s as u64);
+    let filename = std::path::Path::new(key)
+      .file_name()
+      .unwrap_or_default()
+      .to_string_lossy()
+      .to_string();
+
+    Ok((filename, size, Box::new(resp.body.into_async_read())))
+  }
+
+  async fn download_archive_entry(
+    &self,
+    reader: impl AsyncRead + Send + Unpin + 'static,
+    archive_path_hint: &str,
+    target_entry_path: &str,
+  ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
+    let mut stream = create_archive_stream_from_reader(reader, Some(archive_path_hint))
+      .await
+      .map_err(|e| e.to_string())?;
+
+    // Normalize target
+    let target = target_entry_path.trim_start_matches("./").trim_start_matches('/');
+
+    let mut found_meta = None;
+    let mut found_reader = None;
+
+    while let Ok(Some((meta, entry_reader))) = stream.next_entry().await {
+      let current = meta.path.trim_start_matches("./").trim_start_matches('/');
+      if current == target {
+        found_meta = Some(meta);
+        found_reader = Some(entry_reader);
+        break;
+      }
+    }
+
+    if let (Some(meta), Some(reader)) = (found_meta, found_reader) {
+      let filename = std::path::Path::new(target)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+      Ok((filename, meta.size, reader))
+    } else {
+      Err(format!("Entry '{}' not found in archive", target))
+    }
   }
 }
 #[cfg(test)]
