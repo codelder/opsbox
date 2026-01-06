@@ -273,12 +273,16 @@ pub async fn handle_get_file_raw(
   let body = Body::from_stream(stream);
 
   // Guess mime
-  let mime = mime_guess::from_path(path).first_or_octet_stream().as_ref().to_string();
+  let _mime = mime_guess::from_path(path).first_or_octet_stream().as_ref().to_string();
 
   Ok(
     axum::response::Response::builder()
       .status(StatusCode::OK)
-      .header(axum::http::header::CONTENT_TYPE, mime)
+      .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+      .header(
+        axum::http::header::CONTENT_DISPOSITION,
+        "attachment; filename=\"file.bin\"",
+      )
       .body(body)
       .unwrap(),
   )

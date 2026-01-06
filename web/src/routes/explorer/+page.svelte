@@ -220,8 +220,14 @@
   }
 
   function handleDownload(item: ResourceItem) {
-    // TODO: Implement download API
-    console.log('Downloading:', item.path);
+    if (!item.path) return;
+    const url = `/api/v1/explorer/download?odfi=${encodeURIComponent(item.path)}`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   }
 
   async function goUp() {

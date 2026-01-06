@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use crate::server;
-use opsbox_core::logging::{LogConfig, LogLevel, ReloadHandle, init as core_init};
 use opsbox_core::SqlitePool;
+use opsbox_core::logging::{LogConfig, LogLevel, ReloadHandle, init as core_init};
 use std::str::FromStr;
 
 /// 初始化日志系统
@@ -127,11 +127,7 @@ async fn determine_log_level(
 /// 更新日志系统
 fn update_log_system(level: LogLevel) -> Result<(), opsbox_core::logging::LogError> {
   let reload_handle = server::get_log_reload_handle()
-    .ok_or_else(|| {
-      opsbox_core::logging::LogError::InvalidConfig(
-        "日志重载句柄未初始化".to_string(),
-      )
-    })?;
+    .ok_or_else(|| opsbox_core::logging::LogError::InvalidConfig("日志重载句柄未初始化".to_string()))?;
 
   reload_handle
     .update_level(level)
