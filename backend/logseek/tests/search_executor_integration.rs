@@ -122,20 +122,21 @@ async fn test_cache_functionality() {
   assert_eq!(cached_keywords, Some(keywords));
 
   // 测试文件行缓存
-  let file_url = logseek::domain::file_url::FileUrl::new(
-    logseek::domain::file_url::EndpointType::Local,
+  let file_url = logseek::domain::Odfi::new(
+    logseek::domain::EndpointType::Local,
     "localhost",
-    logseek::domain::file_url::TargetType::Dir,
+    logseek::domain::TargetType::Dir,
     "test.log",
     None,
   );
   let lines = vec!["line 1".to_string(), "line 2".to_string()];
-  c.put_lines(&sid, &file_url, lines.clone()).await;
+  c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
 
-  let cached_lines = c.get_lines_slice(&sid, &file_url, 1, 2).await;
+  let cached_lines = c.get_lines_slice(&sid, &file_url, 1, 100).await;
   assert!(cached_lines.is_some());
 
-  let (total, slice) = cached_lines.unwrap();
+  // Verify content
+  let (total, slice, _) = cached_lines.unwrap();
   assert_eq!(total, 2);
   assert_eq!(slice, lines);
 }

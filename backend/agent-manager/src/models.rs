@@ -159,6 +159,13 @@ impl AgentInfo {
   pub fn remove_tag_key(&mut self, key: &str) {
     self.tags.retain(|tag| tag.key != key);
   }
+
+  /// 获取 Agent 基础 URL（用于 API 调用）
+  pub fn get_base_url(&self) -> String {
+    let host = self.get_tag_value("host").unwrap_or(&self.hostname);
+    let port = self.get_tag_value("listen_port").unwrap_or("3976");
+    format!("http://{}:{}", host, port)
+  }
 }
 
 #[cfg(test)]
@@ -243,4 +250,36 @@ mod tests {
     assert!(!agent.has_tag("service", "web"));
     assert!(agent.has_tag_key("env")); // env 标签还在
   }
+}
+
+#[test]
+fn test_agent_get_base_url() {
+  // Default case
+  let agent = AgentInfo {
+    id: "test".into(),
+    name: "Test".into(),
+    version: "1.0".into(),
+    hostname: "localhost".into(),
+    tags: vec![],
+    search_roots: vec![],
+    last_heartbeat: 0,
+    status: AgentStatus::Online,
+  };
+  assert_eq!(agent.get_base_url(), "http://localhost:3976");
+
+  // Custom host via tag
+  let mut agent_host = agent.clone();
+  agent_host.add_tag("host".into(), "192.168.1.100".into());
+  assert_eq!(agent_host.get_base_url(), "http://192.168.1.100:3976");
+
+  // Custom port via tag
+  let mut agent_port = agent.clone();
+  agent_port.add_tag("listen_port".into(), "8080".into());
+  assert_eq!(agent_port.get_base_url(), "http://localhost:8080");
+
+  // Custom host and port
+  let mut agent_full = agent.clone();
+  agent_full.add_tag("host".into(), "10.0.0.1".into());
+  agent_full.add_tag("listen_port".into(), "9090".into());
+  assert_eq!(agent_full.get_base_url(), "http://10.0.0.1:9090");
 }

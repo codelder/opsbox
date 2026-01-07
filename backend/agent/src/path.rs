@@ -17,7 +17,7 @@ pub fn resolve_target_paths(config: &AgentConfig, target: &ConfigTarget) -> Resu
       resolve_directory_path(config, path)
     }
     ConfigTarget::Files { paths } => resolve_file_paths(config, paths),
-    ConfigTarget::Archive { path } => resolve_targz_path(config, path),
+    ConfigTarget::Archive { path, .. } => resolve_targz_path(config, path),
   }
 }
 

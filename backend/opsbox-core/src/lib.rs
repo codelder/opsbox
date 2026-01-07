@@ -7,12 +7,19 @@
 //! - 共享中间件
 //! - 日志系统
 
+pub mod agent;
 pub mod database;
 pub mod error;
+pub mod fs;
+pub mod odfs;
+pub mod repository;
+pub mod storage;
+
 pub mod llm;
 pub mod logging;
 pub mod middleware;
 pub mod module;
+pub mod odfi;
 pub mod response;
 
 // 重新导出常用类型

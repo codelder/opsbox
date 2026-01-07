@@ -239,7 +239,7 @@ SOURCES = [{
     await expect(page.getByText(UNI_ID_ARCHIVE)).toBeVisible();
 
     const archiveLink = page.getByRole('link', { name: 'archive.log' });
-    await expect(archiveLink).toHaveAttribute('href', /file=ls%3A%2F%2Flocal%2Flocalhost%2Farchive%2F/);
+    await expect(archiveLink).toHaveAttribute('href', /file=odfi%3A%2F%2Flocal%2F.*archive\.tar/);
 
     await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
   });
@@ -255,7 +255,7 @@ SOURCES = [{
     await expect(page.getByText(UNI_ID_GZ)).toBeVisible();
 
     const gzLink = page.getByRole('link', { name: /e2e-compressed\.log(\.gz)?/ });
-    await expect(gzLink).toHaveAttribute('href', /file=ls%3A%2F%2Flocal%2Flocalhost%2Farchive%2F/);
+    await expect(gzLink).toHaveAttribute('href', /file=odfi%3A%2F%2Flocal%2F.*e2e-compressed\.log\.gz/);
 
     await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
   });
@@ -272,7 +272,7 @@ SOURCES = [{
 
     // 目录扫描场景下，gz 文件仍以普通文件 URL（dir）展示，文件名会包含 .gz
     const gzLink = page.getByRole('link', { name: /e2e-dir-gz\.log(\.gz)?/ });
-    await expect(gzLink).toHaveAttribute('href', /file=ls%3A%2F%2Flocal%2Flocalhost%2Fdir%2F/);
+    await expect(gzLink).toHaveAttribute('href', /file=odfi%3A%2F%2Flocal%2F.*e2e-dir-gz\.log/);
 
     await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
   });

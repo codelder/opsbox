@@ -25,7 +25,7 @@ async fn http_route_usage(pool: SqlitePool, query: &str) {
   let executor = SearchExecutor::new(pool, config);
 
   // 执行搜索
-  match executor.search(query, 3).await {
+  match executor.search(query, 3, None).await {
     Ok((mut rx, sid)) => {
       println!("搜索会话 ID: {}", sid);
 
@@ -64,7 +64,7 @@ async fn cli_tool_usage(pool: SqlitePool, query: &str) {
   let executor = SearchExecutor::new(pool, config);
 
   // 执行搜索
-  match executor.search(query, 5).await {
+  match executor.search(query, 5, None).await {
     Ok((mut rx, _sid)) => {
       let mut total_matches = 0;
 
@@ -98,7 +98,7 @@ async fn scheduled_task_usage(pool: SqlitePool, queries: Vec<&str>) {
   for query in queries {
     println!("\n处理查询: {}", query);
 
-    match executor.search(query, 2).await {
+    match executor.search(query, 2, None).await {
       Ok((mut rx, sid)) => {
         let mut result_count = 0;
 

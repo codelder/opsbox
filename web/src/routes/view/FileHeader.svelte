@@ -2,8 +2,8 @@
   /**
    * 文件查看页面 - 文件信息头部组件
    */
-  import { parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
-  import type { ParsedFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import { parseOdfi } from '$lib/utils/odfi';
+  import type { ParsedOdfi } from '$lib/utils/odfi';
   import { Button } from '$lib/components/ui/button';
   import { Badge } from '$lib/components/ui/badge';
   import type { KeywordInfo } from '$lib/modules/logseek/types';
@@ -45,6 +45,10 @@
      * 字体大小改变回调
      */
     onFontSizeChange?: (size: string) => void;
+    /**
+     * 文件编码
+     */
+    encoding?: string;
   }
 
   let {
@@ -55,7 +59,8 @@
     loading = false,
     onDownload,
     fontSize = 'base',
-    onFontSizeChange
+    onFontSizeChange,
+    encoding
   }: Props = $props();
 
   // Svelte 5 类型导出
@@ -102,7 +107,7 @@
   function parseFileInfo(full: string) {
     if (!full) return { title: '未知文件', icon: FileText, metadata: [] };
 
-    const parsed: ParsedFileUrl | null = parseFileUrl(full);
+    const parsed: ParsedOdfi | null = parseOdfi(full);
     if (!parsed) {
       const parts = full.split('/');
       return {
@@ -239,6 +244,16 @@
             {/if}
           </div>
         </div>
+      {/if}
+
+      <!-- 编码 -->
+      {#if encoding}
+        <Badge
+          variant="outline"
+          class="h-5 border-blue-200/50 bg-blue-50/50 px-2 text-[10px] font-medium text-blue-700 dark:border-blue-800/30 dark:bg-blue-900/20 dark:text-blue-400/80"
+        >
+          {encoding}
+        </Badge>
       {/if}
     </div>
   </div>

@@ -110,8 +110,7 @@ pub async fn execute_search(
   }
 
   // 5. 执行搜索
-  let mut all_processed = 0;
-  let mut all_matched = 0;
+  // all_processed 和 all_matched 计数器在并发模式下暂不在此统计，后续可按需在 EntryStreamProcessor 中增加。
 
   for search_path in filtered_paths {
     // 检查是否被取消
@@ -140,12 +139,15 @@ pub async fn execute_search(
           recursive: *recursive,
         })
       }
-      ConfigTarget::Archive { path } => {
+      ConfigTarget::Archive { path, .. } => {
         // Archive 类型：传递相对路径
-        Some(ConfigTarget::Archive { path: path.clone() })
+        Some(ConfigTarget::Archive {
+          path: path.clone(),
+          entry: None,
+        })
       }
     };
-    let estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, target_hint).await {
+    let mut estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, target_hint).await {
       Ok(s) => s,
       Err(e) => {
         warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
@@ -153,18 +155,14 @@ pub async fn execute_search(
       }
     };
 
-    if let Err(e) = search_with_entry_stream(
-      estream,
-      processor.clone(),
-      &task_id,
-      &tx,
-      &mut all_processed,
-      &mut all_matched,
-      extra_path_filter.clone(),
-      &cancel_token,
-    )
-    .await
-    {
+    // 使用 EntryStreamProcessor 进行并发搜索
+    let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
+      .with_cancel_token(cancel_token.clone());
+    if let Some(filter) = extra_path_filter.clone() {
+      stream_processor = stream_processor.with_extra_path_filter(filter);
+    }
+
+    if let Err(e) = stream_processor.process_stream(&mut *estream, tx.clone()).await {
       warn!("处理条目流失败 {}: {}", search_path.display(), e);
     }
   }
@@ -176,89 +174,7 @@ pub async fn execute_search(
     elapsed_ms,
   });
 
-  info!(
-    "搜索完成: task_id={}, processed={}, matched={}",
-    task_id, all_processed, all_matched
-  );
+  info!("搜索完成: task_id={}", task_id);
 }
 
-/// 通用条目流搜索辅助函数
-/// 使用通用处理函数并自动处理消息发送
-#[allow(clippy::too_many_arguments)]
-/// 通用条目流搜索辅助函数
-/// 使用通用处理函数并自动处理消息发送
-#[allow(clippy::too_many_arguments)]
-async fn search_with_entry_stream(
-  mut stream: Box<dyn logseek::service::entry_stream::EntryStream>,
-  processor: Arc<SearchProcessor>,
-  task_id: &str,
-  tx: &mpsc::Sender<SearchEvent>,
-  all_processed: &mut usize,
-  all_matched: &mut usize,
-  extra_path_filter: Option<logseek::query::PathFilter>,
-  cancel_token: &CancellationToken,
-) -> Result<(), String> {
-  loop {
-    if cancel_token.is_cancelled() {
-      info!("搜索任务 {} 已被取消", task_id);
-      break;
-    }
-
-    match stream.next_entry().await {
-      Ok(Some((meta, mut reader))) => {
-        // 全局 Path 过滤（硬性 AND + Query Spec 过滤）
-        // combined check: extra_path_filter AND spec.path_filter
-        if !processor.should_process_path_with(&meta.path, extra_path_filter.as_ref()) {
-          continue;
-        }
-
-        // 处理条目内容
-        match processor.process_content(meta.path.clone(), &mut reader).await {
-          Ok(Some(mut result)) => {
-            // 设置 archive_path (如果来自归档)
-            result.archive_path = meta.container_path;
-
-            *all_processed += 1;
-            *all_matched += 1;
-
-            // Send with backpressure
-            if tx.send(SearchEvent::Success(result)).await.is_err() {
-              debug!("接收端已关闭，停止处理任务 {}", task_id);
-              break;
-            }
-          }
-          Ok(None) => {
-            *all_processed += 1;
-            // No match, do nothing
-          }
-          Err(e) => {
-            *all_processed += 1;
-            warn!("处理内容失败 {}: {}", meta.path, e);
-            let err_event = SearchEvent::Error {
-              source: "agent-process".to_string(),
-              message: format!("处理失败: {}", e),
-              recoverable: true,
-            };
-            if tx.send(err_event).await.is_err() {
-              break;
-            }
-          }
-        }
-      }
-      Ok(None) => break, // Stream 结束
-      Err(e) => {
-        warn!("读取条目流失败: {}", e);
-        let err_event = SearchEvent::Error {
-          source: "agent-stream".to_string(),
-          message: format!("读取流失败: {}", e),
-          recoverable: true,
-        };
-        if tx.send(err_event).await.is_err() {
-          break;
-        }
-      }
-    }
-  }
-
-  Ok(())
-}
+// 已移除 search_with_entry_stream，直接使用 logseek::service::entry_stream::EntryStreamProcessor

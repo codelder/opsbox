@@ -6,9 +6,14 @@ use std::{
 // use futures::io::AsyncReadExt as FuturesAsyncReadExt;
 use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
+use grep_regex::RegexMatcherBuilder;
+use grep_searcher::{BinaryDetection, Encoding as GrepEncoding, MmapChoice, SearcherBuilder};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tracing::{debug, trace, warn};
+
+pub mod sink;
+use sink::BooleanContextSink;
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -110,6 +115,36 @@ impl SearchProcessor {
     path: String,
     reader: &mut R,
   ) -> Result<Option<SearchResult>, SearchError> {
+    // 优先尝试基于 grep crate 的高性能本地搜索
+    // 条件：
+    // 1. 本地文件（Path 存在）
+    // 2. 无 Fancy Regex (grep-regex 仅支持标准 regex)
+    // 3. 能够生成有效的 regex pattern
+    let use_grep = self.can_use_grep(&path);
+
+    if use_grep {
+      let spec = self.spec.clone();
+      let p = path.clone();
+      let ctx = self.context_lines;
+      let enc_override = self.encoding.clone();
+
+      // 在 blocking thread 中运行 grep，利用 mmap
+      let handle = tokio::task::spawn_blocking(move || Self::grep_file_blocking(&p, &spec, ctx, enc_override));
+
+      match handle.await {
+        Ok(Ok(Some(res))) => return Ok(Some(res)),
+        Ok(Ok(None)) => return Ok(None),
+        Ok(Err(e)) => {
+          debug!("grep 搜索失败，回退到 legacy 模式: {}: {}", path, e);
+          // Fallback continues below
+        }
+        Err(e) => {
+          warn!("grep 任务 join 失败: {}", e);
+          // Fallback
+        }
+      }
+    }
+
     match grep_context(reader, &self.spec, self.context_lines, self.encoding.as_deref()).await? {
       Some((lines, merged, encoding)) => {
         debug!("找到匹配: {} ({} 行)", path, merged.len());
@@ -119,7 +154,215 @@ impl SearchProcessor {
     }
   }
 
-  /// 发送结果到 channel（可单独测试）
+  fn can_use_grep(&self, path: &str) -> bool {
+    // 1. 检查是否存在 (简单检查)
+    if std::fs::metadata(path).is_err() {
+      return false;
+    }
+
+    // 2. 排除归档和压缩文件，因为它们需要进行解压处理，直接搜索原始文件会得到错误结果
+    let lower = path.to_lowercase();
+    if lower.ends_with(".gz")
+      || lower.ends_with(".tgz")
+      || lower.ends_with(".tar")
+      || lower.ends_with(".zip")
+      || lower.ends_with(".bz2")
+      || lower.ends_with(".xz")
+      || lower.ends_with(".zst")
+    {
+      return false;
+    }
+
+    // 3. 检查是否有 Fancy Regex
+    for term in &self.spec.terms {
+      if matches!(term, crate::query::Term::RegexFancy { .. }) {
+        return false;
+      }
+    }
+    true
+  }
+
+  /// 使用 grep crate 执行因为 (blocking)
+  /// 利用 mmap 和 SIMD 加速
+  fn grep_file_blocking(
+    path: &str,
+    spec: &Query,
+    context_lines: usize,
+    encoding_override: Option<String>,
+  ) -> Result<Option<SearchResult>, String> {
+    // 1. 构建 Regex Pattern
+    // 我们需要构建一个 pattern 能够命中所有 terms (A|B|C...)
+    // 这样 grep 才能找到所有相关行，然后我们在 sink 里再区分具体命中
+    //
+    // 只有 Literal, Phrase, RegexStd 支持。
+    let mut patterns = Vec::new();
+    for term in &spec.terms {
+      match term {
+        crate::query::Term::Literal(s) | crate::query::Term::Phrase(s) => {
+          patterns.push(regex::escape(s));
+        }
+        crate::query::Term::RegexStd { pattern, .. } => {
+          patterns.push(pattern.clone());
+        }
+        _ => return Err("Unsupported term type for grep".to_string()),
+      }
+    }
+
+    if patterns.is_empty() {
+      return Ok(None);
+    }
+
+    // Join with |
+    let combined_pattern = patterns.join("|");
+    let matcher = RegexMatcherBuilder::new()
+      .case_insensitive(true) // Default to case insensitive as per Query logic? Query terms handle this?
+      // Query logic: Literal -> to_lowercase(), Regex -> re (flags).
+      // My combined pattern uses generic case-insensitive for now?
+      // Wait, `Term::matches` handles case sensitivity per term.
+      // `Literal` is case-insensitive.
+      // `Phrase` is case-sensitive (contains).
+      // `RegexStd` has its own flags.
+      //
+      // This is a problem: A combined regex `(?i)foo|bar` makes both case insensitive.
+      // If we have mixed case sensitivity, we can't use a single global flag.
+      // We can use inline flags: `(?i:foo)|bar`.
+      //
+      // Let's refine pattern construction.
+      .build(&combined_pattern)
+      .map_err(|e| format!("Regex build failed: {}", e))?;
+
+    // 2. Detect Encoding (reuse logic, need to read file header)
+    // Or let grep-searcher handle it? grep-searcher supports "encoding" but we need to know WHICH one.
+    // We can peek 4KB.
+    let mut detected_encoding_label = "UTF-8".to_string();
+    {
+      use std::io::Read;
+      let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+      let mut buf = [0u8; 4096];
+      let n = f.read(&mut buf).unwrap_or(0);
+      if n > 0
+        && let Some(enc) = detect_encoding(&buf[..n])
+      {
+        detected_encoding_label = enc.name().to_string();
+      }
+    }
+
+    // Override if provided
+    if let Some(enc) = encoding_override {
+      detected_encoding_label = enc;
+    }
+
+    // 3. Build Searcher
+    let enc_res = GrepEncoding::new(&detected_encoding_label);
+    let mut searcher = SearcherBuilder::new()
+      .binary_detection(BinaryDetection::quit(b'\x00'))
+      .encoding(enc_res.ok())
+      .memory_map(unsafe { MmapChoice::auto() }) // Enable mmap!
+      .line_number(true)
+      .build();
+
+    // 4. Run Sink
+    let mut occurs = vec![false; spec.terms.len()];
+    let mut matched_lines: Vec<usize> = Vec::new(); // 0-based
+    let mut matched_count = 0;
+
+    let mut sink = BooleanContextSink::new(
+      spec,
+      &mut occurs,
+      &mut matched_lines,
+      &mut matched_count,
+      Some(&detected_encoding_label),
+    );
+
+    searcher
+      .search_path(&matcher, path, &mut sink)
+      .map_err(|e| e.to_string())?;
+
+    // 5. Eval Boolean Logic
+    let expr_match = spec.eval_file(&occurs);
+
+    if expr_match && matched_count > 0 {
+      matched_lines.sort();
+      matched_lines.dedup();
+
+      // 重新读取文件内容 (Full File)以满足前端对行号的预期
+      // 使用之前检测到的 encoding
+
+      let encoding = Encoding::for_label(detected_encoding_label.as_bytes()).unwrap_or(UTF_8);
+      // 这里的 encoding 是 encoding_rs::Encoding
+
+      // 为了复用 read_lines_* 函数，我们需要 sample。
+      // 或者直接读取。现在的 read_lines_* 需要 sample。
+      // 我们可以 simple read 一点? 或者修改 read_lines_* ?
+      // 复用现有逻辑最安全。grep_context 读取前 4096 作为 sample。
+      // 我们这里可以简单读取前 4096.
+
+      // let's read first 4096 bytes from reader.
+      // Since we use std::fs::read below, we don't need manual sample reading.
+
+      let lines_result = if encoding == UTF_8 {
+        // Async reader require? grep_file_blocking is synchronous (tokio::spawn_blocking wrapper)
+        // BUT read_lines_utf8 takes AsyncRead.
+        // We are in blocking thread. We cannot block_on async functions easily unless we use Handle.
+        //
+        // Refactoring `read_lines_*` to be synchronous is too much work.
+        //
+        // ALTERNATIVE: Use `grep-searcher`'s Sink to collect ALL lines?
+        // No, that scans.
+        //
+        // ALTERNATIVE: Use std::io::BufRead lines()?
+        // We need manual decoding handling.
+        // `decode_buffer_to_lines` is synchronous and pure.
+        // We can read whole file into buffer (mmap?) and decode.
+        // Since we are optimizing for speed, usually mmap is good.
+        // BUT we need `Vec<String>`.
+        //
+        // Let's use `std::fs::read` to get all bytes.
+        // Then decode.
+        // Since `grep_file_blocking` is in blocking thread, it's fine.
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        decode_buffer_to_lines(encoding, &bytes, "grep_file_result ")
+      } else {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        decode_buffer_to_lines(encoding, &bytes, "grep_file_result ")
+      };
+
+      let lines = lines_result;
+
+      // 生成 Merged Ranges (highlight regions)
+      // 逻辑同 grep_context
+      let mut ranges: Vec<(usize, usize)> = Vec::new();
+      let max_idx = lines.len().saturating_sub(1);
+      for idx in matched_lines {
+        let s = idx.saturating_sub(context_lines);
+        let e = std::cmp::min(idx + context_lines, max_idx);
+        ranges.push((s, e));
+      }
+      ranges.sort_by_key(|r| r.0);
+
+      let mut merged: Vec<(usize, usize)> = Vec::new();
+      for (s, e) in ranges {
+        if let Some(last) = merged.last_mut()
+          && s <= last.1 + 1
+        {
+          if e > last.1 {
+            last.1 = e;
+          }
+          continue;
+        }
+        merged.push((s, e));
+      }
+
+      return Ok(Some(SearchResult::new(
+        path.to_string(),
+        lines,
+        merged,
+        Some(detected_encoding_label),
+      )));
+    }
+
+    Ok(None)
+  }
   ///
   /// # 返回
   /// - `Ok(())`: 发送成功
@@ -462,9 +705,6 @@ pub async fn grep_context<R: AsyncRead + Unpin>(
   if !is_probably_text_bytes(&sample) {
     debug!("文件不是文本格式，跳过搜索");
 
-    // 添加详细诊断信息
-    trace!("文本检测诊断信息 - 样本大小: {} 字节", sample.len());
-
     if sample.is_empty() {
       warn!("样本为空，但 is_probably_text_bytes 应返回 true（代码逻辑异常）");
     }
@@ -665,7 +905,7 @@ pub struct SearchResult {
   pub merged: Vec<(usize, usize)>,
   /// 文件编码（如果不是 UTF-8，则包含编码名称，如 "GBK"）
   pub encoding: Option<String>,
-  /// 当结果来自归档内部条目时，归档文件的绝对路径（Agent/Local 侧填充；用于服务端构造唯一 FileUrl）
+  /// 当结果来自归档内部条目时，归档文件的绝对路径（Agent/Local 侧填充；用于服务端构造唯一 Odfi）
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub archive_path: Option<String>,
   /// 条目来源类型
@@ -1407,8 +1647,9 @@ foo lower
 
   // 测试辅助：运行基于 tar.gz 字节的搜索并收集所有结果
   async fn run_tar_search_bytes(tar_gz: Vec<u8>, spec: &Query, ctx: usize) -> Vec<SearchResult> {
-    use crate::service::entry_stream::{EntryStreamProcessor, TarGzEntryStream};
+    use crate::service::entry_stream::EntryStreamProcessor;
     use futures::io::Cursor;
+    use opsbox_core::fs::TarGzEntryStream;
     use tokio::sync::mpsc;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
@@ -2011,5 +2252,32 @@ foo lower
     let processor3 = SearchProcessor::new_with_encoding(spec, 1, None);
     assert_eq!(processor3.context_lines, 1);
     assert!(processor3.encoding.is_none());
+  }
+}
+
+#[cfg(test)]
+mod tests_gzip {
+  use super::*;
+  use crate::query::Query;
+  use tokio::io::AsyncWriteExt;
+
+  #[tokio::test]
+  async fn test_grep_context_gzip() {
+    let content = "2025-01-01 [INFO] Test log entry UNIQUE_ID_123\n";
+    let mut encoder = async_compression::tokio::write::GzipEncoder::new(Vec::new());
+    encoder.write_all(content.as_bytes()).await.unwrap();
+    encoder.shutdown().await.unwrap();
+    let compressed = encoder.into_inner();
+
+    let spec = Arc::new(Query::parse_github_like("UNIQUE_ID_123").unwrap());
+    let mut reader = async_compression::tokio::bufread::GzipDecoder::new(&compressed[..]);
+
+    let result = grep_context(&mut reader, &spec, 0, None).await.unwrap();
+    assert!(result.is_some());
+    let (lines, merged, _) = result.unwrap();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0], content.trim_end());
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0], (0, 0));
   }
 }

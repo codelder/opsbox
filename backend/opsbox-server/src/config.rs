@@ -7,6 +7,30 @@ fn port_parser(s: &str) -> Result<u16, String> {
   s.parse::<u16>().map_err(|_| format!("无效的端口号：{s}"))
 }
 
+/// 验证主机地址（IPv4、IPv6 或主机名）
+fn host_parser(s: &str) -> Result<String, String> {
+  let s = s.trim();
+
+  if s.is_empty() {
+    return Err("主机地址不能为空".to_string());
+  }
+
+  // 尝试解析为 IP 地址（IPv4 或 IPv6）
+  if s.parse::<std::net::IpAddr>().is_ok() {
+    return Ok(s.to_string());
+  }
+
+  // 尝试解析为带方括号的 IPv6 地址（如 [::1]）
+  if let Some(ipv6_str) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+    if ipv6_str.parse::<std::net::Ipv6Addr>().is_ok() {
+      return Ok(s.to_string());
+    }
+  }
+
+  // 对于主机名，接受非空字符串，让系统在绑定的时候验证
+  Ok(s.to_string())
+}
+
 /// 将字符串解析为 SocketAddr
 fn addr_parser(s: &str) -> Result<SocketAddr, String> {
   s.parse::<SocketAddr>()
@@ -54,7 +78,8 @@ pub struct AppConfig {
     short = 'H',
     value_name = "HOST",
     default_value = "0.0.0.0",
-    help = "监听地址"
+    value_parser = host_parser,
+    help = "监听地址（IPv4、IPv6 或主机名）"
   )]
   pub host: String,
 
@@ -139,6 +164,13 @@ pub struct AppConfig {
     help = "IO 操作最大重试次数（指数退避，适用于所有远程数据源，默认 5 次）"
   )]
   pub io_max_retries: Option<u32>,
+
+  #[arg(
+    long = "server-id",
+    value_name = "ID",
+    help = "当前服务器的唯一标识（可以是域名或 IP），用于生成跨集群可访问的 FileURL"
+  )]
+  pub server_id: Option<String>,
 
   /// 管理子命令（start/stop）
   #[command(subcommand)]
@@ -236,6 +268,14 @@ impl AppConfig {
       .or_else(|| Self::env_u32("LOGSEEK_IO_MAX_RETRIES"))
       .unwrap_or(5)
       .clamp(1, 20)
+  }
+
+  /// 获取服务器标识
+  pub fn get_server_id(&self) -> Option<String> {
+    self
+      .server_id
+      .clone()
+      .or_else(|| std::env::var("LOGSEEK_SERVER_ID").ok())
   }
 
   fn env_usize(key: &str) -> Option<usize> {

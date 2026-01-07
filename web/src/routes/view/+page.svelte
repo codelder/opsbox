@@ -12,7 +12,7 @@
   import { fetchViewCache, fetchViewDownload, escapeHtml } from '$lib/modules/logseek';
   import { highlight } from '$lib/modules/logseek/utils/highlight';
   import type { KeywordInfo } from '$lib/modules/logseek/types';
-  import { getDisplayName, parseFileUrl } from '$lib/modules/logseek/utils/fileUrl';
+  import { getDisplayName, parseOdfi } from '$lib/utils/odfi';
   import Alert from '$lib/components/Alert.svelte';
   import FileHeader from './FileHeader.svelte';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
@@ -33,6 +33,7 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let fontSize = $state('sm');
+  let encoding = $state<string | undefined>(undefined);
 
   // 字体大小类映射
   let fontSizeClass = $state('text-base whitespace-pre-wrap');
@@ -392,6 +393,9 @@
       // 获取文件元数据
       const meta = await fetchRange(1, 1);
       total = meta.total;
+      if (meta.encoding) {
+        encoding = meta.encoding;
+      }
 
       if (total <= 0) {
         end = 0;
@@ -486,9 +490,9 @@
       const a = document.createElement('a');
       a.href = url;
 
-      // 使用 parseFileUrl 获取正确的文件名（支持 archive entry path）
+      // 使用 parseOdfi 获取正确的文件名（支持 archive entry path）
       let fileName = 'log.txt';
-      const parsed = parseFileUrl(currentFile);
+      const parsed = parseOdfi(currentFile);
       if (parsed) {
         fileName = parsed.displayName;
       } else {
@@ -643,6 +647,7 @@
             onDownload={downloadCurrentFile}
             {fontSize}
             onFontSizeChange={handleFontSizeChange}
+            {encoding}
           />
 
           <!-- 虚拟滚动内容区域 -->

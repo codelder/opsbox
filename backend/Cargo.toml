@@ -5,7 +5,7 @@ members = [
   "opsbox-core",
   "logseek",
   "agent",
-  "agent-manager",
+  "agent-manager", "explorer",
 ]
 
 [workspace.package]

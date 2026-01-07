@@ -109,10 +109,9 @@ pub async fn plan_with_starlark_with_script(
   prefix.push_str("S3_PROFILES = [\n");
   for p in &s3_profiles {
     prefix.push_str(&format!(
-      "  {{'profile_name': '{}', 'endpoint': '{}', 'bucket': '{}'}},\n",
+      "  {{'profile_name': '{}', 'endpoint': '{}'}},\n",
       esc_single(&p.profile_name),
       esc_single(&p.endpoint),
-      esc_single(&p.bucket)
     ));
   }
   prefix.push_str("]\n");
@@ -387,7 +386,7 @@ fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, Str
 fn log_script_source(idx: usize, src: &Source) {
   use crate::domain::config::{Endpoint, Target};
   match (&src.endpoint, &src.target) {
-    (Endpoint::S3 { profile, bucket }, Target::Archive { path }) => {
+    (Endpoint::S3 { profile, bucket }, Target::Archive { path, .. }) => {
       tracing::debug!(
         "[Planner] 来源[{}] s3 profile={} bucket={} archive={}",
         idx,
@@ -400,7 +399,7 @@ fn log_script_source(idx: usize, src: &Source) {
       let scope = match tgt {
         Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
         Target::Files { paths } => format!("Files count={}", paths.len()),
-        Target::Archive { path } => format!("Archive path={}", path),
+        Target::Archive { path, .. } => format!("Archive path={}", path),
       };
       tracing::debug!(
         "[Planner] 来源[{}] agent id={} subpath={} scope={} filter_glob={}",
@@ -415,7 +414,7 @@ fn log_script_source(idx: usize, src: &Source) {
       let scope = match tgt {
         Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
         Target::Files { paths } => format!("Files count={}", paths.len()),
-        Target::Archive { path } => format!("Archive path={}", path),
+        Target::Archive { path, .. } => format!("Archive path={}", path),
       };
       tracing::debug!(
         "[Planner] 来源[{}] local root={} scope={} filter_glob={}",

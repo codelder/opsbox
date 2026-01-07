@@ -7,7 +7,7 @@
 
 <LabelPrimitive.Root
   bind:ref
-  class={cn('text-sm leading-none font-medium peer-disabled:cursor-not-allowed peer-disabled:opacity-70', className)}
+  class={cn('text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70', className)}
   {...restProps}
 >
   {@render children?.()}

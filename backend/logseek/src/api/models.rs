@@ -21,8 +21,6 @@ pub struct S3SettingsPayload {
   #[serde(default)]
   pub endpoint: String,
   #[serde(default)]
-  pub bucket: String,
-  #[serde(default)]
   pub access_key: String,
   #[serde(default)]
   pub secret_key: String,
@@ -36,7 +34,6 @@ impl From<S3SettingsPayload> for s3::S3Settings {
   fn from(value: S3SettingsPayload) -> Self {
     Self {
       endpoint: value.endpoint,
-      bucket: value.bucket,
       access_key: value.access_key,
       secret_key: value.secret_key,
     }
@@ -47,7 +44,6 @@ impl From<s3::S3Settings> for S3SettingsPayload {
   fn from(value: s3::S3Settings) -> Self {
     Self {
       endpoint: value.endpoint,
-      bucket: value.bucket,
       access_key: value.access_key,
       secret_key: value.secret_key,
       configured: false,
@@ -72,7 +68,6 @@ pub struct ViewParams {
 pub struct S3ProfilePayload {
   pub profile_name: String,
   pub endpoint: String,
-  pub bucket: String,
   pub access_key: String,
   pub secret_key: String,
 }
@@ -82,7 +77,6 @@ impl From<S3ProfilePayload> for s3::S3Profile {
     Self {
       profile_name: value.profile_name,
       endpoint: value.endpoint,
-      bucket: value.bucket,
       access_key: value.access_key,
       secret_key: value.secret_key,
     }
@@ -94,7 +88,6 @@ impl From<s3::S3Profile> for S3ProfilePayload {
     Self {
       profile_name: value.profile_name,
       endpoint: value.endpoint,
-      bucket: value.bucket,
       access_key: value.access_key,
       secret_key: value.secret_key,
     }
@@ -142,7 +135,6 @@ mod tests {
   fn test_s3_settings_payload_serialization() {
     let payload = S3SettingsPayload {
       endpoint: "localhost:9000".to_string(),
-      bucket: "logs".to_string(),
       access_key: "minioadmin".to_string(),
       secret_key: "minioadmin".to_string(),
       configured: true,
@@ -153,7 +145,6 @@ mod tests {
     let deserialized: S3SettingsPayload = serde_json::from_str(&json).unwrap();
 
     assert_eq!(deserialized.endpoint, "localhost:9000");
-    assert_eq!(deserialized.bucket, "logs");
     assert!(deserialized.configured);
   }
 
@@ -163,7 +154,6 @@ mod tests {
     let payload: S3SettingsPayload = serde_json::from_str(json).unwrap();
 
     assert_eq!(payload.endpoint, "");
-    assert_eq!(payload.bucket, "");
     assert!(!payload.configured);
     assert_eq!(payload.connection_error, None);
   }
@@ -181,7 +171,6 @@ mod tests {
   fn test_s3_settings_conversion_to_domain() {
     let payload = S3SettingsPayload {
       endpoint: "localhost:9000".to_string(),
-      bucket: "logs".to_string(),
       access_key: "admin".to_string(),
       secret_key: "password".to_string(),
       configured: true,
@@ -191,7 +180,6 @@ mod tests {
     let settings: s3::S3Settings = payload.into();
 
     assert_eq!(settings.endpoint, "localhost:9000");
-    assert_eq!(settings.bucket, "logs");
     assert_eq!(settings.access_key, "admin");
     assert_eq!(settings.secret_key, "password");
   }
@@ -200,7 +188,6 @@ mod tests {
   fn test_s3_settings_conversion_from_domain() {
     let settings = s3::S3Settings {
       endpoint: "localhost:9000".to_string(),
-      bucket: "logs".to_string(),
       access_key: "admin".to_string(),
       secret_key: "password".to_string(),
     };
@@ -208,7 +195,6 @@ mod tests {
     let payload: S3SettingsPayload = settings.into();
 
     assert_eq!(payload.endpoint, "localhost:9000");
-    assert_eq!(payload.bucket, "logs");
     assert!(!payload.configured); // 默认值
     assert_eq!(payload.connection_error, None); // 默认值
   }
@@ -240,7 +226,6 @@ mod tests {
     let payload = S3SettingsPayload::default();
 
     assert_eq!(payload.endpoint, "");
-    assert_eq!(payload.bucket, "");
     assert_eq!(payload.access_key, "");
     assert_eq!(payload.secret_key, "");
     assert!(!payload.configured);

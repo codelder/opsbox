@@ -1,39 +1,5 @@
 @import 'tailwindcss';
 @variant dark (&:where(.dark, .dark *));
-@import 'perfect-scrollbar/css/perfect-scrollbar.css';
-
-/* 自定义 PerfectScrollbar 样式：始终显示竖向滚动条，优化明/暗主题可见性 */
-.ps__rail-y {
-  display: block;
-  opacity: 0.6;
-  /* 稍宽一些便于点击 */
-  width: 14px;
-  right: 0;
-}
-
-.ps:hover > .ps__rail-y,
-.ps--scrolling-y > .ps__rail-y,
-.ps--focus > .ps__rail-y {
-  opacity: 0.85;
-}
-
-.ps__thumb-y {
-  /* slate-400 */
-  background-color: #9ca3af;
-  /* 拇指宽度 */
-  width: 10px;
-  /* 最小高度 */
-  min-height: 28px;
-  border-radius: 6px;
-}
-
-.dark .ps__thumb-y {
-  /* slate-500（暗色更深）*/
-  background-color: #64748b;
-}
-
-/* 防止 X 轴误显 */
-/*.ps__rail-x { display: none; height: 0; }*/
 
 @font-face {
   font-family: 'Google Sans Code';

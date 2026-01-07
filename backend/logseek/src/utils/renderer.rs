@@ -83,33 +83,33 @@ pub fn render_markdown(path: &str, ranges: Vec<(usize, usize)>, all_lines: Vec<S
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
-pub struct JsonLine {
+pub struct JsonLine<'a> {
   pub no: usize,
-  pub text: String,
+  pub text: &'a str,
 }
 
 #[derive(Debug, Serialize)]
-pub struct JsonChunk {
+pub struct JsonChunk<'a> {
   pub range: (usize, usize),
-  pub lines: Vec<JsonLine>,
+  pub lines: Vec<JsonLine<'a>>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct SearchJsonResult {
-  pub path: String,
-  pub keywords: Vec<crate::query::KeywordHighlight>, // 带类型信息的关键词列表
-  pub chunks: Vec<JsonChunk>,
+pub struct SearchJsonResult<'a> {
+  pub path: &'a str,
+  pub keywords: &'a [crate::query::KeywordHighlight], // 带类型信息的关键词列表
+  pub chunks: Vec<JsonChunk<'a>>,
   /// 文件编码名称（如 "UTF-8"、"GBK"）
-  pub encoding: Option<String>,
+  pub encoding: &'a Option<String>,
 }
 
-pub fn render_json_chunks(
-  path: &str,
+pub fn render_json_chunks<'a>(
+  path: &'a str,
   ranges: Vec<(usize, usize)>,
-  all_lines: Vec<String>,
-  highlights_with_type: &[crate::query::KeywordHighlight],
-  encoding: Option<String>,
-) -> SearchJsonResult {
+  all_lines: &'a [String],
+  highlights_with_type: &'a [crate::query::KeywordHighlight],
+  encoding: &'a Option<String>,
+) -> SearchJsonResult<'a> {
   let mut chunks: Vec<JsonChunk> = Vec::with_capacity(ranges.len());
   for (s, e) in ranges.into_iter() {
     let mut lines_vec: Vec<JsonLine> = Vec::with_capacity(e.saturating_sub(s) + 1);
@@ -117,7 +117,7 @@ pub fn render_json_chunks(
     for i in s..=e {
       lines_vec.push(JsonLine {
         no: i + 1,
-        text: all_lines[i].clone(),
+        text: &all_lines[i],
       });
     }
     chunks.push(JsonChunk {
@@ -127,8 +127,8 @@ pub fn render_json_chunks(
   }
 
   SearchJsonResult {
-    path: path.to_string(),
-    keywords: highlights_with_type.to_vec(),
+    path,
+    keywords: highlights_with_type,
     chunks,
     encoding,
   }
@@ -228,7 +228,7 @@ mod tests {
   fn test_render_json_chunks_basic() {
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
     let highlights = vec![crate::query::KeywordHighlight::Literal("test".to_string())];
-    let result = render_json_chunks("test.log", vec![(0, 1)], lines, &highlights, None);
+    let result = render_json_chunks("test.log", vec![(0, 1)], &lines, &highlights, &None);
 
     assert_eq!(result.path, "test.log");
     assert_eq!(result.keywords.len(), 1);
@@ -252,7 +252,7 @@ mod tests {
       "line 4".to_string(),
     ];
     let highlights = vec![crate::query::KeywordHighlight::Literal("line".to_string())];
-    let result = render_json_chunks("test.log", vec![(0, 1), (2, 3)], lines, &highlights, None);
+    let result = render_json_chunks("test.log", vec![(0, 1), (2, 3)], &lines, &highlights, &None);
 
     assert_eq!(result.chunks.len(), 2);
     assert_eq!(result.chunks[0].range, (1, 2));
@@ -262,7 +262,7 @@ mod tests {
   #[test]
   fn test_render_json_chunks_empty_ranges() {
     let lines = vec!["line 1".to_string()];
-    let result = render_json_chunks("test.log", vec![], lines, &[], None);
+    let result = render_json_chunks("test.log", vec![], &lines, &[], &None);
 
     assert_eq!(result.chunks.len(), 0);
   }
