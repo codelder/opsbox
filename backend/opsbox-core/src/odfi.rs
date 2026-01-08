@@ -207,7 +207,12 @@ impl FromStr for Odfi {
     }
 
     // Parse path and handle S3 bucket
-    let path_encoded = url.path().trim_start_matches('/');
+    let path_encoded = url.path();
+    let path_encoded = if let Some(p) = path_encoded.strip_prefix('/') {
+      p
+    } else {
+      path_encoded
+    };
     let mut path = percent_encoding::percent_decode_str(path_encoded)
       .decode_utf8_lossy()
       .into_owned();
@@ -333,5 +338,25 @@ mod tests {
     let url = Odfi::from_str(s).unwrap();
     assert_eq!(url.endpoint_type, EndpointType::Local);
     assert_eq!(url.path, "path with spaces/file.log");
+  }
+
+  #[test]
+  fn test_parse_root_path() {
+    // Tests that double slash is parsed as root path '/'
+    let s = "odfi://agent-01@agent//";
+    let url = Odfi::from_str(s).unwrap();
+    assert_eq!(url.endpoint_id, "agent-01");
+    assert_eq!(url.endpoint_type, EndpointType::Agent);
+    assert_eq!(url.path, "/"); // Was "" before fix
+  }
+
+  #[test]
+  fn test_parse_empty_path() {
+    // Tests that single slash (after host) is parsed as empty path
+    let s = "odfi://agent-01@agent/";
+    let url = Odfi::from_str(s).unwrap();
+    assert_eq!(url.endpoint_id, "agent-01");
+    assert_eq!(url.endpoint_type, EndpointType::Agent);
+    assert_eq!(url.path, "");
   }
 }

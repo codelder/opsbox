@@ -24,9 +24,11 @@ export interface ParsedOdfi {
  */
 export function parseOdfi(urlStr: string): ParsedOdfi | null {
   try {
-    const url = new URL(urlStr);
-    // Only accept odfi:
-    if (url.protocol !== 'odfi:') return null;
+    // Use http protocol for parsing because browsers treat unknown schemes (like odfi)
+    // as opaque URLs, and hostname/username properties will be empty.
+    // By replacing odfi:// with http://, we ensure standard parsing behavior.
+    if (!urlStr.startsWith('odfi://')) return null;
+    const url = new URL(urlStr.replace(/^odfi:/, 'http:'));
 
     // Parse id from userinfo
     let endpointId = decodeURIComponent(url.username);

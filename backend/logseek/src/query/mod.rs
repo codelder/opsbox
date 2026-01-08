@@ -200,7 +200,13 @@ fn eval_expr(expr: &Expr, f: &dyn Fn(usize) -> bool) -> bool {
 
 /// 将 glob 表达式转换为 PathFilter（仅包含 include 规则）
 pub fn path_glob_to_filter(glob: &str) -> Result<PathFilter, String> {
-  let glob = globset::Glob::new(glob).map_err(|e| format!("无效路径模式: {}", e))?;
+  // 使用 strict glob 模式：literal_separator(true)
+  // 这意味着 * 不能匹配路径分隔符，必须使用 ** 才能跨目录匹配
+  let glob = globset::GlobBuilder::new(glob)
+    .literal_separator(true)
+    .build()
+    .map_err(|e| format!("无效路径模式: {}", e))?;
+
   let mut builder = globset::GlobSetBuilder::new();
   builder.add(glob);
   let set = builder.build().map_err(|e| format!("构建路径过滤器失败: {}", e))?;
@@ -210,4 +216,31 @@ pub fn path_glob_to_filter(glob: &str) -> Result<PathFilter, String> {
     include_contains: Vec::new(),
     exclude_contains: Vec::new(),
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_path_glob_filter_strict() {
+    // 1. *.log 不应匹配子目录 (如果 separator 是严格的)
+    let filter = path_glob_to_filter("*.log").unwrap();
+    assert!(filter.is_allowed("error.log"));
+    assert!(!filter.is_allowed("var/error.log")); // / 被视为分隔符，* 无法匹配
+    assert!(!filter.is_allowed("/var/error.log"));
+
+    // 2. */*.log 匹配一级子目录
+    let filter = path_glob_to_filter("*/*.log").unwrap();
+    assert!(!filter.is_allowed("error.log"));
+    assert!(filter.is_allowed("var/error.log"));
+    assert!(!filter.is_allowed("var/log/error.log"));
+
+    // 3. **/*.log 递归匹配
+    let filter = path_glob_to_filter("**/*.log").unwrap();
+    assert!(filter.is_allowed("error.log")); // ** 可以匹配空
+    assert!(filter.is_allowed("var/error.log"));
+    assert!(filter.is_allowed("var/log/error.log"));
+    assert!(filter.is_allowed("/abs/path/to/error.log"));
+  }
 }
