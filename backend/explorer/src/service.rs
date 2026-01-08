@@ -43,10 +43,19 @@ impl ExplorerService {
 
     let path_str = if odfi.path.is_empty() {
       "/".to_string()
-    } else if odfi.path.starts_with('/') {
-      odfi.path.clone()
     } else {
-      format!("/{}", odfi.path)
+      // Check if path is already absolute (works for both Unix and Windows)
+      let path_buf = PathBuf::from(&odfi.path);
+      if path_buf.is_absolute() {
+        // Already absolute, use as-is
+        odfi.path.clone()
+      } else if odfi.path.starts_with('/') {
+        // Unix-style absolute path
+        odfi.path.clone()
+      } else {
+        // Relative path, make it absolute with leading slash (Unix-style)
+        format!("/{}", odfi.path)
+      }
     };
 
     let mut is_archive_target = odfi.target_type == TargetType::Archive;
