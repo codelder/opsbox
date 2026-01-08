@@ -1,6 +1,6 @@
 use super::lexer::{Token, TokenKind, tokenize};
 use super::{Expr, ParseError, PathFilter, Query, Term};
-use globset::{Glob, GlobSetBuilder};
+use globset::GlobSetBuilder;
 // 标准 regex 引擎直接通过路径使用：regex::Regex
 
 pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
@@ -24,18 +24,27 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
           } else {
             format!("**/{}", pattern)
           };
-          if negative {
-            has_exclude_glob = true;
-            excludes_glob.add(Glob::new(&pat).map_err(|_| ParseError::InvalidPathPattern {
+
+          // Use strict glob matching
+          let glob_res = globset::GlobBuilder::new(&pat)
+            .literal_separator(true)
+            .build()
+            .map_err(|_| ParseError::InvalidPathPattern {
               pattern: pat.clone(),
               span: Some(t.span),
-            })?);
-          } else {
-            has_include_glob = true;
-            includes_glob.add(Glob::new(&pat).map_err(|_| ParseError::InvalidPathPattern {
-              pattern: pat.clone(),
-              span: Some(t.span),
-            })?);
+            });
+
+          match glob_res {
+            Ok(glob) => {
+              if negative {
+                has_exclude_glob = true;
+                excludes_glob.add(glob);
+              } else {
+                has_include_glob = true;
+                includes_glob.add(glob);
+              }
+            }
+            Err(e) => return Err(e),
           }
         } else if negative {
           exclude_contains.push(pattern);
@@ -350,7 +359,8 @@ mod tests {
 
   #[test]
   fn path_filter_glob_and_contains() {
-    let spec = parse_github_like("path:logs/*.log -path:node_modules/ foo").expect("parse");
+    // strict glob 模式下，logs/**/*.log 才能匹配 logs/app/app.log
+    let spec = parse_github_like("path:logs/**/*.log -path:node_modules/ foo").expect("parse");
     assert!(spec.path_filter.is_allowed("logs/app/app.log"));
     assert!(!spec.path_filter.is_allowed("app/node_modules/x.js"));
     assert!(!spec.path_filter.is_allowed("logs/app/readme.md"));
@@ -537,7 +547,7 @@ mod tests {
 
   #[test]
   fn path_qualifier_requires_no_whitespace() {
-    let a = parse_github_like("path:logs/*.log foo").expect("parse a");
+    let a = parse_github_like("path:logs/**/*.log foo").expect("parse a");
     let b = parse_github_like("path :logs/*.log foo").expect("parse b");
     // With proper qualifier, only logs/*.log under logs/ should pass
     assert!(a.path_filter.is_allowed("logs/app/app.log"));
@@ -593,6 +603,26 @@ mod tests {
       ParseError::UnexpectedToken { span } => assert_eq!(span, (8, 9)),
       e => panic!("unexpected error: {:?}", e),
     }
+  }
+
+  #[test]
+  fn path_filter_deep_recursive_glob() {
+    // 强制使用 ** 匹配多层目录
+    let spec = parse_github_like("path:src/**/*.rs").expect("parse");
+
+    // 匹配:
+    assert!(spec.path_filter.is_allowed("src/main.rs")); // 直属文件
+    assert!(spec.path_filter.is_allowed("src/utils/helper.rs")); // 一级子目录
+    assert!(spec.path_filter.is_allowed("src/a/b/c/d.rs")); // 多级子目录
+
+    // 不匹配:
+    assert!(!spec.path_filter.is_allowed("tests/main.rs")); // 前缀不符
+    assert!(!spec.path_filter.is_allowed("src/readme.md")); // 后缀不符
+
+    // 对比: 单星号行为
+    let spec_shallow = parse_github_like("path:src/*.rs").expect("parse");
+    assert!(spec_shallow.path_filter.is_allowed("src/lib.rs"));
+    assert!(!spec_shallow.path_filter.is_allowed("src/utils/lib.rs")); // Strict: * 不跨目录
   }
 
   #[test]

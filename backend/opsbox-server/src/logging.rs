@@ -96,12 +96,10 @@ async fn determine_log_level(
     // 命令行参数或 verbose 指定了级别，同步到数据库
     if let Err(e) = repo.update_level("server", config_level).await {
       tracing::warn!("同步日志级别到数据库失败: {}，继续使用配置的级别", e);
+    } else if config.log_level.is_some() {
+      tracing::info!("已将命令行日志级别 '{}' 同步到数据库", config_level);
     } else {
-      if config.log_level.is_some() {
-        tracing::info!("已将命令行日志级别 '{}' 同步到数据库", config_level);
-      } else {
-        tracing::info!("已将 verbose 参数对应的日志级别 '{}' 同步到数据库", config_level);
-      }
+      tracing::info!("已将 verbose 参数对应的日志级别 '{}' 同步到数据库", config_level);
     }
     return config_level;
   }

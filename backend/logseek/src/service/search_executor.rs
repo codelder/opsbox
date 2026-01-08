@@ -2858,7 +2858,7 @@ SOURCES = [
     {{
         "endpoint": {{"kind": "local", "root": "{}"}},
         "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "filter_glob": "*.log",
+        "filter_glob": "**/*.log",
         "display_name": "filter-test",
     }}
 ]
