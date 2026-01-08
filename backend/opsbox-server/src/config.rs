@@ -21,10 +21,13 @@ fn host_parser(s: &str) -> Result<String, String> {
   }
 
   // 尝试解析为带方括号的 IPv6 地址（如 [::1]）
-  if let Some(ipv6_str) = s.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-    if ipv6_str.parse::<std::net::Ipv6Addr>().is_ok() {
-      return Ok(s.to_string());
-    }
+  if s
+    .strip_prefix('[')
+    .and_then(|s| s.strip_suffix(']'))
+    .and_then(|ipv6_str| ipv6_str.parse::<std::net::Ipv6Addr>().ok())
+    .is_some()
+  {
+    return Ok(s.to_string());
   }
 
   // 对于主机名，接受非空字符串，让系统在绑定的时候验证

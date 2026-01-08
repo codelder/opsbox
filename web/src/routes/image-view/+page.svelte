@@ -448,7 +448,7 @@
     <div class="group relative z-20 border-t border-border bg-background/50 backdrop-blur-sm">
       <!-- Left scroll button -->
       <button
-        class="absolute inset-y-0 left-0 z-30 flex w-12 items-center justify-center bg-gradient-to-r from-background/80 to-transparent text-foreground opacity-0 transition-opacity hover:opacity-100"
+        class="absolute inset-y-0 left-0 z-30 flex w-12 items-center justify-center bg-linear-to-r from-background/80 to-transparent text-foreground opacity-0 transition-opacity hover:opacity-100"
         onclick={() => scrollThumbnails('left')}
         title="Scroll Left"
       >
@@ -462,7 +462,7 @@
       >
         {#each peerImages as item, i}
           <button
-            class="relative h-24 w-40 flex-shrink-0 overflow-hidden rounded-lg border-2 transition-all hover:scale-105 active:scale-95 {i ===
+            class="relative h-24 w-40 shrink-0 overflow-hidden rounded-lg border-2 transition-all hover:scale-105 active:scale-95 {i ===
             currentIndex
               ? 'scale-105 border-primary ring-2 ring-primary/20'
               : 'border-transparent opacity-60 hover:opacity-100'}"
@@ -479,7 +479,7 @@
 
       <!-- Right scroll button -->
       <button
-        class="absolute inset-y-0 right-0 z-30 flex w-12 items-center justify-center bg-gradient-to-l from-background/80 to-transparent text-foreground opacity-0 transition-opacity hover:opacity-100"
+        class="absolute inset-y-0 right-0 z-30 flex w-12 items-center justify-center bg-linear-to-l from-background/80 to-transparent text-foreground opacity-0 transition-opacity hover:opacity-100"
         onclick={() => scrollThumbnails('right')}
         title="Scroll Right"
       >

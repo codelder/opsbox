@@ -43,10 +43,19 @@ impl ExplorerService {
 
     let path_str = if odfi.path.is_empty() {
       "/".to_string()
-    } else if odfi.path.starts_with('/') {
-      odfi.path.clone()
     } else {
-      format!("/{}", odfi.path)
+      // Check if path is already absolute (works for both Unix and Windows)
+      let path_buf = PathBuf::from(&odfi.path);
+      if path_buf.is_absolute() {
+        // Already absolute, use as-is
+        odfi.path.clone()
+      } else if odfi.path.starts_with('/') {
+        // Unix-style absolute path
+        odfi.path.clone()
+      } else {
+        // Relative path, make it absolute with leading slash (Unix-style)
+        format!("/{}", odfi.path)
+      }
     };
 
     let mut is_archive_target = odfi.target_type == TargetType::Archive;
@@ -299,7 +308,12 @@ impl ExplorerService {
 
     // If listing root of the agent, return search roots instead of calling agent list API
     // (Agent list API might fail if / is not in whitelist)
-    if path_str == "/" {
+    // If listing root of the agent, return search roots instead of calling agent list API
+    // (Agent list API might fail if / is not in whitelist)
+    // But if search_roots contains "/", we want to list the real root content, not the virtual list of roots (which would just be "/" and loop).
+    let has_root_access = agent.search_roots.iter().any(|r| r == "/");
+
+    if path_str == "/" && !has_root_access {
       let items = agent
         .search_roots
         .into_iter()
