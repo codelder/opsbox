@@ -231,18 +231,20 @@ pub async fn view_cache_json(
 
           // 读取条目
           let mut found = false;
+          let mut checked_count = 0;
           while let Some(entry_res) = stream
             .next_entry()
             .await
             .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
           {
             let (meta, mut reader) = entry_res;
+            checked_count += 1;
 
             // 如果指定了 entry 路径，检查是否匹配
             if let Some(ref target) = target_entry {
-              // 规范化路径比较（去除开头的 /）
-              let meta_path = meta.path.trim_start_matches('/');
-              let target_path = target.trim_start_matches('/');
+              // 规范化路径比较（去除开头的 / 和 ./）
+              let meta_path = meta.path.trim_start_matches('/').trim_start_matches("./");
+              let target_path = target.trim_start_matches('/').trim_start_matches("./");
               if meta_path != target_path {
                 continue; // 跳过不匹配的条目
               }
@@ -265,7 +267,7 @@ pub async fn view_cache_json(
           }
 
           if !found && target_entry.is_some() {
-            tracing::warn!("在归档中未找到指定条目: {:?}", target_entry);
+            tracing::warn!("在归档中未找到指定条目: {:?}, 共检查 {} 个条目", target_entry, checked_count);
           } else if !found {
             tracing::warn!("流未返回任何条目: {}", file_url);
           }
