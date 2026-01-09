@@ -158,6 +158,12 @@ pub async fn execute_search(
     // 使用 EntryStreamProcessor 进行并发搜索
     let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
       .with_cancel_token(cancel_token.clone());
+
+    // 仅目录类型需要 base_path 用于相对路径转换
+    if matches!(&request.target, ConfigTarget::Dir { .. }) {
+      stream_processor = stream_processor.with_base_path(search_path.clone());
+    }
+
     if let Some(filter) = extra_path_filter.clone() {
       stream_processor = stream_processor.with_extra_path_filter(filter);
     }
