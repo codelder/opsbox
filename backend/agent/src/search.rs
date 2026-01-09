@@ -157,7 +157,8 @@ pub async fn execute_search(
 
     // 使用 EntryStreamProcessor 进行并发搜索
     let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
-      .with_cancel_token(cancel_token.clone());
+      .with_cancel_token(cancel_token.clone())
+      .with_base_path(search_path.clone());
     if let Some(filter) = extra_path_filter.clone() {
       stream_processor = stream_processor.with_extra_path_filter(filter);
     }

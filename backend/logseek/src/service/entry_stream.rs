@@ -129,6 +129,8 @@ pub struct EntryStreamProcessor {
   // 额外路径过滤器（可选），与用户查询中的 path: 规则做 AND
   extra_path_filter: Option<crate::query::PathFilter>,
   cancel_token: Option<tokio_util::sync::CancellationToken>,
+  // 基础路径（可选）：如果设置，过滤时将先去除该前缀（用于支持相对路径 glob）
+  base_path: Option<PathBuf>,
 }
 
 impl EntryStreamProcessor {
@@ -138,12 +140,19 @@ impl EntryStreamProcessor {
       content_timeout: Duration::from_secs(60),
       extra_path_filter: None,
       cancel_token: None,
+      base_path: None,
     }
   }
 
   /// 设置取消令牌
   pub fn with_cancel_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
     self.cancel_token = Some(token);
+    self
+  }
+
+  /// 设置基础路径（用于相对路径过滤）
+  pub fn with_base_path(mut self, base_path: impl Into<PathBuf>) -> Self {
+    self.base_path = Some(base_path.into());
     self
   }
 
@@ -198,9 +207,17 @@ impl EntryStreamProcessor {
       };
 
       // 路径过滤（仅在主循环进行，任务内无需再次判断）
+      let path_to_check_p = if let Some(base) = &self.base_path {
+        std::path::Path::new(&meta.path)
+          .strip_prefix(base)
+          .unwrap_or(std::path::Path::new(&meta.path))
+      } else {
+        std::path::Path::new(&meta.path)
+      };
+
       if !self
         .processor
-        .should_process_path_with(&meta.path, self.extra_path_filter.as_ref())
+        .should_process_path_with(&path_to_check_p.to_string_lossy(), self.extra_path_filter.as_ref())
       {
         trace!("路径不匹配，跳过: {}", &meta.path);
         continue;
