@@ -125,7 +125,7 @@ SOURCES = [{
 SOURCES = [{
     'endpoint': { 'kind': 'local', 'root': '${absRoot}' },
     'target':   { 'type': 'archive', 'path': 'e2e-archive.tar' },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'E2E Test Archive'
 }]
 `;

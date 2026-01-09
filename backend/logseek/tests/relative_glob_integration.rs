@@ -40,7 +40,7 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
   {
     let filter = logseek::query::path_glob_to_filter("*/*.log").unwrap();
     let mut stream_processor = EntryStreamProcessor::new(processor.clone())
-      .with_base_path(root.clone())
+      .with_base_path(root)
       .with_extra_path_filter(filter);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
@@ -89,7 +89,7 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
   {
     let filter = logseek::query::path_glob_to_filter("**/*.log").unwrap();
     let mut stream_processor = EntryStreamProcessor::new(processor.clone())
-      .with_base_path(root.clone())
+      .with_base_path(root)
       .with_extra_path_filter(filter);
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);

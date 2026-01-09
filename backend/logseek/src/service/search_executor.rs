@@ -448,9 +448,12 @@ impl SearchExecutor {
     if let Some(token) = cancel_token.clone() {
       processor = processor.with_cancel_token(token);
     }
-    // 对于 Local 数据源，设置 base_path 以支持相对路径 glob 过滤
+    // 对于 Local 数据源的目录类型，设置 base_path 以支持相对路径 glob 过滤
+    // 注意：归档文件内部的条目已经是相对路径，不需要 strip_prefix
     if let Endpoint::Local { root } = &source.endpoint {
-      processor = processor.with_base_path(root);
+      if matches!(&source.target, Target::Dir { .. }) {
+        processor = processor.with_base_path(root);
+      }
     }
 
     // 设置 filter_glob（与用户查询的 path: 限定词做 AND）

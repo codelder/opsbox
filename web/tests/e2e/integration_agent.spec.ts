@@ -238,10 +238,12 @@ test.describe('Agent Integration E2E', () => {
   const TEST_APP_AGENT_ARCHIVE = `e2e_test_agent_archive_${RUN_ID}`;
   const TEST_APP_AGENT_TARGZ = `e2e_test_agent_targz_${RUN_ID}`;
   const TEST_APP_AGENT_DIR_MULTI_GZ = `e2e_test_agent_dir_multi_gz_${RUN_ID}`;
+  const TEST_APP_AGENT_RELATIVE_GLOB = `e2e_test_agent_relative_glob_${RUN_ID}`;
   const UNI_ID_AGENT = `E2E_AGENT_${RUN_ID}`;
   const UNI_ID_AGENT_ARCHIVE = `E2E_AGENT_ARCHIVE_${RUN_ID}`;
   const UNI_ID_AGENT_TARGZ = `E2E_AGENT_TARGZ_${RUN_ID}`;
   const UNI_ID_AGENT_DIR_MULTI_GZ = `E2E_AGENT_DIR_MULTI_GZ_${RUN_ID}`;
+  const UNI_ID_AGENT_RELATIVE_GLOB = `E2E_AGENT_RELATIVE_GLOB_${RUN_ID}`;
 
   const repoRoot = path.resolve(__dirname, '../../..');
 
@@ -287,6 +289,14 @@ test.describe('Agent Integration E2E', () => {
     ]);
     writeGzFile(TEST_MULTI_GZ_1, `2025-01-01 12:00:00 [INFO] gz 1 ${UNI_ID_AGENT_DIR_MULTI_GZ}\n`);
     writeGzFile(TEST_MULTI_GZ_2, `2025-01-01 12:00:00 [INFO] gz 2 ${UNI_ID_AGENT_DIR_MULTI_GZ}\n`);
+
+    // 为 */*.log 测试创建子目录文件
+    const subdir = path.join(TEST_LOGS_DIR, 'subdir');
+    fs.mkdirSync(subdir, { recursive: true });
+    fs.writeFileSync(path.join(subdir, 'target.log'), `match me ${UNI_ID_AGENT_RELATIVE_GLOB}\n`);
+    const deepDir = path.join(subdir, 'nested');
+    fs.mkdirSync(deepDir, { recursive: true });
+    fs.writeFileSync(path.join(deepDir, 'too-deep.log'), `should not match ${UNI_ID_AGENT_RELATIVE_GLOB}\n`);
 
     agentPort = await getFreePort();
 
@@ -345,7 +355,7 @@ SOURCES = [{
 SOURCES = [{
     'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
     'target':   { 'type': 'archive', 'path': 'agent-archive.tar' },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'E2E Agent Archive'
 }]
 `;
@@ -362,7 +372,7 @@ SOURCES = [{
 SOURCES = [{
     'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
     'target':   { 'type': 'archive', 'path': 'agent-archive.tar.gz' },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'E2E Agent TarGz'
 }]
 `;
@@ -391,6 +401,22 @@ SOURCES = [{
       }
     });
     expect(responseDirMultiGz.ok()).toBeTruthy();
+
+    const scriptRelativeGlob = `
+SOURCES = [{
+    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
+    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
+    'filter_glob': '*/*.log',
+    'display_name': 'E2E Agent Relative Glob'
+}]
+`;
+    const responseRelativeGlob = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
+      data: {
+        app: TEST_APP_AGENT_RELATIVE_GLOB,
+        script: scriptRelativeGlob
+      }
+    });
+    expect(responseRelativeGlob.ok()).toBeTruthy();
   });
 
   test.afterAll(async ({ request }) => {
@@ -411,6 +437,11 @@ SOURCES = [{
     }
     try {
       await request.delete(`${API_LOGSEEK_BASE}/settings/planners/scripts/${TEST_APP_AGENT_DIR_MULTI_GZ}`);
+    } catch {
+      // ignore
+    }
+    try {
+      await request.delete(`${API_LOGSEEK_BASE}/settings/planners/scripts/${TEST_APP_AGENT_RELATIVE_GLOB}`);
     } catch {
       // ignore
     }
@@ -558,5 +589,21 @@ SOURCES = [{
 
     await expect(page.getByRole('link', { name: 'multi-1.log.gz' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'multi-2.log.gz' })).toBeVisible();
+  });
+
+  test('should support * relative glob matching in agent dir', async ({ page }) => {
+    await page.goto('http://127.0.0.1:5173/search');
+
+    const searchInput = page.getByPlaceholder('搜索...');
+    await searchInput.fill(`app:${TEST_APP_AGENT_RELATIVE_GLOB} "${UNI_ID_AGENT_RELATIVE_GLOB}"`);
+    await searchInput.press('Enter');
+
+    // 预期：只匹配 subdir/target.log
+    // too-deep.log 在 subdir/nested/too-deep.log，路径层级不符，不应被 * 匹配
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果', { timeout: 10000 });
+    await expect(page.locator('mark.highlight', { hasText: UNI_ID_AGENT_RELATIVE_GLOB })).toHaveCount(1);
+
+    await expect(page.getByRole('link', { name: 'target.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'too-deep.log' })).not.toBeVisible();
   });
 });
