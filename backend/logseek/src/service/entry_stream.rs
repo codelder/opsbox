@@ -207,17 +207,32 @@ impl EntryStreamProcessor {
       };
 
       // 路径过滤（仅在主循环进行，任务内无需再次判断）
+      // 对于目录类型，使用 base_path 进行相对路径转换以支持相对 glob 匹配
       let path_to_check_p = if let Some(base) = &self.base_path {
-        std::path::Path::new(&meta.path)
-          .strip_prefix(base)
-          .unwrap_or(std::path::Path::new(&meta.path))
+        let path_obj = std::path::Path::new(&meta.path);
+        match path_obj.strip_prefix(base) {
+          Ok(p) => p,
+          Err(_) => {
+            // 尝试 canonicalize 后的路径
+            if let Ok(canon_path) = std::fs::canonicalize(path_obj)
+              && let Ok(canon_base) = std::fs::canonicalize(base)
+              && let Ok(_p) = canon_path.strip_prefix(&canon_base)
+            {
+              // 路径匹配成功，继续使用原路径
+              path_obj
+            } else {
+              path_obj
+            }
+          }
+        }
       } else {
         std::path::Path::new(&meta.path)
       };
 
+      let path_str = path_to_check_p.to_string_lossy();
       if !self
         .processor
-        .should_process_path_with(&path_to_check_p.to_string_lossy(), self.extra_path_filter.as_ref())
+        .should_process_path_with(&path_str, self.extra_path_filter.as_ref())
       {
         trace!("路径不匹配，跳过: {}", &meta.path);
         continue;

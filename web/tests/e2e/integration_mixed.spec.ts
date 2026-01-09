@@ -455,7 +455,7 @@ SOURCES = [
   {
     'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
     'target':   { 'type': 'dir', 'path': 'dir', 'recursive': True },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'Local Dir'
   },
   {
@@ -466,13 +466,13 @@ SOURCES = [
   {
     'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
     'target':   { 'type': 'archive', 'path': 'local-archive.tar.gz' },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'Local Archive'
   },
   {
     'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
     'target':   { 'type': 'dir', 'path': 'dir', 'recursive': True },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'Agent Dir'
   },
   {
@@ -483,13 +483,13 @@ SOURCES = [
   {
     'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
     'target':   { 'type': 'archive', 'path': 'agent-archive.tar.gz' },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'Agent Archive'
   },
   {
     'endpoint': { 'kind': 's3', 'profile': '${PROFILE}', 'bucket': '${BUCKET}' },
     'target':   { 'type': 'archive', 'path': '${S3_ARCHIVE_KEY}' },
-    'filter_glob': '*.log',
+    'filter_glob': '**/*.log',
     'display_name': 'S3 Archive'
   },
 ]
