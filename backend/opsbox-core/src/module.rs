@@ -62,3 +62,47 @@ macro_rules! register_module {
     }
   };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestModule;
+
+    #[async_trait]
+    impl Module for TestModule {
+        fn name(&self) -> &'static str {
+            "test_module"
+        }
+
+        fn api_prefix(&self) -> &'static str {
+            "/api/v1/test"
+        }
+
+        async fn init_schema(&self, _pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
+            Ok(())
+        }
+
+        fn router(&self, _pool: SqlitePool) -> Router {
+            Router::new()
+        }
+    }
+
+    #[test]
+    fn test_module_basic_methods() {
+        let module = TestModule;
+        assert_eq!(module.name(), "test_module");
+        assert_eq!(module.api_prefix(), "/api/v1/test");
+
+        // Default implementations should not panic
+        module.configure();
+        module.cleanup();
+    }
+
+    #[test]
+    fn test_module_factory() {
+        let factory = ModuleFactory::new(|| Arc::new(TestModule));
+        let module = (factory.create)();
+        assert_eq!(module.name(), "test_module");
+    }
+}

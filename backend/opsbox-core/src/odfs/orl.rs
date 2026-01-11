@@ -1,7 +1,10 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
+
+use fluent_uri::Uri;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
-use url::Url;
 
 /// 资源端点类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -9,6 +12,29 @@ pub enum EndpointType {
   Local,
   Agent,
   S3,
+}
+
+impl FromStr for EndpointType {
+  type Err = OrlError;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s {
+      "local" => Ok(EndpointType::Local),
+      "agent" => Ok(EndpointType::Agent),
+      "s3" => Ok(EndpointType::S3),
+      _ => Err(OrlError::InvalidEndpointType(s.to_string())),
+    }
+  }
+}
+
+impl fmt::Display for EndpointType {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      EndpointType::Local => write!(f, "local"),
+      EndpointType::Agent => write!(f, "agent"),
+      EndpointType::S3 => write!(f, "s3"),
+    }
+  }
 }
 
 /// 目标资源类型
@@ -22,15 +48,15 @@ pub enum TargetType {
 
 /// OpsBox 资源定位符 (ORL)
 ///
-/// 结构对齐 ODFI 设计: `orl://[id]@[type][.server_addr]/[path]?entry=[entry_path]`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ORL {
-  pub server_addr: Option<String>,
-  pub endpoint_type: EndpointType,
-  pub endpoint_id: String,
-  pub target_type: TargetType,
-  pub path: String,
-  pub entry_path: Option<String>,
+/// 轻量级封装：底层维护单一的符合 RFC 3986 规范的 URI 字符串 (scheme 固定为 `orl`)。
+/// 所有的属性通过 On-demand parsing 获取，不再维护冗余的 struct 字段。
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct ORL(String);
+
+impl fmt::Debug for ORL {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("ORL").field(&self.0).finish()
+  }
 }
 
 #[derive(Debug, Error)]
@@ -41,110 +67,163 @@ pub enum OrlError {
   UnsupportedScheme(String),
   #[error("Invalid endpoint type: {0}")]
   InvalidEndpointType(String),
-  #[error("Invalid target type: {0}")]
-  InvalidTargetType(String),
-  #[error("Missing required field: {0}")]
-  MissingField(&'static str),
-  #[error("URL parsing error: {0}")]
-  ParseError(#[from] url::ParseError),
+  #[error("Missing authority/host")]
+  MissingAuthority,
 }
 
 impl ORL {
-  pub fn new(
-    endpoint_type: EndpointType,
-    endpoint_id: impl Into<String>,
-    target_type: TargetType,
-    path: impl Into<String>,
-    entry_path: Option<String>,
-  ) -> Self {
-    Self {
-      server_addr: None,
-      endpoint_type,
-      endpoint_id: endpoint_id.into(),
-      target_type,
-      path: path.into(),
-      entry_path,
+  /// 从字符串解析并校验
+  pub fn parse(s: impl Into<String>) -> Result<Self, OrlError> {
+    let s = s.into();
+
+    // 1. 基本 URI 格式校验
+    match Uri::parse(s.as_str()) {
+      Ok(uri) => {
+        // 2. Scheme 校验
+        if uri.scheme().as_str() != "orl" {
+          return Err(OrlError::UnsupportedScheme(
+            uri.scheme().as_str().to_string(),
+          ));
+        }
+        // 3. Authority 校验 (必须存在)
+        if uri.authority().is_none() {
+          return Err(OrlError::MissingAuthority);
+        }
+      }
+      Err(e) => return Err(OrlError::InvalidFormat(e.to_string())),
+    }
+
+    Ok(Self(s))
+  }
+
+  /// 获取原始 URI 字符串
+  pub fn as_str(&self) -> &str {
+    &self.0
+  }
+
+  /// 获取 fluent_uri::Uri 视图（内部使用，unwrap 保证 safe，因为 parse 时已校验）
+  pub fn uri(&self) -> Uri<&str> {
+    Uri::parse(self.0.as_str()).expect("ORL internal string should be valid URI")
+  }
+
+  // --- Accessors ---
+
+  /// 获取端点类型 (local/agent/s3)
+  /// 解析 host 的第一部分，如 `agent.web-01` -> `agent`
+  pub fn endpoint_type(&self) -> Result<EndpointType, OrlError> {
+    let auth = self.uri().authority().ok_or(OrlError::MissingAuthority)?;
+    let host = auth.host();
+
+    // 简单策略：Host 即 Type (针对 `odfi://local` 或 `odfi://agent`)
+    // 或者 Host 是 `type.addr` (针对 `odfi://agent.10.0.1.5`)
+    let type_str = host.split('.').next().unwrap_or(host);
+
+    EndpointType::from_str(type_str)
+  }
+
+  /// 获取端点 ID (AgentID / ProfileName)
+  /// 对应 userinfo 部分
+  pub fn endpoint_id(&self) -> Option<&str> {
+    self.uri().authority()?.userinfo().map(|u| u.as_str())
+  }
+
+  /// 对于 S3，ProfileName 就在 id 里
+  /// 对于 Local，如果 id 为空则意味着 localhost
+  pub fn effective_id(&self) -> Cow<'_, str> {
+    match self.endpoint_id() {
+      Some(id) => Cow::Borrowed(id),
+      None => Cow::Borrowed("localhost"),
     }
   }
 
-  pub fn with_server_addr(mut self, addr: impl Into<String>) -> Self {
-    self.server_addr = Some(addr.into());
-    self
+  /// 获取资源路径
+  pub fn path(&self) -> &str {
+    self.uri().path().as_str()
   }
 
-  /// Get a human-readable display name (usually the file name)
-  pub fn display_name(&self) -> String {
-    if let Some(entry) = &self.entry_path {
-      entry.split('/').next_back().unwrap_or(entry).to_string()
+  /// 获取完整路径 (含 Bucket 处理逻辑)
+  /// S3: `orl://profile@s3/bucket/path` -> Bucket="bucket", Key="path"
+  /// 这部分高层逻辑是否要下沉到 ORL 还有待商榷，目前先提供基础 Path
+  pub fn path_decoded(&self) -> Cow<'_, str> {
+    self.uri().path().as_str().into()
+  }
+
+  /// 获取查询参数 `entry` (归档内部路径)
+  pub fn entry_path(&self) -> Option<Cow<'_, str>> {
+    self.query_param("entry")
+  }
+
+  /// 获取查询参数 `glob` (过滤通配符)
+  pub fn filter_glob(&self) -> Option<Cow<'_, str>> {
+    self.query_param("glob")
+  }
+
+  /// 辅助：获取 Query 参数
+  fn query_param(&self, key: &str) -> Option<Cow<'_, str>> {
+    let uri = self.uri();
+    let query = uri.query()?;
+    // fluent-uri 暂时没提供便捷的 query pair iterator，手动解析
+    for pair in query.as_str().split('&') {
+      let mut parts = pair.splitn(2, '=');
+      if let Some(k) = parts.next()
+        && k == key
+      {
+          let v = parts.next().unwrap_or("");
+          // 可以在这里做 URL decode
+          return Some(Cow::Borrowed(v));
+      }
+    }
+    None
+  }
+
+  /// 判断目标类型
+  pub fn target_type(&self) -> TargetType {
+    let path = self.path();
+    if self.entry_path().is_some()
+      || path.ends_with(".tar")
+      || path.ends_with(".tar.gz")
+      || path.ends_with(".tgz")
+      || path.ends_with(".zip")
+    {
+      TargetType::Archive
     } else {
-      self.path.split('/').next_back().unwrap_or(&self.path).to_string()
+      TargetType::Dir
     }
+  }
+
+  /// 获取显示名称
+  pub fn display_name(&self) -> String {
+    if let Some(entry) = self.entry_path() {
+      entry.split('/').next_back().unwrap_or(&entry).to_string()
+    } else {
+      let p = self.path();
+      p.split('/').next_back().unwrap_or(p).to_string()
+    }
+  }
+
+  /// Builder 模式：修改 Path
+  /// 注意：这对 String wrapper 来说开销较大，因为需要重建字符串
+  pub fn join(&self, subpath: &str) -> Result<Self, OrlError> {
+    let mut s = self.0.clone();
+    // 粗暴简单的实现，实际可能需要更健壮的 path join
+    if !s.contains('?') && !s.contains('#') {
+      let sep = if s.ends_with('/') { "" } else { "/" };
+      s.push_str(sep);
+      s.push_str(subpath.trim_start_matches('/'));
+      return Self::parse(s);
+    }
+    // 暂时如果带 query 就不支持简单的 join，或者需要更复杂的重组逻辑
+    // 实际生产建议引入 url crate 的 builder 功能进行辅助构造，或者 fluent-uri 的 builder（如果有）
+    // 这里为简化暂略
+    Err(OrlError::InvalidFormat("Cannot join path on complex URI currently".into()))
   }
 }
 
+// --- Trait Impls ---
+
 impl fmt::Display for ORL {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let endpoint_type_str = match self.endpoint_type {
-      EndpointType::Local => "local",
-      EndpointType::Agent => "agent",
-      EndpointType::S3 => "s3",
-    };
-
-    let mut url = Url::parse("orl://placeholder").map_err(|_| fmt::Error)?;
-
-    // Set Path
-    let mut final_path = if self.path.starts_with('/') {
-      self.path.clone()
-    } else {
-      format!("/{}", self.path)
-    };
-
-    if self.endpoint_type == EndpointType::S3 {
-      if let Some((profile, bucket)) = self.endpoint_id.split_once(':') {
-        url.set_username(profile).map_err(|_| fmt::Error)?;
-        final_path = format!("/{}{}", bucket, final_path);
-      } else {
-        url.set_username(&self.endpoint_id).map_err(|_| fmt::Error)?;
-      }
-    } else if !self.endpoint_id.is_empty()
-      && (self.endpoint_type != EndpointType::Local || self.endpoint_id != "localhost")
-    {
-      if let Some((user, pass)) = self.endpoint_id.split_once(':') {
-        url.set_username(user).map_err(|_| fmt::Error)?;
-        url.set_password(Some(pass)).map_err(|_| fmt::Error)?;
-      } else {
-        url.set_username(&self.endpoint_id).map_err(|_| fmt::Error)?;
-      }
-    }
-
-    let mut host = endpoint_type_str.to_string();
-    let mut port = None;
-
-    if let Some(addr) = &self.server_addr {
-      if let Some((h, p)) = addr.split_once(':') {
-        if !h.is_empty() {
-          host.push('.');
-          host.push_str(h);
-        }
-        port = p.parse::<u16>().ok();
-      } else {
-        host.push('.');
-        host.push_str(addr);
-      }
-    }
-
-    url.set_host(Some(&host)).map_err(|_| fmt::Error)?;
-    if let Some(p) = port {
-      url.set_port(Some(p)).map_err(|_| fmt::Error)?;
-    }
-
-    url.set_path(&final_path);
-
-    if let Some(entry) = &self.entry_path {
-      url.query_pairs_mut().append_pair("entry", entry);
-    }
-
-    write!(f, "{}", url)
+    write!(f, "{}", self.0)
   }
 }
 
@@ -152,77 +231,26 @@ impl FromStr for ORL {
   type Err = OrlError;
 
   fn from_str(s: &str) -> Result<Self, Self::Err> {
-    let url = Url::parse(s)?;
-    if url.scheme() != "orl" {
-      return Err(OrlError::UnsupportedScheme(url.scheme().to_string()));
-    }
+    Self::parse(s)
+  }
+}
 
-    // Parse id from userinfo
-    let mut endpoint_id = url.username().to_string();
-    if let Some(pass) = url.password() {
-      endpoint_id = format!("{}:{}", endpoint_id, pass);
-    }
+impl Serialize for ORL {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: Serializer,
+  {
+    serializer.serialize_str(&self.0)
+  }
+}
 
-    let host = url.host_str().ok_or(OrlError::MissingField("host"))?;
-    let (endpoint_type_str, mut server_addr): (&str, Option<String>) = if let Some((t, addr)) = host.split_once('.') {
-      (t, Some(addr.to_string()))
-    } else {
-      (host, None)
-    };
-
-    if let Some(port) = url.port() {
-      if let Some(ref mut addr) = server_addr {
-        addr.push_str(&format!(":{}", port));
-      } else {
-        server_addr = Some(format!(":{}", port));
-      }
-    }
-
-    let endpoint_type = match endpoint_type_str {
-      "local" => EndpointType::Local,
-      "agent" => EndpointType::Agent,
-      "s3" => EndpointType::S3,
-      other => return Err(OrlError::InvalidEndpointType(other.to_string())),
-    };
-
-    if endpoint_type == EndpointType::Local && endpoint_id.is_empty() {
-      endpoint_id = "localhost".to_string();
-    }
-
-    let path_encoded = url.path().trim_start_matches('/');
-    let mut path = percent_encoding::percent_decode_str(path_encoded)
-      .decode_utf8_lossy()
-      .into_owned();
-
-    if endpoint_type == EndpointType::S3 {
-      if let Some((bucket, rest)) = path.split_once('/') {
-        endpoint_id = format!("{}:{}", endpoint_id, bucket);
-        path = rest.to_string();
-      } else if !path.is_empty() {
-        endpoint_id = format!("{}:{}", endpoint_id, path);
-        path = String::new();
-      }
-    }
-
-    let entry_path = url
-      .query_pairs()
-      .find(|(k, _)| k == "entry")
-      .map(|(_, v)| v.to_string());
-
-    let target_type = if entry_path.is_some() {
-      TargetType::Archive
-    } else {
-      TargetType::Dir
-    };
-
-    Ok(ORL {
-      server_addr,
-      endpoint_type,
-      endpoint_id,
-      target_type,
-      path,
-      entry_path,
-    })
+impl<'de> Deserialize<'de> for ORL {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    let s = String::deserialize(deserializer)?;
+    Self::parse(s).map_err(serde::de::Error::custom)
   }
 }
 
@@ -274,4 +302,125 @@ impl fmt::Display for OpsPath {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "{}", self.0)
   }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_endpoint_type_from_str() {
+        assert!(matches!(EndpointType::from_str("local"), Ok(EndpointType::Local)));
+        assert!(matches!(EndpointType::from_str("agent"), Ok(EndpointType::Agent)));
+        assert!(matches!(EndpointType::from_str("s3"), Ok(EndpointType::S3)));
+        assert!(EndpointType::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_endpoint_type_display() {
+        assert_eq!(EndpointType::Local.to_string(), "local");
+        assert_eq!(EndpointType::Agent.to_string(), "agent");
+        assert_eq!(EndpointType::S3.to_string(), "s3");
+    }
+
+    #[test]
+    fn test_orl_parse() {
+        let orl = ORL::parse("orl://local/var/log").unwrap();
+        assert_eq!(orl.as_str(), "orl://local/var/log");
+
+        // Invalid scheme
+        assert!(ORL::parse("http://local/path").is_err());
+    }
+
+    #[test]
+    fn test_orl_endpoint_type() {
+        let orl = ORL::parse("orl://agent.web-01/path").unwrap();
+        assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Agent);
+
+        let orl = ORL::parse("orl://local/path").unwrap();
+        assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
+    }
+
+    #[test]
+    fn test_orl_endpoint_id() {
+        let orl = ORL::parse("orl://user@agent/path").unwrap();
+        assert_eq!(orl.endpoint_id(), Some("user"));
+
+        let orl = ORL::parse("orl://local/path").unwrap();
+        assert_eq!(orl.endpoint_id(), None);
+        assert_eq!(orl.effective_id(), "localhost");
+    }
+
+    #[test]
+    fn test_orl_path() {
+        let orl = ORL::parse("orl://local/var/log/app.log").unwrap();
+        assert_eq!(orl.path(), "/var/log/app.log");
+    }
+
+    #[test]
+    fn test_orl_entry_path() {
+        let orl = ORL::parse("orl://local/archive.tar?entry=inner/file.log").unwrap();
+        assert_eq!(orl.entry_path(), Some(Cow::Borrowed("inner/file.log")));
+
+        let orl = ORL::parse("orl://local/file.log").unwrap();
+        assert_eq!(orl.entry_path(), None);
+    }
+
+    #[test]
+    fn test_orl_target_type() {
+        let orl = ORL::parse("orl://local/file.tar").unwrap();
+        assert_eq!(orl.target_type(), TargetType::Archive);
+
+        let orl = ORL::parse("orl://local/file.log").unwrap();
+        assert_eq!(orl.target_type(), TargetType::Dir);
+
+        let orl = ORL::parse("orl://local/file.log?entry=inner").unwrap();
+        assert_eq!(orl.target_type(), TargetType::Archive);
+    }
+
+    #[test]
+    fn test_orl_display_name() {
+        let orl = ORL::parse("orl://local/var/log/app.log").unwrap();
+        assert_eq!(orl.display_name(), "app.log");
+
+        let orl = ORL::parse("orl://local/archive.tar?entry=inner/file.log").unwrap();
+        assert_eq!(orl.display_name(), "file.log");
+    }
+
+    #[test]
+    fn test_orl_join() {
+        let orl = ORL::parse("orl://local/var/log").unwrap();
+        let joined = orl.join("app.log").unwrap();
+        assert_eq!(joined.path(), "/var/log/app.log");
+
+        // With trailing slash
+        let orl = ORL::parse("orl://local/var/log/").unwrap();
+        let joined = orl.join("app.log").unwrap();
+        assert_eq!(joined.path(), "/var/log/app.log");
+    }
+
+    #[test]
+    fn test_orl_serialization() {
+        let orl = ORL::parse("orl://local/path").unwrap();
+        let json = serde_json::to_string(&orl).unwrap();
+        assert_eq!(json, "\"orl://local/path\"");
+
+        let deserialized: ORL = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, orl);
+    }
+
+    #[test]
+    fn test_ops_path() {
+        let path = OpsPath::new("/var/log");
+        assert_eq!(path.as_str(), "/var/log");
+        assert_eq!(path.to_string(), "/var/log");
+
+        let joined = path.join("app.log");
+        assert_eq!(joined.as_str(), "/var/log/app.log");
+
+        // With trailing slash
+        let path = OpsPath::new("/var/log/");
+        let joined = path.join("/app.log");
+        assert_eq!(joined.as_str(), "/var/log/app.log");
+    }
 }

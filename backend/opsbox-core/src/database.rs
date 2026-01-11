@@ -77,3 +77,36 @@ pub async fn run_migration(pool: &SqlitePool, sql: &str, module: &str) -> Result
   tracing::info!("{} 模块数据库迁移完成", module);
   Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_database_config_new() {
+        let config = DatabaseConfig::new("sqlite::memory:".to_string(), 5, 10);
+        assert_eq!(config.url, "sqlite::memory:");
+        assert_eq!(config.max_connections, 5);
+        assert_eq!(config.connect_timeout, 10);
+    }
+
+    #[tokio::test]
+    async fn test_init_pool_memory() {
+        // Use in-memory database for testing
+        let config = DatabaseConfig::new("sqlite::memory:".to_string(), 1, 5);
+        let pool = init_pool(&config).await.expect("Failed to init pool");
+
+        health_check(&pool).await.expect("Health check failed");
+
+        // Test migration helper
+        run_migration(&pool, "CREATE TABLE IF NOT EXISTS test (id INTEGER PRIMARY KEY)", "test_module")
+            .await
+            .expect("Migration failed");
+
+        let row: (i32,) = sqlx::query_as("SELECT COUNT(*) FROM test")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.0, 0);
+    }
+}

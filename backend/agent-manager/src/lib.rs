@@ -8,7 +8,7 @@ pub mod repository;
 pub mod routes;
 
 use axum::Router;
-use manager::AgentManager;
+pub use manager::AgentManager;
 use models::AgentTag;
 use once_cell::sync::OnceCell;
 use opsbox_core::SqlitePool;
@@ -140,3 +140,78 @@ pub async fn get_all_tags() -> Vec<(String, String)> {
 
 // 使用 inventory 自动注册模块
 opsbox_core::register_module!(AgentManagerModule);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use models::AgentInfo;
+    use opsbox_core::Module;
+
+    #[test]
+    fn test_agent_manager_module_name() {
+        let module = AgentManagerModule::default();
+        assert_eq!(module.name(), "AgentManager");
+        assert_eq!(module.api_prefix(), "/api/v1/agents");
+    }
+
+    #[test]
+    fn test_build_agent_endpoint() {
+        let agent = AgentInfo {
+            id: "agent-123".to_string(),
+            name: "Test Agent".to_string(),
+            version: "1.0.0".to_string(),
+            hostname: "test-host".to_string(),
+            tags: vec![],
+            search_roots: vec![],
+            last_heartbeat: chrono::Utc::now().timestamp(),
+            status: models::AgentStatus::Online,
+        };
+
+        let endpoint = build_agent_endpoint(&agent);
+        assert_eq!(endpoint, "agent-123");
+    }
+
+    #[tokio::test]
+    async fn test_agent_manager_module_lifecycle() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let module = AgentManagerModule::default();
+
+        // Test name and prefix
+        assert_eq!(module.name(), "AgentManager");
+        assert_eq!(module.api_prefix(), "/api/v1/agents");
+
+        // Test init_schema (will also init global manager)
+        let result = module.init_schema(&pool).await;
+        assert!(result.is_ok());
+
+        // Test configure and cleanup
+        module.configure();
+        module.cleanup();
+
+        // Test get_global_agent_manager after init
+        let manager = get_global_agent_manager();
+        assert!(manager.is_some());
+
+        // Test duplicate init
+        let result = init_global_agent_manager(pool.clone()).await;
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "全局 Agent Manager 已初始化");
+    }
+
+    #[tokio::test]
+    async fn test_get_online_agent_endpoints_with_manager() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // 确保数据库中有表
+        AgentRepository::new(pool.clone()).init_schema().await.unwrap();
+
+        // 如果已经初始化则跳过，否则初始化
+        let _ = init_global_agent_manager(pool).await;
+
+        let endpoints = get_online_agent_endpoints().await;
+        // 初始为空
+        assert_eq!(endpoints.len(), 0);
+
+        let tags = get_all_tags().await;
+        assert_eq!(tags.len(), 0);
+    }
+}

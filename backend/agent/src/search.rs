@@ -147,12 +147,57 @@ pub async fn execute_search(
         })
       }
     };
-    let mut estream = match logseek::service::entry_stream::build_local_entry_stream(&path_str, target_hint).await {
-      Ok(s) => s,
-      Err(e) => {
-        warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
-        continue;
-      }
+    let mut estream: Box<dyn opsbox_core::fs::EntryStream> = match target_hint {
+        Some(ConfigTarget::Dir { path, recursive }) => {
+             // 必须基于 search_path 拼接，因为 ConfigTarget::Dir 的 path 可能是 relative (如 ".")
+             let full_path = if path == "." {
+                 search_path.clone()
+             } else {
+                 search_path.join(path)
+             };
+
+             let stream = opsbox_core::fs::FsEntryStream::new(full_path, recursive).await;
+             match stream {
+                 Ok(s) => Box::new(s),
+                 Err(e) => {
+                     warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
+                     continue;
+                 }
+             }
+        },
+        Some(ConfigTarget::Files { paths }) => {
+             Box::new(opsbox_core::fs::MultiFileEntryStream::new(paths))
+        },
+        Some(ConfigTarget::Archive { path, .. }) => {
+             // For agent, path is absolute path to archive
+             match tokio::fs::File::open(&path).await {
+                 Ok(f) => {
+                     match opsbox_core::fs::create_archive_stream_from_reader(f, Some(&path)).await {
+                         Ok(s) => s,
+                         Err(e) => {
+                             warn!("打开归档流失败 {}: {}", path, e);
+                             continue;
+                         }
+                     }
+                 },
+                 Err(e) => {
+                     warn!("打开归档文件失败 {}: {}", path, e);
+                     continue;
+                 }
+             }
+        },
+        None => {
+             // Fallback or skip? Agent construction logic suggests it always creates Some.
+             // If None, maybe use FsEntryStream on path_str?
+             let stream = opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(&path_str), true).await;
+             match stream {
+                 Ok(s) => Box::new(s),
+                 Err(e) => {
+                     warn!("构建本地条目流失败 {}: {}", path_str, e);
+                     continue;
+                 }
+             }
+        }
     };
 
     // 使用 EntryStreamProcessor 进行并发搜索

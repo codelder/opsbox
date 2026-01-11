@@ -119,6 +119,7 @@ pub async fn stream_search(
 ) -> Result<HttpResponse<Body>, LogSeekApiError> {
   tracing::info!("[Search] 开始搜索: q={}", body.q);
 
+
   let ctx = body.context.unwrap_or(3);
   let config = SearchExecutorConfig {
     io_max_concurrency: s3_max_concurrency(),
@@ -159,4 +160,98 @@ pub async fn delete_search_session(
       e
     )))
   })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use futures::StreamExt;
+    use axum::http::StatusCode;
+
+    #[tokio::test]
+    async fn test_convert_to_ndjson_stream() {
+        let (tx, rx) = mpsc::channel(10);
+        let highlights = vec![];
+
+        let mut stream = Box::pin(convert_to_ndjson_stream(rx, highlights));
+
+        // 模拟完成事件
+        tx.send(SearchEvent::Complete { source: "test-source".into(), elapsed_ms: 123 }).await.unwrap();
+
+        if let Some(res) = stream.next().await {
+            let item = res.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+            assert_eq!(json["type"], "complete");
+            assert_eq!(json["source"], "test-source");
+            assert_eq!(json["elapsed_ms"], 123);
+        } else {
+            panic!("Expected item from stream");
+        }
+
+        // 模拟错误事件
+        tx.send(SearchEvent::Error {
+            source: "err-source".into(),
+            message: "error message".into(),
+            recoverable: true
+        }).await.unwrap();
+
+        if let Some(res) = stream.next().await {
+            let item = res.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+            assert_eq!(json["type"], "error");
+            assert_eq!(json["message"], "error message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delete_search_session() {
+        let sid = "test-sid-delete".to_string();
+        let resp = delete_search_session(axum::extract::Path(sid)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_convert_to_ndjson_stream_success() {
+        let (tx, rx) = mpsc::channel(10);
+        let highlights = vec![];
+
+        let mut stream = Box::pin(convert_to_ndjson_stream(rx, highlights));
+
+        // 模拟成功事件
+        // 注意：SearchResult 的 new 是私有的或在当前 crate 可见，
+        // 这里我们直接构造结构体（如果字段是 pub 的话）或者检查可见性。
+        // 根据之前的查看，SearchResult 字段是 pub 的。
+        let result = crate::service::search::SearchResult {
+            path: "test.log".into(),
+            lines: vec!["match line".into()],
+            merged: vec![(0, 0)],
+            encoding: Some("UTF-8".into()),
+            archive_path: None,
+            source_type: Default::default(),
+        };
+
+        tx.send(SearchEvent::Success(result)).await.unwrap();
+
+        if let Some(res) = stream.next().await {
+            let item = res.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+            assert_eq!(json["type"], "result");
+            assert_eq!(json["data"]["path"], "test.log");
+            assert_eq!(json["data"]["chunks"].as_array().unwrap().len(), 1);
+        } else {
+            panic!("Expected item from stream");
+        }
+    }
+
+    #[test]
+    fn test_search_response_serialization() {
+        let res = SearchResponse::Complete {
+            source: "test".into(),
+            elapsed_ms: 100
+        };
+        let json = serde_json::to_string(&res).unwrap();
+        assert!(json.contains("\"type\":\"complete\""));
+        assert!(json.contains("\"source\":\"test\""));
+    }
 }

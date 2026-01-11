@@ -1,5 +1,6 @@
 use super::orl::OpsPath;
 use super::types::{OpsEntry, OpsMetadata};
+use crate::fs::EntryStream;
 use async_trait::async_trait;
 use std::pin::Pin;
 use tokio::io::AsyncRead;
@@ -25,4 +26,10 @@ pub trait OpsFileSystem: Send + Sync {
 
   /// 获取当前文件系统的标识（用于日志或调试）
   fn name(&self) -> &str;
+
+  /// 将路径转换为条目流（用于搜索）
+  /// 默认实现返回错误，Provider 需要覆盖此方法以支持搜索
+  async fn as_entry_stream(&self, _path: &OpsPath, _recursive: bool) -> std::io::Result<Box<dyn EntryStream>> {
+    Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Not implemented"))
+  }
 }

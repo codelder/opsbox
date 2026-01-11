@@ -19,7 +19,6 @@ pub mod llm;
 pub mod logging;
 pub mod middleware;
 pub mod module;
-pub mod odfi;
 pub mod response;
 
 // 重新导出常用类型

@@ -391,4 +391,21 @@ mod tests {
     assert!(config.enable_file);
     assert_eq!(config.file_prefix, "custom");
   }
+
+  #[tokio::test]
+  async fn test_init_and_reload() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config = LogConfig {
+      level: LogLevel::Info,
+      log_dir: temp_dir.path().to_path_buf(),
+      enable_console: false,
+      enable_file: true,
+      file_prefix: "test-init".to_string(),
+      ..Default::default()
+    };
+
+    let handle = init(config).expect("Init failed");
+    handle.update_level(LogLevel::Debug).expect("Reload failed");
+    assert!(temp_dir.path().exists());
+  }
 }

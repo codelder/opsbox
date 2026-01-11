@@ -158,23 +158,59 @@ pub async fn handle_list_files(
   State(state): State<AppState>,
   Query(req): Query<AgentListRequest>,
 ) -> Result<Json<AgentListResponse>, ApiError> {
-  let path_str = req.path;
-  let path = std::path::Path::new(&path_str);
+  let path_str = urlencoding::decode(&req.path).map(|s| s.into_owned()).unwrap_or(req.path);
+
+  // Special case: empty path or "/" means list all search roots themselves
+  if path_str.is_empty() || path_str == "/" {
+    let mut all_items = Vec::new();
+
+    for root in &state.config.search_roots {
+      let root_path = std::path::Path::new(root);
+      if !root_path.exists() {
+        continue;
+      }
+
+      // Instead of listing contents, we list the root itself as a virtual entry
+      let name = root_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| root.clone());
+
+      match crate::path::canonicalize_existing(root_path) {
+        Ok(abs_path) => {
+          all_items.push(AgentFileItem {
+            name,
+            path: abs_path.to_string_lossy().to_string(),
+            is_dir: true,
+            is_symlink: false,
+            size: None,
+            modified: None,
+            child_count: None,
+            hidden_child_count: None,
+            mime_type: None,
+          });
+        }
+        Err(e) => {
+          tracing::warn!("Failed to canonicalize search root {}: {}", root, e);
+        }
+      }
+    }
+
+    return Ok(Json(AgentListResponse { items: all_items }));
+  }
 
   // Security check: ensure path is within allowed directories or subdirectories
   use crate::path::resolve_directory_path;
-  match resolve_directory_path(&state.config, &path_str) {
-    Ok(_) => {}
+  let resolved_paths = match resolve_directory_path(&state.config, &path_str) {
+    Ok(p) => p,
     Err(e) => {
       // 访问被拒绝或路径不在允许范围内，统一返回 NotFound 避免泄露信息
       return Err(ApiError::NotFound(format!("Access denied or path not found: {}", e)));
     }
-  }
+  };
 
-  // Double check existence (resolve_directory_path already checks existence)
-  if !path.exists() {
-    return Err(ApiError::NotFound(format!("Path not found: {}", path_str)));
-  }
+  // Use the first resolved path for listing
+  let path = &resolved_paths[0];
 
   let items = opsbox_core::fs::list_directory(path)
     .await
@@ -211,51 +247,25 @@ pub async fn handle_get_file_raw(
   State(state): State<AppState>,
   Query(req): Query<GetFileRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-  let path_str = req.path;
+  let path_str = urlencoding::decode(&req.path).map(|s| s.into_owned()).unwrap_or(req.path);
 
   // Security check: ensure path is within allowed directories or subdirectories
-  // This will check if path is within allowed dirs and if it exists
-  // For files, we might need a resolve_file_path equivalent, or check parent dir
-  // Actually resolve_directory_path currently checks if path exists and is a DIR.
-  // So we probably need to check if the file's parent is allowed.
-
-  let path = std::path::Path::new(&path_str);
-
-  info!("RawFile: Request path: {}", path_str);
-
-  // Security check: ensure file is under search_roots
-  use crate::path::{canonicalize_existing, canonicalize_roots, is_under_any_root};
-
-  let canon_roots = canonicalize_roots(&state.config.search_roots);
-
-  // Check if file exists and canonicalize
-  if !path.exists() {
-    warn!("RawFile: File does not exist: {}", path_str);
-    return Err(ApiError::NotFound(format!("File not found: {}", path_str)));
-  }
-
-  let canonical_path = match canonicalize_existing(path) {
+  use crate::path::resolve_directory_path;
+  let resolved_paths = match resolve_directory_path(&state.config, &path_str) {
     Ok(p) => p,
     Err(e) => {
-      warn!("RawFile: Canonicalize failed for {}: {}", path_str, e);
-      return Err(ApiError::NotFound(format!("Path error: {}", e)));
+      warn!("RawFile: Path resolution failed for {}: {}", path_str, e);
+      return Err(ApiError::NotFound(format!("Access denied or path not found: {}", e)));
     }
   };
 
-  info!("RawFile: Canonical path: {:?}", canonical_path);
-
-  if !is_under_any_root(&canonical_path, &canon_roots) {
-    warn!(
-      "RawFile: Access denied for {:?}. Not under any root: {:?}",
-      canonical_path, canon_roots
-    );
-    return Err(ApiError::NotFound(format!("Access denied: {}", path_str)));
-  }
+  // Use the first resolved path
+  let path = &resolved_paths[0];
 
   if !path.exists() || !path.is_file() {
     warn!(
-      "RawFile: File check failed for {}: exists={}, is_file={}",
-      path_str,
+      "RawFile: File check failed for {:?}: exists={}, is_file={}",
+      path,
       path.exists(),
       path.is_file()
     );
@@ -302,4 +312,231 @@ pub fn create_router(config: Arc<AgentConfig>) -> Router {
     .route("/api/v1/list_files", get(handle_list_files))
     .route("/api/v1/file_raw", get(handle_get_file_raw))
     .with_state(AppState { config })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use axum::body::Body;
+  use axum::http::{Request, StatusCode};
+  use std::path::PathBuf;
+  use std::sync::{Arc, Mutex};
+  use tower::ServiceExt;
+  use tempfile;
+
+  fn create_test_config(roots: Vec<String>) -> Arc<AgentConfig> {
+    Arc::new(AgentConfig {
+      agent_id: "test-agent".to_string(),
+      agent_name: "Test Agent".to_string(),
+      server_endpoint: "http://localhost:4000".to_string(),
+      search_roots: roots,
+      listen_port: 3976,
+      enable_heartbeat: false,
+      heartbeat_interval_secs: 30,
+      worker_threads: None,
+      log_dir: PathBuf::from("/tmp"),
+      log_retention: 7,
+      reload_handle: None,
+      current_log_level: Arc::new(Mutex::new("info".to_string())),
+    })
+  }
+
+  #[tokio::test]
+  async fn test_health_route() {
+    let app = create_router(create_test_config(vec!["/tmp".to_string()]));
+    let response = app
+      .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+  }
+
+  #[tokio::test]
+  async fn test_info_route() {
+    let app = create_router(create_test_config(vec!["/tmp".to_string()]));
+    let response = app
+      .oneshot(Request::builder().uri("/api/v1/info").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+    let info: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(info["id"], "test-agent");
+  }
+
+  #[tokio::test]
+  async fn test_paths_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sub = tmp.path().join("subdir");
+    std::fs::create_dir(&sub).unwrap();
+
+    let app = create_router(create_test_config(vec![tmp.path().to_string_lossy().to_string()]));
+    let response = app
+      .oneshot(Request::builder().uri("/api/v1/paths").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+    let paths: Vec<String> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(paths, vec!["subdir"]);
+  }
+
+  #[tokio::test]
+  async fn test_list_files_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file1 = tmp.path().join("file1.txt");
+    std::fs::write(&file1, "hello").unwrap();
+
+    // 我们需要规范化路径，因为 API 内部会进行规范化校验
+    let canon_tmp = std::fs::canonicalize(tmp.path()).unwrap();
+    let path_str = canon_tmp.to_string_lossy().to_string();
+
+    let app = create_router(create_test_config(vec![path_str.clone()]));
+
+    let response = app
+      .oneshot(Request::builder()
+        .uri(format!("/api/v1/list_files?path={}", urlencoding::encode(&path_str)))
+        .body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 10).await.unwrap();
+    let res: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(res["items"].as_array().unwrap().len() >= 1);
+  }
+
+  #[tokio::test]
+  async fn test_get_file_raw_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file1 = tmp.path().join("file1.txt");
+    std::fs::write(&file1, "hello content").unwrap();
+
+    let canon_file = std::fs::canonicalize(&file1).unwrap();
+    let canon_root = std::fs::canonicalize(tmp.path()).unwrap();
+
+    let app = create_router(create_test_config(vec![canon_root.to_string_lossy().to_string()]));
+
+    let response = app
+      .oneshot(Request::builder()
+        .uri(format!("/api/v1/file_raw?path={}", urlencoding::encode(&canon_file.to_string_lossy())))
+        .body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+    assert_eq!(body, "hello content");
+  }
+
+  #[tokio::test]
+  async fn test_log_config_routes() {
+    let app = create_router(create_test_config(vec!["/tmp".to_string()]));
+
+    // GET config
+    let response = app.clone()
+      .oneshot(Request::builder().uri("/api/v1/log/config").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // PUT level
+    let response = app.clone()
+      .oneshot(Request::builder()
+        .method("PUT")
+        .uri("/api/v1/log/level")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"level":"debug"}"#)).unwrap())
+      .await
+      .unwrap();
+    // 由于 Mock 配置中没有 reload_handle，预期返回 500 ReloadFailed
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    // PUT retention
+    let response = app.clone()
+      .oneshot(Request::builder()
+        .method("PUT")
+        .uri("/api/v1/log/retention")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"retention_count":10}"#)).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+  }
+
+  #[tokio::test]
+  async fn test_handle_search_route() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file1 = tmp.path().join("file1.log");
+    std::fs::write(&file1, "error: something happened\n").unwrap();
+
+    let canon_root = std::fs::canonicalize(tmp.path()).unwrap();
+    let app = create_router(create_test_config(vec![canon_root.to_string_lossy().to_string()]));
+
+    // 构造 SearchBody 的 Agent 版本 (AgentSearchRequest)
+    // 注意：Target::Dir 的 path "." 在 Agent 侧表示 search_roots[0]
+    let search_req = serde_json::json!({
+        "task_id": "test-task",
+        "query": "error",
+        "context_lines": 0,
+        "path_filter": null,
+        "target": {
+            "type": "dir",
+            "path": ".",
+            "recursive": false
+        }
+    });
+
+    let response = app
+      .oneshot(Request::builder()
+        .method("POST")
+        .uri("/api/v1/search")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_string(&search_req).unwrap())).unwrap())
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // 检查响应流
+    use tokio_stream::StreamExt;
+    let mut stream = response.into_body().into_data_stream();
+    let mut found_match = false;
+    let mut found_complete = false;
+
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.unwrap();
+        let s = String::from_utf8_lossy(&chunk);
+        for line in s.lines() {
+            if line.trim().is_empty() { continue; }
+            let json: serde_json::Value = serde_json::from_str(line).unwrap();
+            if json["type"] == "result" {
+                found_match = true;
+            }
+            if json["type"] == "complete" {
+                found_complete = true;
+            }
+        }
+    }
+
+    assert!(found_match, "Should find at least one match result in stream");
+    assert!(found_complete, "Should find complete event in stream");
+  }
+
+  #[tokio::test]
+  async fn test_handle_cancel_route() {
+    let app = create_router(create_test_config(vec!["/tmp".to_string()]));
+
+    let response = app
+      .oneshot(Request::builder()
+        .method("POST")
+        .uri("/api/v1/cancel/test-task")
+        .body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+  }
 }

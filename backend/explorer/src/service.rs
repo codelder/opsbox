@@ -1,1238 +1,336 @@
-use std::path::PathBuf;
+
 
 use crate::domain::{ResourceItem, ResourceType};
-use futures_util::TryStreamExt;
+use crate::fs::{AgentDiscoveryFileSystem, S3DiscoveryFileSystem};
 use opsbox_core::SqlitePool;
-use opsbox_core::fs::create_archive_stream_from_reader;
-use opsbox_core::odfi::{EndpointType, Odfi, TargetType};
-use opsbox_core::storage::s3::format_s3_error;
+use opsbox_core::odfs::orl::{ORL, TargetType};
+use opsbox_core::odfs::manager::OrlManager;
+use opsbox_core::odfs::types::OpsFileType;
+use opsbox_core::odfs::providers::LocalOpsFS;
 use tokio::io::AsyncRead;
-use tokio_util::io::StreamReader;
+
+use agent_manager::AgentManager;
+use std::sync::Arc;
+use opsbox_core::odfs::providers::{S3OpsFS, AgentOpsFS};
+use opsbox_core::odfs::fs::OpsFileSystem;
+use opsbox_core::odfs::manager::OpsFileSystemResolver;
+use futures_util::future::BoxFuture;
 
 pub struct ExplorerService {
+  orl_manager: Arc<OrlManager>,
+  // 保留旧字段以支持遗留/动态功能
   db_pool: SqlitePool,
+  agent_manager: Option<Arc<AgentManager>>,
 }
 
 impl ExplorerService {
   pub fn new(db_pool: SqlitePool) -> Self {
-    Self { db_pool }
+    let mut manager = OrlManager::new();
+
+    // Register Default Providers
+    manager.register("local".to_string(), Arc::new(LocalOpsFS::new(None)));
+    manager.register("s3.root".to_string(), Arc::new(S3DiscoveryFileSystem::new(db_pool.clone())));
+
+    // S3 Resolver
+    let pool_clone = db_pool.clone();
+    let s3_resolver: OpsFileSystemResolver = Box::new(move |key: String| -> BoxFuture<'static, Option<Arc<dyn OpsFileSystem>>> {
+       let pool = pool_clone.clone();
+       Box::pin(async move {
+           Self::resolve_s3_static(&pool, &key).await
+       })
+    });
+    manager.set_resolver(s3_resolver);
+
+    Self {
+      orl_manager: Arc::new(manager),
+      db_pool,
+      agent_manager: None,
+    }
   }
 
-  pub async fn list(&self, odfi: &Odfi) -> Result<Vec<ResourceItem>, String> {
-    match odfi.endpoint_type {
-      EndpointType::Local => self.list_local(odfi).await,
-      EndpointType::Agent => self.list_agent(odfi).await,
-      EndpointType::S3 => self.list_s3(odfi).await,
-    }
+  pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
+    self.agent_manager = Some(manager.clone());
+
+    // Combined Resolver (S3 + Agent)
+    let pool = self.db_pool.clone();
+    let am = manager.clone();
+
+    let resolver: OpsFileSystemResolver = Box::new(move |key: String| -> BoxFuture<'static, Option<Arc<dyn OpsFileSystem>>> {
+       let pool = pool.clone();
+       let am = am.clone();
+       Box::pin(async move {
+           if let Some(fs) = Self::resolve_s3_static(&pool, &key).await {
+               return Some(fs);
+           }
+
+           if key.starts_with("agent.") {
+               let id_part = key.trim_start_matches("agent.");
+               if let Some(agent) = am.get_agent(id_part).await {
+                    let base_url = agent.get_base_url();
+                    return Some(Arc::new(AgentOpsFS::new(id_part, base_url)) as Arc<dyn OpsFileSystem>);
+               }
+           }
+           None
+       })
+    });
+
+    // Take ownership of the Arc, unwrap it, modify, and put it back
+    let temp_arc = std::mem::replace(&mut self.orl_manager, Arc::new(OrlManager::new()));
+    let mut orl_manager = match Arc::try_unwrap(temp_arc) {
+        Ok(manager) => manager,
+        Err(_) => panic!("OrlManager Arc should have only one reference"),
+    };
+    orl_manager.register("agent.root".to_string(), Arc::new(AgentDiscoveryFileSystem::new(manager.clone())));
+    orl_manager.set_resolver(resolver);
+    self.orl_manager = Arc::new(orl_manager);
+
+    self
+  }
+
+  pub async fn list(&self, orl: &ORL) -> Result<Vec<ResourceItem>, String> {
+      let mut use_orl = orl.clone();
+
+      // Auto-detect archive
+      if use_orl.target_type() != TargetType::Archive {
+          let path_str = use_orl.path().to_lowercase();
+          let is_archive_ext = path_str.ends_with(".tar")
+              || path_str.ends_with(".tar.gz")
+              || path_str.ends_with(".tgz")
+              || path_str.ends_with(".gz")
+              || path_str.ends_with(".zip");
+
+          if is_archive_ext {
+              // Reconstruct ORL with target=archive
+              let base = use_orl.as_str();
+              let separator = if base.contains('?') { "&" } else { "?" };
+              let new_orl_str = format!("{}{}{}={}", base, separator, "target", "archive");
+              if let Ok(new_orl) = ORL::parse(new_orl_str) {
+                 use_orl = new_orl;
+              }
+          }
+      }
+
+      self.orl_manager.read_dir(&use_orl).await
+          .map(|entries| entries.into_iter().map(|e| map_entry(e, &use_orl)).collect())
+          .map_err(|e| e.to_string())
   }
 
   pub async fn download(
     &self,
-    odfi: &Odfi,
+    orl: &ORL,
   ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
-    match odfi.endpoint_type {
-      EndpointType::Local => self.download_local(odfi).await,
-      EndpointType::Agent => self.download_agent(odfi).await,
-      EndpointType::S3 => self.download_s3(odfi).await,
-    }
+      let meta = self.orl_manager.metadata(orl).await.map_err(|e| e.to_string())?;
+      let reader = self.orl_manager.open_read(orl).await.map_err(|e| e.to_string())?;
+      Ok((meta.name, Some(meta.size), Box::new(reader)))
   }
 
-  async fn list_local(&self, odfi: &Odfi) -> Result<Vec<ResourceItem>, String> {
-    // Warning: minimal security check. In production, this should restricted to allowed directories.
-    // Assuming opsbox-server runs with permissions to access the path.
-
-    let path_str = if odfi.path.is_empty() {
-      "/".to_string()
-    } else {
-      // Check if path is already absolute (works for both Unix and Windows)
-      let path_buf = PathBuf::from(&odfi.path);
-      if path_buf.is_absolute() {
-        // Already absolute, use as-is
-        odfi.path.clone()
-      } else if odfi.path.starts_with('/') {
-        // Unix-style absolute path
-        odfi.path.clone()
-      } else {
-        // Relative path, make it absolute with leading slash (Unix-style)
-        format!("/{}", odfi.path)
-      }
-    };
-
-    let mut is_archive_target = odfi.target_type == TargetType::Archive;
-
-    // Auto-detect archive if pointing to a local file
-    if !is_archive_target {
-      let path = PathBuf::from(&path_str);
-      if path.is_file() {
-        // Simple extension check to decide if we should treat as archive navigation
-        let lower = path_str.to_lowercase();
-        if lower.ends_with(".tar") || lower.ends_with(".tar.gz") || lower.ends_with(".tgz") || lower.ends_with(".gz") {
-          is_archive_target = true;
-        }
-      }
-    }
-
-    // Handle archive navigation
-    if is_archive_target {
-      let path = PathBuf::from(&path_str);
-      if !path.exists() {
-        return Err(format!("Archive file does not exist: {}", path_str));
-      }
-
-      let file = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
-      let mut stream = opsbox_core::fs::create_archive_stream_from_reader(file, Some(&path_str))
-        .await
-        .map_err(|e| format!("Failed to open archive stream: {}", e))?;
-
-      let mut items = Vec::new();
-
-      let entry_prefix = odfi.entry_path.clone().unwrap_or_default();
-      // Ensure prefix ends with / if not empty to match directories correctly
-      let filter_prefix = if entry_prefix.is_empty() {
-        "".to_string()
-      } else if entry_prefix.ends_with('/') {
-        entry_prefix.clone()
-      } else {
-        format!("{}/", entry_prefix)
-      };
-
-      let mut synthetic_dirs = std::collections::HashSet::new();
-
-      // Iterate entries
-      while let Ok(Some((meta, _reader))) = stream.next_entry().await {
-        let path = meta.path.clone();
-
-        if !path.starts_with(&filter_prefix) {
-          continue;
-        }
-
-        // Get relative path
-        let rel_path = &path[filter_prefix.len()..];
-        if rel_path.is_empty() {
-          continue; // Directory itself
-        }
-
-        // Check if it's a direct child or subdirectory
-        let parts: Vec<&str> = rel_path.splitn(2, '/').collect();
-        // If it has a slash (parts > 1) OR it ends with slash (parts=1 but split result might vary depending on trailing slash, safer to check logic)
-        // If "subdir/file", parts=["subdir", "file"]
-        // If "subdir/", parts=["subdir", ""]
-
-        let is_subdir = parts.len() > 1;
-
-        if is_subdir {
-          let dir_name = parts[0];
-          if synthetic_dirs.contains(dir_name) {
-            continue;
-          }
-          synthetic_dirs.insert(dir_name.to_string());
-
-          let mut child_odfi = odfi.clone();
-          let child_entry = format!("{}{}/", filter_prefix, dir_name);
-          child_odfi.entry_path = Some(child_entry);
-          child_odfi.target_type = TargetType::Archive;
-
-          items.push(ResourceItem {
-            name: dir_name.to_string(),
-            path: child_odfi.to_string(),
-            r#type: ResourceType::Dir,
-            size: None,
-            modified: None,
-            has_children: Some(true),
-            child_count: None,
-            hidden_child_count: None,
-            mime_type: None,
-          });
-        } else {
-          // Direct file
-          let mut child_odfi = odfi.clone();
-          child_odfi.entry_path = Some(path.clone());
-          child_odfi.target_type = TargetType::Archive;
-
-          items.push(ResourceItem {
-            name: rel_path.to_string(),
-            path: child_odfi.to_string(),
-            r#type: ResourceType::File,
-            size: meta.size,
-            modified: None,
-            has_children: None,
-            child_count: None,
-            hidden_child_count: None,
-            mime_type: None,
-          });
-        }
-      }
-
-      // Sort items
-      items.sort_by(|a, b| {
-        let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
-        let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
-
-        if a_is_dir == b_is_dir {
-          a.name.cmp(&b.name)
-        } else if a_is_dir {
-          std::cmp::Ordering::Less
-        } else {
-          std::cmp::Ordering::Greater
-        }
-      });
-
-      return Ok(items);
-    }
-
-    let path = PathBuf::from(&path_str);
-    if !path.exists() {
-      return Err(format!("Path does not exist: {}", path_str));
-    }
-
-    let mut items = Vec::new();
-
-    let list_items = opsbox_core::fs::list_directory(&path)
-      .await
-      .map_err(|e| e.to_string())?;
-
-    for item in list_items {
-      let r_type = match (item.is_dir, item.is_symlink) {
-        (true, true) => ResourceType::LinkDir,
-        (true, false) => ResourceType::Dir,
-        (false, true) => ResourceType::LinkFile,
-        (false, false) => ResourceType::File,
-      };
-
-      // Construct child path
-      let child_path = if path_str == "/" {
-        item.name.to_string()
-      } else {
-        format!("{}/{}", odfi.path.trim_start_matches('/'), item.name)
-      };
-
-      // Reconstruct ODFI for the child
-      let child_odfi = Odfi::new(
-        EndpointType::Local,
-        odfi.endpoint_id.clone(), // localhost
-        TargetType::Dir,
-        child_path,
-        None,
-      );
-
-      items.push(ResourceItem {
-        name: item.name,
-        path: child_odfi.to_string(),
-        r#type: r_type,
-        size: item.size,
-        modified: item.modified,
-        has_children: Some(item.is_dir && item.child_count.unwrap_or(0) > 0),
-        child_count: item.child_count.map(|c| c as u64),
-        hidden_child_count: item.hidden_child_count.map(|c| c as u64),
-        mime_type: item.mime_type,
-      });
-    }
-
-    Ok(items)
-  }
-
-  async fn list_agent(&self, odfi: &Odfi) -> Result<Vec<ResourceItem>, String> {
-    let agent_id = &odfi.endpoint_id;
-
-    use agent_manager::get_global_agent_manager;
-
-    // Level 1: Root Agent - List Online Agents
-    if agent_id.is_empty() {
-      if let Some(manager) = get_global_agent_manager() {
-        let agents = manager.list_online_agents().await;
-        let items = agents
-          .into_iter()
-          .map(|a| {
-            let child_odfi = Odfi::new(
-              EndpointType::Agent,
-              a.id.clone(),
-              TargetType::Dir,
-              "/", // Root of agent
-              None,
-            );
-            ResourceItem {
-              name: if a.name.is_empty() {
-                a.id
-              } else {
-                format!("{} ({})", a.name, a.id)
-              },
-              path: child_odfi.to_string(),
-              r#type: ResourceType::Dir, // Treat agent as a directory
-              size: None,
-              modified: Some(a.last_heartbeat),
-              has_children: Some(true), // Agents presumably have files
-              child_count: None,
-              hidden_child_count: None,
-              mime_type: None,
-            }
-          })
-          .collect();
-        return Ok(items);
-      } else {
-        return Err("Agent manager not initialized".to_string());
-      }
-    }
-
-    let (agent, endpoint) = if let Some(manager) = get_global_agent_manager() {
-      if let Some(agent) = manager.get_agent(agent_id).await {
-        (agent.clone(), agent.get_base_url())
-      } else {
-        return Err(format!("Agent {} not found or offline", agent_id));
-      }
-    } else {
-      return Err("Agent manager not initialized".to_string());
-    };
-
-    use opsbox_core::agent::AgentClient;
-    // Note: timeout is optional
-    let client = AgentClient::new(agent_id.clone(), endpoint, Some(std::time::Duration::from_secs(10)));
-
-    let odfi_path = odfi.path.clone();
-    let odfi_entry = odfi.entry_path.clone();
-    tracing::debug!(
-      "list_agent: agent_id={}, odfi.path={}, odfi.entry_path={:?}, odfi.target_type={:?}",
-      agent_id,
-      odfi_path,
-      odfi_entry,
-      odfi.target_type
-    );
-
-    let path_str = if odfi_path.is_empty() {
-      "/".to_string()
-    } else if odfi_path.starts_with('/') {
-      odfi_path.clone()
-    } else {
-      format!("/{}", odfi_path)
-    };
-    tracing::debug!("list_agent: path_str={}", path_str);
-
-    // If listing root of the agent, return search roots instead of calling agent list API
-    // (Agent list API might fail if / is not in whitelist)
-    // If listing root of the agent, return search roots instead of calling agent list API
-    // (Agent list API might fail if / is not in whitelist)
-    // But if search_roots contains "/", we want to list the real root content, not the virtual list of roots (which would just be "/" and loop).
-    let has_root_access = agent.search_roots.iter().any(|r| r == "/");
-
-    if path_str == "/" && !has_root_access {
-      let items = agent
-        .search_roots
-        .into_iter()
-        .map(|root| {
-          // Ensure root has leading slash for ODFI consistency if needed, but usually search_roots are absolute
-          let name = root.clone();
-          let child_odfi = Odfi::new(
-            EndpointType::Agent,
-            agent_id.clone(),
-            TargetType::Dir,
-            root, // Use root path as is
-            None,
-          );
-          ResourceItem {
-            name,
-            path: child_odfi.to_string(),
-            r#type: ResourceType::Dir,
-            size: None,
-            modified: None,
-            has_children: Some(true),
-            child_count: None,
-            hidden_child_count: None,
-            mime_type: None,
-          }
-        })
-        .collect();
-      return Ok(items);
-    }
-
-    let url = format!("/api/v1/list_files?path={}", urlencoding::encode(&path_str));
-
-    // Check if path points to an archive file (auto-detect)
-    let lower_path = path_str.to_lowercase();
-    let is_archive = odfi.target_type == TargetType::Archive
-      || lower_path.ends_with(".tar")
-      || lower_path.ends_with(".tar.gz")
-      || lower_path.ends_with(".tgz")
-      || lower_path.ends_with(".gz");
-
-    if is_archive && !path_str.is_empty() && path_str != "/" {
-      // Handle agent archive browsing - need to download the archive and list its contents
-      return self
-        .list_agent_archive(&client, agent_id, &path_str, odfi.entry_path.as_deref())
-        .await;
-    }
-
-    use opsbox_core::agent::models::AgentListResponse;
-    let resp: AgentListResponse = client
-      .get(&url)
-      .await
-      .map_err(|e| format!("Agent request failed: {}", e))?;
-
-    let items = resp
-      .items
-      .into_iter()
-      .map(|item| {
-        let child_odfi = Odfi::new(
-          EndpointType::Agent,
-          agent_id.clone(),
-          TargetType::Dir,
-          item.path.trim_start_matches('/').to_string(), // ODFI path usually relative to root?
-          // We keep path consistent with what agent returns
-          None,
-        );
-
-        ResourceItem {
-          name: item.name,
-          path: child_odfi.to_string(),
-          r#type: match (item.is_dir, item.is_symlink) {
-            (true, true) => ResourceType::LinkDir,
-            (true, false) => ResourceType::Dir,
-            (false, true) => ResourceType::LinkFile,
-            (false, false) => ResourceType::File,
-          },
-          size: item.size,
-          modified: item.modified,
-          has_children: if item.is_dir {
-            Some(item.child_count.unwrap_or(0) > 0)
-          } else {
-            None
-          },
-          child_count: item.child_count.map(|c| c as u64),
-          hidden_child_count: item.hidden_child_count.map(|c| c as u64),
-          mime_type: item.mime_type,
-        }
-      })
-      .collect();
-
-    Ok(items)
-  }
-
-  async fn list_s3(&self, odfi: &Odfi) -> Result<Vec<ResourceItem>, String> {
-    // Level 1: Root S3 - List Profiles
-    if odfi.endpoint_id.is_empty() {
-      let profiles = opsbox_core::repository::s3::list_s3_profiles(&self.db_pool)
-        .await
-        .map_err(|e| format!("Database error: {}", e))?;
-
-      let items = profiles
-        .into_iter()
-        .map(|p| {
-          let child_odfi = Odfi::new(
-            EndpointType::S3,
-            p.profile_name.clone(), // ID is just profile name
-            TargetType::Dir,
-            "", // Root of profile
-            None,
-          );
-          ResourceItem {
-            name: p.profile_name,
-            path: child_odfi.to_string(),
-            r#type: ResourceType::Dir,
-            size: None,
-            modified: None,
-            has_children: Some(true),
-            child_count: None,
-            hidden_child_count: None,
-            mime_type: None,
-          }
-        })
-        .collect();
-      return Ok(items);
-    }
-
-    // Level 2: Profile - List Buckets
-    // If ID has no colon, it's a profile. But check if it's meant to be profile:bucket (handled by split logic below if valid)
-    // Actually, if we want to list buckets, we need a client. Client comes from profile.
-    // If ID is "profile", we load profile and list buckets.
-
-    let (profile, bucket) = if let Some((p, b)) = odfi.endpoint_id.split_once(':') {
-      (p, Some(b))
-    } else {
-      (odfi.endpoint_id.as_str(), None)
-    };
-
-    let profile_row = opsbox_core::repository::s3::load_s3_profile(&self.db_pool, profile)
-      .await
-      .map_err(|e| format!("Database error: {}", e))?
-      .ok_or_else(|| format!("S3 Profile not found: {}", profile))?;
-
-    use opsbox_core::storage::s3::get_or_create_s3_client;
-    let client = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
-      .map_err(|e| format!("Failed to create S3 client: {}", e))?;
-
-    if let Some(bucket_name) = bucket {
-      // Check if path points to an archive file (auto-detect)
-      let lower_path = odfi.path.to_lowercase();
-      let is_archive = odfi.target_type == TargetType::Archive
-        || lower_path.ends_with(".tar")
-        || lower_path.ends_with(".tar.gz")
-        || lower_path.ends_with(".tgz")
-        || lower_path.ends_with(".gz");
-
-      if is_archive && !odfi.path.is_empty() {
-        // Handle S3 archive browsing
-        return self
-          .list_s3_archive(&profile_row, bucket_name, &odfi.path, odfi.entry_path.as_deref())
-          .await;
-      }
-
-      // Level 3: Bucket - List Objects (directory mode)
-
-      let prefix = if odfi.path.is_empty() {
-        "".to_string()
-      } else if !odfi.path.ends_with('/') {
-        format!("{}/", odfi.path)
-      } else {
-        odfi.path.clone()
-      };
-
-      let s3_prefix = prefix.trim_start_matches('/').to_string();
-
-      let resp = client
-        .list_objects_v2()
-        .bucket(bucket_name)
-        .prefix(&s3_prefix)
-        .delimiter("/")
-        .send()
-        .await
-        .map_err(|e| format!("S3 ListObjects failed: {}", format_s3_error(&e)))?;
-
-      let mut items = Vec::new();
-
-      // Directories (CommonPrefixes)
-      if let Some(common_prefixes) = resp.common_prefixes {
-        for cp in common_prefixes {
-          if let Some(p) = cp.prefix {
-            let name = p.trim_end_matches('/').split('/').next_back().unwrap_or(&p).to_string();
-            let child_path = p.trim_start_matches('/').to_string();
-            let child_odfi = Odfi::new(
-              EndpointType::S3,
-              odfi.endpoint_id.clone(),
-              TargetType::Dir,
-              child_path,
-              None,
-            );
-            items.push(ResourceItem {
-              name,
-              path: child_odfi.to_string(),
-              r#type: ResourceType::Dir,
-              size: None,
-              modified: None,
-              has_children: Some(true),
-              child_count: None,
-              hidden_child_count: None,
-              mime_type: None,
-            });
-          }
-        }
-      }
-
-      // Files
-      if let Some(contents) = resp.contents {
-        for obj in contents {
-          if let Some(key) = obj.key {
-            if key == s3_prefix {
-              continue;
-            }
-            let name = key.split('/').next_back().unwrap_or(&key).to_string();
-            if name.is_empty() {
-              continue;
-            }
-
-            let child_odfi = Odfi::new(
-              EndpointType::S3,
-              odfi.endpoint_id.clone(),
-              TargetType::Dir, // Files are Dir target unless entry
-              key.trim_start_matches('/').to_string(),
-              None,
-            );
-
-            let is_dir = key.ends_with('/');
-            // S3 "folders" are sometimes empty objects ending in /.
-            // But list_objects_v2 with delimiter handles common prefixes.
-            // Usually contents won't have dirs unless 0-byte placeholders.
-            // Let's treat them as files if they are in contents.
-            if is_dir {
-              continue;
-            }
-
-            items.push(ResourceItem {
-              name,
-              path: child_odfi.to_string(),
-              r#type: ResourceType::File,
-              size: obj.size.map(|s| s as u64),
-              modified: obj.last_modified.map(|d| d.secs()),
-              has_children: None,
-              child_count: None,
-              hidden_child_count: None,
-              mime_type: None, // We don't sniff S3 contents here
-            });
-          }
-        }
-      }
-      Ok(items)
-    } else {
-      // Level 2: List Buckets for Profile
-      let resp = client
-        .list_buckets()
-        .send()
-        .await
-        .map_err(|e| format!("S3 ListBuckets failed: {}", format_s3_error(&e)))?;
-
-      let items = resp
-        .buckets
-        .unwrap_or_default()
-        .into_iter()
-        .map(|b| {
-          let name = b.name.unwrap_or_default();
-          let child_odfi = Odfi::new(
-            EndpointType::S3,
-            format!("{}:{}", profile, name), // Construct profile:bucket ID
-            TargetType::Dir,
-            "",
-            None,
-          );
-          ResourceItem {
-            name,
-            path: child_odfi.to_string(),
-            r#type: ResourceType::Dir,
-            size: None,
-            modified: b.creation_date.map(|d| d.secs()),
-            has_children: Some(true),
-            child_count: None,
-            hidden_child_count: None,
-            mime_type: None,
-          }
-        })
-        .collect();
-      Ok(items)
-    }
-  }
-
-  /// List contents of an archive file stored in S3
-  async fn list_s3_archive(
-    &self,
-    profile: &opsbox_core::repository::s3::S3Profile,
-    bucket: &str,
-    key: &str,
-    entry_path: Option<&str>,
-  ) -> Result<Vec<ResourceItem>, String> {
-    use opsbox_core::storage::s3::get_or_create_s3_client;
-
-    let client = get_or_create_s3_client(&profile.endpoint, &profile.access_key, &profile.secret_key)
-      .map_err(|e| format!("Failed to create S3 client: {}", e))?;
-
-    // Download the archive from S3
-    let resp = client
-      .get_object()
-      .bucket(bucket)
-      .key(key)
-      .send()
-      .await
-      .map_err(|e| format!("Failed to get S3 object: {}", format_s3_error(&e)))?;
-
-    // into_async_read() returns impl tokio::io::AsyncBufRead which implements AsyncRead
-    let reader = resp.body.into_async_read();
-
-    // Create archive stream
-    let mut stream = opsbox_core::fs::create_archive_stream_from_reader(reader, Some(key))
-      .await
-      .map_err(|e| format!("Failed to open archive stream: {}", e))?;
-
-    let mut items = Vec::new();
-
-    let entry_prefix = entry_path.unwrap_or_default().to_string();
-    let filter_prefix = if entry_prefix.is_empty() {
-      "".to_string()
-    } else if entry_prefix.ends_with('/') {
-      entry_prefix.clone()
-    } else {
-      format!("{}/", entry_prefix)
-    };
-
-    let mut synthetic_dirs = std::collections::HashSet::new();
-
-    // Iterate entries
-    while let Ok(Some((meta, _reader))) = stream.next_entry().await {
-      let raw_entry_path = meta.path.clone();
-      let trimmed = raw_entry_path.trim_start_matches("./");
-      let archive_entry_path = if trimmed.is_empty() {
-        raw_entry_path.clone()
-      } else {
-        trimmed.to_string()
-      };
-
-      if !filter_prefix.is_empty() && !archive_entry_path.starts_with(&filter_prefix) {
-        continue;
-      }
-
-      let rel_path = &archive_entry_path[filter_prefix.len()..];
-      if rel_path.is_empty() {
-        continue;
-      }
-
-      let parts: Vec<&str> = rel_path.splitn(2, '/').collect();
-      let is_subdir = parts.len() > 1;
-
-      if is_subdir {
-        let dir_name = parts[0];
-        if synthetic_dirs.contains(dir_name) {
-          continue;
-        }
-        synthetic_dirs.insert(dir_name.to_string());
-
-        let child_odfi = Odfi::new(
-          EndpointType::S3,
-          format!("{}:{}", profile.profile_name, bucket),
-          TargetType::Archive,
-          key.to_string(),
-          Some(format!("{}{}/", filter_prefix, dir_name)),
-        );
-
-        items.push(ResourceItem {
-          name: dir_name.to_string(),
-          path: child_odfi.to_string(),
-          r#type: ResourceType::Dir,
-          size: None,
-          modified: None,
-          has_children: Some(true),
-          child_count: None,
-          hidden_child_count: None,
-          mime_type: None,
-        });
-      } else {
-        let child_odfi = Odfi::new(
-          EndpointType::S3,
-          format!("{}:{}", profile.profile_name, bucket),
-          TargetType::Archive,
-          key.to_string(),                  // Use S3 object key as archive path
-          Some(archive_entry_path.clone()), // Use entry path inside the archive
-        );
-
-        items.push(ResourceItem {
-          name: rel_path.to_string(),
-          path: child_odfi.to_string(),
-          r#type: ResourceType::File,
-          size: meta.size,
-          modified: None,
-          has_children: None,
-          child_count: None,
-          hidden_child_count: None,
-          mime_type: None,
-        });
-      }
-    }
-
-    // Sort items
-    items.sort_by(|a, b| {
-      let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
-      let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
-
-      if a_is_dir == b_is_dir {
-        a.name.cmp(&b.name)
-      } else if a_is_dir {
-        std::cmp::Ordering::Less
-      } else {
-        std::cmp::Ordering::Greater
-      }
-    });
-
-    Ok(items)
-  }
-
-  /// List contents of an archive file from an Agent
-  async fn list_agent_archive(
-    &self,
-    client: &opsbox_core::agent::AgentClient,
-    agent_id: &str,
-    archive_path: &str,
-    filter_entry: Option<&str>,
-  ) -> Result<Vec<ResourceItem>, String> {
-    tracing::debug!(
-      "list_agent_archive: agent_id={}, archive_path={}, filter_entry={:?}",
-      agent_id,
-      archive_path,
-      filter_entry
-    );
-
-    // Download the archive from agent
-    let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(archive_path));
-    let response = client
-      .get_raw(&url)
-      .await
-      .map_err(|e| format!("Failed to download archive from agent: {}", e))?;
-
-    tracing::debug!("list_agent_archive: downloaded archive, status={}", response.status());
-
-    // Convert response body stream to AsyncRead using StreamReader
-    let stream = response.bytes_stream().map_err(std::io::Error::other);
-    let reader = StreamReader::new(stream);
-
-    // Create archive stream
-    let mut stream = opsbox_core::fs::create_archive_stream_from_reader(reader, Some(archive_path))
-      .await
-      .map_err(|e| format!("Failed to open archive stream: {}", e))?;
-
-    tracing::debug!("list_agent_archive: archive stream created successfully");
-
-    let mut items = Vec::new();
-
-    let entry_prefix = filter_entry.unwrap_or_default().to_string();
-    let filter_prefix = if entry_prefix.is_empty() {
-      "".to_string()
-    } else if entry_prefix.ends_with('/') {
-      entry_prefix.clone()
-    } else {
-      format!("{}/", entry_prefix)
-    };
-
-    let mut synthetic_dirs = std::collections::HashSet::new();
-
-    tracing::debug!(
-      "list_agent_archive: starting to iterate entries, filter_prefix={}",
-      filter_prefix
-    );
-
-    // Iterate entries
-    while let Ok(Some((meta, _reader))) = stream.next_entry().await {
-      tracing::debug!("list_agent_archive: found entry path={}", meta.path);
-      // Remove leading "./" that tar sometimes includes
-      let raw_entry_path = meta.path.clone();
-      let cleaned_entry_path = raw_entry_path.trim_start_matches("./");
-      let entry_path = if cleaned_entry_path.is_empty() {
-        raw_entry_path.clone()
-      } else {
-        cleaned_entry_path.to_string()
-      };
-
-      if !filter_prefix.is_empty() && !entry_path.starts_with(&filter_prefix) {
-        tracing::debug!("list_agent_archive: skipping entry, doesn't match filter_prefix");
-        continue;
-      }
-
-      // Get relative path after filter_prefix
-      let rel_path = if filter_prefix.is_empty() {
-        entry_path.clone()
-      } else {
-        entry_path[filter_prefix.len()..].to_string()
-      };
-
-      tracing::debug!("list_agent_archive: rel_path={}", rel_path);
-
-      if rel_path.is_empty() {
-        continue;
-      }
-
-      let parts: Vec<&str> = rel_path.splitn(2, '/').collect();
-      let is_subdir = parts.len() > 1;
-
-      if is_subdir {
-        let dir_name = parts[0];
-        if synthetic_dirs.contains(dir_name) {
-          continue;
-        }
-        synthetic_dirs.insert(dir_name.to_string());
-
-        let child_odfi = Odfi::new(
-          EndpointType::Agent,
-          agent_id.to_string(),
-          TargetType::Archive,
-          archive_path.to_string(), // Original archive path
-          Some(format!("{}{}/", filter_prefix, dir_name)),
-        );
-
-        items.push(ResourceItem {
-          name: dir_name.to_string(),
-          path: child_odfi.to_string(),
-          r#type: ResourceType::Dir,
-          size: None,
-          modified: None,
-          has_children: Some(true),
-          child_count: None,
-          hidden_child_count: None,
-          mime_type: None,
-        });
-      } else {
-        let child_odfi = Odfi::new(
-          EndpointType::Agent,
-          agent_id.to_string(),
-          TargetType::Archive,
-          archive_path.to_string(), // Original archive path - NOT the entry path!
-          Some(entry_path.clone()), // Entry path inside the archive
-        );
-
-        items.push(ResourceItem {
-          name: rel_path.to_string(),
-          path: child_odfi.to_string(),
-          r#type: ResourceType::File,
-          size: meta.size,
-          modified: None,
-          has_children: None,
-          child_count: None,
-          hidden_child_count: None,
-          mime_type: None,
-        });
-      }
-    }
-
-    tracing::debug!("list_agent_archive: found {} items", items.len());
-
-    // Sort items
-    items.sort_by(|a, b| {
-      let a_is_dir = a.r#type == ResourceType::Dir || a.r#type == ResourceType::LinkDir;
-      let b_is_dir = b.r#type == ResourceType::Dir || b.r#type == ResourceType::LinkDir;
-
-      if a_is_dir == b_is_dir {
-        a.name.cmp(&b.name)
-      } else if a_is_dir {
-        std::cmp::Ordering::Less
-      } else {
-        std::cmp::Ordering::Greater
-      }
-    });
-
-    Ok(items)
-  }
-
-  async fn download_local(
-    &self,
-    odfi: &Odfi,
-  ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
-    let path_str = if odfi.path.is_empty() {
-      "/".to_string()
-    } else if odfi.path.starts_with('/') {
-      odfi.path.clone()
-    } else {
-      format!("/{}", odfi.path)
-    };
-
-    // Check if it's an archive entry download
-    if odfi.target_type == TargetType::Archive {
-      let file = tokio::fs::File::open(&path_str).await.map_err(|e| e.to_string())?;
-      let entry_path = odfi
-        .entry_path
-        .clone()
-        .ok_or_else(|| "Archive entry path missing".to_string())?;
-
-      return self.download_archive_entry(file, &path_str, &entry_path).await;
-    }
-
-    let path = PathBuf::from(&path_str);
-    if !path.exists() {
-      return Err(format!("File does not exist: {}", path_str));
-    }
-    let meta = path.metadata().map_err(|e| e.to_string())?;
-    if meta.is_dir() {
-      return Err("Cannot download a directory".to_string());
-    }
-
-    let file = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
-    let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-
-    Ok((filename, Some(meta.len()), Box::new(tokio::io::BufReader::new(file))))
-  }
-
-  async fn download_agent(
-    &self,
-    odfi: &Odfi,
-  ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
-    let agent_id = &odfi.endpoint_id;
-    use agent_manager::get_global_agent_manager;
-    let (_agent, endpoint) = if let Some(manager) = get_global_agent_manager() {
-      if let Some(agent) = manager.get_agent(agent_id).await {
-        (agent.clone(), agent.get_base_url())
-      } else {
-        tracing::error!("Agent {} not found or offline during download", agent_id);
-        return Err(format!("Agent {} not found or offline", agent_id));
-      }
-    } else {
-      tracing::error!("Agent manager not initialized when downloading from agent {}", agent_id);
-      return Err("Agent manager not initialized".to_string());
-    };
-
-    use opsbox_core::agent::AgentClient;
-    let client = AgentClient::new(
-      agent_id.clone(),
-      endpoint,
-      Some(std::time::Duration::from_secs(30)), // Longer timeout for download
-    );
-
-    let path_str = if odfi.path.starts_with('/') {
-      odfi.path.clone()
-    } else {
-      format!("/{}", odfi.path)
-    };
-
-    // Archive entry
-    if odfi.target_type == TargetType::Archive {
-      let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(&path_str));
-      let response = client
-        .get_raw(&url)
-        .await
-        .map_err(|e| format!("Failed to download archive from agent: {}", e))?;
-
-      let stream = response.bytes_stream().map_err(std::io::Error::other);
-      let reader = StreamReader::new(stream);
-      let entry_path = odfi
-        .entry_path
-        .clone()
-        .ok_or_else(|| "Archive entry path missing".to_string())?;
-
-      return self.download_archive_entry(reader, &path_str, &entry_path).await;
-    }
-
-    // Normal file
-    let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(&path_str));
-    let response = client.get_raw(&url).await.map_err(|e| {
-      tracing::error!("Agent download failed for path {}: {}", path_str, e);
-      format!("Failed to download file from agent: {}", e)
-    })?;
-
-    let content_len = response.content_length();
-    let filename = std::path::Path::new(&path_str)
-      .file_name()
-      .unwrap_or_default()
-      .to_string_lossy()
-      .to_string();
-
-    let stream = response.bytes_stream().map_err(std::io::Error::other);
-    let reader = StreamReader::new(stream);
-
-    Ok((filename, content_len, Box::new(reader)))
-  }
-
-  async fn download_s3(&self, odfi: &Odfi) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
-    let (profile_name, bucket) = if let Some((p, b)) = odfi.endpoint_id.split_once(':') {
-      (p, Some(b))
-    } else {
-      (odfi.endpoint_id.as_str(), None)
-    };
-
-    if bucket.is_none() {
-      return Err("Cannot download a profile".to_string());
-    }
-    let bucket_name = bucket.unwrap();
-
-    let profile_row = opsbox_core::repository::s3::load_s3_profile(&self.db_pool, profile_name)
-      .await
-      .map_err(|e| format!("Database error: {}", e))?
-      .ok_or_else(|| format!("S3 Profile not found: {}", profile_name))?;
-
-    use opsbox_core::storage::s3::get_or_create_s3_client;
-    let client = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
-      .map_err(|e| format!("Failed to create S3 client: {}", e))?;
-
-    let key = odfi.path.trim_start_matches('/');
-
-    // Archive entry
-    if odfi.target_type == TargetType::Archive {
-      let resp = client
-        .get_object()
-        .bucket(bucket_name)
-        .key(key)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to get S3 object: {}", format_s3_error(&e)))?;
-
-      let reader = resp.body.into_async_read();
-      let entry_path = odfi
-        .entry_path
-        .clone()
-        .ok_or_else(|| "Archive entry path missing".to_string())?;
-
-      return self.download_archive_entry(reader, key, &entry_path).await;
-    }
-
-    // Normal file
-    let resp = client
-      .get_object()
-      .bucket(bucket_name)
-      .key(key)
-      .send()
-      .await
-      .map_err(|e| format!("Failed to get S3 object: {}", format_s3_error(&e)))?;
-
-    let size = resp.content_length.map(|s| s as u64);
-    let filename = std::path::Path::new(key)
-      .file_name()
-      .unwrap_or_default()
-      .to_string_lossy()
-      .to_string();
-
-    Ok((filename, size, Box::new(resp.body.into_async_read())))
-  }
-
-  async fn download_archive_entry(
-    &self,
-    reader: impl AsyncRead + Send + Unpin + 'static,
-    archive_path_hint: &str,
-    target_entry_path: &str,
-  ) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
-    let mut stream = create_archive_stream_from_reader(reader, Some(archive_path_hint))
-      .await
-      .map_err(|e| e.to_string())?;
-
-    // Normalize target
-    let target = target_entry_path.trim_start_matches("./").trim_start_matches('/');
-
-    let mut found_meta = None;
-    let mut found_reader = None;
-
-    while let Ok(Some((meta, entry_reader))) = stream.next_entry().await {
-      let current = meta.path.trim_start_matches("./").trim_start_matches('/');
-      if current == target {
-        found_meta = Some(meta);
-        found_reader = Some(entry_reader);
-        break;
-      }
-    }
-
-    if let (Some(meta), Some(reader)) = (found_meta, found_reader) {
-      let filename = std::path::Path::new(target)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-      Ok((filename, meta.size, reader))
-    } else {
-      Err(format!("Entry '{}' not found in archive", target))
-    }
+  // Static helper for S3 resolution to reduce duplication
+  async fn resolve_s3_static(pool: &SqlitePool, key: &str) -> Option<Arc<dyn OpsFileSystem>> {
+       if !key.starts_with("s3.") { return None; }
+       let id_part = key.trim_start_matches("s3.");
+       use opsbox_core::repository::s3::load_s3_profile;
+       use opsbox_core::storage::s3::get_or_create_s3_client;
+
+       if let Some((profile_name, bucket_name)) = id_part.split_once(':') {
+           if let Ok(Some(profile)) = load_s3_profile(pool, profile_name).await {
+               if let Ok(client) = get_or_create_s3_client(&profile.endpoint, &profile.access_key, &profile.secret_key) {
+                   return Some(Arc::new(S3OpsFS::new((*client).clone(), bucket_name)) as Arc<dyn OpsFileSystem>);
+               }
+           }
+       } else {
+           if let Ok(Some(_)) = load_s3_profile(pool, id_part).await {
+               return Some(Arc::new(S3DiscoveryFileSystem::new(pool.clone())) as Arc<dyn OpsFileSystem>);
+           }
+       }
+       None
   }
 }
+
 #[cfg(test)]
 mod tests {
   use super::*;
-  use opsbox_core::odfi::Odfi;
+  use opsbox_core::odfs::orl::ORL;
+  use tokio::io::AsyncReadExt;
+
+  #[tokio::test]
+  async fn test_explorer_service_list_local_not_found() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+    let orl = ORL::parse("orl://local/non/existent").unwrap();
+    let result = service.list(&orl).await;
+    assert!(result.is_err());
+  }
+
+  #[tokio::test]
+  async fn test_explorer_service_download_local() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("test.txt");
+    tokio::fs::write(&file_path, "hello download").await.unwrap();
+
+    let encoded_path = urlencoding::encode(file_path.to_str().unwrap());
+    let orl = ORL::parse(format!("orl://local/{}", encoded_path)).unwrap();
+
+    let (_name, size, mut reader) = service.download(&orl).await.unwrap();
+    assert_eq!(size, Some(14));
+    let mut content = String::new();
+    reader.read_to_string(&mut content).await.unwrap();
+    assert_eq!(content, "hello download");
+  }
 
   #[tokio::test]
   async fn test_list_local_archive_tar() {
-    // Create a temporary tar file
-    let temp_dir = tempfile::tempdir().unwrap();
-    let archive_path = temp_dir.path().join("test.tar");
-    let file = std::fs::File::create(&archive_path).unwrap();
-    let mut builder = tar::Builder::new(file);
+     let temp_dir = tempfile::tempdir().unwrap();
+     let tar_path = temp_dir.path().join("test.tar");
+     let file = std::fs::File::create(&tar_path).unwrap();
+     let mut builder = tar::Builder::new(file);
 
-    // Add file
-    let mut header = tar::Header::new_gnu();
-    header.set_size(4);
-    header.set_cksum();
-    builder.append_data(&mut header, "foo.txt", "test".as_bytes()).unwrap();
+     let mut header = tar::Header::new_gnu();
+     header.set_size(4);
+     header.set_cksum();
+     builder.append_data(&mut header, "foo.txt", "test".as_bytes()).unwrap();
 
-    // Add dir
-    let mut header = tar::Header::new_gnu();
-    header.set_entry_type(tar::EntryType::Directory);
-    header.set_size(0);
-    header.set_cksum();
-    builder.append_data(&mut header, "bar/", &mut std::io::empty()).unwrap();
+     let mut header = tar::Header::new_gnu();
+     header.set_entry_type(tar::EntryType::Directory);
+     header.set_size(0);
+     header.set_cksum();
+     builder.append_data(&mut header, "bar/", &mut std::io::empty()).unwrap();
+     builder.finish().unwrap();
 
-    builder.finish().unwrap();
+     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+     let service = ExplorerService::new(pool);
 
-    // Setup service (mock pool not needed for local)
-    // We need a dummy SqlitePool. opsbox-coreSqlitePool is sqlx::Pool<Sqlite>.
-    // Ideally we mock it or use an in-memory db.
-    // For list_local, db_pool is unused.
-    // We can try to construct one if sqlx allows easy mock, or just pass a real one.
-    // Let's use sqlx::SqlitePool::connect("sqlite::memory:").
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-    let service = ExplorerService::new(pool);
+     let encoded_path = urlencoding::encode(tar_path.to_str().unwrap());
+     let orl = ORL::parse(format!("orl://local/{}", encoded_path)).unwrap();
 
-    // Create ODFI
-    let odfi = Odfi::new(
-      EndpointType::Local,
-      "localhost".to_string(),
-      TargetType::Archive,
-      archive_path.to_string_lossy().to_string(),
-      None,
-    );
+     let items = service.list(&orl).await.unwrap();
+     assert_eq!(items.len(), 2);
 
-    // List
-    let items = service.list(&odfi).await.unwrap();
-
-    // Verify
-    assert_eq!(items.len(), 2);
-    let foo = items.iter().find(|i| i.name == "foo.txt").unwrap();
-    assert_eq!(foo.r#type, ResourceType::File);
-
-    let bar = items.iter().find(|i| i.name == "bar").unwrap();
-    assert_eq!(bar.r#type, ResourceType::Dir);
+     let foo = items.iter().find(|i| i.name == "foo.txt").unwrap();
+     assert!(foo.r#type == ResourceType::File);
+     assert!(foo.path.contains("entry=foo.txt"));
   }
 
   #[tokio::test]
-  async fn test_list_local_archive_auto_detect() {
-    // Create a temporary tar file
-    let temp_dir = tempfile::tempdir().unwrap();
-    let archive_path = temp_dir.path().join("autodetect.tar");
-    let file = std::fs::File::create(&archive_path).unwrap();
-    let mut builder = tar::Builder::new(file);
+  async fn test_download_from_agent() {
+    for key in &["http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+        unsafe { std::env::remove_var(key); }
+    }
+    unsafe { std::env::set_var("NO_PROXY", "127.0.0.1,localhost"); }
+    unsafe { std::env::set_var("no_proxy", "127.0.0.1,localhost"); }
 
-    // Add file
-    let mut header = tar::Header::new_gnu();
-    header.set_size(4);
-    header.set_cksum();
-    builder.append_data(&mut header, "auto.txt", "test".as_bytes()).unwrap();
+    use axum::{routing::get, Router};
 
-    builder.finish().unwrap();
+    let app = Router::new()
+      .route("/api/v1/file_raw", get(|| async { "agent download content" }))
+      .route("/api/v1/list_files", get(|| async {
+          serde_json::json!({
+              "items": [
+                  {
+                      "name": "file.txt",
+                      "path": "/tmp/file.txt",
+                      "is_dir": false,
+                      "is_symlink": false,
+                      "size": 100,
+                      "modified": 0,
+                      "child_count": 0,
+                      "mime_type": "text/plain"
+                  }
+              ],
+              "total": 1
+          }).to_string()
+      }));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let port = addr.port();
+
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
 
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-    let service = ExplorerService::new(pool);
-
-    // Create ODFI with TargetType::Dir (simulating user input or default traversal)
-    let odfi = Odfi::new(
-      EndpointType::Local,
-      "localhost".to_string(),
-      TargetType::Dir, // Intentionally not Archive
-      archive_path.to_string_lossy().to_string(),
-      None,
-    );
-
-    // List
-    let items = service.list(&odfi).await.unwrap();
-
-    // Verify it listed content inside tar
-    assert_eq!(items.len(), 1);
-    let auto = items.iter().find(|i| i.name == "auto.txt").unwrap();
-    assert_eq!(auto.r#type, ResourceType::File);
-  }
-
-  #[tokio::test]
-  async fn test_list_local_archive_targz_auto_detect() {
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-
-    // Create a temporary tar.gz file
-    let temp_dir = tempfile::tempdir().unwrap();
-    let archive_path = temp_dir.path().join("autodetect.tar.gz");
-    let file = std::fs::File::create(&archive_path).unwrap();
-    let enc = GzEncoder::new(file, Compression::default());
-    let mut builder = tar::Builder::new(enc);
-
-    // Add file
-    let mut header = tar::Header::new_gnu();
-    header.set_size(4);
-    header.set_cksum();
-    builder
-      .append_data(&mut header, "inner_gz.txt", "test".as_bytes())
+    agent_manager::repository::AgentRepository::new(pool.clone())
+      .init_schema()
+      .await
       .unwrap();
 
-    let enc = builder.into_inner().unwrap();
-    enc.finish().unwrap();
+    let manager = std::sync::Arc::new(agent_manager::AgentManager::new(pool.clone()).await.unwrap());
 
-    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-    let service = ExplorerService::new(pool);
+    let mut agent_info = agent_manager::models::AgentInfo {
+      id: "agent-dl".to_string(),
+      name: "DL Agent".to_string(),
+      version: "0.1.0".to_string(),
+      hostname: "127.0.0.1".to_string(),
+      tags: vec![],
+      search_roots: vec!["/tmp".to_string()],
+      last_heartbeat: 9999999999,
+      status: agent_manager::models::AgentStatus::Online,
+    };
+    agent_info.tags.push(agent_manager::models::AgentTag::new("listen_port".to_string(), port.to_string()));
 
-    // Create ODFI with TargetType::Dir
-    let odfi = Odfi::new(
-      EndpointType::Local,
-      "localhost".to_string(),
-      TargetType::Dir,
-      archive_path.to_string_lossy().to_string(),
-      None,
-    );
+    manager.register_agent(agent_info).await.unwrap();
 
-    // List
-    let items = service.list(&odfi).await.unwrap();
+    let service = ExplorerService::new(pool).with_agent_manager(manager);
 
-    // Verify it listed content
-    assert_eq!(items.len(), 1);
-    let item = items.iter().find(|i| i.name == "inner_gz.txt").unwrap();
-    assert_eq!(item.r#type, ResourceType::File);
+    let orl = ORL::parse("orl://agent-dl@agent/tmp/file.txt").unwrap();
+
+    let (name, _size, mut reader) = service.download(&orl).await.unwrap();
+    assert_eq!(name, "file.txt");
+
+    let mut content = String::new();
+    reader.read_to_string(&mut content).await.unwrap();
+    assert_eq!(content, "agent download content");
   }
 }
+  fn map_entry(entry: opsbox_core::odfs::types::OpsEntry, parent_orl: &ORL) -> ResourceItem {
+      let is_orl = entry.path.starts_with("orl://");
+
+      let path = if is_orl {
+          entry.path
+      } else if parent_orl.target_type() == TargetType::Archive {
+           let base = parent_orl.as_str().split('?').next().unwrap_or(parent_orl.as_str());
+
+           // Ensure we don't double encode if entry.path is already encoded?
+           // ArchiveOpsFS usually returns decoded/raw paths.
+           let encoded_entry = urlencoding::encode(&entry.path);
+           format!("{}?target=archive&entry={}", base, encoded_entry)
+      } else {
+          // Standard directory traversal
+          if entry.path.starts_with('/') {
+              // If the entry already provides an absolute path, use it with the same endpoint
+              let auth = parent_orl.uri().authority().map(|a| a.as_str()).unwrap_or("local");
+              let encoded_path = entry.path.split('/')
+                  .map(|s| urlencoding::encode(s).into_owned())
+                  .collect::<Vec<_>>()
+                  .join("/");
+              format!("orl://{}{}", auth, encoded_path)
+          } else {
+              // Fallback to name-based joining: Append name to parent path
+              // Remove query params from base
+              let base = parent_orl.as_str().split('?').next().unwrap_or(parent_orl.as_str());
+              let separator = if base.ends_with('/') { "" } else { "/" };
+              let encoded_name = urlencoding::encode(&entry.name);
+              format!("{}{}{}", base, separator, encoded_name)
+          }
+      };
+
+      ResourceItem {
+          name: entry.name,
+          path,
+          r#type: match entry.metadata.file_type {
+              OpsFileType::Directory => ResourceType::Dir,
+              OpsFileType::File => ResourceType::File,
+              OpsFileType::Symlink => ResourceType::LinkFile,
+              OpsFileType::Unknown => ResourceType::File,
+          },
+          size: Some(entry.metadata.size),
+          modified: entry.metadata.modified.map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64),
+          has_children: if entry.metadata.is_dir() { Some(true) } else { None },
+          child_count: None,
+          hidden_child_count: None,
+          mime_type: entry.metadata.mime_type,
+      }
+  }

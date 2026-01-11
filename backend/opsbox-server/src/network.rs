@@ -74,3 +74,66 @@ pub fn init_network_env() {
     tracing::info!("检测到空代理环境变量，已移除空的 HTTP(S)_PROXY");
   }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+    use std::sync::Mutex;
+    use std::sync::LazyLock;
+
+    static ENV_MUTEX: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    #[test]
+    fn test_init_network_env_defaults() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // 清理环境变量
+        unsafe {
+            env::remove_var("HTTP_PROXY");
+            env::remove_var("http_proxy");
+            env::remove_var("HTTPS_PROXY");
+            env::remove_var("https_proxy");
+            env::remove_var("ALL_PROXY");
+            env::remove_var("all_proxy");
+            env::remove_var("NO_PROXY");
+            env::remove_var("no_proxy");
+        }
+
+        init_network_env();
+
+        // 验证默认 NO_PROXY 是否被设置
+        assert!(env::var("NO_PROXY").is_ok());
+        assert!(env::var("NO_PROXY").unwrap().contains("localhost"));
+    }
+
+    #[test]
+    fn test_init_network_env_all_proxy_conversion() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe {
+            env::remove_var("HTTP_PROXY");
+            env::remove_var("http_proxy");
+            env::remove_var("ALL_PROXY");
+            env::set_var("all_proxy", "http://proxy:8080");
+        }
+
+        init_network_env();
+
+        // 验证 all_proxy (小写) 也能被正确读取并转换为大写 HTTP_PROXY
+        assert_eq!(env::var("HTTP_PROXY").expect("HTTP_PROXY should be set"), "http://proxy:8080");
+        assert!(env::var("ALL_PROXY").is_err());
+        assert!(env::var("all_proxy").is_err());
+    }
+
+    #[test]
+    fn test_init_network_env_empty_proxy_cleanup() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        unsafe {
+            env::set_var("HTTP_PROXY", " ");
+        }
+
+        init_network_env();
+
+        // 验证空代理被移除
+        assert!(env::var("HTTP_PROXY").is_err());
+    }
+}

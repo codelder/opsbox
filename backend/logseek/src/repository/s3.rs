@@ -2,35 +2,14 @@ use super::RepositoryError;
 use super::error::Result;
 use crate::utils::storage::{self, S3Error};
 use opsbox_core::{SqlitePool, run_migration};
-use serde::{Deserialize, Serialize};
 use tracing::{debug, error, info};
+pub use opsbox_core::repository::s3::{S3Settings, S3Profile};
+use opsbox_core::repository::s3::{
+    load_s3_profile as core_load_s3_profile,
+    list_s3_profiles as core_list_s3_profiles
+};
 
-/// S3 兼容对象存储配置
-///
-/// 支持所有 S3 兼容的对象存储服务：
-/// - AWS S3
-/// - MinIO
-/// - 阿里云 OSS
-/// - 腾讯云 COS
-/// - Cloudflare R2
-/// - 其他 S3 兼容服务
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct S3Settings {
-  pub endpoint: String,
-  pub access_key: String,
-  pub secret_key: String,
-}
-
-/// S3 配置 Profile
-///
-/// 每个 Profile 包含完整的 S3 访问配置：Endpoint + Bucket + Credentials
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct S3Profile {
-  pub profile_name: String,
-  pub endpoint: String,
-  pub access_key: String,
-  pub secret_key: String,
-}
+// Structs moved to opsbox_core::repository::s3
 
 /// 初始化 LogSeek 模块的数据库表
 pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
@@ -55,22 +34,19 @@ pub async fn init_schema(db_pool: &SqlitePool) -> Result<()> {
 
 pub async fn load_s3_settings(pool: &SqlitePool) -> Result<Option<S3Settings>> {
   debug!("加载 S3 配置（default profile）");
-  let row = sqlx::query_as::<_, (String, String, String)>(
-    "SELECT endpoint, access_key, secret_key FROM s3_profiles WHERE profile_name = 'default'",
-  )
-  .fetch_optional(pool)
-  .await
-  .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 配置失败: {}", e)))?;
+  let profile = core_load_s3_profile(pool, "default")
+    .await
+    .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 配置失败: {}", e)))?;
 
-  match &row {
+  match &profile {
     Some(_) => info!("S3 配置加载成功 (profile=default)"),
     None => info!("S3 配置不存在 (profile=default)"),
   }
 
-  Ok(row.map(|(endpoint, access_key, secret_key)| S3Settings {
-    endpoint,
-    access_key,
-    secret_key,
+  Ok(profile.map(|p| S3Settings {
+    endpoint: p.endpoint,
+    access_key: p.access_key,
+    secret_key: p.secret_key,
   }))
 }
 
@@ -197,51 +173,17 @@ pub async fn verify_s3_settings_with_bucket(settings: &S3Settings, bucket: &str)
 
 /// 加载指定 profile 的 S3 配置
 pub async fn load_s3_profile(pool: &SqlitePool, profile_name: &str) -> Result<Option<S3Profile>> {
-  let profile_name = if profile_name.is_empty() {
-    "default"
-  } else {
-    profile_name
-  };
-  debug!("加载 S3 Profile: {}", profile_name);
-
-  let row = sqlx::query_as::<_, (String, String, String, String)>(
-    "SELECT profile_name, endpoint, access_key, secret_key FROM s3_profiles WHERE profile_name = ?",
-  )
-  .bind(profile_name)
-  .fetch_optional(pool)
-  .await
-  .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profile 失败: {}", e)))?;
-
-  Ok(row.map(|(profile_name, endpoint, access_key, secret_key)| S3Profile {
-    profile_name,
-    endpoint,
-    access_key,
-    secret_key,
-  }))
+  core_load_s3_profile(pool, profile_name)
+    .await
+    .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profile 失败: {}", e)))
 }
 
 /// 加载所有 S3 Profiles
 pub async fn list_s3_profiles(pool: &SqlitePool) -> Result<Vec<S3Profile>> {
   debug!("加载所有 S3 Profiles");
-
-  let rows = sqlx::query_as::<_, (String, String, String, String)>(
-    "SELECT profile_name, endpoint, access_key, secret_key FROM s3_profiles ORDER BY profile_name",
-  )
-  .fetch_all(pool)
-  .await
-  .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profiles 失败: {}", e)))?;
-
-  Ok(
-    rows
-      .into_iter()
-      .map(|(profile_name, endpoint, access_key, secret_key)| S3Profile {
-        profile_name,
-        endpoint,
-        access_key,
-        secret_key,
-      })
-      .collect(),
-  )
+  core_list_s3_profiles(pool)
+    .await
+    .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profiles 失败: {}", e)))
 }
 
 /// 保存或更新 S3 Profile

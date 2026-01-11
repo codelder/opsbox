@@ -107,6 +107,35 @@ impl AgentClient {
       .map_err(|e| AgentClientError::Other(format!("解析响应失败: {}", e)))
   }
 
+  /// 带查询参数的 GET 请求辅助函数
+  pub async fn get_with_query<T: DeserializeOwned, Q: serde::Serialize>(
+    &self,
+    path: &str,
+    query: &Q,
+  ) -> Result<T, AgentClientError> {
+    let url = format!("{}{}", self.endpoint, path);
+    let response = self
+      .client
+      .get(&url)
+      .query(query)
+      .timeout(self.timeout)
+      .send()
+      .await
+      .map_err(|e| AgentClientError::ConnectionError(e.to_string()))?;
+
+    if !response.status().is_success() {
+      return Err(AgentClientError::Other(format!(
+        "Agent 返回错误状态: {}",
+        response.status()
+      )));
+    }
+
+    response
+      .json::<T>()
+      .await
+      .map_err(|e| AgentClientError::Other(format!("解析响应失败: {}", e)))
+  }
+
   /// 通用 POST 请求辅助函数
   pub async fn post<B: serde::Serialize, T: DeserializeOwned>(
     &self,
@@ -142,6 +171,32 @@ impl AgentClient {
     let response = self
       .client
       .get(&url)
+      .timeout(self.timeout)
+      .send()
+      .await
+      .map_err(|e| AgentClientError::ConnectionError(e.to_string()))?;
+
+    if !response.status().is_success() {
+      return Err(AgentClientError::Other(format!(
+        "Agent 返回错误状态: {}",
+        response.status()
+      )));
+    }
+
+    Ok(response)
+  }
+
+  /// 带查询参数获取原始响应流
+  pub async fn get_raw_with_query<Q: serde::Serialize>(
+    &self,
+    path: &str,
+    query: &Q,
+  ) -> Result<reqwest::Response, AgentClientError> {
+    let url = format!("{}{}", self.endpoint, path);
+    let response = self
+      .client
+      .get(&url)
+      .query(query)
       .timeout(self.timeout)
       .send()
       .await

@@ -1,5 +1,6 @@
 use axum::http::{StatusCode, header::CONTENT_TYPE};
 use axum::{Router, http, response::Response, routing::get};
+use tower_http::trace::TraceLayer;
 use opsbox_core::logging::ReloadHandle;
 use opsbox_core::{Module, SqlitePool};
 use rust_embed::RustEmbed;
@@ -178,6 +179,33 @@ fn build_router(db_pool: SqlitePool, modules: &[Arc<dyn Module>]) -> Router {
   // SPA fallback（必须放最后）
   app = app.fallback(get(spa_fallback));
 
+  // 添加请求日志中间件
+  app = app.layer(
+    TraceLayer::new_for_http()
+      .make_span_with(|_request: &http::Request<_>| {
+        tracing::info_span!("") // 使用空 span 名称
+      })
+      .on_request(|request: &http::Request<_>, _span: &tracing::Span| {
+        tracing::info!(
+          target: "http_request",
+          method = %request.method(),
+          uri = %request.uri(),
+          version = ?request.version(),
+          headers = ?request.headers(),
+          "收到请求"
+        );
+      })
+      .on_response(|response: &http::Response<_>, latency: std::time::Duration, _span: &tracing::Span| {
+        tracing::info!(
+          target: "http_response",
+          status = %response.status(),
+          latency_ms = latency.as_millis(),
+          headers = ?response.headers(),
+          "发送响应"
+        );
+      })
+  );
+
   app
 }
 
@@ -205,4 +233,75 @@ pub async fn run(addr: SocketAddr, db_pool: SqlitePool, modules: Vec<Arc<dyn Mod
     .expect("服务启动失败");
 
   tracing::info!("服务已关闭");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn test_log_state_management() {
+        let path = std::path::PathBuf::from("/tmp/test-logs");
+        // 注意：OnceLock 只能被设置一次。
+        // 如果其他测试已经设置了，这里会失败，所以我们使用 get_or_init 逻辑
+        if get_log_dir().is_none() {
+            set_log_dir(path.clone());
+        }
+        assert!(get_log_dir().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_serve_embedded_index() {
+        // 尝试获取 index.html
+        let resp = serve_embedded("index.html");
+        assert!(resp.is_some());
+        let resp = resp.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/html");
+    }
+
+    #[tokio::test]
+    async fn test_spa_fallback_logic() {
+        // Test hitting index.html implicitly
+        let uri = "/dashboard".parse::<http::Uri>().unwrap();
+        let resp = spa_fallback(uri).await;
+        // Since /dashboard doesn't exist in Assets, it should fallback to index.html
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/html");
+
+        // Test hitting a real asset (if we can simulate it, but index.html is definitely there)
+        let uri = "/index.html".parse::<http::Uri>().unwrap();
+        let resp = spa_fallback(uri).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_build_router_nesting() {
+        use async_trait::async_trait;
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // Mock a module
+        struct MockModule;
+        #[async_trait]
+        impl Module for MockModule {
+            fn name(&self) -> &'static str { "Mock" }
+            fn api_prefix(&self) -> &'static str { "/api/v1/mock" }
+            fn router(&self, _pool: SqlitePool) -> Router {
+                Router::new().route("/test", get(|| async { "mock ok" }))
+            }
+            async fn init_schema(&self, _pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> { Ok(()) }
+            fn cleanup(&self) {}
+        }
+
+        let modules: Vec<Arc<dyn Module>> = vec![Arc::new(MockModule)];
+        let app = build_router(pool, &modules);
+
+        let response = app
+            .oneshot(Request::builder().uri("/api/v1/mock/test").body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

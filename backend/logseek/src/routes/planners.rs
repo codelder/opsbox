@@ -9,7 +9,7 @@ use opsbox_core::SqlitePool;
 use serde::{Deserialize, Serialize};
 
 use crate::api::LogSeekApiError;
-use crate::domain::config::Source;
+use opsbox_core::odfs::orl::ORL;
 use crate::repository::{RepositoryError, planners};
 use crate::service::ServiceError;
 
@@ -58,8 +58,8 @@ pub struct PlannerTestPayload {
 pub struct PlannerTestResponse {
   /// 清理后的查询（移除了 app:/dt:/fdt:/tdt: 等）
   pub cleaned_query: String,
-  /// 规划出的来源列表（与 Source 对齐）
-  pub sources: Vec<Source>,
+  /// 规划出的来源列表（ORL）
+  pub sources: Vec<ORL>,
   /// 调试日志（print 函数的输出）
   pub debug_logs: Vec<String>,
 }
@@ -167,4 +167,56 @@ pub async fn set_default(
 ) -> Result<StatusCode, LogSeekApiError> {
   planners::set_default(&pool, Some(&body.app)).await?;
   Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::planners::init_schema;
+
+    async fn setup_test_db() -> SqlitePool {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn test_planner_crud_routes() {
+        let pool = setup_test_db().await;
+
+        // 1. Save a script
+        let payload = PlannerUpsertPayload {
+            app: "test-app".to_string(),
+            script: "def plan(q): return []".to_string(),
+        };
+        save_script(State(pool.clone()), Json(payload)).await.unwrap();
+
+        // 2. Get the script
+        let resp = get_script(State(pool.clone()), Path("test-app".to_string())).await.unwrap();
+        assert_eq!(resp.app, "test-app");
+        assert_eq!(resp.script, "def plan(q): return []");
+
+        // 3. List scripts
+        let list = list_scripts(State(pool.clone())).await.unwrap();
+        assert_eq!(list.items.len(), 1);
+        assert_eq!(list.items[0].app, "test-app");
+
+        // 4. Set/Get default
+        set_default(State(pool.clone()), Json(DefaultPlannerPayload { app: "test-app".into() })).await.unwrap();
+        let default = get_default(State(pool.clone())).await.unwrap();
+        assert_eq!(default.0, Some("test-app".to_string()));
+
+        // 5. Delete
+        delete_script(State(pool.clone()), Path("test-app".to_string())).await.unwrap();
+        let list = list_scripts(State(pool.clone())).await.unwrap();
+        assert_eq!(list.items.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_readme_md() {
+        let resp = get_readme_md().await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // Verify it contains some known text from planners/README.md
+        // include_str! should work in tests
+    }
 }

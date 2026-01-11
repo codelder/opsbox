@@ -43,6 +43,7 @@ chrono = "0.4"
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4.0", features = ["derive"] }
+urlencoding = "2"
 
 # 路径匹配
 globset = "0.4"

@@ -548,4 +548,110 @@ mod tests {
 
     assert_eq!(response.status(), StatusCode::CREATED);
   }
+
+  #[tokio::test]
+  async fn test_agent_routes_full_flow() {
+    let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let manager = Arc::new(AgentManager::new(pool).await.unwrap());
+    let app = create_routes(manager.clone());
+
+    // 1. Register
+    let agent_id = "agent-full-flow";
+    let agent_info = serde_json::json!({
+        "id": agent_id,
+        "name": "Full Flow Agent",
+        "version": "1.0.0",
+        "hostname": "localhost",
+        "tags": [],
+        "search_roots": ["/logs"],
+        "last_heartbeat": 0,
+        "status": {"type": "Online"},
+        "listen_port": 4001
+    });
+
+    let mut req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/register")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(serde_json::to_string(&agent_info).unwrap()))
+      .unwrap();
+    req.extensions_mut().insert(axum::extract::connect_info::ConnectInfo::<std::net::SocketAddr>("127.0.0.1:12345".parse().unwrap()));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // 2. Heartbeat
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri(format!("/{}/heartbeat", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 3. Get Agent
+    let req = axum::http::Request::builder()
+      .method("GET")
+      .uri(format!("/{}", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 4. List Agents
+    let req = axum::http::Request::builder()
+      .method("GET")
+      .uri("/")
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 5. Tag Management
+    // Add Tag
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri(format!("/{}/tags/add", agent_id))
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(serde_json::json!({"key": "env", "value": "test"}).to_string()))
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // List Tags
+    let req = axum::http::Request::builder()
+      .method("GET")
+      .uri("/tags")
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Remove Tag
+    let req = axum::http::Request::builder()
+      .method("DELETE")
+      .uri(format!("/{}/tags/remove", agent_id))
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(serde_json::json!({"key": "env", "value": "test"}).to_string()))
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Clear Tags
+    let req = axum::http::Request::builder()
+      .method("DELETE")
+      .uri(format!("/{}/tags/clear", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 6. Unregister
+    let req = axum::http::Request::builder()
+      .method("DELETE")
+      .uri(format!("/{}", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+  }
 }

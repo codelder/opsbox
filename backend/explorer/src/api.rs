@@ -7,7 +7,7 @@ use axum::{
   routing::{get, post},
 };
 use opsbox_core::SuccessResponse;
-use opsbox_core::odfi::Odfi;
+use opsbox_core::odfs::orl::ORL;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
@@ -21,7 +21,7 @@ pub struct AppState {
 
 #[derive(Debug, Deserialize)]
 pub struct ListRequest {
-  pub odfi: String,
+  pub orl: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,15 +41,13 @@ async fn list_resources(
   State(state): State<Arc<AppState>>,
   Json(payload): Json<ListRequest>,
 ) -> opsbox_core::Result<impl IntoResponse> {
-  // Parse ODFI
-  let odfi: Odfi = payload
-    .odfi
-    .parse()
-    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ODFI: {}", e)))?;
+  // Parse ORL
+  let orl = ORL::parse(payload.orl)
+    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   let items = state
     .service
-    .list(&odfi)
+    .list(&orl)
     .await
     .map_err(opsbox_core::AppError::internal)?;
 
@@ -64,14 +62,12 @@ async fn download_resource(
   State(state): State<Arc<AppState>>,
   Query(payload): Query<ListRequest>,
 ) -> Result<impl IntoResponse, opsbox_core::AppError> {
-  let odfi: Odfi = payload
-    .odfi
-    .parse()
-    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ODFI: {}", e)))?;
+  let orl = ORL::parse(payload.orl)
+    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   let (filename, size, reader) = state
     .service
-    .download(&odfi)
+    .download(&orl)
     .await
     .map_err(opsbox_core::AppError::internal)?;
 

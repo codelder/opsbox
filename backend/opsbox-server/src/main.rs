@@ -17,10 +17,10 @@ extern crate explorer;
 // 模块声明
 mod config;
 mod daemon;
-mod log_routes;
 mod logging;
-mod network;
-mod server;
+
+use opsbox_server::network;
+use opsbox_server::server;
 
 #[cfg(windows)]
 mod daemon_windows;

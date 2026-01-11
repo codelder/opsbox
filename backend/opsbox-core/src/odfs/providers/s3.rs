@@ -1,7 +1,9 @@
+use crate::fs::{PrefixedReader, sniff_file_type};
 use crate::odfs::{OpsEntry, OpsFileSystem, OpsFileType, OpsMetadata, OpsPath, OpsRead};
 use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use std::io;
+use tokio::io::AsyncReadExt;
 
 /// S3 文件系统提供者
 ///
@@ -184,4 +186,142 @@ impl OpsFileSystem for S3OpsFS {
     let stream = resp.body.into_async_read();
     Ok(Box::pin(stream))
   }
+
+  async fn as_entry_stream(&self, path: &OpsPath, recursive: bool) -> io::Result<Box<dyn crate::fs::EntryStream>> {
+    let prefix = path.as_str().trim_start_matches('/').to_string();
+
+    // 如果看起来像文件（不以 / 结尾），或者我们通过 HeadObject 确认它是文件
+    // 这里为了性能，先假设：
+    // 1. 如果 recursive=false 且不以 / 结尾 -> 单文件
+    // 2. 否则 -> 目录遍历
+
+    let is_dir_like = prefix.ends_with('/') || prefix.is_empty();
+
+    if !is_dir_like && !recursive {
+        // 单文件模式
+        Ok(Box::new(S3EntryStream::new(self.client.clone(), self.bucket.clone(), vec![prefix])))
+    } else {
+        // 目录模式：先列出所有 Key（暂不通过 Stream Lazily List，因为 S3 List 分页处理较繁琐，
+        // 这里先一次性 List 出所有 Keys，类似 FsEntryStream 的 jwalk）
+        // 注意：生产环境如果 Bucket 巨大，应使用 Paginator
+
+        let mut keys = Vec::new();
+        let mut stream = self.client.list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(&prefix)
+            .into_paginator()
+            .send();
+
+        while let Some(res) = stream.next().await {
+            let page = res.map_err(|e| io::Error::other(e.to_string()))?;
+            for obj in page.contents.unwrap_or_default() {
+                if let Some(k) = obj.key {
+                    if k.ends_with('/') { continue; } // 跳过目录占位符
+                    keys.push(k);
+                }
+            }
+        }
+
+        Ok(Box::new(S3EntryStream::new(self.client.clone(), self.bucket.clone(), keys)))
+    }
+  }
+}
+
+pub struct S3EntryStream {
+    client: Client,
+    bucket: String,
+    keys: std::collections::VecDeque<String>,
+}
+
+impl S3EntryStream {
+    pub fn new(client: Client, bucket: String, keys: Vec<String>) -> Self {
+        Self {
+            client,
+            bucket,
+            keys: keys.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl crate::fs::EntryStream for S3EntryStream {
+    async fn next_entry(&mut self) -> io::Result<Option<(crate::fs::EntryMeta, Box<dyn tokio::io::AsyncRead + Send + Unpin>)>> {
+        if let Some(key) = self.keys.pop_front() {
+            let resp = self.client.get_object()
+                .bucket(&self.bucket)
+                .key(&key)
+                .send()
+                .await
+                .map_err(|e| io::Error::other(e.to_string()))?;
+
+            let size = resp.content_length.map(|s| s as u64);
+            let stream = resp.body.into_async_read();
+
+            // 预读取头部进行类型探测
+            let mut buf_reader = tokio::io::BufReader::new(stream);
+            let mut head = vec![0u8; 1024];
+            let mut n = 0;
+            // 尽力读取最多 1024 字节
+            while n < head.len() {
+                 let read_n = buf_reader.read(&mut head[n..]).await.map_err(|e| io::Error::other(e.to_string()))?;
+                 if read_n == 0 { break; }
+                 n += read_n;
+            }
+            head.truncate(n);
+
+            let kind = sniff_file_type(&head);
+            let is_compressed = kind.is_gzip();
+
+            // 重构流（因为头部已被读取）
+            let prefixed = PrefixedReader::new(head, buf_reader);
+
+            let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = if is_compressed {
+                 // 使用 tokio 版本的 GzipDecoder，无需 compat (PrefixedReader 实现了 AsyncRead)
+                 let gz = async_compression::tokio::bufread::GzipDecoder::new(tokio::io::BufReader::new(prefixed));
+                 Box::new(gz)
+            } else {
+                 Box::new(prefixed)
+            };
+
+            let meta = crate::fs::EntryMeta {
+                path: key.clone(),
+                container_path: None,
+                size,
+                is_compressed: true,
+                source: crate::fs::EntrySource::File,
+            };
+
+            Ok(Some((meta, reader)))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_s3_ops_fs_new() {
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .build();
+        let client = Client::from_conf(config);
+        let fs = S3OpsFS::new(client, "my-bucket");
+        assert_eq!(fs.bucket, "my-bucket");
+        assert_eq!(fs.name(), "S3OpsFS");
+    }
+
+    #[test]
+    fn test_s3_entry_stream_new() {
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .build();
+        let client = Client::from_conf(config);
+        let stream = S3EntryStream::new(client, "my-bucket".to_string(), vec!["k1".to_string(), "k2".to_string()]);
+
+        assert_eq!(stream.bucket, "my-bucket");
+        assert_eq!(stream.keys.len(), 2);
+    }
 }

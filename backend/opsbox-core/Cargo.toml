@@ -69,4 +69,8 @@ tempfile = "3.24.0"
 lru = "0.16.2"
 futures-lite = "2.6.1"
 tokio-stream = "0.1.17"
+fluent-uri = "0.4.1"
+
+[dev-dependencies]
+tar = "0.4"
 

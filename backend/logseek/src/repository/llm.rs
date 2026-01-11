@@ -561,3 +561,375 @@ async fn verify_chat_openai(
   }
   Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provider_kind_as_str() {
+        assert_eq!(ProviderKind::Ollama.as_str(), "ollama");
+        assert_eq!(ProviderKind::OpenAI.as_str(), "openai");
+    }
+
+    #[test]
+    fn test_provider_kind_parse() {
+        assert_eq!(ProviderKind::parse("ollama"), Some(ProviderKind::Ollama));
+        assert_eq!(ProviderKind::parse("OLLAMA"), Some(ProviderKind::Ollama));
+        assert_eq!(ProviderKind::parse("openai"), Some(ProviderKind::OpenAI));
+        assert_eq!(ProviderKind::parse("OPENAI"), Some(ProviderKind::OpenAI));
+        assert_eq!(ProviderKind::parse("invalid"), None);
+        assert_eq!(ProviderKind::parse(""), None);
+    }
+
+    #[test]
+    fn test_provider_kind_serialization() {
+        let ollama = ProviderKind::Ollama;
+        let json = serde_json::to_string(&ollama).unwrap();
+        assert_eq!(json, "\"ollama\"");
+
+        let openai = ProviderKind::OpenAI;
+        let json = serde_json::to_string(&openai).unwrap();
+        assert_eq!(json, "\"openai\"");
+    }
+
+    #[test]
+    fn test_provider_kind_deserialization() {
+        let ollama: ProviderKind = serde_json::from_str("\"ollama\"").unwrap();
+        assert_eq!(ollama, ProviderKind::Ollama);
+
+        let openai: ProviderKind = serde_json::from_str("\"openai\"").unwrap();
+        assert_eq!(openai, ProviderKind::OpenAI);
+    }
+
+    #[test]
+    fn test_llm_backend_struct() {
+        let backend = LlmBackend {
+            name: "test-backend".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "qwen3:8b".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        assert_eq!(backend.name, "test-backend");
+        assert_eq!(backend.provider, ProviderKind::Ollama);
+        assert_eq!(backend.timeout_secs, 60);
+        assert!(backend.api_key.is_none());
+    }
+
+    #[test]
+    fn test_llm_backend_public_conversion() {
+        let backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::OpenAI,
+            base_url: "https://api.openai.com".to_string(),
+            model: "gpt-4".to_string(),
+            timeout_secs: 30,
+            api_key: Some("secret-key".to_string()),
+            organization: Some("org-123".to_string()),
+            project: Some("proj-456".to_string()),
+        };
+
+        let public: LlmBackendPublic = backend.into();
+        assert_eq!(public.name, "test");
+        assert_eq!(public.provider, ProviderKind::OpenAI);
+        assert_eq!(public.base_url, "https://api.openai.com");
+        assert_eq!(public.model, "gpt-4");
+        assert_eq!(public.timeout_secs, 30);
+        assert!(public.has_api_key);
+    }
+
+    #[test]
+    fn test_llm_backend_public_no_api_key() {
+        let backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        let public: LlmBackendPublic = backend.into();
+        assert!(!public.has_api_key);
+    }
+
+    #[test]
+    fn test_llm_backend_public_empty_api_key() {
+        let backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::OpenAI,
+            base_url: "https://api.openai.com".to_string(),
+            model: "gpt-4".to_string(),
+            timeout_secs: 30,
+            api_key: Some("".to_string()),
+            organization: None,
+            project: None,
+        };
+
+        let public: LlmBackendPublic = backend.into();
+        assert!(!public.has_api_key);
+    }
+
+    #[test]
+    fn test_now_secs() {
+        let now = now_secs();
+        assert!(now > 0);
+        // Should be a reasonable timestamp (after 2020)
+        assert!(now > 1577836800); // 2020-01-01
+    }
+
+    #[test]
+    fn test_llm_backend_serialization() {
+        let backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        let json = serde_json::to_string(&backend).unwrap();
+        assert!(json.contains("test"));
+        assert!(json.contains("ollama"));
+        assert!(json.contains("llama2"));
+
+        let deserialized: LlmBackend = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "test");
+        assert_eq!(deserialized.provider, ProviderKind::Ollama);
+    }
+
+    #[test]
+    fn test_llm_backend_public_serialization() {
+        let public = LlmBackendPublic {
+            name: "test".to_string(),
+            provider: ProviderKind::OpenAI,
+            base_url: "https://api.openai.com".to_string(),
+            model: "gpt-4".to_string(),
+            timeout_secs: 30,
+            has_api_key: true,
+        };
+
+        let json = serde_json::to_string(&public).unwrap();
+        assert!(json.contains("test"));
+        assert!(json.contains("openai"));
+        assert!(json.contains("gpt-4"));
+        assert!(json.contains("true"));
+
+        let deserialized: LlmBackendPublic = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "test");
+        assert!(deserialized.has_api_key);
+    }
+
+    #[tokio::test]
+    async fn test_init_schema() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        let result = init_schema(&pool).await;
+        assert!(result.is_ok());
+
+        // Verify tables were created
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='llm_backends'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='llm_default'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_get_backend() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let backend = LlmBackend {
+            name: "test-backend".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        // Save
+        save_backend(&pool, &backend, true).await.unwrap();
+
+        // Get
+        let retrieved = get_backend(&pool, "test-backend").await.unwrap();
+        assert!(retrieved.is_some());
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.name, "test-backend");
+        assert_eq!(retrieved.model, "llama2");
+    }
+
+    #[tokio::test]
+    async fn test_list_backends() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let backend1 = LlmBackend {
+            name: "backend1".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        let backend2 = LlmBackend {
+            name: "backend2".to_string(),
+            provider: ProviderKind::OpenAI,
+            base_url: "https://api.openai.com".to_string(),
+            model: "gpt-4".to_string(),
+            timeout_secs: 30,
+            api_key: Some("key".to_string()),
+            organization: None,
+            project: None,
+        };
+
+        save_backend(&pool, &backend1, true).await.unwrap();
+        save_backend(&pool, &backend2, true).await.unwrap();
+
+        let backends = list_backends(&pool).await.unwrap();
+        assert_eq!(backends.len(), 2);
+        assert_eq!(backends[0].name, "backend1");
+        assert_eq!(backends[1].name, "backend2");
+        assert!(!backends[0].has_api_key);
+        assert!(backends[1].has_api_key);
+    }
+
+    #[tokio::test]
+    async fn test_update_backend() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let mut backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        save_backend(&pool, &backend, true).await.unwrap();
+
+        // Update
+        backend.model = "llama3".to_string();
+        backend.timeout_secs = 90;
+        save_backend(&pool, &backend, true).await.unwrap();
+
+        let retrieved = get_backend(&pool, "test").await.unwrap().unwrap();
+        assert_eq!(retrieved.model, "llama3");
+        assert_eq!(retrieved.timeout_secs, 90);
+    }
+
+    #[tokio::test]
+    async fn test_delete_backend() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        save_backend(&pool, &backend, true).await.unwrap();
+        assert!(get_backend(&pool, "test").await.unwrap().is_some());
+
+        delete_backend(&pool, "test").await.unwrap();
+        assert!(get_backend(&pool, "test").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_default() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        save_backend(&pool, &backend, true).await.unwrap();
+
+        // Initially no default
+        let default = get_default(&pool).await.unwrap();
+        assert!(default.is_none());
+
+        // Set default
+        set_default(&pool, Some("test")).await.unwrap();
+        let default = get_default(&pool).await.unwrap();
+        assert_eq!(default, Some("test".to_string()));
+
+        // Clear default
+        set_default(&pool, None).await.unwrap();
+        let default = get_default(&pool).await.unwrap();
+        assert!(default.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_default_nonexistent() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let result = set_default(&pool, Some("nonexistent")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_delete_default_backend_clears_default() {
+        let pool = SqlitePool::connect(":memory:").await.unwrap();
+        init_schema(&pool).await.unwrap();
+
+        let backend = LlmBackend {
+            name: "test".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            api_key: None,
+            organization: None,
+            project: None,
+        };
+
+        save_backend(&pool, &backend, true).await.unwrap();
+        set_default(&pool, Some("test")).await.unwrap();
+
+        delete_backend(&pool, "test").await.unwrap();
+
+        let default = get_default(&pool).await.unwrap();
+        assert!(default.is_none());
+    }
+}

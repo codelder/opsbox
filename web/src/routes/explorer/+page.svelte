@@ -5,7 +5,7 @@
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
-  import { type ResourceItem, type Odfi, listResources } from '$lib/modules/explorer';
+  import { type ResourceItem, type Orl, listResources } from '$lib/modules/explorer';
   import {
     Folder,
     File,
@@ -43,11 +43,11 @@
   import errorDarkIcon from '$lib/assets/error-dark.svg';
 
   // State
-  let currentOdfiStr = $state('');
+  let currentOrlStr = $state('');
   let items: ResourceItem[] = $state([]);
   let loading = $state(false);
   let error: string | null = $state(null);
-  let urlOdfi = page.url.searchParams.get('odfi');
+  let urlOrl = page.url.searchParams.get('orl') || page.url.searchParams.get('odfi');
   let viewMode = $state<'table' | 'grid'>('grid');
   let showHidden = $state(false);
 
@@ -96,22 +96,22 @@
 
   // Derived active state from ODFI
   let activeType = $derived.by(() => {
-    if (currentOdfiStr.startsWith('odfi://local')) return 'local';
-    if (currentOdfiStr.startsWith('odfi://s3')) return 's3';
-    if (currentOdfiStr.includes('@agent') || currentOdfiStr.startsWith('odfi://agent')) return 'agent';
+    if (currentOrlStr.startsWith('orl://local')) return 'local';
+    if (currentOrlStr.startsWith('orl://s3')) return 's3';
+    if (currentOrlStr.includes('@agent') || currentOrlStr.startsWith('orl://agent')) return 'agent';
     return null;
   });
 
   // Identify current agent name or S3 profile name
   let activeId = $derived.by(() => {
     if (activeType === 'agent') {
-      // Extract from odfi://id@agent...
-      const match = currentOdfiStr.match(/odfi:\/\/([^@]+)@agent/);
+      // Extract from orl://id@agent...
+      const match = currentOrlStr.match(/orl:\/\/([^@]+)@agent/);
       return match ? match[1] : null;
     }
     if (activeType === 's3') {
-      // Extract profile from odfi://profile@s3...
-      const match = currentOdfiStr.match(/odfi:\/\/([^@]+)@s3/);
+      // Extract profile from orl://profile@s3...
+      const match = currentOrlStr.match(/orl:\/\/([^@]+)@s3/);
       return match ? match[1] : null;
     }
     return null;
@@ -119,13 +119,13 @@
 
   // Initial load
   onMount(() => {
-    if (urlOdfi) {
-      currentOdfiStr = urlOdfi;
-      loadResources(urlOdfi);
+    if (urlOrl) {
+      currentOrlStr = urlOrl;
+      loadResources(urlOrl);
     } else {
       // Default to local root
-      currentOdfiStr = 'odfi://local/';
-      loadResources(currentOdfiStr);
+      currentOrlStr = 'orl://local/';
+      loadResources(currentOrlStr);
     }
 
     // Preload sidebar data
@@ -136,8 +136,8 @@
   async function loadSidebarData(section: 's3' | 'agent') {
     sidebarLoading[section] = true;
     try {
-      const rootOdfi = section === 's3' ? 'odfi://s3/' : 'odfi://agent/';
-      sidebarData[section] = await listResources(rootOdfi);
+      const rootOrl = section === 's3' ? 'orl://s3/' : 'orl://agent/';
+      sidebarData[section] = await listResources(rootOrl);
     } catch (e) {
       console.error(`Failed to load sidebar ${section}`, e);
     } finally {
@@ -167,8 +167,8 @@
     if (expandedSections[section] && sidebarData[section].length === 0) {
       sidebarLoading[section] = true;
       try {
-        const rootOdfi = section === 's3' ? 'odfi://s3/' : 'odfi://agent/';
-        sidebarData[section] = await listResources(rootOdfi);
+        const rootOrl = section === 's3' ? 'orl://s3/' : 'orl://agent/';
+        sidebarData[section] = await listResources(rootOrl);
       } catch (e) {
         console.error(`Failed to load sidebar ${section}`, e);
       } finally {
@@ -177,14 +177,14 @@
     }
   }
 
-  async function handleNavigate(newOdfi: string): Promise<boolean> {
-    currentOdfiStr = newOdfi;
+  async function handleNavigate(newOrl: string): Promise<boolean> {
+    currentOrlStr = newOrl;
     // Update URL without reload
     const url = new URL(window.location.href);
-    url.searchParams.set('odfi', newOdfi);
+    url.searchParams.set('orl', newOrl);
     // Remove title query if present to clean up
     goto(url.toString(), { keepFocus: true, noScroll: true });
-    return await loadResources(newOdfi);
+    return await loadResources(newOrl);
   }
 
   let selectedItem: ResourceItem | null = $state(null);
@@ -232,7 +232,7 @@
 
   async function goUp() {
     try {
-      let urlStr = currentOdfiStr;
+      let urlStr = currentOrlStr;
       const url = new URL(urlStr);
 
       // Check if we are inside an archive
@@ -255,27 +255,27 @@
         pathParts.pop();
         url.pathname = '/' + pathParts.join('/');
 
-        const targetOdfi = url.toString();
-        const success = await handleNavigate(targetOdfi);
+        const targetOrl = url.toString();
+        const success = await handleNavigate(targetOrl);
 
         // If navigation failed (e.g. 404/Access Denied) and we are in Agent mode,
         // it likely means we went up to a directory not in search_roots.
         // Fallback to Agent Root to show list of search roots.
         if (!success && activeType === 'agent' && activeId) {
-          const rootOdfi = `odfi://${activeId}@agent/`;
+          const rootOrl = `orl://${activeId}@agent/`;
           // Only redirect if we aren't already trying to go to root
-          if (targetOdfi !== rootOdfi) {
+          if (targetOrl !== rootOrl) {
             console.log('Navigation failed in Agent, falling back to root');
-            handleNavigate(rootOdfi);
+            handleNavigate(rootOrl);
           }
         }
       }
     } catch (e) {
       console.error('Failed to parse ODFI for parent navigation', e);
-      if (currentOdfiStr.includes('/')) {
-        const parts = currentOdfiStr.split('/');
+      if (currentOrlStr.includes('/')) {
+        const parts = currentOrlStr.split('/');
         parts.pop();
-        handleNavigate(parts.join('/') || 'odfi://local/');
+        handleNavigate(parts.join('/') || 'orl://local/');
       }
     }
   }
@@ -380,7 +380,7 @@
             {#each items as item}
               {@const isActive =
                 (depth === 0 && activeType === item.key) ||
-                (depth === 1 && (activeId === item.name || currentOdfiStr.startsWith(item.path)))}
+                (depth === 1 && (activeId === item.name || currentOrlStr.startsWith(item.path)))}
               <button
                 class="group flex w-full items-center rounded-md px-2 py-1.5 text-sm transition-colors {isActive
                   ? 'bg-primary/10 text-primary'
@@ -428,9 +428,9 @@
 
         {@render renderLevel(
           [
-            { key: 'local', label: 'Local Machine', path: 'odfi://local/', icon: Monitor },
-            { key: 'agent', label: 'Remote Agents', path: 'odfi://agent/', icon: Server },
-            { key: 's3', label: 'S3 Storage', path: 'odfi://s3/', icon: Cloud }
+            { key: 'local', label: 'Local Machine', path: 'orl://local/', icon: Monitor },
+            { key: 'agent', label: 'Remote Agents', path: 'orl://agent/', icon: Server },
+            { key: 's3', label: 'S3 Storage', path: 'orl://s3/', icon: Cloud }
           ],
           0
         )}
@@ -668,7 +668,7 @@
           onSelect={() => copyToClipboard(item.path)}
         >
           <Link class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
-          <span>复制 ODFI 路径</span>
+          <span>复制 ORL 路径</span>
         </ContextMenu.Item>
 
         <ContextMenu.Item
@@ -723,7 +723,7 @@
     >
       <ContextMenu.Item
         class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
-        onSelect={() => loadResources(currentOdfiStr)}
+        onSelect={() => loadResources(currentOrlStr)}
       >
         <RefreshCw class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
         <span>刷新</span>
@@ -732,22 +732,23 @@
   {/snippet}
 
   <!-- Main Content -->
-  <div class="flex flex-1 flex-col overflow-hidden bg-background">
+  <main data-testid="explorer-container" class="flex flex-1 flex-col overflow-hidden bg-background">
     <!-- Toolbar -->
     <div class="flex items-center space-x-2 border-b border-border/40 p-4 dark:border-gray-700/50">
-      <Button variant="ghost" size="icon" onclick={goUp} disabled={loading}>
+      <Button variant="ghost" size="icon" onclick={goUp} disabled={loading} title="后退">
         <ArrowLeft class="h-4 w-4" />
       </Button>
-      <Button variant="ghost" size="icon" onclick={() => loadResources(currentOdfiStr)} disabled={loading}>
+      <Button variant="ghost" size="icon" onclick={() => loadResources(currentOrlStr)} disabled={loading} title="刷新">
         <RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
       </Button>
       <div
         class="flex flex-1 items-center rounded-md border border-border/40 bg-muted/50 px-3 py-1.5 focus-within:ring-1 focus-within:ring-ring dark:border-gray-700/50"
       >
         <input
+          id="orl-input"
           class="w-full flex-1 border-none bg-transparent font-mono text-sm font-light outline-none"
-          bind:value={currentOdfiStr}
-          onkeydown={(e) => e.key === 'Enter' && handleNavigate(currentOdfiStr)}
+          bind:value={currentOrlStr}
+          onkeydown={(e) => e.key === 'Enter' && handleNavigate(currentOrlStr)}
         />
       </div>
 
@@ -787,6 +788,7 @@
 
     <!-- Content Area -->
     <div
+      data-testid="explorer-content"
       class="relative flex-1 overflow-auto p-4"
       onclick={() => (selectedItem = null)}
       role="button"
@@ -868,7 +870,7 @@
                       <Button
                         variant="default"
                         size="sm"
-                        onclick={() => loadResources(currentOdfiStr)}
+                        onclick={() => loadResources(currentOrlStr)}
                         disabled={loading}
                       >
                         <RefreshCw class="mr-2 h-4 w-4 {loading ? 'animate-spin' : ''}" />
@@ -1060,5 +1062,5 @@
         {/if}
       </div>
     </div>
-  </div>
+  </main>
 </div>
