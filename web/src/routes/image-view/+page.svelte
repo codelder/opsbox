@@ -96,14 +96,14 @@
       const lastSlash = cleanFile.lastIndexOf('/');
       if (lastSlash === -1) return;
 
-      const parentOdfi = cleanFile.substring(0, lastSlash + 1);
+      const parentOrl = cleanFile.substring(0, lastSlash + 1);
 
       // Only fetch if parent directory actually changed or list is empty
       const currentParent =
         peerImages.length > 0 ? peerImages[0].path.substring(0, peerImages[0].path.lastIndexOf('/') + 1) : null;
 
-      if (!currentParent || currentParent !== parentOdfi) {
-        const items = await listResources(parentOdfi);
+      if (!currentParent || currentParent !== parentOrl) {
+        const items = await listResources(parentOrl);
         // Sort numerically for better user experience
         peerImages = items
           .filter(isImageFile)

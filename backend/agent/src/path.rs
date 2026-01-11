@@ -26,39 +26,55 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
   let mut resolved_paths = Vec::new();
   let canon_roots = canonicalize_roots(&config.search_roots);
 
-  let rel_as_path = PathBuf::from(relative_path);
-  // 绝对路径：必须位于某个白名单根目录下
+  // 1. First, if it's absolute (or looks like one), try as-is
+  let rel_as_path = std::path::Path::new(relative_path);
+
   if rel_as_path.is_absolute() {
-    if rel_as_path.exists() && rel_as_path.is_dir() {
-      let cand_c = canonicalize_existing(&rel_as_path)?;
-      if !is_under_any_root(&cand_c, &canon_roots) {
-        return Err(format!("目录不在白名单中: {}", cand_c.display()));
-      }
-      resolved_paths.push(cand_c);
-    }
-  } else {
-    // 相对路径：对每个白名单根进行拼接，并校验规范化后仍在该根下
-    for root in &config.search_roots {
-      let root_path = PathBuf::from(root);
-      let full_path = root_path.join(relative_path);
-      if full_path.exists() && full_path.is_dir() {
-        let cand_c = canonicalize_existing(&full_path)?;
-        let root_c = canonicalize_existing(&root_path)?;
-        if cand_c.starts_with(&root_c) {
+    if rel_as_path.exists() {
+      if let Ok(cand_c) = canonicalize_existing(rel_as_path) {
+        if is_under_any_root(&cand_c, &canon_roots) {
           resolved_paths.push(cand_c);
-          continue;
         }
       }
+    }
+  }
+
+  // 2. If no paths resolved yet, or even if they did, try treating it as relative to roots
+  // Strip leading slash if present for relative join
+  let normalized_path = relative_path.strip_prefix('/').unwrap_or(relative_path);
+
+  // Only try relative resolution if normalized_path is not empty (or we want to list roots)
+  if !normalized_path.is_empty() {
+    for root in &config.search_roots {
+      let root_path = PathBuf::from(root);
+      let full_path = root_path.join(normalized_path);
+
+      if full_path.exists() {
+        if let Ok(cand_c) = canonicalize_existing(&full_path) {
+          if let Ok(root_c) = canonicalize_existing(&root_path) {
+            if cand_c.starts_with(&root_c) {
+              if !resolved_paths.contains(&cand_c) {
+                resolved_paths.push(cand_c);
+              }
+            }
+          }
+        }
+      }
+
       // 尝试在一级子目录下拼接（兼容原先的"模糊子目录"逻辑）
       if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
           if entry.path().is_dir() {
-            let sub_path = entry.path().join(relative_path);
-            if sub_path.exists() && sub_path.is_dir() {
-              let cand_c = canonicalize_existing(&sub_path)?;
-              let root_c = canonicalize_existing(&root_path)?;
-              if cand_c.starts_with(&root_c) {
-                resolved_paths.push(cand_c);
+            let sub_path = entry.path().join(normalized_path);
+            if sub_path.exists() {
+              if let Ok(cand_c) = canonicalize_existing(&sub_path) {
+                if let Ok(root_c) = canonicalize_existing(&root_path) {
+                  if cand_c.starts_with(&root_c) {
+                    if !resolved_paths.contains(&cand_c) {
+                      resolved_paths.push(cand_c);
+                    }
+                  }
+                }
               }
             }
           }
@@ -68,7 +84,7 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
   }
 
   if resolved_paths.is_empty() {
-    Err(format!("未找到目录: {}", relative_path))
+    Err(format!("未找到路径: {}", relative_path))
   } else {
     Ok(resolved_paths)
   }

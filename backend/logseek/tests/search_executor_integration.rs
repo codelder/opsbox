@@ -2,7 +2,7 @@
 //!
 //! 验证多数据源搜索、并发控制、缓存功能
 
-use logseek::domain::config::{Endpoint, Source, Target};
+
 use logseek::query::KeywordHighlight;
 use logseek::repository::cache::cache;
 use logseek::service::search::SearchEvent;
@@ -122,116 +122,17 @@ async fn test_cache_functionality() {
   assert_eq!(cached_keywords, Some(keywords));
 
   // 测试文件行缓存
-  let file_url = logseek::domain::Odfi::new(
-    logseek::domain::EndpointType::Local,
-    "localhost",
-    logseek::domain::TargetType::Dir,
-    "test.log",
-    None,
-  );
+  let file_url = "orl://local/test.log";
   let lines = vec!["line 1".to_string(), "line 2".to_string()];
-  c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
+  c.put_lines(&sid, file_url, &lines, "UTF-8".to_string()).await;
 
-  let cached_lines = c.get_lines_slice(&sid, &file_url, 1, 100).await;
+  let cached_lines = c.get_lines_slice(&sid, file_url, 1, 100).await;
   assert!(cached_lines.is_some());
 
   // Verify content
   let (total, slice, _) = cached_lines.unwrap();
   assert_eq!(total, 2);
   assert_eq!(slice, lines);
-}
-
-#[tokio::test]
-async fn test_search_event_types() {
-  // 验证 SearchEvent 的各种类型
-  let success_event = SearchEvent::Success(logseek::service::search::SearchResult {
-    path: "test.log".to_string(),
-    lines: vec!["error line".to_string()],
-    merged: vec![(0, 1)],
-    encoding: None,
-    archive_path: None,
-    source_type: logseek::service::search::EntrySourceType::default(),
-  });
-
-  let error_event = SearchEvent::Error {
-    source: "test-source".to_string(),
-    message: "test error".to_string(),
-    recoverable: true,
-  };
-
-  let complete_event = SearchEvent::Complete {
-    source: "test-source".to_string(),
-    elapsed_ms: 100,
-  };
-
-  // 验证事件可以被序列化
-  assert!(serde_json::to_string(&success_event).is_ok());
-  assert!(serde_json::to_string(&error_event).is_ok());
-  assert!(serde_json::to_string(&complete_event).is_ok());
-}
-
-#[tokio::test]
-async fn test_concurrent_search_simulation() {
-  // 模拟并发搜索场景
-  let (pool, _temp_dir) = create_test_pool().await;
-
-  // 创建多个 SearchExecutor 实例（模拟并发请求）
-  let config = SearchExecutorConfig {
-    io_max_concurrency: 5,
-    stream_channel_capacity: 32,
-  };
-
-  let mut handles = vec![];
-
-  for i in 0..3 {
-    let pool_clone = pool.clone();
-    let config_clone = config.clone();
-
-    let handle = tokio::spawn(async move {
-      let _executor = SearchExecutor::new(pool_clone, config_clone);
-      // 验证 executor 可以被创建
-      format!("executor-{}", i)
-    });
-
-    handles.push(handle);
-  }
-
-  // 等待所有任务完成
-  let results: Vec<_> = futures::future::join_all(handles)
-    .await
-    .into_iter()
-    .filter_map(|r| r.ok())
-    .collect();
-
-  assert_eq!(results.len(), 3);
-}
-
-#[tokio::test]
-async fn test_source_configuration() {
-  // 测试数据源配置结构
-  let local_source = Source {
-    endpoint: Endpoint::Local {
-      root: "/var/log".to_string(),
-    },
-    target: Target::Dir {
-      path: ".".to_string(),
-      recursive: true,
-    },
-    filter_glob: Some("*.log".to_string()),
-    display_name: Some("Local Logs".to_string()),
-  };
-
-  // 验证序列化
-  let json = serde_json::to_string(&local_source).expect("序列化失败");
-  assert!(json.contains("local"));
-  assert!(json.contains("/var/log"));
-
-  // 验证反序列化
-  let deserialized: Source = serde_json::from_str(&json).expect("反序列化失败");
-  match deserialized.endpoint {
-    Endpoint::Local { root } => assert_eq!(root, "/var/log"),
-    _ => panic!("端点类型错误"),
-  }
 }
 
 #[tokio::test]

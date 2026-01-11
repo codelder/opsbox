@@ -12,7 +12,7 @@
   import { fetchViewCache, fetchViewDownload, escapeHtml } from '$lib/modules/logseek';
   import { highlight } from '$lib/modules/logseek/utils/highlight';
   import type { KeywordInfo } from '$lib/modules/logseek/types';
-  import { getDisplayName, parseOdfi } from '$lib/utils/odfi';
+  import { getDisplayName, parseOrl } from '$lib/utils/orl';
   import Alert from '$lib/components/Alert.svelte';
   import FileHeader from './FileHeader.svelte';
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
@@ -492,7 +492,7 @@
 
       // 使用 parseOdfi 获取正确的文件名（支持 archive entry path）
       let fileName = 'log.txt';
-      const parsed = parseOdfi(currentFile);
+      const parsed = parseOrl(currentFile);
       if (parsed) {
         fileName = parsed.displayName;
       } else {

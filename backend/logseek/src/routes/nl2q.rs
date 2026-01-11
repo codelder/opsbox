@@ -24,3 +24,20 @@ pub async fn nl2q(
   tracing::info!("NL2Q API成功: {} -> '{}', 耗时: {:?}", body.nl, q, start.elapsed());
   Ok(Json(NL2QOut { q }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::nl2q::NLBody;
+
+    #[tokio::test]
+    async fn test_nl2q_route_error() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // 不初始化 schema 且环境变量中通常没有配置 LLM，会导致 call_llm 失败
+
+        let body = NLBody { nl: "find error".to_string() };
+        let res = nl2q(State(pool), Json(body)).await;
+
+        assert!(res.is_err());
+    }
+}

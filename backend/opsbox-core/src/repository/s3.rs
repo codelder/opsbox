@@ -66,3 +66,84 @@ pub async fn list_s3_profiles(pool: &SqlitePool) -> Result<Vec<S3Profile>> {
       .collect(),
   )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn setup_db() -> SqlitePool {
+        // Use a unique in-memory database for each test by using a unique name
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        // Create table manually for testing as schema location is unknown/distributed
+        let sql = r#"
+            CREATE TABLE IF NOT EXISTS s3_profiles (
+                profile_name TEXT PRIMARY KEY,
+                endpoint TEXT NOT NULL,
+                access_key TEXT NOT NULL,
+                secret_key TEXT NOT NULL
+            );
+        "#;
+        sqlx::query(sql).execute(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn test_load_s3_profile() {
+        let pool = setup_db().await;
+
+        // Clear any existing data
+        sqlx::query("DELETE FROM s3_profiles").execute(&pool).await.unwrap();
+
+        // Insert test data
+        sqlx::query("INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key) VALUES (?, ?, ?, ?)")
+            .bind("default")
+            .bind("http://minio:9000")
+            .bind("ak")
+            .bind("sk")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let profile = load_s3_profile(&pool, "default").await.unwrap().unwrap();
+        assert_eq!(profile.endpoint, "http://minio:9000");
+        assert_eq!(profile.access_key, "ak");
+
+        let not_found = load_s3_profile(&pool, "nonexistent").await.unwrap();
+        assert!(not_found.is_none());
+
+        // Empty name defaults to "default"
+        let default_loader = load_s3_profile(&pool, "").await.unwrap().unwrap();
+        assert_eq!(default_loader.profile_name, "default");
+    }
+
+    #[tokio::test]
+    async fn test_list_s3_profiles() {
+        let pool = setup_db().await;
+
+        // Clear any existing data
+        sqlx::query("DELETE FROM s3_profiles").execute(&pool).await.unwrap();
+
+        sqlx::query("INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key) VALUES (?, ?, ?, ?)")
+            .bind("a")
+            .bind("e1")
+            .bind("k1")
+            .bind("s1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query("INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key) VALUES (?, ?, ?, ?)")
+            .bind("b")
+            .bind("e2")
+            .bind("k2")
+            .bind("s2")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let profiles = list_s3_profiles(&pool).await.unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].profile_name, "a");
+        assert_eq!(profiles[1].profile_name, "b");
+    }
+}

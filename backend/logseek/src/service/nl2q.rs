@@ -339,4 +339,34 @@ mod tests {
     let output = strip_think_sections(input);
     assert_eq!(output, "result");
   }
+
+  #[tokio::test]
+  async fn test_resolve_llm_client_fallback_to_env() {
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    // 数据库未初始化，应该报错
+    let result = resolve_llm_client(&pool).await;
+    assert!(result.is_err());
+  }
+
+  #[tokio::test]
+  async fn test_resolve_llm_client_from_db() {
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    llm::init_schema(&pool).await.unwrap();
+
+    let backend = llm::LlmBackend {
+      name: "test-ollama".to_string(),
+      provider: llm::ProviderKind::Ollama,
+      base_url: "http://localhost:11434".to_string(),
+      model: "test-model".to_string(),
+      timeout_secs: 30,
+      api_key: None,
+      organization: None,
+      project: None,
+    };
+    llm::save_backend(&pool, &backend, true).await.unwrap();
+    llm::set_default(&pool, Some("test-ollama")).await.unwrap();
+
+    let result = resolve_llm_client(&pool).await;
+    assert!(result.is_ok());
+  }
 }

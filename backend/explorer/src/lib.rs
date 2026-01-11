@@ -1,5 +1,6 @@
 pub mod api;
 pub mod domain;
+pub mod fs;
 pub mod service;
 
 use async_trait::async_trait;
@@ -25,8 +26,14 @@ impl Module for ExplorerModule {
   }
 
   fn router(&self, pool: SqlitePool) -> Router {
-    let service = Arc::new(service::ExplorerService::new(pool));
-    api::router(service)
+    let mut service = service::ExplorerService::new(pool);
+
+    // Try to get global AgentManager and configure it
+    if let Some(agent_manager) = agent_manager::get_global_agent_manager() {
+      service = service.with_agent_manager(agent_manager);
+    }
+
+    api::router(Arc::new(service))
   }
 }
 

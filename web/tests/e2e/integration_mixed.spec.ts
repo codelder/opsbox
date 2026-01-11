@@ -42,11 +42,12 @@ function findServerCommand(): { command: string; args: string[]; cwd: string } {
 }
 
 function findAgentCommand(): { command: string; argsPrefix: string[]; cwd: string } {
-  const candidate = path.join(backendDir, 'target', 'release', 'opsbox-agent');
-  if (fs.existsSync(candidate)) {
-    return { command: candidate, argsPrefix: [], cwd: backendDir };
-  }
-  return { command: 'cargo', argsPrefix: ['run', '-p', 'opsbox-agent', '--'], cwd: backendDir };
+  // 不使用预编译二进制：避免 workspace 依赖（如 logseek）变更后，旧二进制导致 e2e 结果不一致。
+  return {
+    command: 'cargo',
+    argsPrefix: ['run', '--release', '-p', 'opsbox-agent', '--'],
+    cwd: backendDir
+  };
 }
 
 async function ensureBackendUp(request: APIRequestContext) {
@@ -443,8 +444,9 @@ test.describe('Mixed Sources Integration E2E', () => {
     agentProc.stdout.on('data', (d) => process.stdout.write(d));
     agentProc.stderr.on('data', (d) => process.stderr.write(d));
 
-    await waitForHttpOk(request, `http://127.0.0.1:${agentPort}/health`, 15000);
-    await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 15000);
+    // opsbox-agent 通过 `cargo run --release` 启动时，首次编译可能较慢（尤其是依赖 AWS SDK 时）
+    await waitForHttpOk(request, `http://127.0.0.1:${agentPort}/health`, 120000);
+    await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 60000);
 
     // 当前后端支持的组合：
     // - Local: dir / files / archive
@@ -452,46 +454,13 @@ test.describe('Mixed Sources Integration E2E', () => {
     // - S3: archive（暂不支持 dir/files，EntryStreamFactory 会直接报错）
     const script = `
 SOURCES = [
-  {
-    'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
-    'target':   { 'type': 'dir', 'path': 'dir', 'recursive': True },
-    'filter_glob': '**/*.log',
-    'display_name': 'Local Dir'
-  },
-  {
-    'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
-    'target':   { 'type': 'files', 'paths': ['local-files.log'] },
-    'display_name': 'Local Files'
-  },
-  {
-    'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
-    'target':   { 'type': 'archive', 'path': 'local-archive.tar.gz' },
-    'filter_glob': '**/*.log',
-    'display_name': 'Local Archive'
-  },
-  {
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
-    'target':   { 'type': 'dir', 'path': 'dir', 'recursive': True },
-    'filter_glob': '**/*.log',
-    'display_name': 'Agent Dir'
-  },
-  {
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
-    'target':   { 'type': 'files', 'paths': ['agent-files.log'] },
-    'display_name': 'Agent Files'
-  },
-  {
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
-    'target':   { 'type': 'archive', 'path': 'agent-archive.tar.gz' },
-    'filter_glob': '**/*.log',
-    'display_name': 'Agent Archive'
-  },
-  {
-    'endpoint': { 'kind': 's3', 'profile': '${PROFILE}', 'bucket': '${BUCKET}' },
-    'target':   { 'type': 'archive', 'path': '${S3_ARCHIVE_KEY}' },
-    'filter_glob': '**/*.log',
-    'display_name': 'S3 Archive'
-  },
+  "orl://local${LOCAL_DIR_SUBDIR}?glob=**/*.log",
+  "orl://local${LOCAL_FILES_FILE}",
+  "orl://local${LOCAL_ARCHIVE_FILE}?glob=**/*.log",
+  "orl://${AGENT_ID}@agent${AGENT_DIR_SUBDIR}?glob=**/*.log",
+  "orl://${AGENT_ID}@agent${AGENT_FILES_FILE}",
+  "orl://${AGENT_ID}@agent${AGENT_ARCHIVE_FILE}?glob=**/*.log",
+  "orl://${PROFILE}@s3/${BUCKET}/${S3_ARCHIVE_KEY}?glob=**/*.log"
 ]
 `;
 

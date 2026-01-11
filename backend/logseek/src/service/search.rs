@@ -12,8 +12,13 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tracing::{debug, trace, warn};
 
+
 pub mod sink;
 use sink::BooleanContextSink;
+
+#[cfg(test)]
+mod search_tests;
+
 
 #[derive(Debug, Error)]
 pub enum SearchError {
@@ -38,6 +43,17 @@ use crate::query::{PathFilter, Query};
 // ============================================================================
 // 配置和辅助类型（已简化：删除未使用的旧配置/统计结构）
 // ============================================================================
+
+/// grep 能力检测结果
+#[derive(Debug)]
+enum GrepCapability {
+    /// 普通文件，支持 mmap 直接搜索（最快）
+    Direct(String),
+    /// Gzip压缩文件，支持流式解压搜索（较快）
+    Gzip(String),
+    /// 不支持 grep 优化，需回退到 legacy 模式
+    None,
+}
 
 // ============================================================================
 // SearchProcessor：负责处理单个文件/条目的搜索逻辑（纯业务逻辑，易于测试）
@@ -120,29 +136,38 @@ impl SearchProcessor {
     // 1. 本地文件（Path 存在）
     // 2. 无 Fancy Regex (grep-regex 仅支持标准 regex)
     // 3. 能够生成有效的 regex pattern
-    let use_grep = self.can_use_grep(&path);
+    let capability = self.check_grep_capability(&path);
 
-    if use_grep {
-      let spec = self.spec.clone();
-      let p = path.clone();
-      let ctx = self.context_lines;
-      let enc_override = self.encoding.clone();
+    match capability {
+      GrepCapability::Direct(p) => {
+          let spec = self.spec.clone();
+          let ctx = self.context_lines;
+          let enc = self.encoding.clone();
 
-      // 在 blocking thread 中运行 grep，利用 mmap
-      let handle = tokio::task::spawn_blocking(move || Self::grep_file_blocking(&p, &spec, ctx, enc_override));
+          let handle = tokio::task::spawn_blocking(move || Self::grep_file_blocking(&p, &spec, ctx, enc));
 
-      match handle.await {
-        Ok(Ok(Some(res))) => return Ok(Some(res)),
-        Ok(Ok(None)) => return Ok(None),
-        Ok(Err(e)) => {
-          debug!("grep 搜索失败，回退到 legacy 模式: {}: {}", path, e);
-          // Fallback continues below
-        }
-        Err(e) => {
-          warn!("grep 任务 join 失败: {}", e);
-          // Fallback
-        }
-      }
+          match handle.await {
+            Ok(Ok(Some(res))) => return Ok(Some(res)),
+            Ok(Ok(None)) => return Ok(None),
+            Ok(Err(e)) => debug!("grep mmap search failed, fallback: {}", e),
+            Err(e) => warn!("grep mmap task join failed: {}", e),
+          }
+      },
+      GrepCapability::Gzip(p) => {
+          let spec = self.spec.clone();
+          let ctx = self.context_lines;
+          let enc = self.encoding.clone();
+
+          let handle = tokio::task::spawn_blocking(move || Self::grep_reader_blocking_gzip(&p, &spec, ctx, enc));
+
+          match handle.await {
+            Ok(Ok(Some(res))) => return Ok(Some(res)),
+            Ok(Ok(None)) => return Ok(None),
+            Ok(Err(e)) => debug!("grep gzip search failed, fallback: {}", e),
+            Err(e) => warn!("grep gzip task join failed: {}", e),
+          }
+      },
+      GrepCapability::None => {}
     }
 
     match grep_context(reader, &self.spec, self.context_lines, self.encoding.as_deref()).await? {
@@ -154,32 +179,42 @@ impl SearchProcessor {
     }
   }
 
-  fn can_use_grep(&self, path: &str) -> bool {
+  fn check_grep_capability(&self, path: &str) -> GrepCapability {
     // 1. 检查是否存在 (简单检查)
     if std::fs::metadata(path).is_err() {
-      return false;
+      return GrepCapability::None;
     }
 
-    // 2. 排除归档和压缩文件，因为它们需要进行解压处理，直接搜索原始文件会得到错误结果
-    let lower = path.to_lowercase();
-    if lower.ends_with(".gz")
-      || lower.ends_with(".tgz")
-      || lower.ends_with(".tar")
-      || lower.ends_with(".zip")
-      || lower.ends_with(".bz2")
-      || lower.ends_with(".xz")
-      || lower.ends_with(".zst")
-    {
-      return false;
-    }
-
-    // 3. 检查是否有 Fancy Regex
+    // 2. 检查是否有 Fancy Regex
     for term in &self.spec.terms {
       if matches!(term, crate::query::Term::RegexFancy { .. }) {
-        return false;
+        return GrepCapability::None; // Fancy regex not supported by grep-searcher
       }
     }
-    true
+
+    // 3. 基于内容的嗅探
+    if let Ok(mut file) = std::fs::File::open(path) {
+        use std::io::Read;
+        let mut head = [0u8; 262];
+        if let Ok(n) = file.read(&mut head) {
+             let kind = opsbox_core::fs::sniff_file_type(&head[..n]);
+
+             // 如果是 Gzip，使用流式 grep 优化
+             if kind.is_gzip() {
+                 return GrepCapability::Gzip(path.to_string());
+             }
+
+             // 如果是其他归档（如 tar, zip），暂不支持优化
+             if kind.is_archive_or_compressed() {
+                 return GrepCapability::None;
+             }
+
+             // 普通文件，直接 mmap
+             return GrepCapability::Direct(path.to_string());
+        }
+    }
+
+    GrepCapability::None
   }
 
   /// 使用 grep crate 执行因为 (blocking)
@@ -367,6 +402,142 @@ impl SearchProcessor {
   /// # 返回
   /// - `Ok(())`: 发送成功
   /// - `Err(SearchError::ChannelClosed)`: 接收端已关闭
+  /// 使用 grep crate 对 Gzip 文件进行流式搜索
+  fn grep_reader_blocking_gzip(
+      path: &str,
+      spec: &Query,
+      context_lines: usize,
+      encoding_override: Option<String>,
+  ) -> Result<Option<SearchResult>, String> {
+      use flate2::read::GzDecoder;
+      let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+      let decoder = GzDecoder::new(f);
+      // 调用通用的 reader 搜索逻辑
+      // 注意：gzip流通常是UTF-8，编码检测可能需要预读解压流，这里简化处理：
+      // GzDecoder 不支持 seek，所以不能简单 peek。
+      // 我们可以先假设是UTF-8，或者让 Sink 在处理时如果发现乱码则报错？
+      // 或者：GzDecoder 实际上实现了 Read。我们可以先读一点点？
+      // 为了简单和性能，我们先假设 gzip 内容主要为 UTF-8。
+      // Sink 里的 encoding label 只是用于后续解码。
+      // 如果我们想支持 gzip+gbk，我们需要在 decoder 后面再接 encoding_rs_io?
+      // 或者... searcher 支持 encoding。
+
+      Self::grep_reader_internal(path, Box::new(decoder), spec, context_lines, encoding_override.unwrap_or_else(|| "UTF-8".to_string()))
+  }
+
+  /// 通用的 Reader 搜索实现 (shared by grep_file_blocking internally if reused, but here separate)
+  fn grep_reader_internal(
+    path: &str,
+    mut reader: Box<dyn std::io::Read + Send>,
+    spec: &Query,
+    context_lines: usize,
+    encoding_label: String,
+  ) -> Result<Option<SearchResult>, String> {
+      // 1. Build Matcher (Same as grep_file_blocking)
+      let mut patterns = Vec::new();
+      for term in &spec.terms {
+        match term {
+          crate::query::Term::Literal(s) | crate::query::Term::Phrase(s) => patterns.push(regex::escape(s)),
+          crate::query::Term::RegexStd { pattern, .. } => patterns.push(pattern.clone()),
+          _ => return Err("Unsupported term type".to_string()),
+        }
+      }
+      if patterns.is_empty() { return Ok(None); }
+
+      let combined_pattern = patterns.join("|");
+      let matcher = RegexMatcherBuilder::new()
+          .case_insensitive(true)
+          .build(&combined_pattern)
+          .map_err(|e| format!("Regex error: {}", e))?;
+
+      // 2. Build Searcher
+      let enc_res = GrepEncoding::new(&encoding_label);
+      let mut searcher = SearcherBuilder::new()
+          .binary_detection(BinaryDetection::quit(b'\x00'))
+          .encoding(enc_res.ok())
+          .line_number(true)
+          .build();
+
+      // 3. Run Sink
+      let mut occurs = vec![false; spec.terms.len()];
+      let mut matched_lines: Vec<usize> = Vec::new();
+      let mut matched_count = 0;
+
+      let mut sink = BooleanContextSink::new(
+        spec, &mut occurs, &mut matched_lines, &mut matched_count, Some(&encoding_label)
+      );
+
+      searcher.search_reader(&matcher, &mut reader, &mut sink).map_err(|e| e.to_string())?;
+
+      // 4. Eval
+      if spec.eval_file(&occurs) && matched_count > 0 {
+          matched_lines.sort();
+          matched_lines.dedup();
+
+          // Re-read for context?
+          // Wait, grep_file_blocking re-reads the WHOLE file to satisfy context.
+          // For Gzip stream, we CANNOT seek back.
+          // This is the problem with streaming search + "get whole file lines for context processing".
+          //
+          // If we want to support full file content return (like grep_file_blocking does for "lines"),
+          // we have to re-read the gzip file from start.
+          // Since we are optimizing for 100MB+ files, re-reading is costly but maybe acceptable given we only do it on HIT.
+          //
+          // Alternative: The Sink collects matched lines. But SearchResult structure expects `lines: Vec<String>` of the WHOLE file?
+          // No, SearchResult expects meaningful lines.
+          // `lines` in SearchResult usually means "all lines in the file" OR "relevant lines"?
+          // In `grep_file_blocking`, it returns `decode_buffer_to_lines` which is ALL lines.
+          //
+          // If the frontend expects the WHOLE file content for a 100MB file, that is heavy.
+          // But looking at `grep_file_blocking`:
+          // `let bytes = std::fs::read(path)... decode` -> It reads everything into memory!
+          // So for 100MB file, we are putting 100MB text into memory.
+          //
+          // So for Gzip, we can do the same: reopen file, decode all, return.
+          // It's still faster than Legacy because strict searching (filtering) is fast.
+          // And we only pay the full read cost if we MATCH.
+
+          use flate2::read::GzDecoder;
+          use std::io::Read;
+          // Re-open for full read
+          let f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+          let mut d = GzDecoder::new(f);
+          let mut buf = Vec::new();
+          d.read_to_end(&mut buf).map_err(|e| e.to_string())?;
+
+          let encoding = Encoding::for_label(encoding_label.as_bytes()).unwrap_or(UTF_8);
+          let lines = decode_buffer_to_lines(encoding, &buf, "grep_gzip_result ");
+
+          let mut ranges = Vec::new(); // ... calculate ranges
+          let max_idx = lines.len().saturating_sub(1);
+          for idx in matched_lines {
+             let s = idx.saturating_sub(context_lines);
+             let e = std::cmp::min(idx + context_lines, max_idx);
+             ranges.push((s, e));
+          }
+           // Merge ranges logic (duplicate from grep_file_blocking)
+           ranges.sort_by_key(|r| r.0);
+           let mut merged: Vec<(usize, usize)> = Vec::new();
+           for (s, e) in ranges {
+             if let Some(last) = merged.last_mut() && s <= last.1 + 1 {
+               if e > last.1 { last.1 = e; }
+               continue;
+             }
+             merged.push((s, e));
+           }
+
+          return Ok(Some(SearchResult::new(
+             path.to_string(), lines, merged, Some(encoding_label)
+          )));
+      }
+
+      Ok(None)
+  }
+
+  ///
+  /// # 返回
+  /// - `Ok(())`: 发送成功
+  /// - `Err(SearchError::ChannelClosed)`: 接收端已关闭
   pub async fn send_result(
     &self,
     result: SearchResult,
@@ -378,7 +549,7 @@ impl SearchProcessor {
 }
 
 /// 返回检测到的编码，如果无法确定则返回 None
-fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
+pub(super) fn detect_encoding(sample: &[u8]) -> Option<&'static Encoding> {
   // 检查 BOM（字节顺序标记）- 最可靠的检测方式
   if sample.len() >= 2 {
     match &sample[0..2] {

@@ -113,3 +113,76 @@ pub async fn list_directory<P: AsRef<Path>>(path: P) -> Result<Vec<DiskItem>, St
 
   Ok(items)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_disk_item_serialization() {
+        let item = DiskItem {
+            name: "test.log".to_string(),
+            path: "/var/log/test.log".to_string(),
+            is_dir: false,
+            is_symlink: false,
+            size: Some(1024),
+            modified: Some(1234567890),
+            child_count: None,
+            hidden_child_count: None,
+            mime_type: Some("text/plain".to_string()),
+        };
+
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(json.contains("test.log"));
+        assert!(json.contains("1024"));
+
+        let deserialized: DiskItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "test.log");
+        assert!(!deserialized.is_dir);
+        assert_eq!(deserialized.size, Some(1024));
+    }
+
+    #[test]
+    fn test_disk_item_directory() {
+        let item = DiskItem {
+            name: "logs".to_string(),
+            path: "/var/logs".to_string(),
+            is_dir: true,
+            is_symlink: false,
+            size: None,
+            modified: Some(1234567890),
+            child_count: Some(10),
+            hidden_child_count: Some(2),
+            mime_type: None,
+        };
+
+        assert!(item.is_dir);
+        assert_eq!(item.child_count, Some(10));
+        assert_eq!(item.hidden_child_count, Some(2));
+        assert_eq!(item.size, None);
+    }
+
+    #[test]
+    fn test_disk_item_symlink() {
+        let item = DiskItem {
+            name: "link".to_string(),
+            path: "/tmp/link".to_string(),
+            is_dir: false,
+            is_symlink: true,
+            size: Some(100),
+            modified: None,
+            child_count: None,
+            hidden_child_count: None,
+            mime_type: None,
+        };
+
+        assert!(item.is_symlink);
+        assert!(!item.is_dir);
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_nonexistent() {
+        let result = list_directory("/nonexistent/path/12345").await;
+        assert!(result.is_err());
+    }
+}

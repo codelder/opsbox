@@ -14,6 +14,7 @@ use thiserror::Error;
 use tokio::io::AsyncRead;
 use tokio::time;
 use tracing::{debug, error, info, warn};
+use url::Url;
 
 #[derive(Debug, Error)]
 pub enum S3Error {
@@ -73,6 +74,12 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
 
   info!("创建 S3 客户端: url={}", url);
 
+  // 对于 localhost / IP 形式的 endpoint，强制 path-style。
+  // 原因：virtual-host 风格会把请求变成 `bucket.<host>`，当 host 是 IP（如 127.0.0.1）时往往无法解析，
+  // 会导致 S3 请求失败（例如 E2E 的 mock S3 场景）。
+  let force_path_style = should_force_path_style(url);
+  info!("S3 客户端参数: force_path_style={}", force_path_style);
+
   // 记录当前代理环境变量，便于排查连接问题
   let no_proxy_dbg = std::env::var("NO_PROXY")
     .ok()
@@ -100,7 +107,7 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
     .endpoint_url(url) // 支持 MinIO 和其他 S3 兼容服务
     .region(Region::new("oss-cn-beijing")) // MinIO 通常不关心 region，但 SDK 需要
     .credentials_provider(credentials)
-    .force_path_style(false) // 根据服务类型动态选择，aws-config 默认自动处理，这里显式 false 可能需确认? LogSeek 原代码是 false
+    .force_path_style(force_path_style)
     .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest()) // AWS SDK 要求设置 behavior version
     .build();
 
@@ -110,6 +117,21 @@ pub fn get_or_create_s3_client(url: &str, access_key: &str, secret_key: &str) ->
   S3_CLIENT_CACHE.lock().unwrap().insert(cache_key, Arc::clone(&client));
   info!("S3 客户端创建并缓存成功");
   Ok(client)
+}
+
+fn should_force_path_style(endpoint_url: &str) -> bool {
+  let Ok(url) = Url::parse(endpoint_url) else {
+    // 解析失败时不强制（后续请求会报更明确错误）
+    return false;
+  };
+  let Some(host) = url.host_str() else {
+    return false;
+  };
+  if host.eq_ignore_ascii_case("localhost") {
+    return true;
+  }
+  // IP 地址强制 path-style（避免 bucket.<ip> 域名无法解析）
+  host.parse::<std::net::IpAddr>().is_ok()
 }
 
 /// 格式化 AWS SDK 错误，提取详细的错误信息
@@ -448,3 +470,157 @@ pub async fn test_s3_connection(url: &str, access_key: &str, secret_key: &str, b
   info!("S3 连接测试成功");
   Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_force_path_style() {
+        assert!(should_force_path_style("http://localhost:9000"));
+        assert!(should_force_path_style("http://127.0.0.1:9000"));
+        assert!(should_force_path_style("http://192.168.1.10"));
+        assert!(!should_force_path_style("https://s3.amazonaws.com"));
+        assert!(!should_force_path_style("https://oss-cn-hangzhou.aliyuncs.com"));
+        // Invalid URL
+        assert!(!should_force_path_style("not-a-url"));
+    }
+
+    #[test]
+    fn test_io_timeout_default() {
+        // Ensure no env var set (careful if running in parallel, but test binary env is somewhat isolated or we assume no set)
+        // If external env vars are set, this might flake.
+        // We can forcefully unset, but modifying env in tests is not thread-safe.
+        // Just verify it returns a reasonable duration.
+        let t = io_timeout();
+        assert!(t.as_secs() >= 5 && t.as_secs() <= 300);
+    }
+
+    #[test]
+    fn test_s3_error_display() {
+        let err = S3Error::InvalidBaseUrl { url: "foo".into() };
+        assert_eq!(err.to_string(), "S3 URL 不可用: foo");
+
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        let s3_err: S3Error = io_err.into();
+        assert!(matches!(s3_err, S3Error::Io { .. }));
+    }
+
+    #[test]
+    fn test_s3_reader_provider_struct() {
+        let provider = S3ReaderProvider::new("url", "ak", "sk", "bucket", "key");
+        assert_eq!(provider.url, "url");
+        assert_eq!(provider.bucket, "bucket");
+    }
+
+    #[test]
+    fn test_s3_error_variants() {
+        // Test all S3Error variants
+        let err = S3Error::S3Build { reason: "test reason".to_string() };
+        assert!(err.to_string().contains("test reason"));
+
+        let err = S3Error::S3GetObject {
+            bucket: "test-bucket".to_string(),
+            key: "test-key".to_string(),
+            error: "test error".to_string(),
+        };
+        assert!(err.to_string().contains("test-bucket"));
+        assert!(err.to_string().contains("test-key"));
+
+        let err = S3Error::S3ToStream {
+            bucket: "bucket".to_string(),
+            key: "key".to_string(),
+            error: "stream error".to_string(),
+        };
+        assert!(err.to_string().contains("stream error"));
+
+        let err = S3Error::S3ListObjects {
+            bucket: "bucket".to_string(),
+            prefix: "prefix/".to_string(),
+            error: "list error".to_string(),
+        };
+        assert!(err.to_string().contains("prefix/"));
+
+        let err = S3Error::Regex {
+            pattern: "[invalid".to_string(),
+            error: "regex error".to_string(),
+        };
+        assert!(err.to_string().contains("[invalid"));
+
+        let err = S3Error::Io {
+            path: "/test/path".to_string(),
+            error: "io error".to_string(),
+        };
+        assert!(err.to_string().contains("/test/path"));
+
+        let err = S3Error::ConnectionTimeout {
+            bucket: "timeout-bucket".to_string(),
+            operation: "get_object".to_string(),
+        };
+        assert!(err.to_string().contains("timeout-bucket"));
+        assert!(err.to_string().contains("get_object"));
+    }
+
+    #[test]
+    fn test_io_error_conversion() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let s3_err: S3Error = io_err.into();
+
+        match s3_err {
+            S3Error::Io { path, error } => {
+                assert_eq!(path, "unknown");
+                assert!(error.contains("access denied"));
+            }
+            _ => panic!("Expected S3Error::Io"),
+        }
+    }
+
+    #[test]
+    fn test_should_force_path_style_edge_cases() {
+        // Localhost variations
+        assert!(should_force_path_style("http://LOCALHOST:9000"));
+        assert!(should_force_path_style("https://localhost"));
+
+        // Domain names should not force path style
+        assert!(!should_force_path_style("http://minio.example.com"));
+        assert!(!should_force_path_style("https://storage.googleapis.com"));
+
+        // Edge cases
+        assert!(!should_force_path_style(""));
+        assert!(!should_force_path_style("://invalid"));
+    }
+
+    #[test]
+    fn test_io_timeout_clamping() {
+        // The function should clamp values between 5 and 300 seconds
+        let timeout = io_timeout();
+        let secs = timeout.as_secs();
+        assert!(secs >= 5, "Timeout should be at least 5 seconds, got {}", secs);
+        assert!(secs <= 300, "Timeout should be at most 300 seconds, got {}", secs);
+    }
+
+    #[test]
+    fn test_s3_reader_provider_fields() {
+        let provider = S3ReaderProvider::new(
+            "http://localhost:9000",
+            "access_key_123",
+            "secret_key_456",
+            "my-bucket",
+            "path/to/object.txt"
+        );
+
+        assert_eq!(provider.url, "http://localhost:9000");
+        assert_eq!(provider.access_key, "access_key_123");
+        assert_eq!(provider.secret_key, "secret_key_456");
+        assert_eq!(provider.bucket, "my-bucket");
+        assert_eq!(provider.key, "path/to/object.txt");
+    }
+
+    #[test]
+    fn test_s3_error_debug() {
+        let err = S3Error::InvalidBaseUrl { url: "test".to_string() };
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("InvalidBaseUrl"));
+    }
+}
+

@@ -116,6 +116,45 @@ pub struct Query {
 }
 
 impl Query {
+
+  pub fn new(terms: Vec<Term>) -> Self {
+       let expr = if terms.is_empty() {
+         None
+       } else {
+         let atoms: Vec<Expr> = (0..terms.len()).map(Expr::Atom).collect();
+         Some(Expr::And(atoms))
+       };
+       let highlights = terms.iter().flat_map(|t| t.highlight()).collect();
+       Self {
+         terms,
+         expr,
+         path_filter: PathFilter::default(),
+         highlights,
+         byte_matchers: vec![],
+       }
+    }
+
+  pub fn with_path_filter(mut self, pattern: Option<String>) -> Result<Self, String> {
+        if let Some(p) = pattern {
+            if let Some(stripped) = p.strip_prefix('!') {
+                 let glob = globset::GlobBuilder::new(stripped)
+                    .literal_separator(true).build().map_err(|e|e.to_string())?;
+                 let mut builder = globset::GlobSetBuilder::new();
+                 builder.add(glob);
+                 let set = builder.build().map_err(|e|e.to_string())?;
+                 self.path_filter.exclude = Some(set);
+            } else {
+                 let glob = globset::GlobBuilder::new(&p)
+                    .literal_separator(true).build().map_err(|e|e.to_string())?;
+                 let mut builder = globset::GlobSetBuilder::new();
+                 builder.add(glob);
+                 let set = builder.build().map_err(|e|e.to_string())?;
+                 self.path_filter.include = Some(set);
+            }
+        }
+        Ok(self)
+    }
+
   pub fn from_keywords(keywords: &[String]) -> Self {
     let mut terms: Vec<Term> = Vec::new();
     for s in keywords.iter().filter(|s| !s.is_empty()) {
@@ -243,4 +282,113 @@ mod tests {
     assert!(filter.is_allowed("var/log/error.log"));
     assert!(filter.is_allowed("/abs/path/to/error.log"));
   }
+
+  #[test]
+  fn test_term_matches() {
+    // Literal is case-insensitive
+    let term = Term::Literal("ERROR".to_string());
+    assert!(term.matches("error occurred"));
+    assert!(term.matches("ERROR occurred"));
+    assert!(!term.matches("warning"));
+
+    // Phrase is case-sensitive
+    let term = Term::Phrase("Error".to_string());
+    assert!(term.matches("Error occurred"));
+    assert!(!term.matches("error occurred"));
+
+    // Regex
+    let re = regex::Regex::new(r"\d+").unwrap();
+    let term = Term::RegexStd { pattern: r"\d+".to_string(), re };
+    assert!(term.matches("line 123"));
+    assert!(!term.matches("no numbers"));
+  }
+
+  #[test]
+  fn test_from_keywords() {
+    let keywords = vec!["foo".to_string(), "bar".to_string(), "".to_string()];
+    let query = Query::from_keywords(&keywords);
+
+    assert_eq!(query.terms.len(), 2); // Empty string filtered out
+    assert_eq!(query.highlights.len(), 2);
+    assert!(matches!(query.expr, Some(Expr::And(_))));
+
+    // Empty keywords
+    let query = Query::from_keywords(&[]);
+    assert!(query.terms.is_empty());
+    assert!(query.expr.is_none());
+  }
+
+  #[test]
+  fn test_eval_expr_logic() {
+    // AND
+    let expr = Expr::And(vec![Expr::Atom(0), Expr::Atom(1)]);
+    assert!(eval_expr(&expr, &|i| i < 2)); // Both true
+    assert!(!eval_expr(&expr, &|i| i == 0)); // Only first true
+
+    // OR
+    let expr = Expr::Or(vec![Expr::Atom(0), Expr::Atom(1)]);
+    assert!(eval_expr(&expr, &|i| i == 0)); // First true
+    assert!(eval_expr(&expr, &|i| i == 1)); // Second true
+    assert!(!eval_expr(&expr, &|_| false)); // Both false
+
+    // NOT
+    let expr = Expr::Not(Box::new(Expr::Atom(0)));
+    assert!(!eval_expr(&expr, &|_| true));
+    assert!(eval_expr(&expr, &|_| false));
+  }
+
+  #[test]
+  fn test_collect_positive_atoms() {
+    let mut out = Vec::new();
+
+    // Simple atom
+    collect_positive_atoms(&Expr::Atom(0), false, &mut out);
+    assert_eq!(out, vec![0]);
+
+    // Negated atom should not be collected
+    out.clear();
+    collect_positive_atoms(&Expr::Not(Box::new(Expr::Atom(1))), false, &mut out);
+    assert!(out.is_empty());
+
+    // Mixed
+    out.clear();
+    let expr = Expr::And(vec![
+      Expr::Atom(0),
+      Expr::Not(Box::new(Expr::Atom(1))),
+      Expr::Atom(2),
+    ]);
+    collect_positive_atoms(&expr, false, &mut out);
+    assert_eq!(out, vec![0, 2]);
+  }
+
+  #[test]
+  fn test_path_filter_is_allowed() {
+    let mut filter = PathFilter::default();
+
+    // No filters - allow all
+    assert!(filter.is_allowed("any/path"));
+
+    // Exclude contains
+    filter.exclude_contains.push("node_modules".to_string());
+    assert!(!filter.is_allowed("src/node_modules/lib.js"));
+    assert!(filter.is_allowed("src/lib.js"));
+
+    // Include contains
+    filter = PathFilter::default();
+    filter.include_contains.push("src".to_string());
+    assert!(filter.is_allowed("src/main.rs"));
+    assert!(!filter.is_allowed("tests/main.rs"));
+  }
+
+  #[test]
+  fn test_keyword_highlight_serialization() {
+    let hl = KeywordHighlight::Literal("test".to_string());
+    let json = serde_json::to_string(&hl).unwrap();
+    assert!(json.contains("literal"));
+    assert!(json.contains("test"));
+
+    let deserialized: KeywordHighlight = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized, hl);
+  }
 }
+

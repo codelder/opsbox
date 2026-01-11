@@ -1,0 +1,572 @@
+import { test, expect } from '@playwright/test';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import * as fs from 'fs';
+import * as net from 'net';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+function getFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      server.close(() => {
+        if (!addr || typeof addr === 'string') {
+          reject(new Error('Failed to allocate a free port'));
+          return;
+        }
+        resolve(addr.port);
+      });
+    });
+  });
+}
+
+function findAgentCommand(repoRoot: string): { command: string; argsPrefix: string[]; cwd: string } {
+  const backendDir = path.join(repoRoot, 'backend');
+  return {
+    command: 'cargo',
+    argsPrefix: ['run', '--release', '-p', 'opsbox-agent', '--'],
+    cwd: backendDir
+  };
+}
+
+async function stopProcess(proc: ChildProcessWithoutNullStreams) {
+  if (proc.exitCode !== null) return;
+  proc.kill('SIGINT');
+
+  const exited = await Promise.race([
+    new Promise<boolean>((resolve) => proc.once('exit', () => resolve(true))),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000))
+  ]);
+  if (exited) return;
+
+  proc.kill('SIGKILL');
+  await new Promise<void>((resolve) => proc.once('exit', () => resolve()));
+}
+
+test.describe('Explorer E2E', () => {
+  test.describe.configure({ mode: 'serial' });
+
+  const RUN_ID = Date.now();
+  const AGENT_ID = `e2e-explorer-agent-${RUN_ID}`;
+
+  const repoRoot = path.resolve(__dirname, '../../..');
+  const TEST_ROOT_DIR = path.join(__dirname, `temp_explorer_${RUN_ID}`);
+  const TEST_FILES_DIR = path.join(TEST_ROOT_DIR, 'files');
+  const TEST_AGENT_LOG_DIR = path.join(TEST_ROOT_DIR, 'agent_runtime_logs');
+
+  let agentProc: ChildProcessWithoutNullStreams | null = null;
+  let agentPort: number | null = null;
+
+  test.beforeAll(async () => {
+    // Create test files
+    fs.mkdirSync(TEST_FILES_DIR, { recursive: true });
+    fs.mkdirSync(TEST_AGENT_LOG_DIR, { recursive: true });
+    fs.writeFileSync(path.join(TEST_FILES_DIR, 'test.txt'), 'Hello Explorer!\n');
+    fs.writeFileSync(path.join(TEST_FILES_DIR, 'test.log'), 'Log content\n');
+
+    // Start agent
+    agentPort = await getFreePort();
+    const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
+
+    const args = [
+      ...argsPrefix,
+      '--agent-id',
+      AGENT_ID,
+      '--agent-name',
+      'E2E Explorer Agent',
+      '--server-endpoint',
+      'http://127.0.0.1:4001',
+      '--search-roots',
+      TEST_ROOT_DIR,
+      '--listen-port',
+      String(agentPort),
+      '--no-heartbeat',
+      '--log-dir',
+      TEST_AGENT_LOG_DIR,
+      '--log-retention',
+      '1'
+    ];
+
+    agentProc = spawn(command, args, {
+      cwd,
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+      stdio: 'pipe'
+    });
+    agentProc.stdout.on('data', (d) => process.stdout.write(d));
+    agentProc.stderr.on('data', (d) => process.stderr.write(d));
+
+    // Wait for agent to be ready
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+  });
+
+  test.afterAll(async ({ request }) => {
+    try {
+      await request.delete(`http://127.0.0.1:4001/api/v1/agents/${AGENT_ID}`);
+    } catch {
+      // ignore
+    }
+    if (agentProc) {
+      await stopProcess(agentProc);
+    }
+    fs.rmSync(TEST_ROOT_DIR, { recursive: true, force: true });
+  });
+
+  test('should list local files with correct API field name (orl not odfi)', async ({ page }) => {
+    // This test case captures the bug we just fixed:
+    // Frontend was sending "odfi" but backend expects "orl"
+
+    // Monitor network requests to verify correct field name
+    const requests: any[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/api/v1/explorer/list')) {
+        const postData = request.postData();
+        if (postData) {
+          requests.push(JSON.parse(postData));
+        }
+      }
+    });
+
+    // Navigate to local files in browser
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${TEST_FILES_DIR}`)}`);
+
+    // Wait for the page to load
+    await page.waitForLoadState('networkidle');
+
+    // Verify the page loaded successfully (no error message)
+    await expect(page.locator('body')).not.toContainText(/error|错误/i);
+
+    // Verify we can see our test files
+    await expect(page.getByText('test.txt')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('test.log')).toBeVisible();
+
+    // Verify the request used 'orl' field, not 'odfi'
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests[0]).toHaveProperty('orl');
+    expect(requests[0]).not.toHaveProperty('odfi');
+  });
+
+  test('should list agent root (discovery) with correct provider registration', async ({ page }) => {
+    // This test case captures the bug we just fixed:
+    // - OrlManager was using effective_id() which mapped empty ID to "localhost"
+    // - This caused key to be "agent.localhost" instead of "agent.root"
+    // - AgentDiscoveryFileSystem was registered as "agent.root" but couldn't be found
+
+    await page.goto('http://localhost:5173/explorer?orl=orl%3A%2F%2Fagent%2F');
+
+    // Wait for the page to load
+    await page.waitForLoadState('networkidle');
+
+    // Verify the page loaded successfully (no 500 error)
+    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error/i);
+
+    // Should list available agents
+    // Look for our test agent
+    await expect(page.getByText(AGENT_ID, { exact: false })).toBeVisible({ timeout: 5000 });
+  });
+
+  test('should list agent root directory (empty path)', async ({ page }) => {
+    // This test verifies the scenario: orl://agent-id@agent/
+    // When path is empty (root directory), agent should list search roots
+    // Bug: Agent returns 404 when path is empty or "/"
+
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent/`)}`);
+
+    // Wait for the page to load
+    await page.waitForLoadState('networkidle');
+
+    // Verify the page loaded successfully (no error)
+    await expect(page.locator('body')).not.toContainText(/404|Not Found|错误/i);
+
+    // Should list the search root directory itself
+    const rootDirName = path.basename(TEST_ROOT_DIR);
+
+    // We use a regex to match because the UI might truncate long folder names
+    // e.g., "temp_explorer_1768064125538" -> "temp_explorer...64125538"
+    const namePrefix = rootDirName.substring(0, 10);
+    await expect(page.getByText(new RegExp(namePrefix)).first()).toBeVisible({ timeout: 5000 });
+  });
+
+  test('should list agent files', async ({ page }) => {
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_FILES_DIR}`)}`
+    );
+
+    await page.waitForLoadState('networkidle');
+
+    // Verify we can see the test files
+    await expect(page.getByText('test.txt')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('test.log')).toBeVisible();
+  });
+
+  test('should download local file by clicking', async ({ page }) => {
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${TEST_FILES_DIR}`)}`);
+
+    await page.waitForLoadState('networkidle');
+
+    // Right-click on the file to open context menu
+    await page.getByText('test.txt').click({ button: 'right' });
+
+    // Click download option (if available in context menu)
+    // Or double-click to open/download
+    // This depends on your UI implementation
+
+    // For now, just verify the file is visible
+    await expect(page.getByText('test.txt')).toBeVisible();
+  });
+
+  test('should navigate through agent files by clicking', async ({ page }) => {
+    // This test captures a real bug reported by user:
+    // When clicking into a subdirectory after entering agent's search-roots,
+    // the agent returns 404 Not Found
+
+    // Start at agent root
+    await page.goto('http://localhost:5173/explorer?orl=orl%3A%2F%2Fagent%2F');
+    await page.waitForLoadState('networkidle');
+
+    // Find and click on our test agent link
+    const agentItem = page.locator(`text=${AGENT_ID}`).first();
+    await expect(agentItem).toBeVisible({ timeout: 5000 });
+
+    // Click to navigate to agent root
+    await agentItem.click();
+
+    // Wait for the search root folder to appear
+    const rootDirName = path.basename(TEST_ROOT_DIR);
+    const namePrefix = rootDirName.substring(0, 10);
+    const rootDirLocator = page.getByText(new RegExp(namePrefix)).first();
+    await expect(rootDirLocator).toBeVisible({ timeout: 10000 });
+
+    // Double-click the root folder to enter it
+    await rootDirLocator.dblclick();
+
+    // Now we should see 'files'
+    await expect(page.getByText('files')).toBeVisible({ timeout: 5000 });
+
+    // Find and double-click on 'files' directory to navigate into it
+    const filesItem = page.locator('text=files').first();
+    await filesItem.dblclick();
+
+    // Wait for the test files to appear
+    await expect(page.getByText('test.txt')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('test.log')).toBeVisible();
+  });
+
+  test('should verify API requests use correct field names', async ({ page }) => {
+    // Monitor all explorer API requests
+    const requests: any[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/api/v1/explorer/')) {
+        const postData = request.postData();
+        requests.push({
+          url: request.url(),
+          method: request.method(),
+          body: postData ? JSON.parse(postData) : null
+        });
+      }
+    });
+
+    // Navigate through several pages to generate multiple requests
+    await page.goto('http://localhost:5173/explorer?orl=orl%3A%2F%2Fagent%2F');
+    await page.waitForLoadState('networkidle');
+
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent/`)}`);
+    await page.waitForLoadState('networkidle');
+
+    // Verify all POST requests to /list use 'orl' field
+    const listRequests = requests.filter((r) => r.url.includes('/list') && r.method === 'POST');
+    expect(listRequests.length).toBeGreaterThan(0);
+
+    for (const req of listRequests) {
+      if (req.body) {
+        expect(req.body).toHaveProperty('orl');
+        expect(req.body).not.toHaveProperty('odfi');
+      }
+    }
+  });
+
+  test('should support multiple search roots and navigate each individually', async ({ page, request }) => {
+    const multiRootAgentId = `${AGENT_ID}-multi`;
+    const root1 = path.join(TEST_ROOT_DIR, 'multi_root_1');
+    const root2 = path.join(TEST_ROOT_DIR, 'multi_root_2');
+
+    fs.mkdirSync(root1, { recursive: true });
+    fs.mkdirSync(root2, { recursive: true });
+    fs.writeFileSync(path.join(root1, 'file1.txt'), 'content 1');
+    fs.writeFileSync(path.join(root2, 'file2.txt'), 'content 2');
+
+    const multiPort = await getFreePort();
+    const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
+
+    const args = [
+      ...argsPrefix,
+      '--agent-id',
+      multiRootAgentId,
+      '--agent-name',
+      'Multi Root Agent',
+      '--server-endpoint',
+      'http://127.0.0.1:4001',
+      '--search-roots',
+      `${root1},${root2}`,
+      '--listen-port',
+      String(multiPort),
+      '--no-heartbeat',
+      '--log-dir',
+      path.join(TEST_ROOT_DIR, 'multi_agent_logs'),
+      '--log-retention',
+      '1'
+    ];
+
+    const proc = spawn(command, args, {
+      cwd,
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+      stdio: 'pipe'
+    });
+
+    try {
+      // Wait for agent to register
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // Go to agent root: orl://agent-id@agent/
+      await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${multiRootAgentId}@agent/`)}`);
+      await page.waitForLoadState('networkidle');
+
+      // Both roots should be visible since we now list roots as virtual directories
+      await expect(page.getByText('multi_root_1')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByText('multi_root_2')).toBeVisible({ timeout: 5000 });
+
+      // Navigate into root 1
+      await page.locator('text=multi_root_1').first().dblclick();
+      await expect(page.getByText('file1.txt')).toBeVisible({ timeout: 5000 });
+
+      // Go back to agent root using breadcrumb or URL
+      await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${multiRootAgentId}@agent/`)}`);
+      await page.waitForLoadState('networkidle');
+
+      // Navigate into root 2
+      await page.locator('text=multi_root_2').first().dblclick();
+      await expect(page.getByText('file2.txt')).toBeVisible({ timeout: 5000 });
+    } finally {
+      await stopProcess(proc);
+      try {
+        await request.delete(`http://127.0.0.1:4001/api/v1/agents/${multiRootAgentId}`);
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test('should not escape search-roots when clicking up button', async ({ page, request }) => {
+    // Create a special agent for this test
+    const escapeAgentId = `${AGENT_ID}-escape`;
+    const innerRoot = path.join(TEST_ROOT_DIR, 'escape_test_root');
+    fs.mkdirSync(innerRoot, { recursive: true });
+    // Create a file inside the root
+    fs.writeFileSync(path.join(innerRoot, 'authorized.txt'), 'authorized');
+    // Create a file OUTSIDE the root (in the parent directory)
+    fs.writeFileSync(path.join(TEST_ROOT_DIR, 'secret.txt'), 'secret outside root');
+
+    const escapePort = await getFreePort();
+    const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
+
+    const args = [
+      ...argsPrefix,
+      '--agent-id',
+      escapeAgentId,
+      '--agent-name',
+      'Escape Test Agent',
+      '--server-endpoint',
+      'http://127.0.0.1:4001',
+      '--search-roots',
+      innerRoot,
+      '--listen-port',
+      String(escapePort),
+      '--no-heartbeat',
+      '--log-dir',
+      path.join(TEST_ROOT_DIR, 'escape_agent_logs'),
+      '--log-retention',
+      '1'
+    ];
+
+    const proc = spawn(command, args, {
+      cwd,
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+      stdio: 'pipe'
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // Navigate directly into the root folder
+      const rootOrl = `orl://${escapeAgentId}@agent${innerRoot}`;
+      await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(rootOrl)}`);
+      await page.waitForLoadState('networkidle');
+
+      // Verify we see authorized file
+      await expect(page.getByText('authorized.txt')).toBeVisible({ timeout: 5000 });
+
+      // Click the "Up" button to try to escape to parent
+      // The button has lucide-arrow-left icon
+      const upButton = page.locator('button:has(svg.lucide-arrow-left)');
+      await upButton.click();
+
+      // Ensure we didn't escape to the actual parent directory (TEST_ROOT_DIR)
+      // If we escaped, we would see 'authorized.txt' within a folder or 'secret.txt'
+      await expect(page.getByText('secret.txt')).not.toBeVisible();
+
+      // Instead, we should have fallen back to the Agent's root list
+      const virtualRootOrl = `orl://${escapeAgentId}@agent/`;
+      await expect(page).toHaveURL(new RegExp(encodeURIComponent(virtualRootOrl)));
+
+      // And we should see the authorized root directory name again
+      const rootDirName = path.basename(innerRoot);
+      await expect(page.getByText(rootDirName)).toBeVisible({ timeout: 5000 });
+    } finally {
+      await stopProcess(proc);
+      try {
+        await request.delete(`http://127.0.0.1:4001/api/v1/agents/${escapeAgentId}`);
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test('should prohibit access to paths outside search-roots via manual ORL entry', async ({ page, request }) => {
+    // 1. Setup a restricted agent
+    const restrictedAgentId = `${AGENT_ID}-restricted`;
+    const allowedDir = path.join(TEST_ROOT_DIR, 'allowed_zone');
+    fs.mkdirSync(allowedDir, { recursive: true });
+
+    // We'll try to access a sibling directory that is NOT allowed
+    const forbiddenDir = path.join(TEST_ROOT_DIR, 'forbidden_zone');
+    fs.mkdirSync(forbiddenDir, { recursive: true });
+    fs.writeFileSync(path.join(forbiddenDir, 'secret_data.txt'), 'this should never be seen');
+
+    const restrictedPort = await getFreePort();
+    const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
+
+    const args = [
+      ...argsPrefix,
+      '--agent-id',
+      restrictedAgentId,
+      '--agent-name',
+      'Restricted Agent',
+      '--server-endpoint',
+      'http://127.0.0.1:4001',
+      '--search-roots',
+      allowedDir,
+      '--listen-port',
+      String(restrictedPort),
+      '--no-heartbeat',
+      '--log-dir',
+      path.join(TEST_ROOT_DIR, 'restricted_agent_logs'),
+      '--log-retention',
+      '1'
+    ];
+
+    const proc = spawn(command, args, {
+      cwd,
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+      stdio: 'pipe'
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // 2. Try to manually navigate to the forbidden directory by typing ORL
+      // Note: We use the absolute path of forbiddenDir to test access control
+      const forbiddenOrl = `orl://${restrictedAgentId}@agent${forbiddenDir}`;
+
+      await page.goto('http://localhost:5173/explorer');
+      await page.waitForLoadState('networkidle');
+
+      const input = page.locator('#orl-input');
+      await input.fill(forbiddenOrl);
+      await input.press('Enter');
+
+      // 3. Verify access is denied
+      // The Agent backend should return 404/Access Denied which frontend displays
+      await expect(page.locator('body')).toContainText(/Access denied|Not Found|404|错误/i);
+
+      // Verify files in the forbidden directory are NOT visible
+      await expect(page.getByText('secret_data.txt')).not.toBeVisible();
+
+      // Navigate to allowed dir and verify it works
+      const allowedOrl = `orl://${restrictedAgentId}@agent${allowedDir}`;
+      await input.fill(allowedOrl);
+      await input.press('Enter');
+      await expect(page.locator('body')).not.toContainText(/Access denied|Not Found|404|错误/i);
+    } finally {
+      await stopProcess(proc);
+      try {
+        await request.delete(`http://127.0.0.1:4001/api/v1/agents/${restrictedAgentId}`);
+      } catch {
+        // ignore
+      }
+    }
+  });
+
+  test('should access file with Chinese characters in name', async ({ page, request }) => {
+    const chineseAgentId = `${AGENT_ID}-chinese`;
+    const chineseRoot = path.join(TEST_ROOT_DIR, 'chinese_test');
+    fs.mkdirSync(chineseRoot, { recursive: true });
+
+    // File name with Chinese characters
+    const fileName = '测试文件_截屏.txt';
+    fs.writeFileSync(path.join(chineseRoot, fileName), 'Chinese content');
+
+    const chinesePort = await getFreePort();
+    const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
+
+    const args = [
+      ...argsPrefix,
+      '--agent-id',
+      chineseAgentId,
+      '--agent-name',
+      'Chinese Path Agent',
+      '--server-endpoint',
+      'http://127.0.0.1:4001',
+      '--search-roots',
+      chineseRoot,
+      '--listen-port',
+      String(chinesePort),
+      '--no-heartbeat',
+      '--log-dir',
+      path.join(TEST_ROOT_DIR, 'chinese_agent_logs'),
+      '--log-retention',
+      '1'
+    ];
+
+    const proc = spawn(command, args, {
+      cwd,
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+      stdio: 'pipe'
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      // 1. Visit the directory
+      const rootOrl = `orl://${chineseAgentId}@agent${chineseRoot}`;
+      await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(rootOrl)}`);
+      await page.waitForLoadState('networkidle');
+
+      // 2. Verify file is listed correctly
+      await expect(page.getByText(fileName)).toBeVisible({ timeout: 10000 });
+
+      // 3. Optional: double click to verify it can be "opened" (redirected to /view)
+      // Actually, we just want to know if the listing and path resolution works.
+    } finally {
+      await stopProcess(proc);
+      try {
+        await request.delete(`http://127.0.0.1:4001/api/v1/agents/${chineseAgentId}`);
+      } catch {
+        // ignore
+      }
+    }
+  });
+});

@@ -23,7 +23,7 @@ explorer = { path = "../explorer", optional = true }
 # analytics = { path = "../analytics", optional = true }
 # monitoring = { path = "../monitoring", optional = true }
 # 不再使用文件系统静态服务
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
 # 为跨平台交叉编译启用 OpenSSL 源码内置编译（避免目标系统缺失 OpenSSL 开发包）
 openssl = { version = "0.10", features = ["vendored"] }
 # 嵌入前端静态资源到二进制（无需任何特性）
@@ -38,6 +38,7 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 # 仅使用 mimalloc 作为全局分配器（不再保留切换能力）
 mimalloc = "0.1"
+async-trait = "0.1"
 
 
 # ✅ 模块功能开关

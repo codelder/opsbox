@@ -1,7 +1,7 @@
 export type EndpointType = 'Local' | 'S3' | 'Agent';
-export type TargetType = 'Dir' | 'Files' | 'Archive'; // Note: Files usually implied as Dir for container or Archive for specific
+export type TargetType = 'Dir' | 'Files' | 'Archive';
 
-export interface Odfi {
+export interface Orl {
   endpoint_type: EndpointType;
   endpoint_id: string; // "localhost", "profile:bucket", "agent_id"
   target_type: TargetType;
@@ -13,7 +13,7 @@ export type ResourceType = 'file' | 'dir' | 'linkfile' | 'linkdir';
 
 export interface ResourceItem {
   name: string;
-  path: string; // Full ODFI string for child
+  path: string; // Full ORL string for child
   type: ResourceType;
   size?: number | null;
   modified?: number | null;
@@ -24,5 +24,5 @@ export interface ResourceItem {
 }
 
 export interface ResourceListRequest {
-  odfi: string; // Serialized ODFI string
+  orl: string; // Serialized ORL string
 }

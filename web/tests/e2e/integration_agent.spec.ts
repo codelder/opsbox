@@ -133,12 +133,12 @@ function getFreePort(): Promise<number> {
 
 function findAgentCommand(repoRoot: string): { command: string; argsPrefix: string[]; cwd: string } {
   const backendDir = path.join(repoRoot, 'backend');
-  const candidate = path.join(backendDir, 'target', 'release', 'opsbox-agent');
-  if (fs.existsSync(candidate)) {
-    return { command: candidate, argsPrefix: [], cwd: backendDir };
-  }
-
-  return { command: 'cargo', argsPrefix: ['run', '-p', 'opsbox-agent', '--'], cwd: backendDir };
+  // 不使用预编译二进制：避免 workspace 依赖（如 logseek）变更后，旧二进制导致 e2e 偶发/稳定失败。
+  return {
+    command: 'cargo',
+    argsPrefix: ['run', '--release', '-p', 'opsbox-agent', '--'],
+    cwd: backendDir
+  };
 }
 
 function findServerCommand(repoRoot: string): { command: string; args: string[]; cwd: string } {
@@ -329,18 +329,14 @@ test.describe('Agent Integration E2E', () => {
     agentProc.stdout.on('data', (d) => process.stdout.write(d));
     agentProc.stderr.on('data', (d) => process.stderr.write(d));
 
-    await waitForHttpOk(request, `http://127.0.0.1:${agentPort}/health`, 15000);
+    // opsbox-agent 通过 `cargo run --release` 启动时，首次编译可能较慢（尤其是依赖 AWS SDK 时）
+    await waitForHttpOk(request, `http://127.0.0.1:${agentPort}/health`, 120000);
 
     // 确认 Agent 已注册到 server（new_by_agent_id 依赖 agent-manager 里 host/listen_port 标签）
-    await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 15000);
+    await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 60000);
 
     const script = `
-SOURCES = [{
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
-    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
-    'filter_glob': '*.log',
-    'display_name': 'E2E Agent Logs'
-}]
+SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*.log"]
 `;
 
     const response = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -352,12 +348,7 @@ SOURCES = [{
     expect(response.ok()).toBeTruthy();
 
     const scriptArchive = `
-SOURCES = [{
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
-    'target':   { 'type': 'archive', 'path': 'agent-archive.tar' },
-    'filter_glob': '**/*.log',
-    'display_name': 'E2E Agent Archive'
-}]
+SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/agent-archive.tar?glob=**/*.log"]
 `;
 
     const responseArchive = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -369,12 +360,7 @@ SOURCES = [{
     expect(responseArchive.ok()).toBeTruthy();
 
     const scriptTarGz = `
-SOURCES = [{
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
-    'target':   { 'type': 'archive', 'path': 'agent-archive.tar.gz' },
-    'filter_glob': '**/*.log',
-    'display_name': 'E2E Agent TarGz'
-}]
+SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/agent-archive.tar.gz?glob=**/*.log"]
 `;
 
     const responseTarGz = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -386,12 +372,7 @@ SOURCES = [{
     expect(responseTarGz.ok()).toBeTruthy();
 
     const scriptDirMultiGz = `
-SOURCES = [{
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
-    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
-    'filter_glob': '*.log.gz',
-    'display_name': 'E2E Agent Dir Multi GZ'
-}]
+SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*.log.gz"]
 `;
 
     const responseDirMultiGz = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -403,12 +384,7 @@ SOURCES = [{
     expect(responseDirMultiGz.ok()).toBeTruthy();
 
     const scriptRelativeGlob = `
-SOURCES = [{
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': 'logs' },
-    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
-    'filter_glob': '*/*.log',
-    'display_name': 'E2E Agent Relative Glob'
-}]
+SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*/*.log"]
 `;
     const responseRelativeGlob = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
       data: {
@@ -513,7 +489,8 @@ SOURCES = [{
     await expect(entryLink).toHaveAttribute(
       'href',
       new RegExp(
-        `file=odfi%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar%3Fentry%3Dinternal.*archived\\.log`
+        // ORL: orl://{agent_id}@agent/<abs_path>?entry=...
+        `file=orl%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar%3Fentry%3Dinternal.*archived\\.log`
       )
     );
   });
@@ -552,7 +529,8 @@ SOURCES = [{
     await expect(entryLink).toHaveAttribute(
       'href',
       new RegExp(
-        `file=odfi%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar\\.gz%3Fentry%3Dinternal.*archived-tgz\\.log`
+        // ORL: orl://{agent_id}@agent/<abs_path>?entry=...
+        `file=orl%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar\\.gz%3Fentry%3Dinternal.*archived-tgz\\.log`
       )
     );
   });

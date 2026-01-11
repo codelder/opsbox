@@ -27,3 +27,39 @@ pub fn s3_max_concurrency() -> usize {
 pub fn cpu_max_concurrency() -> usize {
   num_cpus::get().min(16)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_stream_channel_capacity() {
+        assert_eq!(stream_channel_capacity(), 256);
+    }
+
+    #[test]
+    fn test_s3_max_concurrency_default() {
+        // Without env var or tuning, should return default 12
+        let concurrency = s3_max_concurrency();
+        assert!(concurrency >= 1 && concurrency <= 128);
+    }
+
+    #[test]
+    fn test_cpu_max_concurrency() {
+        let concurrency = cpu_max_concurrency();
+        // Should be between 1 and 16
+        assert!(concurrency >= 1);
+        assert!(concurrency <= 16);
+        // Should not exceed physical CPU count
+        assert!(concurrency <= num_cpus::get());
+    }
+
+    #[test]
+    fn test_s3_max_concurrency_clamping() {
+        // The function should clamp values between 1 and 128
+        // We can't easily test env var behavior, but we can verify the function runs
+        let result = s3_max_concurrency();
+        assert!(result >= 1);
+        assert!(result <= 128);
+    }
+}

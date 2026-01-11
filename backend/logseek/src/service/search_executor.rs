@@ -3,50 +3,33 @@
 //! 负责协调多数据源并行搜索，管理并发控制，聚合搜索结果
 
 use crate::agent::{SearchOptions, SearchService, create_agent_client_by_id};
-use crate::domain::config::{Endpoint, Source, Target};
 use crate::query::Query;
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::service::ServiceError;
 use crate::service::search::SearchEvent;
 use futures::StreamExt;
 use opsbox_core::SqlitePool;
+use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Semaphore, mpsc};
-use tracing::{debug, info, trace};
+use tracing::{debug, info};
 
 /// 搜索执行器配置
 #[derive(Debug, Clone)]
 pub struct SearchExecutorConfig {
-  /// IO 并发数（统一控制 S3/Local/Agent 数据源的并发访问）
-  /// 防止大量并发连接导致端口耗尽、文件描述符耗尽等资源问题
   pub io_max_concurrency: usize,
-  /// 流通道容量
   pub stream_channel_capacity: usize,
 }
 
 impl Default for SearchExecutorConfig {
   fn default() -> Self {
     Self {
-      // 默认并发数 12 是保守的设置，适用于：
-      // - 少量数据源（< 20 个）
-      // - 混合 S3/Local/Agent 数据源
-      //
-      // 如果有大量 Agent 数据源（> 50 个），建议通过环境变量或配置文件增加到 50-100
-      // 需要考虑的因素：
-      // - 系统临时端口数量（Linux 默认 ~28000 个）
-      // - 文件描述符限制（ulimit -n，通常 1024-4096）
-      // - 内存容量（每个并发连接 ~1-10MB）
-      // - 网络带宽
       io_max_concurrency: 12,
       stream_channel_capacity: 128,
     }
   }
 }
 
-/// 搜索执行器
-///
-/// 封装多数据源并行搜索逻辑，提供可复用的搜索服务
 pub struct SearchExecutor {
   pool: SqlitePool,
   config: SearchExecutorConfig,
@@ -54,14 +37,6 @@ pub struct SearchExecutor {
 }
 
 impl SearchExecutor {
-  /// 创建搜索执行器
-  ///
-  /// # 参数
-  /// - pool: 数据库连接池
-  /// - config: 搜索执行器配置
-  ///
-  /// # 返回
-  /// 新的 SearchExecutor 实例
   pub fn new(pool: SqlitePool, config: SearchExecutorConfig) -> Self {
     let io_semaphore = Arc::new(Semaphore::new(config.io_max_concurrency));
     Self {
@@ -71,20 +46,7 @@ impl SearchExecutor {
     }
   }
 
-  /// 获取存储源配置列表（支持混合数据源）
-  ///
-  /// 从查询字符串中提取 app 和 encoding 限定词，
-  /// 通过 Starlark 规划器获取数据源配置
-  ///
-  /// # 参数
-  /// - query: 原始查询字符串
-  ///
-  /// # 返回
-  /// - Vec<Source>: 数据源配置列表
-  /// - String: 清理后的查询字符串（移除了 app: 和 encoding: 限定词）
-  /// - Option<String>: encoding 限定词（如果指定）
-  async fn get_sources(&self, query: &str) -> Result<(Vec<Source>, String, Option<String>), ServiceError> {
-    // 从查询字符串中提取 app 和 encoding 限定词
+  async fn get_sources(&self, query: &str) -> Result<(Vec<ORL>, String, Option<String>), ServiceError> {
     let mut app: Option<String> = None;
     let mut encoding: Option<String> = None;
     let mut tokens: Vec<&str> = Vec::new();
@@ -94,19 +56,18 @@ impl SearchExecutor {
         && !rest.is_empty()
       {
         app = Some(rest.to_string());
-        continue; // 跳过该限定词
+        continue;
       }
       if let Some(rest) = t.strip_prefix("encoding:")
         && !rest.is_empty()
       {
         encoding = Some(rest.to_string());
-        continue; // 跳过该限定词
+        continue;
       }
       tokens.push(t);
     }
     let cleaned_before_plan = tokens.join(" ");
 
-    // 通过 Starlark 规划器获取数据源配置
     let plan = crate::domain::source_planner::plan_with_starlark(&self.pool, app.as_deref(), &cleaned_before_plan)
       .await
       .map_err(|e| ServiceError::ProcessingError(format!("规划器执行失败: {}", e)))?;
@@ -114,43 +75,20 @@ impl SearchExecutor {
     Ok((plan.sources, plan.cleaned_query, encoding))
   }
 
-  /// 解析查询字符串
-  ///
-  /// # 参数
-  /// - query: 查询字符串
-  ///
-  /// # 返回
-  /// - Arc<Query>: 解析后的查询规范
   fn parse_query(&self, query: &str) -> Result<Arc<Query>, ServiceError> {
     let spec =
       Query::parse_github_like(query).map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
     Ok(Arc::new(spec))
   }
 
-  /// 生成搜索会话 ID 并缓存关键字
-  ///
-  /// # 参数
-  /// - highlights: 高亮关键字列表（带类型信息）
-  ///
-  /// # 返回
-  /// - String: 搜索会话 ID (sid)
   async fn generate_sid_and_cache_keywords(&self, highlights: Vec<crate::query::KeywordHighlight>) -> String {
     let sid = new_sid();
     simple_cache().put_keywords(&sid, highlights).await;
     sid
   }
 
-  /// 搜索 Agent 数据源
-  ///
-  /// # 参数
-  /// - source: 数据源配置
-  /// - cleaned_query: 清理后的查询字符串
-  /// - ctx: 上下文行数
-  /// - highlights: 高亮关键字列表
-  /// - sid: 搜索会话 ID
-  /// - tx: 结果发送通道
   async fn search_agent_source(
-    source: Source,
+    orl: ORL,
     cleaned_query: String,
     ctx: usize,
     _highlights: Vec<crate::query::KeywordHighlight>,
@@ -161,20 +99,14 @@ impl SearchExecutor {
     let start_time = std::time::Instant::now();
 
     // 提取 agent_id
-    let agent_id = match &source.endpoint {
-      Endpoint::Agent { agent_id, .. } => agent_id.clone(),
-      _ => {
-        tracing::error!("[SearchExecutor] 非 Agent 端点，跳过");
-        return;
-      }
-    };
+    // Agent ID 在 ORL 中是 effective_id
+    let agent_id = orl.effective_id().to_string();
 
     info!(
       "[SearchExecutor] 开始数据源搜索: endpoint=agent agent_id={} ctx={}",
       agent_id, ctx
     );
 
-    // 创建 Agent 客户端
     let client = match create_agent_client_by_id(agent_id.clone()).await {
       Ok(client) => client,
       Err(e) => {
@@ -190,7 +122,6 @@ impl SearchExecutor {
       }
     };
 
-    // 健康检查
     if !client.health_check().await {
       tracing::error!("[SearchExecutor] Agent 健康检查失败: {}", agent_id);
       let _ = tx
@@ -203,53 +134,21 @@ impl SearchExecutor {
       return;
     }
 
-    // 调整 Target 路径（拼接 subpath）
-    let adjusted_target = match (&source.endpoint, &source.target) {
-      (Endpoint::Agent { subpath, .. }, Target::Dir { path, recursive }) => {
-        let joined = if path == "." {
-          subpath.clone()
-        } else {
-          format!("{}/{}", subpath, path)
-        };
-        Target::Dir {
-          path: joined,
-          recursive: *recursive,
-        }
-      }
-      (Endpoint::Agent { subpath, .. }, Target::Files { paths }) => {
-        let ps = paths
-          .iter()
-          .map(|p| {
-            if p.starts_with('/') {
-              p.clone()
-            } else {
-              format!("{}/{}", subpath, p)
-            }
-          })
-          .collect();
-        Target::Files { paths: ps }
-      }
-      (Endpoint::Agent { subpath, .. }, Target::Archive { path, entry }) => {
-        let joined = if path.starts_with('/') {
-          path.clone()
-        } else {
-          format!("{}/{}", subpath, path)
-        };
-        Target::Archive {
-          path: joined,
-          entry: entry.clone(),
-        }
-      }
-      _ => source.target.clone(),
+    // 构造 SearchOptions
+    // 使用 crate::domain::config::Target，它是 Agent API 期望的结构
+    use crate::domain::config::Target as ConfigTarget;
+
+    let target = match orl.target_type() {
+       TargetType::Dir => ConfigTarget::Dir { path: orl.path().to_string(), recursive: true },
+       TargetType::Archive => ConfigTarget::Archive { path: orl.path().to_string(), entry: orl.entry_path().map(|c| c.into_owned()) },
     };
 
     let search_options = SearchOptions {
-      target: adjusted_target,
-      path_filter: source.filter_glob.clone(),
+      target,
+      path_filter: orl.filter_glob().map(|c| c.into_owned()),
       ..Default::default()
     };
 
-    // 调用远程搜索
     let mut stream = match client.search(&cleaned_query, ctx, search_options).await {
       Ok(st) => st,
       Err(e) => {
@@ -265,58 +164,57 @@ impl SearchExecutor {
       }
     };
 
-    // 消费结果流
-    debug!("[SearchExecutor] 开始消费 Agent 结果流: agent_id={}", agent_id);
     let mut result_count = 0;
-
     while let Some(item) = stream.next().await {
-      let Ok(res) = item else {
-        tracing::warn!("[SearchExecutor] Agent 返回错误条目，已跳过");
-        continue;
-      };
-
+      let Ok(res) = item else { continue; };
       result_count += 1;
-      trace!(
-        "[SearchExecutor] 收到 Agent 结果 #{}: path={}, lines={}",
-        result_count,
-        res.path,
-        res.lines.len()
-      );
 
       if tx.is_closed() || cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
-        debug!("[SearchExecutor] 结果通道已关闭或搜索已取消，停止发送");
         break;
       }
 
-      // 构造 Odfi
-      let (file_url, file_id) =
-        match crate::domain::build_odfi_for_result_with_archive_path(&source, &res.path, res.archive_path.as_deref()) {
-          Some((url, id)) => (url, id),
-          None => {
-            tracing::warn!("[SearchExecutor] 无法构造 Agent Odfi, path={}", res.path);
-            continue;
-          }
-        };
+      // 构造 Result ORL
+      let result_orl_str = if orl.target_type() == TargetType::Archive {
+         // Archive: keep scheme/authority/path, replace query with entry
+         let scheme = orl.uri().scheme().as_str();
+         // Authority is mandatory for ORL but verify just in case
+         let authority = orl.uri().authority().map(|a| a.as_str()).unwrap_or("agent");
+         let path = orl.path();
+         let entry_encoded = urlencoding::encode(&res.path);
+         format!("{}://{}{}{}", scheme, authority, path, format!("?entry={}", entry_encoded))
+      } else {
+         // Dir: Join path
+         let base = orl.path().trim_end_matches('/');
+         let res_path = res.path.trim();
+         let sub = res_path.trim_start_matches('/');
 
-      // 缓存结果
-      trace!(
-        "Server缓存Agent结果: sid={}, file_url={}, lines_count={}",
-        sid,
-        file_url,
-        res.lines.len()
-      );
+         // Reconstruct with correct authority
+         let scheme = orl.uri().scheme().as_str();
+         let authority = orl.uri().authority().map(|a| a.as_str()).unwrap_or("agent");
+
+         // 注意：Agent 返回的 res.path 可能是相对路径，也可能是绝对路径。
+         // - 若为绝对路径：直接使用（避免把 /abs/path 当成相对路径再次拼接导致重复路径）
+         // - 若为相对路径：拼到 base 下
+         let full_path = if res_path.starts_with('/') {
+           res_path.to_string()
+         } else {
+           format!("{}/{}", base, sub)
+         };
+
+         format!("{}://{}{}", scheme, authority, full_path)
+      };
+
       simple_cache()
         .put_lines(
           &sid,
-          &file_url,
+          &result_orl_str,
           &res.lines,
           res.encoding.clone().unwrap_or("UTF-8".to_string()),
         )
         .await;
 
-      // 发送成功事件
       let success_event = SearchEvent::Success(crate::service::search::SearchResult {
-        path: file_id,
+        path: result_orl_str, // Use ORL string as path ID
         lines: res.lines.clone(),
         merged: res.merged,
         encoding: res.encoding.clone(),
@@ -337,10 +235,7 @@ impl SearchExecutor {
 
     // 发送完成事件
     let elapsed = start_time.elapsed();
-    let source_display = source
-      .display_name
-      .clone()
-      .unwrap_or_else(|| format!("agent:{}", agent_id));
+    let source_display = orl.display_name();
     let status = if tx.is_closed() || cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
       "数据源搜索被取消"
     } else {
@@ -363,21 +258,9 @@ impl SearchExecutor {
       .await;
   }
 
-  /// 搜索 Local/S3 数据源
-  ///
-  /// # 参数
-  /// - pool: 数据库连接池
-  /// - source: 数据源配置
-  /// - spec: 查询规范
-  /// - ctx: 上下文行数
-  /// - encoding_qualifier: 编码限定词
-  /// - highlights: 高亮关键字列表
-  /// - sid: 搜索会话 ID
-  /// - tx: 结果发送通道
-  #[allow(clippy::too_many_arguments)]
   async fn search_entry_stream_source(
     pool: SqlitePool,
-    source: Source,
+    orl: ORL,
     spec: Arc<Query>,
     ctx: usize,
     encoding_qualifier: Option<String>,
@@ -386,264 +269,105 @@ impl SearchExecutor {
     cancel_token: Option<tokio_util::sync::CancellationToken>,
   ) {
     let start_time = std::time::Instant::now();
-    // 生成有意义的默认名称（如果 display_name 未设置）
-    let source_name = source.display_name.clone().unwrap_or_else(|| {
-      match &source.endpoint {
-        Endpoint::Local { root } => {
-          let target_desc = match &source.target {
-            Target::Dir { path, .. } => format!("dir:{}", path),
-            Target::Files { paths } => format!("files:{}", paths.len()),
-            Target::Archive { path, .. } => format!("archive:{}", path),
-          };
-          format!("local:{}:{}", root, target_desc)
-        }
-        Endpoint::S3 { profile, bucket } => {
-          let target_desc = match &source.target {
-            Target::Dir { path, .. } => format!("dir:{}", path),
-            Target::Files { paths } => format!("files:{}", paths.len()),
-            Target::Archive { path, .. } => format!("archive:{}", path),
-          };
-          format!("s3:{}:{}:{}", profile, bucket, target_desc)
-        }
-        Endpoint::Agent { .. } => {
-          // Agent 数据源在 search_agent_source 中处理
-          "unknown".to_string()
-        }
-      }
-    });
-    let endpoint_kind = match &source.endpoint {
-      Endpoint::Local { .. } => "local",
-      Endpoint::S3 { .. } => "s3",
-      Endpoint::Agent { .. } => "agent",
-    };
-    info!(
-      "[SearchExecutor] 开始数据源搜索: source={} endpoint={} ctx={}",
-      source_name, endpoint_kind, ctx
-    );
+    let source_name = orl.display_name();
 
-    // 创建条目流
+    info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, ctx);
+
     let factory = crate::service::entry_stream::EntryStreamFactory::new(pool);
-    let mut estream = match factory.create_stream(source.clone()).await {
+    // process_stream 传入 &orl
+    let mut estream = match factory.create_stream(&orl).await {
       Ok(s) => s,
       Err(e) => {
         tracing::error!("[SearchExecutor] 创建条目流失败 err={}", e);
-        let _ = tx
-          .send(SearchEvent::Error {
+        let _ = tx.send(SearchEvent::Error {
             source: source_name.clone(),
             message: format!("创建条目流失败: {}", e),
             recoverable: true,
-          })
-          .await;
+          }).await;
         return;
       }
     };
 
-    // 创建搜索处理器
     let search_proc = Arc::new(crate::service::search::SearchProcessor::new_with_encoding(
-      spec,
-      ctx,
-      encoding_qualifier,
+      spec, ctx, encoding_qualifier,
     ));
     let mut processor = crate::service::entry_stream::EntryStreamProcessor::new(search_proc);
     if let Some(token) = cancel_token.clone() {
       processor = processor.with_cancel_token(token);
     }
-    // 对于 Local 数据源的目录类型，设置 base_path 以支持相对路径 glob 过滤
-    // 注意：归档文件内部的条目已经是相对路径，不需要 strip_prefix
-    if let Endpoint::Local { root } = &source.endpoint {
-      if matches!(&source.target, Target::Dir { .. }) {
-        processor = processor.with_base_path(root);
+
+    // 路径过滤 Logic needed?
+    // Local source base_path handling logic adapted for ORL?
+    if orl.endpoint_type().unwrap_or(EndpointType::Local) == EndpointType::Local && orl.target_type() == TargetType::Dir {
+       // orl.path() is the root.
+       processor = processor.with_base_path(orl.path());
+    }
+
+    if let Some(glob) = orl.filter_glob() {
+       match crate::query::path_glob_to_filter(&glob) {
+        Ok(filter) => { processor = processor.with_extra_path_filter(filter); }
+        Err(e) => { tracing::warn!("解析 filter_glob 失败: {}", e); }
       }
     }
 
-    // 设置 filter_glob（与用户查询的 path: 限定词做 AND）
-    if let Some(glob) = &source.filter_glob {
-      match crate::query::path_glob_to_filter(glob) {
-        Ok(filter) => {
-          tracing::debug!("[SearchExecutor] 设置 filter_glob: {}", glob);
-          processor = processor.with_extra_path_filter(filter);
-        }
-        Err(e) => {
-          tracing::warn!("[SearchExecutor] 解析 filter_glob 失败 glob={} error={}", glob, e);
-        }
-      }
-    }
-
-    // 创建中转通道
     let (sr_tx, mut sr_rx) = mpsc::channel::<SearchEvent>(32);
 
-    // 后台任务：处理搜索事件并缓存结果
     let tx_clone = tx.clone();
-    let source_clone = source.clone();
     let sid_clone = sid.clone();
-    let tx_for_error = tx.clone();
-    let source_name_for_error = source_name.clone();
-    // 结果计数器
-    let result_count = Arc::new(AtomicUsize::new(0));
-    let result_count_clone = result_count.clone();
+    let orl_clone = orl.clone();
+
     let sender_task = tokio::spawn(async move {
       while let Some(event) = sr_rx.recv().await {
-        if tx_clone.is_closed() {
-          break;
-        }
-
+        if tx_clone.is_closed() { break; }
         match event {
           SearchEvent::Success(mut res) => {
-            result_count_clone.fetch_add(1, Ordering::Relaxed);
-            // 构造 Odfi
-            let (file_url, file_id) = match crate::domain::build_odfi_for_result_with_archive_path(
-              &source_clone,
-              &res.path,
-              res.archive_path.as_deref(),
-            ) {
-              Some((url, id)) => (url, id),
-              None => {
-                tracing::warn!("[SearchExecutor] 无法构造 Odfi, path={}", res.path);
-                continue;
-              }
-            };
+             // Construct Result ORL
+             let result_orl_str = if orl_clone.target_type() == TargetType::Archive {
+                 let scheme = orl_clone.uri().scheme().as_str();
+                 let authority = orl_clone.uri().authority().map(|a| a.as_str()).unwrap_or("local"); // Default local if missing?
+                 let path = orl_clone.path();
+                 let entry_encoded = urlencoding::encode(&res.path);
+                 format!("{}://{}{}?entry={}", scheme, authority, path, entry_encoded)
+             } else {
+                 let scheme = orl_clone.uri().scheme().as_str();
+                 // Use original authority (could be local, s3:profile:bucket, etc)
+                 let authority = orl_clone.uri().authority().map(|a| a.as_str()).unwrap_or("");
 
-            // 缓存结果（文件级明细，默认应保持低噪音）
-            simple_cache()
-              .put_lines(
-                &sid_clone,
-                &file_url,
-                &res.lines,
-                res.encoding.clone().unwrap_or("UTF-8".to_string()),
-              )
-              .await;
+                 // res.path from EntryStream is an absolute path for local files.
+                 // For Dir type, just use res.path directly if it's absolute.
+                 // If relative (shouldn't happen for local), prepend base.
+                 let full_path = if res.path.starts_with('/') {
+                     // Absolute path - use directly
+                     res.path.clone()
+                 } else {
+                     // Relative path - concatenate with base
+                     let base = orl_clone.path().trim_end_matches('/');
+                     format!("{}/{}", base, res.path)
+                 };
 
-            // 更新 path 为完整的 Odfi 字符串
-            res.path = file_id;
+                 format!("{}://{}{}", scheme, authority, full_path)
+             };
 
-            // 发送成功事件
-            if tx_clone.send(SearchEvent::Success(res)).await.is_err() {
-              break;
-            }
+             simple_cache().put_lines(&sid_clone, &result_orl_str, &res.lines, res.encoding.clone().unwrap_or("UTF-8".to_string())).await;
+             res.path = result_orl_str;
+             if tx_clone.send(SearchEvent::Success(res)).await.is_err() { break; }
           }
-          SearchEvent::Error {
-            source,
-            message,
-            recoverable,
-          } => {
-            let _ = tx_clone
-              .send(SearchEvent::Error {
-                source,
-                message,
-                recoverable,
-              })
-              .await;
-          }
-          SearchEvent::Complete { source, elapsed_ms } => {
-            let _ = tx_clone.send(SearchEvent::Complete { source, elapsed_ms }).await;
-          }
+           _ => { let _ = tx_clone.send(event).await; }
         }
       }
     });
 
-    // 处理条目流
     if let Err(e) = processor.process_stream(&mut *estream, sr_tx).await {
-      tracing::error!("[SearchExecutor] 处理条目流失败 err={}", e);
-      // 发送错误事件到前端
-      let _ = tx_for_error
-        .send(SearchEvent::Error {
-          source: source_name_for_error,
-          message: format!("处理归档文件失败: {}", e),
-          recoverable: true,
-        })
-        .await;
+       let _ = tx.send(SearchEvent::Error { source: source_name.clone(), message: e, recoverable: true }).await;
     }
-
-    // 等待发送任务结束
     let _ = sender_task.await;
 
-    // 发送完成事件
     let elapsed = start_time.elapsed();
-    let result_count = result_count.load(Ordering::Relaxed);
-    let status = if tx.is_closed() || cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
-      "数据源搜索被取消"
-    } else {
-      "数据源搜索完成"
-    };
-
-    tracing::info!(
-      "[SearchExecutor] {}: source={}, elapsed={}ms, results={}",
-      status,
-      source_name,
-      elapsed.as_millis(),
-      result_count
-    );
-    let _ = tx
-      .send(SearchEvent::Complete {
-        source: source_name,
-        elapsed_ms: elapsed.as_millis() as u64,
-      })
-      .await;
+    let _ = tx.send(SearchEvent::Complete { source: source_name, elapsed_ms: elapsed.as_millis() as u64 }).await;
   }
 
-  /// 为单个数据源启动搜索任务
-  ///
-  /// 统一使用 IO semaphore 控制所有数据源的并发访问，防止：
-  /// - 端口耗尽（大量并发 HTTP 连接）
-  /// - 文件描述符耗尽
-  /// - 内存压力过大
-  /// - 网络带宽饱和
-  ///
-  /// # 参数
-  /// - source: 数据源配置
-  /// - spec: 查询规范
-  /// - ctx: 上下文行数
-  /// - encoding_qualifier: 编码限定词
-  /// - highlights: 高亮关键字列表（带类型信息）
-  /// - sid: 搜索会话 ID
-  /// - cleaned_query: 清理后的查询字符串
-  /// - tx: 结果发送通道
-  #[allow(clippy::too_many_arguments)]
-  fn spawn_source_search(
-    &self,
-    source: Source,
-    spec: Arc<Query>,
-    ctx: usize,
-    encoding_qualifier: Option<String>,
-    highlights: Vec<crate::query::KeywordHighlight>,
-    sid: String,
-    cleaned_query: String,
-    tx: mpsc::Sender<SearchEvent>,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
-  ) {
-    let io_sem = self.io_semaphore.clone();
-    let pool = self.pool.clone();
 
-    tokio::spawn(async move {
-      // 获取 IO 许可（统一控制所有数据源的并发）
-      let _permit = match io_sem.acquire_owned().await {
-        Ok(p) => p,
-        Err(_) => {
-          tracing::warn!("[SearchExecutor] 获取 IO 许可失败，跳过数据源");
-          return;
-        }
-      };
 
-      // 根据端点类型选择搜索策略
-      match &source.endpoint {
-        Endpoint::Agent { .. } => {
-          Self::search_agent_source(source, cleaned_query, ctx, highlights, sid, tx, cancel_token.clone()).await;
-        }
-        Endpoint::Local { .. } | Endpoint::S3 { .. } => {
-          Self::search_entry_stream_source(pool, source, spec, ctx, encoding_qualifier, sid, tx, cancel_token).await;
-        }
-      }
-    });
-  }
-
-  /// 执行多数据源并行搜索
-  ///
-  /// # 参数
-  /// - query: 原始查询字符串
-  /// - context_lines: 上下文行数
-  ///
-  /// # 返回
-  /// - (mpsc::Receiver<SearchEvent>, String): 搜索事件接收器和搜索会话 ID
   pub async fn search(
     &self,
     query: &str,
@@ -652,53 +376,55 @@ impl SearchExecutor {
   ) -> Result<(mpsc::Receiver<SearchEvent>, String), ServiceError> {
     tracing::info!("[SearchExecutor] 开始搜索: q={}", query);
 
-    // 1. 获取存储源配置列表
     let (sources, cleaned_query, encoding_qualifier) = self.get_sources(query).await?;
     tracing::info!("[SearchExecutor] 获取到 {} 个存储源配置", sources.len());
 
     if sources.is_empty() {
-      tracing::warn!("[SearchExecutor] 没有可用的存储源配置");
-      // 返回空的接收器
       let (tx, rx) = mpsc::channel(1);
       drop(tx);
       return Ok((rx, String::new()));
     }
 
-    // 2. 解析查询
     let spec = self.parse_query(&cleaned_query)?;
     let highlights = spec.highlights.clone();
 
-    // 3. 生成 sid 并缓存关键字
     let sid = self.generate_sid_and_cache_keywords(highlights.clone()).await;
 
-    tracing::info!(
-      "[SearchExecutor] 开始并行搜索: sid={}, sources={}, context={}",
-      sid,
-      sources.len(),
-      context_lines
-    );
-
-    // 4. 创建结果通道
     let (tx, rx) = mpsc::channel(self.config.stream_channel_capacity);
 
-    // 5. 为每个数据源启动搜索任务
     for source in sources {
-      self.spawn_source_search(
-        source,
-        spec.clone(),
-        context_lines,
-        encoding_qualifier.clone(),
-        highlights.clone(),
-        sid.clone(),
-        cleaned_query.clone(),
-        tx.clone(),
-        cancel_token.clone(),
-      );
+      let io_sem = self.io_semaphore.clone();
+      let pool = self.pool.clone();
+      let orl = source;
+      let spec = spec.clone();
+      let ctx = context_lines;
+      let encoding = encoding_qualifier.clone();
+      let highlights = highlights.clone();
+      let sid = sid.clone();
+      let cleaned = cleaned_query.clone();
+      let tx = tx.clone();
+      let token = cancel_token.clone();
+
+      tokio::spawn(async move {
+        let _permit = match io_sem.acquire_owned().await {
+          Ok(p) => p,
+          Err(_) => return,
+        };
+
+        match orl.endpoint_type() {
+          Ok(EndpointType::Agent) => {
+            Self::search_agent_source(orl, cleaned, ctx, highlights, sid, tx, token).await;
+          }
+          Ok(EndpointType::Local) | Ok(EndpointType::S3) => {
+            Self::search_entry_stream_source(pool, orl, spec, ctx, encoding, sid, tx, token).await;
+          }
+          Err(e) => {
+              tracing::error!("Invalid Endpoint Type: {}", e);
+          }
+        }
+      });
     }
-
-    // 6. 删除发送端，让任务完成后自动关闭
     drop(tx);
-
     Ok((rx, sid))
   }
 }
@@ -745,11 +471,7 @@ mod tests {
 
 # 导出 SOURCES 列表
 SOURCES = [
-    {
-        "endpoint": {"kind": "local", "root": "/tmp/test"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-local",
-    }
+    "orl://local/tmp/test"
 ]
 
 # 可选：覆盖 CLEANED_QUERY（如果不覆盖，则使用注入的值）
@@ -1043,21 +765,9 @@ SOURCES = [
     let multi_source_script = r#"
 # 多数据源测试规划脚本
 SOURCES = [
-    {
-        "endpoint": {"kind": "local", "root": "/tmp/test1"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-local-1",
-    },
-    {
-        "endpoint": {"kind": "local", "root": "/tmp/test2"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-local-2",
-    },
-    {
-        "endpoint": {"kind": "local", "root": "/tmp/test3"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-local-3",
-    }
+    "orl://local/tmp/test1",
+    "orl://local/tmp/test2",
+    "orl://local/tmp/test3"
 ]
 "#;
 
@@ -1456,21 +1166,9 @@ SOURCES = []
       r#"
 # 混合有效和无效数据源
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": True}},
-        "display_name": "invalid-source-1",
-    }},
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "valid-source",
-    }},
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": True}},
-        "display_name": "invalid-source-2",
-    }}
+    "orl://local/{}",
+    "orl://local/{}",
+    "orl://local/{}"
 ]
 "#,
       invalid_root1, valid_root, invalid_root2
@@ -1533,11 +1231,7 @@ SOURCES = [
     let error_script = r#"
 # 指向不存在的路径
 SOURCES = [
-    {
-        "endpoint": {"kind": "local", "root": "/definitely/does/not/exist/path"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "error-source",
-    }
+    "orl://local/definitely/does/not/exist/path"
 ]
 "#;
 
@@ -1589,11 +1283,7 @@ SOURCES = [
     // 创建一个会失败的数据源
     let error_script = r#"
 SOURCES = [
-    {
-        "endpoint": {"kind": "local", "root": "/nonexistent/error/path"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-error-source",
-    }
+    "orl://local/nonexistent/error/path"
 ]
 "#;
 
@@ -1632,21 +1322,9 @@ SOURCES = [
     // 创建多个会失败的数据源
     let multi_error_script = r#"
 SOURCES = [
-    {
-        "endpoint": {"kind": "local", "root": "/error/path1"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "error-1",
-    },
-    {
-        "endpoint": {"kind": "local", "root": "/error/path2"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "error-2",
-    },
-    {
-        "endpoint": {"kind": "local", "root": "/error/path3"},
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "error-3",
-    }
+    "orl://local/error/path1",
+    "orl://local/error/path2",
+    "orl://local/error/path3"
 ]
 "#;
 
@@ -1702,15 +1380,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "nonexistent-agent-id",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-agent",
-    }
+    "orl://agent.nonexistent-agent-id/logs"
 ]
 "#;
 
@@ -1776,15 +1446,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（带 subpath）
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "test-agent-with-subpath",
-            "subpath": "/var/log"
-        },
-        "target": {"type": "dir", "path": "app", "recursive": True},
-        "display_name": "agent-with-subpath",
-    }
+    "orl://agent.test-agent-with-subpath/var/log/app"
 ]
 "#;
 
@@ -1840,18 +1502,8 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（Files target）
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "test-agent-files",
-            "subpath": "/logs"
-        },
-        "target": {
-            "type": "files",
-            "paths": ["app.log", "error.log"]
-        },
-        "display_name": "agent-files",
-    }
+    "orl://agent.test-agent-files/logs/app.log",
+    "orl://agent.test-agent-files/logs/error.log"
 ]
 "#;
 
@@ -1905,18 +1557,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（Archive target）
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "test-agent-archive",
-            "subpath": "/backups"
-        },
-        "target": {
-            "type": "archive",
-            "path": "logs.tar.gz"
-        },
-        "display_name": "agent-archive",
-    }
+    "orl://agent.test-agent-archive/backups/logs.tar.gz"
 ]
 "#;
 
@@ -1971,16 +1612,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（带 filter_glob）
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "test-agent-filter",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "filter_glob": "*.log",
-        "display_name": "agent-with-filter",
-    }
+    "orl://agent.test-agent-filter/logs?glob=*.log"
 ]
 "#;
 
@@ -2034,15 +1666,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "test-agent-recoverable",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-agent-recoverable",
-    }
+    "orl://agent.test-agent-recoverable/logs"
 ]
 "#;
 
@@ -2083,20 +1707,8 @@ SOURCES = [
     let mixed_script = r#"
 # 混合 Agent 和 Local 数据源
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "test-agent-mixed",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "agent-source",
-    },
-    {
-        "endpoint": {"kind": "local", "root": "/tmp"},
-        "target": {"type": "dir", "path": ".", "recursive": False},
-        "display_name": "local-source",
-    }
+    "orl://agent.test-agent-mixed/logs",
+    "orl://local/tmp"
 ]
 "#;
 
@@ -2162,33 +1774,9 @@ SOURCES = [
     let multi_agent_script = r#"
 # 多个 Agent 数据源
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "agent-1",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "agent-1",
-    },
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "agent-2",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "agent-2",
-    },
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "agent-3",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "agent-3",
-    }
+    "orl://agent.agent-1/logs",
+    "orl://agent.agent-2/logs",
+    "orl://agent.agent-3/logs"
 ]
 "#;
 
@@ -2233,15 +1821,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置
 SOURCES = [
-    {
-        "endpoint": {
-            "kind": "agent",
-            "agent_id": "specific-agent-id-12345",
-            "subpath": "/logs"
-        },
-        "target": {"type": "dir", "path": ".", "recursive": True},
-        "display_name": "test-agent-id",
-    }
+    "orl://agent.specific-agent-id-12345/logs"
 ]
 "#;
 
@@ -2369,14 +1949,7 @@ SOURCES = [
     // 创建一个返回大量数据源的 planner（100 个）
     let mut sources_json = Vec::new();
     for i in 0..100 {
-      sources_json.push(format!(
-        r#"    {{
-        "endpoint": {{"kind": "local", "root": "/tmp/test{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": True}},
-        "display_name": "test-source-{}"
-    }}"#,
-        i, i
-      ));
+      sources_json.push(format!(r#""orl://local/tmp/test{}""#, i));
     }
     let sources_str = sources_json.join(",\n");
 
@@ -2737,11 +2310,7 @@ SOURCES = [
       r#"
 # 真实文件测试
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "real-local-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -2806,11 +2375,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "context-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -2862,12 +2427,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "filter_glob": "**/*.log",
-        "display_name": "filter-test",
-    }}
+    "orl://local/{}?glob=**/*.log"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -2918,14 +2478,11 @@ SOURCES = [
     std::fs::write(sub_dir.join("sub.log"), "error in subdir\n").unwrap();
 
     // 创建 planner（递归搜索）
+    // 创建 planner（递归搜索）
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": True}},
-        "display_name": "recursive-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -2970,14 +2527,11 @@ SOURCES = [
     std::fs::write(temp_path.join("utf8.log"), "错误信息\n").unwrap();
 
     // 创建 planner
+    // 创建 planner
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "encoding-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3029,11 +2583,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "boolean-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3080,17 +2630,17 @@ SOURCES = [
     std::fs::write(temp_path.join("file3.log"), "no match here\n").unwrap();
 
     // 创建 planner（指定多个文件）
+    let file1 = escape_path_for_starlark(&temp_path.join("file1.log"));
+    let file2 = escape_path_for_starlark(&temp_path.join("file2.log"));
+
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "files", "paths": ["file1.log", "file2.log"]}},
-        "display_name": "multi-files-test",
-    }}
+    "orl://local/{}",
+    "orl://local/{}"
 ]
 "#,
-      escape_path_for_starlark(temp_path)
+      file1, file2
     );
 
     planners::upsert_script(&pool, "multi_files_test", &planner_script)
@@ -3134,11 +2684,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "highlights-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3198,11 +2744,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "archive", "path": "archive.tar.gz"}},
-        "display_name": "archive-test",
-    }}
+    "orl://local/{}/archive.tar.gz"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3248,11 +2790,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "or-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3300,11 +2838,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "not-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3353,11 +2887,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "regex-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3404,11 +2934,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "case-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3456,11 +2982,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "path-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -3510,11 +3032,7 @@ SOURCES = [
     let planner_script = format!(
       r#"
 SOURCES = [
-    {{
-        "endpoint": {{"kind": "local", "root": "{}"}},
-        "target": {{"type": "dir", "path": ".", "recursive": False}},
-        "display_name": "empty-result-test",
-    }}
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)

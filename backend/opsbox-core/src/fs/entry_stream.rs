@@ -484,7 +484,7 @@ pub async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'st
       let stream = TarEntryStream::new(prefixed, hint_name.map(|s| s.to_string()))
         .await
         .map_err(|e| format!("读取 tar 失败: {}", e))?;
-      Ok(Box::new(stream))
+      Ok(Box::new(stream) as Box<dyn EntryStream>)
     }
     ArchiveKind::Gzip => {
       // 基于预读的 head 进行探测
@@ -510,7 +510,7 @@ pub async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'st
         let stream = TarGzEntryStreamAny::new_with_decoder(gz, hint_name.map(|s| s.to_string()))
           .await
           .map_err(|e| format!("解析 tar.gz 失败: {}", e))?;
-        Ok(Box::new(stream))
+        Ok(Box::new(stream) as Box<dyn EntryStream>)
       } else {
         // 走单文件 gzip 逻辑
         let (entry_path, container_path) = if let Some(h) = hint_name {
@@ -529,7 +529,7 @@ pub async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'st
           processed: false,
           container_path,
         };
-        Ok(Box::new(stream))
+        Ok(Box::new(stream) as Box<dyn EntryStream>)
       }
     }
     ArchiveKind::Zip => Err("ZIP 归档暂不支持".to_string()),
@@ -603,7 +603,7 @@ pub async fn open_file_with_compression_detection(
           is_compressed: true,
           source: EntrySource::Gz,
         };
-        Ok((meta, Box::new(gz)))
+        Ok((meta, Box::new(gz) as Box<dyn AsyncRead + Send + Unpin>))
       }
     }
     _ => {
@@ -679,3 +679,52 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
     std::pin::Pin::new(&mut me.inner).poll_read(cx, buf)
   }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn test_prefixed_reader() {
+        let prefix = vec![1, 2, 3];
+        let inner = std::io::Cursor::new(vec![4, 5, 6]);
+        let mut reader = PrefixedReader::new(prefix, inner);
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.unwrap();
+        assert_eq!(buf, vec![1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_normalize_archive_entry_path() {
+        assert_eq!(normalize_archive_entry_path("foo/bar"), "foo/bar");
+        assert_eq!(normalize_archive_entry_path("./foo/bar"), "foo/bar");
+        assert_eq!(normalize_archive_entry_path("/foo/bar"), "foo/bar");
+        assert_eq!(normalize_archive_entry_path("///foo/bar"), "foo/bar");
+    }
+
+    #[test]
+    fn test_sniff_archive_kind_tar() {
+        let mut head = vec![0u8; 512];
+        // ustar at 257
+        head[257] = b'u';
+        head[258] = b's';
+        head[259] = b't';
+        head[260] = b'a';
+        head[261] = b'r';
+        assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Tar);
+    }
+
+    #[test]
+    fn test_sniff_archive_kind_gzip() {
+        let head = vec![0x1F, 0x8B, 0x08];
+        assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Gzip);
+    }
+
+    #[test]
+    fn test_sniff_archive_kind_zip() {
+         let head = vec![0x50, 0x4B, 0x03, 0x04];
+         assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Zip);
+    }
+}
+

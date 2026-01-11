@@ -102,6 +102,12 @@ impl OpsFileSystem for ZipOpsFS {
     let mut entries = Vec::new();
     let mut seen_dirs = std::collections::HashSet::new();
 
+    let prefix = if dir_path.is_empty() {
+      "".to_string()
+    } else {
+      format!("{}/", dir_path)
+    };
+
     for entry in items {
       let name = entry
         .filename()
@@ -109,15 +115,8 @@ impl OpsFileSystem for ZipOpsFS {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid filename"))?;
 
       // Filter entries belonging to this directory
-      if name.starts_with(dir_path) {
-        let relative = if dir_path.is_empty() {
-          name
-        } else if name.len() > dir_path.len() + 1 {
-          // +1 for slash
-          &name[dir_path.len() + 1..]
-        } else {
-          continue; // exact match or shorter
-        };
+      if name.starts_with(&prefix) {
+        let relative = &name[prefix.len()..];
 
         if relative.is_empty() {
           continue;
@@ -133,7 +132,11 @@ impl OpsFileSystem for ZipOpsFS {
           if seen_dirs.insert(component.to_string()) {
             entries.push(OpsEntry {
               name: component.to_string(),
-              path: format!("{}/{}", dir_path, component), // Construct full path
+              path: if dir_path.is_empty() {
+                  component.to_string()
+              } else {
+                  format!("{}/{}", dir_path, component)
+              }, // Construct full path
               metadata: OpsMetadata {
                 name: component.to_string(),
                 file_type: OpsFileType::Directory,
@@ -208,5 +211,88 @@ impl OpsFileSystem for ZipOpsFS {
     } else {
       Err(io::Error::new(io::ErrorKind::NotFound, "Entry not found"))
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::odfs::OpsPath;
+  use async_zip::ZipEntryBuilder;
+  use async_zip::tokio::write::ZipFileWriter;
+  use tempfile::NamedTempFile;
+  use tokio::fs::File;
+  use tokio::io::AsyncReadExt;
+  use async_zip::Compression;
+
+  async fn create_test_zip() -> NamedTempFile {
+    let file = NamedTempFile::new().unwrap();
+    let tokio_file = File::create(file.path()).await.unwrap();
+    let mut writer = ZipFileWriter::with_tokio(tokio_file);
+
+    // Add a file
+    let builder = ZipEntryBuilder::new("test.txt".into(), Compression::Stored);
+    writer.write_entry_whole(builder, b"hello zip content").await.unwrap();
+
+    // Add a directory entry
+    let builder_dir = ZipEntryBuilder::new("logs/".into(), Compression::Stored);
+    writer.write_entry_whole(builder_dir, b"").await.unwrap();
+
+    // Add file in directory
+    let builder_log = ZipEntryBuilder::new("logs/app.log".into(), Compression::Stored);
+    writer.write_entry_whole(builder_log, b"log data zip").await.unwrap();
+
+    writer.close().await.unwrap();
+    file
+  }
+
+  #[tokio::test]
+  async fn test_zip_opsfs_metadata() {
+    let zip_file = create_test_zip().await;
+    let fs = ZipOpsFS::new(zip_file.path().to_path_buf(), None).await.unwrap();
+
+    let meta = fs.metadata(&OpsPath::new("test.txt")).await.unwrap();
+    assert_eq!(meta.name, "test.txt");
+    assert_eq!(meta.size, 17);
+    assert!(matches!(meta.file_type, OpsFileType::File));
+
+    let meta_dir = fs.metadata(&OpsPath::new("logs")).await.unwrap();
+    assert!(matches!(meta_dir.file_type, OpsFileType::Directory));
+  }
+
+  #[tokio::test]
+  async fn test_zip_opsfs_read_dir() {
+    let zip_file = create_test_zip().await;
+    let fs = ZipOpsFS::new(zip_file.path().to_path_buf(), None).await.unwrap();
+
+    // Root
+    let entries = fs.read_dir(&OpsPath::new("")).await.unwrap();
+    assert!(entries.iter().any(|e| e.name == "test.txt"));
+    assert!(entries.iter().any(|e| e.name == "logs"));
+
+    // Subdir
+    let entries = fs.read_dir(&OpsPath::new("logs")).await.unwrap();
+    assert!(entries.iter().any(|e| e.name == "app.log"));
+  }
+
+  #[tokio::test]
+  async fn test_zip_opsfs_open_read() {
+    let zip_file = create_test_zip().await;
+    let fs = ZipOpsFS::new(zip_file.path().to_path_buf(), None).await.unwrap();
+
+    let mut reader = fs.open_read(&OpsPath::new("test.txt")).await.unwrap();
+    let mut content = String::new();
+    reader.read_to_string(&mut content).await.unwrap();
+    assert_eq!(content, "hello zip content");
+  }
+
+  #[tokio::test]
+  async fn test_zip_opsfs_metadata_not_found() {
+    let zip_file = create_test_zip().await;
+    let fs = ZipOpsFS::new(zip_file.path().to_path_buf(), None).await.unwrap();
+
+    let result = fs.metadata(&OpsPath::new("missing.txt")).await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::NotFound);
   }
 }
