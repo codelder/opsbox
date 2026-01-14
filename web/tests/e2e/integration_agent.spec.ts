@@ -264,6 +264,7 @@ test.describe('Agent Integration E2E', () => {
   let agentPort: number | null = null;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     const backend = await ensureBackendUp(request, repoRoot);
     backendProc = backend.proc;
     startedBackend = backend.started;

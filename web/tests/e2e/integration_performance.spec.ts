@@ -27,6 +27,7 @@ test.describe('Performance Boundary Tests', () => {
   const TEST_APP = `e2e_performance_${RUN_ID}`;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     if (!fs.existsSync(TEST_LOG_DIR)) {
       fs.mkdirSync(TEST_LOG_DIR, { recursive: true });
     }

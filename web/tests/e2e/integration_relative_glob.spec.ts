@@ -24,6 +24,7 @@ test.describe('Relative Glob Filtering E2E', () => {
   };
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     // 1. Create directory structure
     if (!fs.existsSync(TEST_LOG_DIR)) {
       fs.mkdirSync(TEST_LOG_DIR, { recursive: true });

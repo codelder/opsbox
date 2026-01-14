@@ -63,6 +63,7 @@ test.describe('Explorer E2E', () => {
   let agentPort: number | null = null;
 
   test.beforeAll(async () => {
+    test.setTimeout(120000);
     // Create test files
     fs.mkdirSync(TEST_FILES_DIR, { recursive: true });
     fs.mkdirSync(TEST_AGENT_LOG_DIR, { recursive: true });

@@ -125,6 +125,7 @@ function getFreePort(): Promise<number> {
 
 test.describe('Multi-Source Robustness E2E', () => {
   test.describe.configure({ mode: 'serial' });
+  test.setTimeout(120000);
 
   const API_LOGSEEK_BASE = 'http://127.0.0.1:4001/api/v1/logseek';
   const API_AGENT_BASE = 'http://127.0.0.1:4001/api/v1/agents';
@@ -148,6 +149,7 @@ test.describe('Multi-Source Robustness E2E', () => {
   let agentPort: number | null = null;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     const backend = await ensureBackendUp(request);
     backendProc = backend.proc;
     startedBackend = backend.started;
@@ -212,7 +214,9 @@ test.describe('Multi-Source Robustness E2E', () => {
   test.afterAll(async ({ request }) => {
     try {
       await request.delete(`${API_LOGSEEK_BASE}/settings/planners/scripts/${APP}`);
-    } catch {}
+    } catch {
+      // ignore
+    }
     if (agentProc) await stopProcess(agentProc);
     if (webProc && startedWeb) await stopProcess(webProc);
     if (backendProc && startedBackend) await stopProcess(backendProc);

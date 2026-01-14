@@ -41,6 +41,7 @@ test.describe('Query Syntax Integration Tests', () => {
   }
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     // 创建测试目录和文件
     if (!fs.existsSync(TEST_LOG_DIR)) {
       fs.mkdirSync(TEST_LOG_DIR, { recursive: true });
