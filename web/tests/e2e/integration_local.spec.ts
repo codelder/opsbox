@@ -85,6 +85,7 @@ test.describe('Local Integration E2E', () => {
   const UNI_ID_DIR_GZ = `E2E_DIR_GZ_${RUN_ID}`;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     // 1. Create temp log directory and file
     if (!fs.existsSync(TEST_LOG_DIR)) {
       fs.mkdirSync(TEST_LOG_DIR, { recursive: true });

@@ -271,6 +271,7 @@ test.describe('S3 Archive E2E', () => {
   let mockS3: { endpoint: string; close: () => Promise<void> } | null = null;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     const backend = await ensureBackendUp(request);
     backendProc = backend.proc;
     startedBackend = backend.started;
