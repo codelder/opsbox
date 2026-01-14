@@ -3,6 +3,7 @@
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
 use crate::api::{LogSeekApiError, models::SearchBody};
+use crate::query::Query;
 use crate::service::search::SearchEvent;
 use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
 use axum::{
@@ -132,7 +133,7 @@ pub async fn stream_search(
 
   let (result_rx, sid) = executor.search(&body.q, ctx, Some(cancel_token)).await?;
 
-  let query = crate::query::Query::parse_github_like(&body.q).unwrap_or_default();
+  let query = Query::parse_github_like(&body.q).unwrap_or_default();
   let highlights = query.highlights.clone();
 
   let inner_stream = convert_to_ndjson_stream(result_rx, highlights);

@@ -16,7 +16,7 @@ use opsbox_core::SqlitePool;
 use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
 use serde::Deserialize;
 // use tokio::io::AsyncBufReadExt;
-use crate::service::entry_stream::EntryStreamFactory;
+use crate::service::entry_stream::create_entry_stream;
 use tracing::debug;
 
 /// 查看缓存中的文件内容
@@ -77,16 +77,14 @@ pub async fn view_cache_json(
           let agent_id = orl.effective_id();
           // 检查是否是归档条目
           let is_archive_target = orl.target_type() == TargetType::Archive;
-            // 归档条目：使用 EntryStreamFactory 下载归档并读取条目
+            // 归档条目：使用 create_entry_stream 下载归档并读取条目
           if is_archive_target {
             debug!(
-              "🚀 Agent 归档条目：使用 EntryStreamFactory 读取: agent_id={}, path={}",
+              "🚀 Agent 归档条目：使用 create_entry_stream 读取: agent_id={}, path={}",
               agent_id, orl.path()
             );
 
-            let factory = EntryStreamFactory::new(pool.clone());
-            let mut stream = factory
-              .create_stream(&orl)
+            let mut stream = create_entry_stream(&pool, &orl)
               .await
               .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
@@ -191,11 +189,8 @@ pub async fn view_cache_json(
           }
         }
         _ => {
-          // Local/S3 来源：使用 EntryStreamFactory
-          let factory = EntryStreamFactory::new(pool.clone());
-
-          let mut stream = factory
-            .create_stream(&orl)
+          // Local/S3 来源：使用 create_entry_stream
+          let mut stream = create_entry_stream(&pool, &orl)
             .await
             .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
@@ -463,9 +458,7 @@ pub async fn view_raw_file(
     }
     _ => {
       // Local / S3
-      let factory = EntryStreamFactory::new(pool);
-      let mut stream = factory
-        .create_stream(&orl)
+      let mut stream = create_entry_stream(&pool, &orl)
         .await
         .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 

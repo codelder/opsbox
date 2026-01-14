@@ -217,8 +217,8 @@ SOURCES = ["orl://local{}?glob=*/*.log"]
 }
 
 #[tokio::test]
-async fn test_entry_stream_factory_with_orl() {
-    use logseek::service::entry_stream::EntryStreamFactory;
+async fn test_create_entry_stream_with_orl() {
+    use logseek::service::entry_stream::create_entry_stream;
     use opsbox_core::odfs::orl::ORL;
 
     let pool = create_test_pool().await;
@@ -236,14 +236,13 @@ async fn test_entry_stream_factory_with_orl() {
     let orl_str = format!("orl://local{}?glob=*.log", abs_path);
     let orl = ORL::parse(&orl_str).expect("Should parse ORL");
 
-    println!("Testing EntryStreamFactory with ORL: {}", orl);
+    println!("Testing create_entry_stream with ORL: {}", orl);
     println!("  endpoint_type: {:?}", orl.endpoint_type());
     println!("  path: {}", orl.path());
     println!("  target_type: {:?}", orl.target_type());
 
-    // 创建 EntryStreamFactory 并尝试创建流
-    let factory = EntryStreamFactory::new(pool);
-    let stream_result = factory.create_stream(&orl).await;
+    // 使用 create_entry_stream 创建流
+    let stream_result = create_entry_stream(&pool, &orl).await;
 
     match &stream_result {
         Ok(_) => println!("EntryStream created successfully"),
@@ -252,7 +251,7 @@ async fn test_entry_stream_factory_with_orl() {
 
     assert!(
         stream_result.is_ok(),
-        "EntryStreamFactory should create stream: {:?}",
+        "create_entry_stream should create stream: {:?}",
         stream_result.err()
     );
 

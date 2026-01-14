@@ -6,7 +6,8 @@ use crate::agent::{SearchOptions, SearchService, create_agent_client_by_id};
 use crate::query::Query;
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::service::ServiceError;
-use crate::service::search::SearchEvent;
+use crate::service::entry_stream::{EntryStreamProcessor, create_entry_stream};
+use crate::service::search::{SearchEvent, SearchProcessor};
 use futures::StreamExt;
 use opsbox_core::SqlitePool;
 use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
@@ -27,6 +28,134 @@ impl Default for SearchExecutorConfig {
       io_max_concurrency: 12,
       stream_channel_capacity: 128,
     }
+  }
+}
+
+/// 搜索上下文：封装单个数据源搜索任务的公共参数
+///
+/// 提供构造结果 ORL、缓存结果、发送事件等公共操作，
+/// 减少 search_agent_source 和 search_entry_stream_source 的重复代码。
+struct SearchContext {
+  orl: ORL,
+  sid: String,
+  ctx: usize,
+  tx: mpsc::Sender<SearchEvent>,
+  cancel_token: Option<tokio_util::sync::CancellationToken>,
+  start_time: std::time::Instant,
+}
+
+impl SearchContext {
+  fn new(
+    orl: ORL,
+    sid: String,
+    ctx: usize,
+    tx: mpsc::Sender<SearchEvent>,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
+  ) -> Self {
+    Self {
+      orl,
+      sid,
+      ctx,
+      tx,
+      cancel_token,
+      start_time: std::time::Instant::now(),
+    }
+  }
+
+  /// 根据结果路径构造完整的 ORL 字符串
+  fn build_result_orl(&self, res_path: &str) -> String {
+    let scheme = self.orl.uri().scheme().as_str();
+    let authority = self.orl.uri().authority().map(|a| a.as_str()).unwrap_or("local");
+
+    if self.orl.target_type() == TargetType::Archive {
+      let entry_encoded = urlencoding::encode(res_path);
+      format!("{}://{}{}?entry={}", scheme, authority, self.orl.path(), entry_encoded)
+    } else {
+      let full_path = if res_path.starts_with('/') {
+        res_path.to_string()
+      } else {
+        let base = self.orl.path().trim_end_matches('/');
+        format!("{}/{}", base, res_path.trim_start_matches('/'))
+      };
+      format!("{}://{}{}", scheme, authority, full_path)
+    }
+  }
+
+  /// 缓存结果并发送成功事件，返回是否应继续
+  async fn cache_and_send(&self, mut result: crate::service::search::SearchResult) -> bool {
+    let result_orl = self.build_result_orl(&result.path);
+    simple_cache()
+      .put_lines(
+        &self.sid,
+        &result_orl,
+        &result.lines,
+        result.encoding.clone().unwrap_or_else(|| "UTF-8".to_string()),
+      )
+      .await;
+
+    result.path = result_orl;
+    self.tx.send(SearchEvent::Success(result)).await.is_ok()
+  }
+
+  /// 获取用于事件的源标识符
+  fn event_source(&self) -> String {
+    match self.orl.endpoint_type() {
+      Ok(EndpointType::Agent) => format!("agent:{}", self.orl.effective_id()),
+      _ => self.orl.display_name(),
+    }
+  }
+
+  /// 发送错误事件
+  async fn send_error(&self, message: String) {
+    let _ = self.tx.send(SearchEvent::Error {
+      source: self.event_source(),
+      message,
+      recoverable: true,
+    }).await;
+  }
+
+  /// 发送完成事件并记录日志
+  async fn send_complete(&self) {
+    self.send_complete_with_stats(None).await;
+  }
+
+  /// 发送完成事件并记录详细日志（含结果数量）
+  async fn send_complete_with_stats(&self, result_count: Option<usize>) {
+    let elapsed = self.start_time.elapsed();
+    let source_display = self.orl.display_name();
+    let event_source = self.event_source();
+    let status = if self.is_cancelled() {
+      "数据源搜索被取消"
+    } else {
+      "数据源搜索完成"
+    };
+
+    if let Some(count) = result_count {
+      tracing::info!(
+        "[SearchExecutor] {}: source={}, elapsed={}ms, results={}",
+        status,
+        source_display,
+        elapsed.as_millis(),
+        count
+      );
+    } else {
+      tracing::info!(
+        "[SearchExecutor] {}: source={}, elapsed={}ms",
+        status,
+        source_display,
+        elapsed.as_millis()
+      );
+    }
+
+    let _ = self.tx.send(SearchEvent::Complete {
+      source: event_source,
+      elapsed_ms: elapsed.as_millis() as u64,
+    }).await;
+  }
+
+  /// 检查是否已取消或通道已关闭
+  fn is_cancelled(&self) -> bool {
+    self.tx.is_closed() || self.cancel_token.as_ref().is_some_and(|t| t.is_cancelled())
   }
 }
 
@@ -88,78 +217,51 @@ impl SearchExecutor {
   }
 
   async fn search_agent_source(
-    orl: ORL,
+    context: SearchContext,
     cleaned_query: String,
-    ctx: usize,
-    _highlights: Vec<crate::query::KeywordHighlight>,
-    sid: String,
-    tx: mpsc::Sender<SearchEvent>,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
   ) {
-    let start_time = std::time::Instant::now();
-
-    // 提取 agent_id
     // Agent ID 在 ORL 中是 effective_id
-    let agent_id = orl.effective_id().to_string();
+    let agent_id = context.orl.effective_id().to_string();
 
     info!(
       "[SearchExecutor] 开始数据源搜索: endpoint=agent agent_id={} ctx={}",
-      agent_id, ctx
+      agent_id, context.ctx
     );
 
     let client = match create_agent_client_by_id(agent_id.clone()).await {
       Ok(client) => client,
       Err(e) => {
         tracing::error!("[SearchExecutor] 无法创建 Agent 客户端 agent_id={} err={}", agent_id, e);
-        let _ = tx
-          .send(SearchEvent::Error {
-            source: format!("agent:{}", agent_id),
-            message: format!("无法创建 Agent 客户端: {}", e),
-            recoverable: true,
-          })
-          .await;
+        context.send_error(format!("无法创建 Agent 客户端: {}", e)).await;
         return;
       }
     };
 
     if !client.health_check().await {
       tracing::error!("[SearchExecutor] Agent 健康检查失败: {}", agent_id);
-      let _ = tx
-        .send(SearchEvent::Error {
-          source: format!("agent:{}", agent_id),
-          message: "Agent 健康检查失败".to_string(),
-          recoverable: true,
-        })
-        .await;
+      context.send_error("Agent 健康检查失败".to_string()).await;
       return;
     }
 
     // 构造 SearchOptions
-    // 使用 crate::domain::config::Target，它是 Agent API 期望的结构
     use crate::domain::config::Target as ConfigTarget;
 
-    let target = match orl.target_type() {
-       TargetType::Dir => ConfigTarget::Dir { path: orl.path().to_string(), recursive: true },
-       TargetType::Archive => ConfigTarget::Archive { path: orl.path().to_string(), entry: orl.entry_path().map(|c| c.into_owned()) },
+    let target = match context.orl.target_type() {
+       TargetType::Dir => ConfigTarget::Dir { path: context.orl.path().to_string(), recursive: true },
+       TargetType::Archive => ConfigTarget::Archive { path: context.orl.path().to_string(), entry: context.orl.entry_path().map(|c| c.into_owned()) },
     };
 
     let search_options = SearchOptions {
       target,
-      path_filter: orl.filter_glob().map(|c| c.into_owned()),
+      path_filter: context.orl.filter_glob().map(|c| c.into_owned()),
       ..Default::default()
     };
 
-    let mut stream = match client.search(&cleaned_query, ctx, search_options).await {
+    let mut stream = match client.search(&cleaned_query, context.ctx, search_options).await {
       Ok(st) => st,
       Err(e) => {
         tracing::error!("[SearchExecutor] 调用 Agent 搜索失败 agent_id={} err={}", agent_id, e);
-        let _ = tx
-          .send(SearchEvent::Error {
-            source: format!("agent:{}", agent_id),
-            message: format!("调用 Agent 搜索失败: {}", e),
-            recoverable: true,
-          })
-          .await;
+        context.send_error(format!("调用 Agent 搜索失败: {}", e)).await;
         return;
       }
     };
@@ -169,60 +271,21 @@ impl SearchExecutor {
       let Ok(res) = item else { continue; };
       result_count += 1;
 
-      if tx.is_closed() || cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
+      if context.is_cancelled() {
         break;
       }
 
-      // 构造 Result ORL
-      let result_orl_str = if orl.target_type() == TargetType::Archive {
-         // Archive: keep scheme/authority/path, replace query with entry
-         let scheme = orl.uri().scheme().as_str();
-         // Authority is mandatory for ORL but verify just in case
-         let authority = orl.uri().authority().map(|a| a.as_str()).unwrap_or("agent");
-         let path = orl.path();
-         let entry_encoded = urlencoding::encode(&res.path);
-         format!("{}://{}{}{}", scheme, authority, path, format!("?entry={}", entry_encoded))
-      } else {
-         // Dir: Join path
-         let base = orl.path().trim_end_matches('/');
-         let res_path = res.path.trim();
-         let sub = res_path.trim_start_matches('/');
-
-         // Reconstruct with correct authority
-         let scheme = orl.uri().scheme().as_str();
-         let authority = orl.uri().authority().map(|a| a.as_str()).unwrap_or("agent");
-
-         // 注意：Agent 返回的 res.path 可能是相对路径，也可能是绝对路径。
-         // - 若为绝对路径：直接使用（避免把 /abs/path 当成相对路径再次拼接导致重复路径）
-         // - 若为相对路径：拼到 base 下
-         let full_path = if res_path.starts_with('/') {
-           res_path.to_string()
-         } else {
-           format!("{}/{}", base, sub)
-         };
-
-         format!("{}://{}{}", scheme, authority, full_path)
-      };
-
-      simple_cache()
-        .put_lines(
-          &sid,
-          &result_orl_str,
-          &res.lines,
-          res.encoding.clone().unwrap_or("UTF-8".to_string()),
-        )
-        .await;
-
-      let success_event = SearchEvent::Success(crate::service::search::SearchResult {
-        path: result_orl_str, // Use ORL string as path ID
+      // 使用 SearchContext 的方法处理结果
+      let result = crate::service::search::SearchResult {
+        path: res.path.clone(),
         lines: res.lines.clone(),
         merged: res.merged,
         encoding: res.encoding.clone(),
         archive_path: None,
         source_type: res.source_type,
-      });
+      };
 
-      if tx.send(success_event).await.is_err() {
+      if !context.cache_and_send(result).await {
         debug!("[SearchExecutor] 发送失败，通道已关闭");
         break;
       }
@@ -233,77 +296,42 @@ impl SearchExecutor {
       agent_id, result_count
     );
 
-    // 发送完成事件
-    let elapsed = start_time.elapsed();
-    let source_display = orl.display_name();
-    let status = if tx.is_closed() || cancel_token.as_ref().is_some_and(|t| t.is_cancelled()) {
-      "数据源搜索被取消"
-    } else {
-      "数据源搜索完成"
-    };
-
-    tracing::info!(
-      "[SearchExecutor] {}: source={}, agent_id={}, elapsed={}ms, results={}",
-      status,
-      source_display,
-      agent_id,
-      elapsed.as_millis(),
-      result_count
-    );
-    let _ = tx
-      .send(SearchEvent::Complete {
-        source: format!("agent:{}", agent_id),
-        elapsed_ms: elapsed.as_millis() as u64,
-      })
-      .await;
+    context.send_complete_with_stats(Some(result_count)).await;
   }
 
   async fn search_entry_stream_source(
+    context: SearchContext,
     pool: SqlitePool,
-    orl: ORL,
     spec: Arc<Query>,
-    ctx: usize,
     encoding_qualifier: Option<String>,
-    sid: String,
-    tx: mpsc::Sender<SearchEvent>,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
   ) {
-    let start_time = std::time::Instant::now();
-    let source_name = orl.display_name();
+    let source_name = context.orl.display_name();
 
-    info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, ctx);
+    info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, context.ctx);
 
-    let factory = crate::service::entry_stream::EntryStreamFactory::new(pool);
-    // process_stream 传入 &orl
-    let mut estream = match factory.create_stream(&orl).await {
+    let mut estream = match create_entry_stream(&pool, &context.orl).await {
       Ok(s) => s,
       Err(e) => {
         tracing::error!("[SearchExecutor] 创建条目流失败 err={}", e);
-        let _ = tx.send(SearchEvent::Error {
-            source: source_name.clone(),
-            message: format!("创建条目流失败: {}", e),
-            recoverable: true,
-          }).await;
+        context.send_error(format!("创建条目流失败: {}", e)).await;
         return;
       }
     };
 
-    let search_proc = Arc::new(crate::service::search::SearchProcessor::new_with_encoding(
-      spec, ctx, encoding_qualifier,
+    let search_proc = Arc::new(SearchProcessor::new_with_encoding(
+      spec, context.ctx, encoding_qualifier,
     ));
-    let mut processor = crate::service::entry_stream::EntryStreamProcessor::new(search_proc);
-    if let Some(token) = cancel_token.clone() {
+    let mut processor = EntryStreamProcessor::new(search_proc);
+    if let Some(token) = context.cancel_token.clone() {
       processor = processor.with_cancel_token(token);
     }
 
-    // 路径过滤 Logic needed?
-    // Local source base_path handling logic adapted for ORL?
-    if orl.endpoint_type().unwrap_or(EndpointType::Local) == EndpointType::Local && orl.target_type() == TargetType::Dir {
-       // orl.path() is the root.
-       processor = processor.with_base_path(orl.path());
+    // 路径过滤
+    if context.orl.endpoint_type().unwrap_or(EndpointType::Local) == EndpointType::Local && context.orl.target_type() == TargetType::Dir {
+       processor = processor.with_base_path(context.orl.path());
     }
 
-    if let Some(glob) = orl.filter_glob() {
+    if let Some(glob) = context.orl.filter_glob() {
        match crate::query::path_glob_to_filter(&glob) {
         Ok(filter) => { processor = processor.with_extra_path_filter(filter); }
         Err(e) => { tracing::warn!("解析 filter_glob 失败: {}", e); }
@@ -312,40 +340,33 @@ impl SearchExecutor {
 
     let (sr_tx, mut sr_rx) = mpsc::channel::<SearchEvent>(32);
 
-    let tx_clone = tx.clone();
-    let sid_clone = sid.clone();
-    let orl_clone = orl.clone();
+    // 为 sender_task 创建必要的克隆
+    let tx_clone = context.tx.clone();
+    let sid_clone = context.sid.clone();
+    let orl_clone = context.orl.clone();
 
     let sender_task = tokio::spawn(async move {
       while let Some(event) = sr_rx.recv().await {
         if tx_clone.is_closed() { break; }
         match event {
           SearchEvent::Success(mut res) => {
-             // Construct Result ORL
-             let result_orl_str = if orl_clone.target_type() == TargetType::Archive {
+             // 构造结果 ORL（与 SearchContext::build_result_orl 逻辑一致）
+             let result_orl_str = {
                  let scheme = orl_clone.uri().scheme().as_str();
-                 let authority = orl_clone.uri().authority().map(|a| a.as_str()).unwrap_or("local"); // Default local if missing?
-                 let path = orl_clone.path();
-                 let entry_encoded = urlencoding::encode(&res.path);
-                 format!("{}://{}{}?entry={}", scheme, authority, path, entry_encoded)
-             } else {
-                 let scheme = orl_clone.uri().scheme().as_str();
-                 // Use original authority (could be local, s3:profile:bucket, etc)
-                 let authority = orl_clone.uri().authority().map(|a| a.as_str()).unwrap_or("");
+                 let authority = orl_clone.uri().authority().map(|a| a.as_str()).unwrap_or("local");
 
-                 // res.path from EntryStream is an absolute path for local files.
-                 // For Dir type, just use res.path directly if it's absolute.
-                 // If relative (shouldn't happen for local), prepend base.
-                 let full_path = if res.path.starts_with('/') {
-                     // Absolute path - use directly
-                     res.path.clone()
+                 if orl_clone.target_type() == TargetType::Archive {
+                     let entry_encoded = urlencoding::encode(&res.path);
+                     format!("{}://{}{}?entry={}", scheme, authority, orl_clone.path(), entry_encoded)
                  } else {
-                     // Relative path - concatenate with base
-                     let base = orl_clone.path().trim_end_matches('/');
-                     format!("{}/{}", base, res.path)
-                 };
-
-                 format!("{}://{}{}", scheme, authority, full_path)
+                     let full_path = if res.path.starts_with('/') {
+                         res.path.clone()
+                     } else {
+                         let base = orl_clone.path().trim_end_matches('/');
+                         format!("{}/{}", base, res.path)
+                     };
+                     format!("{}://{}{}", scheme, authority, full_path)
+                 }
              };
 
              simple_cache().put_lines(&sid_clone, &result_orl_str, &res.lines, res.encoding.clone().unwrap_or("UTF-8".to_string())).await;
@@ -358,12 +379,11 @@ impl SearchExecutor {
     });
 
     if let Err(e) = processor.process_stream(&mut *estream, sr_tx).await {
-       let _ = tx.send(SearchEvent::Error { source: source_name.clone(), message: e, recoverable: true }).await;
+       context.send_error(e).await;
     }
     let _ = sender_task.await;
 
-    let elapsed = start_time.elapsed();
-    let _ = tx.send(SearchEvent::Complete { source: source_name, elapsed_ms: elapsed.as_millis() as u64 }).await;
+    context.send_complete().await;
   }
 
 
@@ -399,7 +419,6 @@ impl SearchExecutor {
       let spec = spec.clone();
       let ctx = context_lines;
       let encoding = encoding_qualifier.clone();
-      let highlights = highlights.clone();
       let sid = sid.clone();
       let cleaned = cleaned_query.clone();
       let tx = tx.clone();
@@ -411,12 +430,15 @@ impl SearchExecutor {
           Err(_) => return,
         };
 
-        match orl.endpoint_type() {
+        // 为两种搜索类型创建统一的 SearchContext
+        let context = SearchContext::new(orl, sid, ctx, tx, token);
+
+        match context.orl.endpoint_type() {
           Ok(EndpointType::Agent) => {
-            Self::search_agent_source(orl, cleaned, ctx, highlights, sid, tx, token).await;
+            Self::search_agent_source(context, cleaned).await;
           }
           Ok(EndpointType::Local) | Ok(EndpointType::S3) => {
-            Self::search_entry_stream_source(pool, orl, spec, ctx, encoding, sid, tx, token).await;
+            Self::search_entry_stream_source(context, pool, spec, encoding).await;
           }
           Err(e) => {
               tracing::error!("Invalid Endpoint Type: {}", e);

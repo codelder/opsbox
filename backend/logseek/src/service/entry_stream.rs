@@ -7,6 +7,9 @@ use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
 use opsbox_core::fs::{EntrySource, EntryStream, PrefixedReader};
+use opsbox_core::odfs::orl::EndpointType;
+use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
+use opsbox_core::odfs::OrlManager;
 
 use super::search::{SearchEvent, SearchProcessor};
 
@@ -361,65 +364,68 @@ impl EntryStreamProcessor {
   }
 }
 
-/// 条目流工厂：根据 SourceConfig 构造 Box<dyn EntryStream>
-pub struct EntryStreamFactory {
-  db_pool: SqlitePool,
-}
+/// 创建条目流（不含 Agent）
+///
+/// 根据 ORL 配置创建对应的条目流：
+/// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
+/// - S3: Archive（自动探测；zip 暂不支持）
+pub async fn create_entry_stream(
+  db_pool: &SqlitePool,
+  orl: &opsbox_core::odfs::orl::ORL,
+) -> Result<Box<dyn EntryStream>, String> {
+  // 构造临时的 OrlManager
+  // 在生产架构中，OrlManager 最好是全局单例或注入的，但为了保持 LogSeek 独立性及 API 兼容，
+  // 我们在这里临时组装它。
+  let mut manager = OrlManager::new();
 
-impl EntryStreamFactory {
-  pub fn new(db_pool: SqlitePool) -> Self {
-    Self { db_pool }
-  }
-
-  /// 从来源配置创建条目流（不含 Agent）
-  ///
-  /// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
-  /// - S3: Archive（自动探测；zip 暂不支持）
-
-  pub async fn create_stream(&self, orl: &opsbox_core::odfs::orl::ORL) -> Result<Box<dyn EntryStream>, String> {
-    use opsbox_core::odfs::orl::EndpointType;
-    use opsbox_core::odfs::{OrlManager, providers::{LocalOpsFS, S3OpsFS}};
-    use std::sync::Arc;
-
-    // 构造临时的 OrlManager
-    // 在生产架构中，OrlManager 最好是全局单例或注入的，但为了保持 LogSeek 独立性及 API 兼容，
-    // 我们在这里临时组装它。
-    let mut manager = OrlManager::new();
-
-    match orl.endpoint_type() {
-      Ok(EndpointType::Local) => {
-        // 注册 Local Provider
-        // LogSeek 默认 Local 是根目录
-        manager.register("local".to_string(), Arc::new(LocalOpsFS::new(None)));
-      }
-      Ok(EndpointType::S3) => {
-         let profile = orl.effective_id();
-         // 加载 Profile
-         let profile_row = crate::repository::s3::load_s3_profile(&self.db_pool, &profile)
-           .await
-           .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
-           .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
-
-         // 构造 S3 客户端
-         use crate::utils::storage::{get_or_create_s3_client};
-         let client = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
-             .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
-
-         // 注册 S3 Provider
-         let (bucket_name, _) = orl.path().trim_start_matches('/').split_once('/').unwrap_or((orl.path().trim_start_matches('/'), ""));
-
-         // 注意：这里需要解引用 Arc<Client> 并 clone，因为 S3OpsFS::new 期望 Client 结构体
-         manager.register(format!("s3.{}", profile), Arc::new(S3OpsFS::new(client.as_ref().clone(), bucket_name)));
-      }
-      Ok(EndpointType::Agent) => {
-         return Err("Agent 来源请通过远程 SearchService 处理".to_string());
-      }
-      Err(e) => return Err(format!("Invalid Endpoint Type: {}", e))
+  match orl.endpoint_type() {
+    Ok(EndpointType::Local) => {
+      // 注册 Local Provider
+      // LogSeek 默认 Local 是根目录
+      manager.register("local".to_string(), Arc::new(LocalOpsFS::new(None)));
     }
+    Ok(EndpointType::S3) => {
+      let profile = orl.effective_id();
+      // 加载 Profile
+      let profile_row = crate::repository::s3::load_s3_profile(db_pool, &profile)
+        .await
+        .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+        .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
 
-    // recursive 默认为 true
-    manager.get_entry_stream(orl, true).await.map_err(|e| format!("获取流失败: {}", e))
+      // 构造 S3 客户端
+      use crate::utils::storage::get_or_create_s3_client;
+      let client = get_or_create_s3_client(
+        &profile_row.endpoint,
+        &profile_row.access_key,
+        &profile_row.secret_key,
+      )
+      .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
+
+      // 注册 S3 Provider
+      let (bucket_name, _) = orl
+        .path()
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or((orl.path().trim_start_matches('/'), ""));
+
+      // 注意：这里需要解引用 Arc<Client> 并 clone，因为 S3OpsFS::new 期望 Client 结构体
+      manager.register(
+        format!("s3.{}", profile),
+        Arc::new(S3OpsFS::new(client.as_ref().clone(), bucket_name)),
+      );
+    }
+    // Agent 类型由 search_agent_source 处理，不应到达这里
+    // 其他未知类型也不应出现（ORL 解析时已验证）
+    _ => unreachable!(
+      "create_entry_stream 仅处理 Local/S3 类型，Agent 应由 search_agent_source 处理"
+    ),
   }
+
+  // recursive 默认为 true
+  manager
+    .get_entry_stream(orl, true)
+    .await
+    .map_err(|e| format!("获取流失败: {}", e))
 }
 
 /// S3 单文件流（临时定义，建议移至 opsbox_core）
