@@ -15,6 +15,9 @@ use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{debug, info};
 
+
+
+
 /// 搜索执行器配置
 #[derive(Debug, Clone)]
 pub struct SearchExecutorConfig {
@@ -175,9 +178,11 @@ impl SearchExecutor {
     }
   }
 
-  async fn get_sources(&self, query: &str) -> Result<(Vec<ORL>, String, Option<String>), ServiceError> {
+  async fn get_sources(&self, query: &str) -> Result<(Vec<ORL>, String, Option<String>, Vec<String>, Vec<String>), ServiceError> {
     let mut app: Option<String> = None;
     let mut encoding: Option<String> = None;
+    let mut path_includes: Vec<String> = Vec::new();
+    let mut path_excludes: Vec<String> = Vec::new(); // 目前只支持 -path
     let mut tokens: Vec<&str> = Vec::new();
 
     for t in query.split_whitespace() {
@@ -193,6 +198,18 @@ impl SearchExecutor {
         encoding = Some(rest.to_string());
         continue;
       }
+      if let Some(rest) = t.strip_prefix("path:")
+        && !rest.is_empty()
+      {
+        path_includes.push(rest.to_string());
+        continue;
+      }
+      if let Some(rest) = t.strip_prefix("-path:")
+        && !rest.is_empty()
+      {
+        path_excludes.push(rest.to_string());
+        continue;
+      }
       tokens.push(t);
     }
     let cleaned_before_plan = tokens.join(" ");
@@ -201,7 +218,7 @@ impl SearchExecutor {
       .await
       .map_err(|e| ServiceError::ProcessingError(format!("规划器执行失败: {}", e)))?;
 
-    Ok((plan.sources, plan.cleaned_query, encoding))
+    Ok((plan.sources, plan.cleaned_query, encoding, path_includes, path_excludes))
   }
 
   fn parse_query(&self, query: &str) -> Result<Arc<Query>, ServiceError> {
@@ -216,9 +233,16 @@ impl SearchExecutor {
     sid
   }
 
+
+
+
   async fn search_agent_source(
     context: SearchContext,
+    pool: SqlitePool,
     cleaned_query: String,
+    encoding_qualifier: Option<String>,
+    path_includes: Vec<String>,
+    path_excludes: Vec<String>,
   ) {
     // Agent ID 在 ORL 中是 effective_id
     let agent_id = context.orl.effective_id().to_string();
@@ -228,7 +252,7 @@ impl SearchExecutor {
       agent_id, context.ctx
     );
 
-    let client = match create_agent_client_by_id(agent_id.clone()).await {
+    let client = match create_agent_client_by_id(&pool, agent_id.clone()).await {
       Ok(client) => client,
       Err(e) => {
         tracing::error!("[SearchExecutor] 无法创建 Agent 客户端 agent_id={} err={}", agent_id, e);
@@ -254,6 +278,9 @@ impl SearchExecutor {
     let search_options = SearchOptions {
       target,
       path_filter: context.orl.filter_glob().map(|c| c.into_owned()),
+      path_includes,
+      path_excludes,
+      encoding: encoding_qualifier,
       ..Default::default()
     };
 
@@ -302,12 +329,24 @@ impl SearchExecutor {
   async fn search_entry_stream_source(
     context: SearchContext,
     pool: SqlitePool,
-    spec: Arc<Query>,
+    cleaned_query: String,
     encoding_qualifier: Option<String>,
+    path_includes: Vec<String>,
+    path_excludes: Vec<String>,
   ) {
     let source_name = context.orl.display_name();
 
     info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, context.ctx);
+
+    // 解析查询
+    let spec = match Query::parse_github_like(&cleaned_query) {
+      Ok(q) => Arc::new(q),
+      Err(e) => {
+        tracing::error!("[SearchExecutor] 查询解析失败 err={}", e);
+        context.send_error(format!("查询解析失败: {}", e)).await;
+        return;
+      }
+    };
 
     let mut estream = match create_entry_stream(&pool, &context.orl).await {
       Ok(s) => s,
@@ -336,6 +375,38 @@ impl SearchExecutor {
         Ok(filter) => { processor = processor.with_extra_path_filter(filter); }
         Err(e) => { tracing::warn!("解析 filter_glob 失败: {}", e); }
       }
+    }
+
+    // 处理额外的路径过滤器 (path: 和 -path:)
+    if !path_includes.is_empty() || !path_excludes.is_empty() {
+        let mut filter = crate::query::PathFilter::default();
+        // 处理 includes
+        if !path_includes.is_empty() {
+            let mut builder = globset::GlobSetBuilder::new();
+            for p in &path_includes {
+                 match globset::GlobBuilder::new(p).literal_separator(true).build() {
+                    Ok(g) => { builder.add(g); },
+                    Err(e) => tracing::warn!("无效的 path glob: {} ({})", p, e),
+                 }
+            }
+            if let Ok(set) = builder.build() {
+                filter.include = Some(set);
+            }
+        }
+        // 处理 excludes
+        if !path_excludes.is_empty() {
+            let mut builder = globset::GlobSetBuilder::new();
+            for p in &path_excludes {
+                 match globset::GlobBuilder::new(p).literal_separator(true).build() {
+                    Ok(g) => { builder.add(g); },
+                    Err(e) => tracing::warn!("无效的 -path glob: {} ({})", p, e),
+                 }
+            }
+            if let Ok(set) = builder.build() {
+                filter.exclude = Some(set);
+            }
+        }
+        processor = processor.with_extra_path_filter(filter);
     }
 
     let (sr_tx, mut sr_rx) = mpsc::channel::<SearchEvent>(32);
@@ -396,7 +467,7 @@ impl SearchExecutor {
   ) -> Result<(mpsc::Receiver<SearchEvent>, String), ServiceError> {
     tracing::info!("[SearchExecutor] 开始搜索: q={}", query);
 
-    let (sources, cleaned_query, encoding_qualifier) = self.get_sources(query).await?;
+    let (sources, cleaned_query, encoding_qualifier, path_includes, path_excludes) = self.get_sources(query).await?;
     tracing::info!("[SearchExecutor] 获取到 {} 个存储源配置", sources.len());
 
     if sources.is_empty() {
@@ -416,11 +487,12 @@ impl SearchExecutor {
       let io_sem = self.io_semaphore.clone();
       let pool = self.pool.clone();
       let orl = source;
-      let spec = spec.clone();
       let ctx = context_lines;
       let encoding = encoding_qualifier.clone();
       let sid = sid.clone();
       let cleaned = cleaned_query.clone();
+      let p_inc = path_includes.clone();
+      let p_exc = path_excludes.clone();
       let tx = tx.clone();
       let token = cancel_token.clone();
 
@@ -433,15 +505,16 @@ impl SearchExecutor {
         // 为两种搜索类型创建统一的 SearchContext
         let context = SearchContext::new(orl, sid, ctx, tx, token);
 
+        // 根据 endpoint 类型直接调度到对应的静态搜索方法
         match context.orl.endpoint_type() {
           Ok(EndpointType::Agent) => {
-            Self::search_agent_source(context, cleaned).await;
+            Self::search_agent_source(context, pool, cleaned, encoding, p_inc, p_exc).await;
           }
           Ok(EndpointType::Local) | Ok(EndpointType::S3) => {
-            Self::search_entry_stream_source(context, pool, spec, encoding).await;
+            Self::search_entry_stream_source(context, pool, cleaned, encoding, p_inc, p_exc).await;
           }
           Err(e) => {
-              tracing::error!("Invalid Endpoint Type: {}", e);
+            tracing::error!("Invalid Endpoint Type: {}", e);
           }
         }
       });
@@ -587,7 +660,7 @@ SOURCES = [
     let result = executor.get_sources("error").await;
     assert!(result.is_ok());
 
-    let (sources, cleaned_query, encoding) = result.unwrap();
+    let (sources, cleaned_query, encoding, _, _) = result.unwrap();
     assert!(!sources.is_empty());
     assert_eq!(cleaned_query, "error");
     assert!(encoding.is_none());
@@ -604,7 +677,7 @@ SOURCES = [
     let result = executor.get_sources("encoding:GBK error").await;
     assert!(result.is_ok());
 
-    let (sources, cleaned_query, encoding) = result.unwrap();
+    let (sources, cleaned_query, encoding, _, _) = result.unwrap();
     assert!(!sources.is_empty());
     assert_eq!(cleaned_query, "error");
     assert_eq!(encoding, Some("GBK".to_string()));
@@ -621,7 +694,7 @@ SOURCES = [
     let result = executor.get_sources("app:test error").await;
     assert!(result.is_ok());
 
-    let (sources, cleaned_query, _) = result.unwrap();
+    let (sources, cleaned_query, _, _, _) = result.unwrap();
     assert!(!sources.is_empty());
     assert_eq!(cleaned_query, "error");
   }
@@ -2176,7 +2249,7 @@ SOURCES = [
     // 应该成功
     assert!(result.is_ok());
 
-    let (_sources, cleaned_query, encoding) = result.unwrap();
+    let (_sources, cleaned_query, encoding, _, _) = result.unwrap();
     assert_eq!(cleaned_query, "error");
     // 最后一个 encoding 限定词应该生效
     assert_eq!(encoding, Some("GBK".to_string()));
@@ -2196,7 +2269,7 @@ SOURCES = [
     // 应该成功（使用 test planner）
     assert!(result.is_ok());
 
-    let (_sources, cleaned_query, _encoding) = result.unwrap();
+    let (_sources, cleaned_query, _encoding, _, _) = result.unwrap();
     assert_eq!(cleaned_query, "error");
     // app 限定词应该被处理（具体行为取决于 planner）
   }
@@ -2215,7 +2288,7 @@ SOURCES = [
     // 应该成功
     assert!(result.is_ok());
 
-    let (_sources, cleaned_query, encoding) = result.unwrap();
+    let (_sources, cleaned_query, encoding, _, _) = result.unwrap();
     assert_eq!(cleaned_query, "error AND warning");
     assert_eq!(encoding, Some("UTF-8".to_string()));
   }
@@ -3085,5 +3158,80 @@ SOURCES = [
 
     // 不应该找到匹配
     assert_eq!(success_count, 0, "不应该找到匹配");
+  }
+  #[tokio::test]
+  async fn test_search_with_complex_path_qualifiers() {
+    let pool = create_test_pool().await;
+
+    // 创建临时目录和文件
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_path = temp_dir.path();
+
+    std::fs::create_dir(temp_path.join("src")).unwrap();
+    std::fs::create_dir(temp_path.join("test")).unwrap();
+
+    std::fs::write(temp_path.join("src/main.rs"), "error in main\n").unwrap();
+    std::fs::write(temp_path.join("src/utils.rs"), "error in utils\n").unwrap();
+    std::fs::write(temp_path.join("test/test.rs"), "error in test\n").unwrap();
+    std::fs::write(temp_path.join("README.md"), "error in readme\n").unwrap();
+
+    // 创建 planner
+    let planner_script = format!(
+      r#"
+SOURCES = [
+    "orl://local/{}"
+]
+"#,
+      escape_path_for_starlark(temp_path)
+    );
+
+    planners::upsert_script(&pool, "complex_path_test", &planner_script)
+      .await
+      .unwrap();
+    planners::set_default(&pool, Some("complex_path_test")).await.unwrap();
+
+    let config = SearchExecutorConfig::default();
+    let executor = SearchExecutor::new(pool, config);
+
+    // 1. 测试 excluide: -path:test/**
+    let result = executor.search("-path:test/** error", 0, None).await;
+    let (mut rx, _) = result.unwrap();
+    let mut found_files = Vec::new();
+    while let Some(event) = rx.recv().await {
+      if let SearchEvent::Success(res) = event {
+        found_files.push(res.path);
+      }
+    }
+    assert!(found_files.iter().any(|f| f.contains("src/main.rs")));
+    assert!(found_files.iter().any(|f| f.contains("README.md")));
+    assert!(!found_files.iter().any(|f| f.contains("test/test.rs"))); // should be excluded
+
+    // 2. 测试 include combination: path:src/** path:test/**
+    // 注意：Strict glob requires ** to match directories.
+    let result = executor.search("path:src/** path:test/** error", 0, None).await;
+    let (mut rx, _) = result.unwrap();
+    let mut found_files = Vec::new();
+    while let Some(event) = rx.recv().await {
+      if let SearchEvent::Success(res) = event {
+        found_files.push(res.path);
+      }
+    }
+    // GlobSet treats multiple patterns as OR
+    assert!(found_files.iter().any(|f| f.contains("src/main.rs")));
+    assert!(found_files.iter().any(|f| f.contains("test/test.rs")));
+    assert!(!found_files.iter().any(|f| f.contains("README.md"))); // Excluded implicitly because not in include list
+
+    // 3. 测试 mixed: path:src/** -path:**/utils.rs
+    let result = executor.search("path:src/** -path:**/utils.rs error", 0, None).await;
+    let (mut rx, _) = result.unwrap();
+    let mut found_files = Vec::new();
+    while let Some(event) = rx.recv().await {
+      if let SearchEvent::Success(res) = event {
+        found_files.push(res.path);
+      }
+    }
+    assert!(found_files.iter().any(|f| f.contains("src/main.rs")));
+    assert!(!found_files.iter().any(|f| f.contains("src/utils.rs"))); // Excluded
+    assert!(!found_files.iter().any(|f| f.contains("test/test.rs"))); // Not included
   }
 }

@@ -28,9 +28,11 @@ impl Module for ExplorerModule {
   fn router(&self, pool: SqlitePool) -> Router {
     let mut service = service::ExplorerService::new(pool);
 
-    // Try to get global AgentManager and configure it
+    // 使用全局 AgentManager（与 agent-manager 路由共享同一实例）
     if let Some(agent_manager) = agent_manager::get_global_agent_manager() {
       service = service.with_agent_manager(agent_manager);
+    } else {
+      tracing::warn!("Explorer: 全局 Agent Manager 未初始化，Agent 功能将不可用");
     }
 
     api::router(Arc::new(service))

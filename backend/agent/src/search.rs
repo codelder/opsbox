@@ -53,8 +53,12 @@ pub async fn execute_search(
     }
   };
 
-  // 2. 创建搜索处理器
-  let processor = Arc::new(SearchProcessor::new(spec.clone(), request.context_lines));
+  // 2. 创建搜索处理器（支持用户指定的编码）
+  let processor = Arc::new(SearchProcessor::new_with_encoding(
+    spec.clone(),
+    request.context_lines,
+    request.encoding.clone(),
+  ));
 
   // 3. 第一层过滤：解析 Target 到实际路径
   let base_paths = match resolve_target_paths(&config, &request.target) {
@@ -79,25 +83,22 @@ pub async fn execute_search(
     }
   };
 
-  // 4. 额外路径过滤：将 path_filter 转为仅含 path: 的 Query，提取 PathFilter 作为"硬性 AND 限定"
-  let extra_path_filter: Option<logseek::query::PathFilter> = if let Some(filter) = &request.path_filter {
-    match logseek::query::path_glob_to_filter(filter) {
-      Ok(f) => Some(f),
-      Err(e) => {
-        error!("路径过滤器解析失败: {}", e);
-        send_event!(SearchEvent::Error {
-          source: "agent-path-filter".to_string(),
-          message: format!("路径过滤器解析失败: {}", e),
-          recoverable: true,
-        });
-        return;
-      }
-    }
-  } else {
-    None
-  };
+  // 4. 额外路径过滤
+  let mut extra_filters = Vec::new();
 
-  let filtered_paths = base_paths; // 与 LogSeek 对齐：仅以目录为起点，后置过滤
+  // 4.1 Base Filter (来自 ORL)
+  if let Some(base) = &request.path_filter {
+      if let Ok(f) = logseek::query::path_glob_to_filter(base) {
+         extra_filters.push(f);
+      }
+  }
+
+  // 4.2 User Filter (path_includes / path_excludes)
+  if let Some(user_filter) = combine_filters(&request.path_includes, &request.path_excludes) {
+      extra_filters.push(user_filter);
+  }
+
+  let filtered_paths = base_paths;
 
   if filtered_paths.is_empty() {
     warn!("没有找到匹配的搜索路径");
@@ -110,10 +111,7 @@ pub async fn execute_search(
   }
 
   // 5. 执行搜索
-  // all_processed 和 all_matched 计数器在并发模式下暂不在此统计，后续可按需在 EntryStreamProcessor 中增加。
-
   for search_path in filtered_paths {
-    // 检查是否被取消
     if cancel_token.is_cancelled() {
       info!("搜索任务 {} 已被取消", task_id);
       return;
@@ -121,43 +119,36 @@ pub async fn execute_search(
 
     debug!("开始搜索路径: {}", search_path.display());
 
-    // 统一由 logseek 提供的构造器创建本地来源条目流
     let path_str = search_path.to_string_lossy().to_string();
-    // 根据 Target 类型传递完整信息，与 Server 端对齐
     let target_hint = match &request.target {
       ConfigTarget::Files { .. } => {
-        // Files 类型：传递单个文件路径（已解析为绝对路径）
-        // 注意：每个 search_path 已经是单个文件，所以传递单个路径
         Some(ConfigTarget::Files {
           paths: vec![path_str.clone()],
         })
       }
       ConfigTarget::Dir { recursive, .. } => {
-        // Dir 类型：传递 recursive 标志，path 使用 "." 表示当前路径
         Some(ConfigTarget::Dir {
           path: ".".to_string(),
           recursive: *recursive,
         })
       }
       ConfigTarget::Archive { path, .. } => {
-        // Archive 类型：传递相对路径
         Some(ConfigTarget::Archive {
           path: path.clone(),
           entry: None,
         })
       }
     };
+
+    // Create estream
     let mut estream: Box<dyn opsbox_core::fs::EntryStream> = match target_hint {
         Some(ConfigTarget::Dir { path, recursive }) => {
-             // 必须基于 search_path 拼接，因为 ConfigTarget::Dir 的 path 可能是 relative (如 ".")
              let full_path = if path == "." {
                  search_path.clone()
              } else {
                  search_path.join(path)
              };
-
-             let stream = opsbox_core::fs::FsEntryStream::new(full_path, recursive).await;
-             match stream {
+             match opsbox_core::fs::FsEntryStream::new(full_path, recursive).await {
                  Ok(s) => Box::new(s),
                  Err(e) => {
                      warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
@@ -169,7 +160,6 @@ pub async fn execute_search(
              Box::new(opsbox_core::fs::MultiFileEntryStream::new(paths))
         },
         Some(ConfigTarget::Archive { path, .. }) => {
-             // For agent, path is absolute path to archive
              match tokio::fs::File::open(&path).await {
                  Ok(f) => {
                      match opsbox_core::fs::create_archive_stream_from_reader(f, Some(&path)).await {
@@ -187,10 +177,7 @@ pub async fn execute_search(
              }
         },
         None => {
-             // Fallback or skip? Agent construction logic suggests it always creates Some.
-             // If None, maybe use FsEntryStream on path_str?
-             let stream = opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(&path_str), true).await;
-             match stream {
+             match opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(&path_str), true).await {
                  Ok(s) => Box::new(s),
                  Err(e) => {
                      warn!("构建本地条目流失败 {}: {}", path_str, e);
@@ -200,17 +187,25 @@ pub async fn execute_search(
         }
     };
 
-    // 使用 EntryStreamProcessor 进行并发搜索
     let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
       .with_cancel_token(cancel_token.clone());
 
-    // 仅目录类型需要 base_path 用于相对路径转换
     if matches!(&request.target, ConfigTarget::Dir { .. }) {
-      stream_processor = stream_processor.with_base_path(search_path.clone());
+      if search_path.is_file() {
+          if let Some(parent) = search_path.parent() {
+              stream_processor = stream_processor.with_base_path(parent.to_path_buf());
+          } else {
+              stream_processor = stream_processor.with_base_path(search_path.clone());
+          }
+      } else {
+          stream_processor = stream_processor.with_base_path(search_path.clone());
+      }
+    } else if let Some(parent) = search_path.parent() {
+      stream_processor = stream_processor.with_base_path(parent.to_path_buf());
     }
 
-    if let Some(filter) = extra_path_filter.clone() {
-      stream_processor = stream_processor.with_extra_path_filter(filter);
+    for filter in &extra_filters {
+      stream_processor = stream_processor.with_extra_path_filter(filter.clone());
     }
 
     if let Err(e) = stream_processor.process_stream(&mut *estream, tx.clone()).await {
@@ -218,7 +213,6 @@ pub async fn execute_search(
     }
   }
 
-  // 发送完成事件
   let elapsed_ms = started_at.elapsed().as_millis() as u64;
   send_event!(SearchEvent::Complete {
     source: "agent:complete".to_string(),
@@ -228,4 +222,44 @@ pub async fn execute_search(
   info!("搜索完成: task_id={}", task_id);
 }
 
-// 已移除 search_with_entry_stream，直接使用 logseek::service::entry_stream::EntryStreamProcessor
+fn combine_filters(
+    includes: &[String],
+    excludes: &[String],
+) -> Option<logseek::query::PathFilter> {
+    let mut final_filter = logseek::query::PathFilter::default();
+    let mut has_filter = false;
+
+    if !includes.is_empty() {
+        let mut builder = globset::GlobSetBuilder::new();
+        for p in includes {
+             match globset::GlobBuilder::new(p).literal_separator(true).build() {
+                Ok(g) => { builder.add(g); },
+                Err(e) => warn!("无效的 path glob: {} ({})", p, e),
+             }
+        }
+        if let Ok(set) = builder.build() {
+            final_filter.include = Some(set);
+            has_filter = true;
+        }
+    }
+
+    if !excludes.is_empty() {
+        let mut builder = globset::GlobSetBuilder::new();
+        for p in excludes {
+             match globset::GlobBuilder::new(p).literal_separator(true).build() {
+                Ok(g) => { builder.add(g); },
+                Err(e) => warn!("无效的 -path glob: {} ({})", p, e),
+             }
+        }
+        if let Ok(set) = builder.build() {
+            final_filter.exclude = Some(set);
+            has_filter = true;
+        }
+    }
+
+    if has_filter {
+        Some(final_filter)
+    } else {
+        None
+    }
+}

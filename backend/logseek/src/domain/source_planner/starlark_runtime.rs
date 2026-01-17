@@ -67,10 +67,15 @@ pub async fn plan_with_starlark_with_script(
 
   // 2) 预取上下文（Agent 列表与 S3 Profiles 列表）
   // 列出在线 Agent 及其标签，供脚本按标签自行筛选
-  let agents_info = if let Some(mgr) = agent_manager::get_global_agent_manager() {
-    mgr.list_online_agents().await
-  } else {
-    vec![]
+  let agents_info = {
+    use agent_manager::repository::AgentRepository;
+    let repo = AgentRepository::new(pool.clone());
+    // 获取所有 Agent，然后过滤在线的（使用 90 秒超时，与 AgentManager 默认值一致）
+    let all_agents = repo.list_agents().await.unwrap_or_default();
+    all_agents
+      .into_iter()
+      .filter(|a| a.is_online(90)) // 心跳超时：90秒
+      .collect::<Vec<_>>()
   };
   let s3_profiles = crate::repository::s3::list_s3_profiles(pool).await?;
 
