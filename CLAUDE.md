@@ -23,6 +23,9 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - `chardetng = "0.1"` - Character encoding detection
 - `grep = "0.3"` - Byte-level regex search
 - `urlencoding = "2.1.3"` - URL encoding
+- `fluent-uri = "0.4.1"` - RFC 3986 compliant URI parsing
+- `async_zip = "0.0.18"` - Async ZIP archive support
+- `tokio-tar = "0.3.1"` - Async TAR archive support
 
 **Key Frontend Dependencies:**
 - `@tanstack/svelte-virtual = "^3.13.12"` - Virtual scrolling
@@ -35,10 +38,10 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 - **Monorepo Structure**: Rust backend (`backend/`) + SvelteKit frontend (`web/`)
 - **Modular Design**: Uses `opsbox-core` inventory system for automatic module discovery
-- **ODFI Protocol**: Unified resource identifier scheme for cross-endpoint resource addressing
+- **ORL Protocol**: Unified resource identifier scheme for cross-endpoint resource addressing (evolved from ODFI, uses `orl://` scheme)
 - **Current Modules**:
   - `logseek`: Log search module supporting local files, S3/MinIO, and archives
-  - `explorer`: Distributed file/resource browser across Local, S3, and Agent endpoints
+  - `explorer`: Distributed file/resource browser across Local, S3, and Agent endpoints with file download support
   - `agent-manager`: Agent registry and management module
 - **Embedded Frontend**: Static assets compiled into binary via `rust-embed`
 
@@ -60,7 +63,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
   - Standard responses (`response.rs`)
   - Middleware utilities (`middleware/`)
   - Logging configuration (`logging/`)
-  - ODFI protocol (`odfi.rs`) - Unified resource identifier scheme
+  - ORL protocol (`orl.rs`) - Unified resource identifier scheme
   - Filesystem utilities (`fs/`) - Archive streaming, compression detection
   - Storage abstraction (`storage/`) - S3 repository and utilities
   - Agent client (`agent/`) - HTTP client for agent communication
@@ -81,8 +84,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
     - `planners.rs` - Planner script persistence
     - `s3.rs` - S3 profile persistence
   - Domain layer (`domain/`) including:
-    - `config.rs` - Source/Endpoint/Target models
-    - `odfi_builder.rs` - ODFI URL construction
+    - `config.rs` - Source/Endpoint/Target models (includes ORL URL construction utilities)
     - `source_planner/` - Starlark runtime for intelligent source planning
   - Source planners (`planners/`)
   - Utilities (`utils/`)
@@ -92,8 +94,9 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 - **explorer**: Distributed resource browser module:
   - Resource listing API (`routes.rs`) - POST `/api/v1/explorer/list`
+  - File download API - POST `/api/v1/explorer/download`
   - Unified browsing across Local, S3, and Agent endpoints
-  - Archive navigation (tar, tar.gz, gzip, tgz)
+  - Archive navigation (tar, tar.gz, gzip, tgz, zip)
   - Auto-detection of archive files
   - Content-based file type detection via MIME types
   - Hidden file counting and metadata
@@ -176,10 +179,10 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **Query Qualifiers**:
   - `app:<appname>` - Select planner script by application name for intelligent source planning
   - `dt:/fdt:/tdt:` - Date/time directives for time-range filtering in queries
-- **ODFI Protocol**: Unified resource identifiers in format `odfi://[id]@[type][.server_addr]/[path]?entry=[entry_path]`
-  - Local: `odfi://local/var/log/nginx/access.log`
-  - Agent: `odfi://web-01@agent/app/logs/error.log`
-  - S3 Archive: `odfi://prod@s3/logs/2023/10/data.tar.gz?entry=internal/service.log`
+- **ORL Protocol**: Unified resource identifiers in format `orl://[id]@[type][.server_addr]/[path]?entry=[entry_path]` (evolved from ODFI)
+  - Local: `orl://local/var/log/nginx/access.log`
+  - Agent: `orl://web-01@agent/app/logs/error.log`
+  - S3 Archive: `orl://prod@s3/logs/2023/10/data.tar.gz?entry=internal/service.log`
 
 ### Build and Test Commands
 
@@ -224,20 +227,21 @@ pnpm --dir web test:unit --run --project=server  # Node.js tests only
 - **Font system**: Uses Maple Mono NF CN font family (5 weights: ExtraLight, Regular, Medium, SemiBold, Bold)
 - **Large file handling**: Virtual scrolling and chunked loading implemented for files > 1000 lines
 - **File download**: Full file download with backend cache support via `/view/download` endpoint
-- **Archive support**: Tar, tar.gz, gzip, tgz with auto-detection and deep navigation
+- **Archive support**: Tar, tar.gz, gzip, tgz, zip with auto-detection and deep navigation
 - **Encoding detection**: GBK and multi-encoding support using `chardetng` and `encoding_rs`
 - **Testing configuration**: Dual test environments (browser + Node.js) with Playwright for browser tests
 - **Development server**: Vite dev server configured for external access (0.0.0.0:5173)
 - **Memory management**: `mimalloc` as global allocator with explicit memory collection on cache cleanup
+- **ORL protocol**: Use `orl://` scheme for resource identifiers (migrated from `odfi://` with backward compatibility)
 
-## ODFI Protocol
+## ORL Protocol (OpsBox Resource Locator)
 
-The ODFI (OpsBox Distributed File Identifier) protocol provides a unified URI scheme for addressing resources across different storage backends.
+The ORL protocol provides a unified URI scheme for addressing resources across different storage backends. It evolved from the earlier ODFI (OpsBox Distributed File Identifier) protocol and uses the `orl://` scheme.
 
 ### Format
 
 ```
-odfi://[id]@[type][.server_addr]/[path]?entry=[entry_path]
+orl://[id]@[type][.server_addr]/[path]?entry=[entry_path]
 ```
 
 ### Components
@@ -251,10 +255,12 @@ odfi://[id]@[type][.server_addr]/[path]?entry=[entry_path]
 ### Examples
 
 ```
-odfi://local/var/log/nginx/access.log
-odfi://web-01@agent.192.168.1.100:4001/app/logs/error.log
-odfi://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
+orl://local/var/log/nginx/access.log
+orl://web-01@agent.192.168.1.100:4001/app/logs/error.log
+orl://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
 ```
+
+**Note**: The legacy `odfi://` scheme may still appear in some parts of the codebase for compatibility, but new code should use `orl://`.
 
 ## API Endpoints
 
@@ -332,6 +338,7 @@ odfi://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
 ### Explorer Module (`/api/v1/explorer`)
 
 - `POST /api/v1/explorer/list` - List resources (Local/S3/Agent)
+- `POST /api/v1/explorer/download` - Download file from Local/S3/Agent endpoint
 
 ### System Log Routes (`/api/v1/log`)
 
@@ -395,7 +402,7 @@ Convert natural language queries to LogSeek query syntax using LLM.
 - **Agent Tag Management**: Full tag CRUD operations (add/remove/clear) for agent organization
 - **System Log Routes**: API endpoints for configuring server log level and retention
 - **Explorer module**: Distributed file/resource browser supporting Local, S3, and Agent endpoints
-- **ODFI protocol**: Unified resource identifier scheme for cross-endpoint addressing
+- **ORL protocol**: Unified resource identifier scheme for cross-endpoint addressing (evolved from ODFI, uses `orl://` scheme)
 - **Archive browsing**: Deep navigation into tar, tar.gz, gzip, tgz archives with auto-detection
 - **S3 archive support**: Browse and view files inside S3-hosted archives
 - **Encoding detection**: GBK and multi-encoding support with automatic detection
@@ -409,6 +416,13 @@ Convert natural language queries to LogSeek query syntax using LLM.
 - **Virtual scrolling**: Performance optimization via `@tanstack/svelte-virtual`
 - **File download functionality**: Full file download with backend cache support
 - **Settings reorganization**: Moved settings and theme toggle to individual pages
+- **SearchExecutor refactor**: Overhauled SearchExecutor and simplified EntryStream creation for better performance
+- **Relative path glob filtering**: Support for relative path glob patterns in search queries
+- **Enhanced archive support**: Added async ZIP archive support with `async_zip` and `tokio-tar` dependencies
+- **Test infrastructure improvements**: Full E2E test suite fixes, increased timeouts, and test coverage analysis
+- **ORL protocol migration**: Transition from ODFI (`odfi://`) to ORL (`orl://`) scheme with backward compatibility
+- **Explorer file download**: Complete file download implementation for the distributed resource browser
+- **Performance optimizations**: Memory management improvements and search cancellation enhancements
 
 ## Common Tasks
 

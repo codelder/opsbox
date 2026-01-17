@@ -5,9 +5,10 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 Project overview
 - Monorepo with a Rust backend and a SvelteKit (Vite) frontend.
 - Backend (backend/): Cargo workspace with crates:
-  - opsbox-server (dir: opsbox-server): Main binary serving as the HTTP server entry point. Dynamically composes modules discovered via opsbox-core's Module inventory (e.g., logseek, agent-manager).
-  - opsbox-core: Shared library providing unified error handling (AppError), database management (SQLite pool), standard response formats, a pluggable Module system (inventory-based), and LLM abstraction (Ollama/OpenAI).
+  - opsbox-server (dir: opsbox-server): Main binary serving as the HTTP server entry point. Dynamically composes modules discovered via opsbox-core's Module inventory (e.g., logseek, agent-manager, explorer).
+  - opsbox-core: Shared library providing unified error handling (AppError), database management (SQLite pool), standard response formats, a pluggable Module system (inventory-based), LLM abstraction (Ollama/OpenAI), and ORL protocol (`orl://`) for unified resource addressing.
   - logseek: Module library exposing router() and init_schema() for log search over local agents and S3-compatible object stores, settings persistence (S3 profiles, LLM backends), planners, and NL→Q using the unified LLM client.
+  - explorer: Module library for distributed resource browsing across Local, S3, and Agent endpoints with archive navigation and file download support (API prefix /api/v1/explorer).
   - agent-manager: Module library for agent registry/health/tags (API prefix /api/v1/agents); auto-registered via inventory.
   - opsbox-agent (dir: agent): Standalone agent binary for live/local log access used by LogSeek (optional in deployments).
 - Frontend (web/): SvelteKit app compiled to static assets directly into backend/opsbox-server/static using adapter-static with SPA fallback.
