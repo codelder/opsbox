@@ -177,7 +177,7 @@ test.describe('Performance Boundary Tests', () => {
     await page.goto('/search');
 
     const searchInput = page.getByPlaceholder('搜索...');
-    await searchInput.fill(`app:${TEST_APP} path:many_files/ PERF_TEST_${RUN_ID}`);
+    await searchInput.fill(`app:${TEST_APP} path:many_files/** PERF_TEST_${RUN_ID}`);
     await searchInput.press('Enter');
 
     // 等待搜索完成
