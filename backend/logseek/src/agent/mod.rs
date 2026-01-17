@@ -16,14 +16,20 @@ pub use opsbox_core::agent::{AgentClient, AgentClientError, AgentInfo, AgentStat
 /// 搜索选项
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
-  /// 路径过滤
+  /// 路径过滤 - 基础过滤（旧字段，对应 ORL filter）
   pub path_filter: Option<String>,
+  /// 路径过滤 - 包含列表（用户指定，与关系）
+  pub path_includes: Vec<String>,
+  /// 路径过滤 - 排除列表（用户指定，非关系）
+  pub path_excludes: Vec<String>,
   /// 搜索目标
   pub target: Target,
   /// 超时时间（秒）
   pub timeout_secs: Option<u64>,
   /// 最大结果数
   pub max_results: Option<usize>,
+  /// 强制指定的编码（如 enc:gbk）
+  pub encoding: Option<String>,
 }
 
 impl Default for SearchOptions {
@@ -41,12 +47,15 @@ impl Default for SearchOptions {
 
     Self {
       path_filter: None,
+      path_includes: Vec::new(),
+      path_excludes: Vec::new(),
       target: Target::Dir {
         path: ".".to_string(),
         recursive: true,
       },
       timeout_secs: Some(timeout_secs),
       max_results: None,
+      encoding: None,
     }
   }
 }
@@ -87,40 +96,51 @@ pub struct AgentSearchRequest {
   pub query: String,
   pub context_lines: usize,
   pub path_filter: Option<String>,
+  pub path_includes: Vec<String>,
+  pub path_excludes: Vec<String>,
   pub target: Target,
+  pub encoding: Option<String>,
 }
 
 // 扩展：通过 ID 创建 AgentClient 的辅助函数
-pub async fn create_agent_client_by_id(agent_id: String) -> Result<AgentClient, AgentClientError> {
-  use agent_manager::get_global_agent_manager;
+pub async fn create_agent_client_by_id(
+  pool: &opsbox_core::SqlitePool,
+  agent_id: String,
+) -> Result<AgentClient, AgentClientError> {
+  use agent_manager::repository::AgentRepository;
 
-  if let Some(manager) = get_global_agent_manager() {
-    // 查找 Agent 信息
-    if let Some(agent_info) = manager.get_agent(&agent_id).await {
-      // 从标签中获取实际的 HTTP endpoint
-      let host_opt = agent_info.get_tag_value("host");
-      let port_opt = agent_info.get_tag_value("listen_port");
+  // 直接创建 repository，不依赖全局 manager
+  let repo = AgentRepository::new(pool.clone());
 
-      if let (Some(host), Some(port)) = (host_opt, port_opt)
-        && port.chars().all(|c| c.is_ascii_digit())
-      {
-        let http_endpoint = format!("http://{}:{}", host, port);
-        // 从全局配置读取超时时间
-        let timeout_secs = if let Some(t) = crate::utils::tuning::get() {
-          t.io_timeout_sec.clamp(5, 300)
-        } else {
-          std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(60)
-            .clamp(5, 300)
-        };
-        return Ok(AgentClient::new(
-          agent_id,
-          http_endpoint,
-          Some(Duration::from_secs(timeout_secs)),
-        ));
-      }
+  // 查找 Agent 信息
+  if let Some(agent_info) = repo
+    .get_agent(&agent_id)
+    .await
+    .map_err(|e| AgentClientError::Other(format!("数据库查询失败: {}", e)))?
+  {
+    // 从标签中获取实际的 HTTP endpoint
+    let host_opt = agent_info.get_tag_value("host");
+    let port_opt = agent_info.get_tag_value("listen_port");
+
+    if let (Some(host), Some(port)) = (host_opt, port_opt)
+      && port.chars().all(|c| c.is_ascii_digit())
+    {
+      let http_endpoint = format!("http://{}:{}", host, port);
+      // 从全局配置读取超时时间
+      let timeout_secs = if let Some(t) = crate::utils::tuning::get() {
+        t.io_timeout_sec.clamp(5, 300)
+      } else {
+        std::env::var("LOGSEEK_IO_TIMEOUT_SEC")
+          .ok()
+          .and_then(|s| s.parse::<u64>().ok())
+          .unwrap_or(60)
+          .clamp(5, 300)
+      };
+      return Ok(AgentClient::new(
+        agent_id,
+        http_endpoint,
+        Some(Duration::from_secs(timeout_secs)),
+      ));
     }
   }
 
@@ -153,7 +173,10 @@ impl SearchService for AgentClient {
       query: query.to_string(),
       context_lines,
       path_filter: options.path_filter,
+      path_includes: options.path_includes,
+      path_excludes: options.path_excludes,
       target: options.target,
+      encoding: options.encoding,
     };
 
     // 中文调试：打印请求明细（仅在 debug 级别或显式开启“线级”调试时）

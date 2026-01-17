@@ -75,8 +75,8 @@ async fn preload_entry(reader: &mut (dyn AsyncRead + Send + Unpin), max_size: us
 pub struct EntryStreamProcessor {
   processor: Arc<SearchProcessor>,
   content_timeout: Duration,
-  // 额外路径过滤器（可选），与用户查询中的 path: 规则做 AND
-  extra_path_filter: Option<crate::query::PathFilter>,
+  // 额外路径过滤器列表，所有过滤器必须同时满足（AND 逻辑）
+  extra_path_filters: Vec<crate::query::PathFilter>,
   cancel_token: Option<tokio_util::sync::CancellationToken>,
   // 基础路径（可选）：如果设置，过滤时将先去除该前缀（用于支持相对路径 glob）
   base_path: Option<PathBuf>,
@@ -87,7 +87,7 @@ impl EntryStreamProcessor {
     Self {
       processor,
       content_timeout: Duration::from_secs(60),
-      extra_path_filter: None,
+      extra_path_filters: Vec::new(),
       cancel_token: None,
       base_path: None,
     }
@@ -105,9 +105,9 @@ impl EntryStreamProcessor {
     self
   }
 
-  /// 设置额外路径过滤器（与用户 path: 规则做 AND）
+  /// 添加额外路径过滤器（多个过滤器之间是 AND 关系）
   pub fn with_extra_path_filter(mut self, filter: crate::query::PathFilter) -> Self {
-    self.extra_path_filter = Some(filter);
+    self.extra_path_filters.push(filter);
     self
   }
 
@@ -200,15 +200,22 @@ impl EntryStreamProcessor {
       } else {
         std::path::Path::new(&meta.path).to_string_lossy().into_owned()
       };
-      if !self
-        .processor
-        .should_process_path_with(&path_str, self.extra_path_filter.as_ref())
-      {
+
+
+      // 检查所有额外过滤器 (AND 逻辑)
+      let mut matched = true;
+      for filter in &self.extra_path_filters {
+         if !self.processor.should_process_path_with(&path_str, Some(filter)) {
+            matched = false;
+            break;
+         }
+      }
+
+      if !matched {
         trace!(
-          "路径不匹配，跳过: meta.path={} path_str_for_filter={} base_path={:?}",
+          "路径不匹配 (extra filters)，跳过: meta.path={} path_str_for_filter={}",
           &meta.path,
-          &path_str,
-          self.base_path
+          &path_str
         );
         continue;
       }

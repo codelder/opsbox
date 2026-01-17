@@ -69,11 +69,11 @@ impl Term {
 
 #[derive(Debug, Clone, Default)]
 pub struct PathFilter {
-  include: Option<GlobSet>,
-  exclude: Option<GlobSet>,
+  pub include: Option<GlobSet>,
+  pub exclude: Option<GlobSet>,
   // 无通配符时的简单包含判断
-  include_contains: Vec<String>,
-  exclude_contains: Vec<String>,
+  pub include_contains: Vec<String>,
+  pub exclude_contains: Vec<String>,
 }
 
 impl PathFilter {

@@ -138,7 +138,7 @@ pub async fn view_cache_json(
               agent_id, orl.path()
             );
 
-            let client = crate::agent::create_agent_client_by_id(agent_id.to_string())
+            let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
               .await
               .map_err(|e| {
                 LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
@@ -419,7 +419,7 @@ pub async fn view_raw_file(
     EndpointType::Agent => {
       let agent_id = orl.effective_id();
       // 创建 Agent 客户端
-      let client = crate::agent::create_agent_client_by_id(agent_id.to_string())
+      let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
         .await
         .map_err(|e| {
           LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))

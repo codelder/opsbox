@@ -519,4 +519,39 @@ SOURCES = [
     await expect(page.getByRole('link', { name: 'agent-dir.log' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'archived-s3.log' })).toBeVisible();
   });
+
+  test('should filter results using path qualifiers across mixed sources', async ({ page }) => {
+    await page.goto('http://127.0.0.1:5173/search');
+    const searchInput = page.getByPlaceholder('搜索...');
+
+    // 1. Filter by specific file pattern (Include) using path:
+    // Both Local and Agent have a file ending in 'dir.log' ('local-dir.log', 'agent-dir.log')
+    // and others do not ('local-files.log', 'agent-files.log').
+    // Query: path:*dir.log
+    await searchInput.fill(`app:${APP} "${MARKER}" path:*dir.log`);
+    await searchInput.press('Enter');
+
+    // Expected: local-dir.log and agent-dir.log.
+    // Total 2 results.
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('2 个结果', { timeout: 15000 });
+    await expect(page.getByRole('link', { name: 'local-dir.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'agent-dir.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'local-files.log' })).toBeHidden();
+    await expect(page.getByRole('link', { name: 'archived-s3.log' })).toBeHidden();
+
+    // 2. Exclude Agent files using -path:
+    // Query: -path:**/*agent*
+    // Filter out any path containing "agent".
+    // Agent files: agent-dir.log, agent-files.log, internal/agent-archived.log
+    // Local files: local-dir.log, local-files.log, internal/local-archived.log
+    // S3: archived-s3.log
+    await searchInput.fill(`app:${APP} "${MARKER}" -path:**/*agent*`);
+    await searchInput.press('Enter');
+
+    // Expected: 7 Total - 3 Agent = 4 Results (3 Local + 1 S3)
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('4 个结果', { timeout: 15000 });
+    await expect(page.getByRole('link', { name: 'local-files.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'archived-s3.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'agent-files.log' })).toBeHidden();
+  });
 });
