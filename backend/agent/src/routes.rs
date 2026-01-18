@@ -482,6 +482,8 @@ mod tests {
         "query": "error",
         "context_lines": 0,
         "path_filter": null,
+        "path_includes": [],
+        "path_excludes": [],
         "target": {
             "type": "dir",
             "path": ".",

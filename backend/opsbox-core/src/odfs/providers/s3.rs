@@ -9,6 +9,7 @@ use tokio::io::AsyncReadExt;
 ///
 /// 将 ORL 路径映射到 S3 bucket
 /// 支持虚拟目录结构
+#[derive(Clone)]
 pub struct S3OpsFS {
   client: Client,
   bucket: String,
