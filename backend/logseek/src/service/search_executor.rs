@@ -396,11 +396,20 @@ impl SearchExecutor {
     &self,
     context: SearchContext,
     request: SearchRequest,
-    spec: Arc<Query>,
   ) {
     let source_name = context.orl.display_name();
 
     info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, request.context_lines);
+
+    // 解析查询（Agent 不需要，因为它自己会处理）
+    let spec = match self.parse_query(&request.query) {
+      Ok(s) => s,
+      Err(e) => {
+        tracing::error!("[SearchExecutor] 查询解析失败 err={}", e);
+        context.send_error(format!("查询解析失败: {}", e)).await;
+        return;
+      }
+    };
 
     let mut estream = match create_entry_stream(&self.pool, &context.orl).await {
       Ok(s) => s,
@@ -466,9 +475,6 @@ impl SearchExecutor {
     let (sources, request) = self.plan(query, context_lines).await?;
     tracing::info!("[SearchExecutor] 获取到 {} 个存储源配置", sources.len());
 
-    // 解析查询以供内部使用
-    let spec = self.parse_query(&request.query)?;
-
     if sources.is_empty() {
       let (tx, rx) = mpsc::channel(1);
       drop(tx);
@@ -484,7 +490,6 @@ impl SearchExecutor {
       let tx = tx.clone();
       let token = cancel_token.clone();
       let request = request.clone();
-      let spec = spec.clone();
       let executor = self.clone();
 
       tokio::spawn(async move {
@@ -502,7 +507,7 @@ impl SearchExecutor {
             executor.search_agent_source(context, request).await;
           }
           Ok(EndpointType::Local) | Ok(EndpointType::S3) => {
-            executor.search_entry_stream_source(context, request, spec).await;
+            executor.search_entry_stream_source(context, request).await;
           }
           Err(e) => {
             tracing::error!("Invalid Endpoint Type: {}", e);
