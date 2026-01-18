@@ -134,8 +134,7 @@ pub async fn stream_search(
   let sid = new_sid();
 
   // 解析查询以获取 highlights（用于前端高亮显示）
-  let highlights = executor
-    .parse_query(&body.q)
+  let highlights = crate::query::Query::parse_github_like(&body.q)
     .map(|spec| spec.highlights.clone())
     .unwrap_or_default();
 
