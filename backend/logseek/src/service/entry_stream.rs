@@ -11,6 +11,8 @@ use opsbox_core::odfs::orl::EndpointType;
 use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
 use opsbox_core::odfs::OrlManager;
 
+use crate::utils::storage;
+
 use super::search::{SearchEvent, SearchProcessor};
 
 // 统一读取并发度：使用 ENTRY_CONCURRENCY（范围 1-128）
@@ -371,6 +373,36 @@ impl EntryStreamProcessor {
   }
 }
 
+use opsbox_core::odfs::fs::OpsFileSystem;
+
+/// 核心：从已有的 OpsFileSystem 实例创建 Stream
+/// 这将重用 OrlManager 的所有智能路由逻辑（归档探测、路径处理等）
+pub async fn get_entry_stream_from_fs(
+    fs: Arc<dyn OpsFileSystem + Send + Sync>,
+    orl: &opsbox_core::odfs::orl::ORL,
+    recursive: bool
+) -> Result<Box<dyn EntryStream>, String> {
+    // 根据 OrlManager 的内部约定生成注册 Key，以匹配其查找逻辑
+    let id = match orl.endpoint_type() {
+        Ok(EndpointType::Local) => "local".to_string(),
+        Ok(EndpointType::S3) => match orl.endpoint_id() {
+            Some(id) if !id.is_empty() => format!("s3.{}", id),
+            _ => "s3.root".to_string(),
+        },
+        Ok(EndpointType::Agent) => match orl.endpoint_id() {
+            Some(id) if !id.is_empty() => format!("agent.{}", id),
+            _ => "agent.root".to_string(),
+        },
+        _ => orl.effective_id().to_string(),
+    };
+
+    let mut manager = OrlManager::new();
+    // 关键：注册实例，让 Manager 可以 resolve 它
+    manager.register(id, fs);
+    manager.get_entry_stream(orl, recursive).await
+        .map_err(|e| format!("获取流失败: {}", e))
+}
+
 /// 创建条目流（不含 Agent）
 ///
 /// 根据 ORL 配置创建对应的条目流：
@@ -380,16 +412,10 @@ pub async fn create_entry_stream(
   db_pool: &SqlitePool,
   orl: &opsbox_core::odfs::orl::ORL,
 ) -> Result<Box<dyn EntryStream>, String> {
-  // 构造临时的 OrlManager
-  // 在生产架构中，OrlManager 最好是全局单例或注入的，但为了保持 LogSeek 独立性及 API 兼容，
-  // 我们在这里临时组装它。
-  let mut manager = OrlManager::new();
-
-  match orl.endpoint_type() {
+  let fs: Arc<dyn OpsFileSystem + Send + Sync> = match orl.endpoint_type() {
     Ok(EndpointType::Local) => {
       // 注册 Local Provider
-      // LogSeek 默认 Local 是根目录
-      manager.register("local".to_string(), Arc::new(LocalOpsFS::new(None)));
+      Arc::new(LocalOpsFS::new(None))
     }
     Ok(EndpointType::S3) => {
       let profile = orl.effective_id();
@@ -400,8 +426,7 @@ pub async fn create_entry_stream(
         .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
 
       // 构造 S3 客户端
-      use crate::utils::storage::get_or_create_s3_client;
-      let client = get_or_create_s3_client(
+      let client = storage::get_or_create_s3_client(
         &profile_row.endpoint,
         &profile_row.access_key,
         &profile_row.secret_key,
@@ -415,24 +440,15 @@ pub async fn create_entry_stream(
         .split_once('/')
         .unwrap_or((orl.path().trim_start_matches('/'), ""));
 
-      // 注意：这里需要解引用 Arc<Client> 并 clone，因为 S3OpsFS::new 期望 Client 结构体
-      manager.register(
-        format!("s3.{}", profile),
-        Arc::new(S3OpsFS::new(client.as_ref().clone(), bucket_name)),
-      );
+      Arc::new(S3OpsFS::new(client.as_ref().clone(), bucket_name))
     }
     // Agent 类型由 search_agent_source 处理，不应到达这里
-    // 其他未知类型也不应出现（ORL 解析时已验证）
-    _ => unreachable!(
-      "create_entry_stream 仅处理 Local/S3 类型，Agent 应由 search_agent_source 处理"
+    _ => return Err(
+      "create_entry_stream 仅处理 Local/S3 类型，Agent 应由 search_agent_source 处理".to_string()
     ),
-  }
+  };
 
-  // recursive 默认为 true
-  manager
-    .get_entry_stream(orl, true)
-    .await
-    .map_err(|e| format!("获取流失败: {}", e))
+  get_entry_stream_from_fs(fs, orl, true).await
 }
 
 /// 通用条目流处理函数（支持基于回调的结果处理）

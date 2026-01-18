@@ -8,6 +8,7 @@ use tokio::fs;
 ///
 /// 将 ORL 路径映射到本地文件系统
 /// 例如: `orl://local/var/log/syslog` -> `/var/log/syslog`
+#[derive(Clone)]
 pub struct LocalOpsFS {
   root: PathBuf,
 }
