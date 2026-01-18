@@ -300,12 +300,6 @@ impl SearchExecutor {
     Ok((plan.sources, request))
   }
 
-  /// 解析清理后的查询字符串为匹配规格
-  pub fn parse_query(&self, query: &str) -> Result<Arc<Query>, ServiceError> {
-    let spec =
-      Query::parse_github_like(query).map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
-    Ok(Arc::new(spec))
-  }
 
   async fn search_agent_source(
     &self,
@@ -402,11 +396,11 @@ impl SearchExecutor {
     info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, request.context_lines);
 
     // 解析查询（Agent 不需要，因为它自己会处理）
-    let spec = match self.parse_query(&request.query) {
-      Ok(s) => s,
+    let spec = match Query::parse_github_like(&request.query) {
+      Ok(q) => Arc::new(q),
       Err(e) => {
-        tracing::error!("[SearchExecutor] 查询解析失败 err={}", e);
-        context.send_error(format!("查询解析失败: {}", e)).await;
+        tracing::error!("[SearchExecutor] 查询解析失败 err={:?}", e);
+        context.send_error(format!("查询解析失败: {:?}", e)).await;
         return;
       }
     };
@@ -607,42 +601,6 @@ SOURCES = [
 
     assert_eq!(config.io_max_concurrency, 50);
     assert_eq!(config.stream_channel_capacity, 256);
-  }
-
-  #[tokio::test]
-  async fn test_parse_query_success() {
-    let pool = create_test_pool().await;
-    let config = SearchExecutorConfig::default();
-    let executor = SearchExecutor::new(pool, config);
-
-    let result = executor.parse_query("error");
-    assert!(result.is_ok());
-
-    let spec = result.unwrap();
-    assert!(!spec.terms.is_empty());
-  }
-
-  #[tokio::test]
-  async fn test_parse_query_with_regex() {
-    let pool = create_test_pool().await;
-    let config = SearchExecutorConfig::default();
-    let executor = SearchExecutor::new(pool, config);
-
-    let result = executor.parse_query(r#"/\d{3}/"#);
-    assert!(result.is_ok());
-  }
-
-  #[tokio::test]
-  async fn test_parse_query_with_boolean() {
-    let pool = create_test_pool().await;
-    let config = SearchExecutorConfig::default();
-    let executor = SearchExecutor::new(pool, config);
-
-    let result = executor.parse_query("error AND warning");
-    assert!(result.is_ok());
-
-    let spec = result.unwrap();
-    assert_eq!(spec.terms.len(), 2);
   }
 
   #[tokio::test]
@@ -1090,46 +1048,6 @@ SOURCES = [
   }
 
   // ========== 错误处理测试 ==========
-
-  #[tokio::test]
-  async fn test_parse_query_failure_invalid_regex() {
-    let pool = create_test_pool().await;
-    let config = SearchExecutorConfig::default();
-    let executor = SearchExecutor::new(pool, config);
-
-    // 测试无效的正则表达式
-    let result = executor.parse_query(r#"/[invalid(/"#);
-
-    // 应该返回错误
-    assert!(result.is_err());
-
-    if let Err(ServiceError::ProcessingError(msg)) = result {
-      assert!(msg.contains("查询解析失败"));
-    } else {
-      panic!("期望 ServiceError::ProcessingError");
-    }
-  }
-
-  #[tokio::test]
-  async fn test_parse_query_failure_complex_invalid() {
-    let pool = create_test_pool().await;
-    let config = SearchExecutorConfig::default();
-    let executor = SearchExecutor::new(pool, config);
-
-    // 测试复杂的无效查询（无效的布尔表达式）
-    let result = executor.parse_query(r#"AND OR NOT"#);
-
-    // 某些查询可能被解析为有效（取决于解析器实现）
-    // 如果解析失败，验证错误类型
-    if result.is_err() {
-      if let Err(ServiceError::ProcessingError(msg)) = result {
-        assert!(msg.contains("查询解析失败"));
-      } else {
-        panic!("期望 ServiceError::ProcessingError");
-      }
-    }
-    // 如果解析成功，也是可以接受的（解析器可能很宽容）
-  }
 
   #[tokio::test]
   async fn test_get_sources_failure_no_planner() {
