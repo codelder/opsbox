@@ -61,7 +61,7 @@ SOURCES = ["orl://local{}?glob=*.log"]
     let executor = SearchExecutor::new(pool, config);
 
     // 执行搜索
-    let result = executor.search("app:test_orl_local UNIQUE_MARKER_123", 1, None).await;
+    let result = executor.search("app:test_orl_local UNIQUE_MARKER_123", "test-sid".to_string(), 1, None).await;
 
     match &result {
         Ok(_) => println!("Search initiated successfully"),
@@ -70,8 +70,8 @@ SOURCES = ["orl://local{}?glob=*.log"]
 
     assert!(result.is_ok(), "Search should succeed: {:?}", result.err());
 
-    let (mut rx, sid) = result.unwrap();
-    println!("Search SID: {}", sid);
+    let (mut rx, _highlights) = result.unwrap();
+
 
     // 收集结果
     let mut success_count = 0;
@@ -174,12 +174,12 @@ SOURCES = ["orl://local{}?glob=*/*.log"]
 
     // 搜索只应该匹配 sub/target.log 中的内容
     let result = executor
-        .search("app:test_relative_glob TARGET_LOG_CONTENT_789", 1, None)
+        .search("app:test_relative_glob TARGET_LOG_CONTENT_789", "test-sid".to_string(), 1, None)
         .await;
 
     assert!(result.is_ok(), "Search should succeed: {:?}", result.err());
 
-    let (mut rx, _sid) = result.unwrap();
+    let (mut rx, _highlights) = result.unwrap();
 
     let mut success_count = 0;
     let mut matched_paths = Vec::new();
