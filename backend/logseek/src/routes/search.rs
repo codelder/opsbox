@@ -132,7 +132,15 @@ pub async fn stream_search(
   let token_for_drop = cancel_token.clone();
 
   let sid = new_sid();
-  let (result_rx, highlights) = executor.search(&body.q, sid.clone(), ctx, Some(cancel_token)).await?;
+
+  // 解析查询以获取 highlights（用于前端高亮显示）
+  let highlights = executor
+    .parse_query(&body.q)
+    .map(|spec| spec.highlights.clone())
+    .unwrap_or_default();
+
+  // 执行搜索
+  let result_rx = executor.search(&body.q, sid.clone(), ctx, Some(cancel_token)).await?;
 
   // 缓存搜索关键词，用于后续文件查看高亮
   simple_cache().put_keywords(&sid, highlights.clone()).await;

@@ -33,7 +33,7 @@ fn escape_path_for_starlark(path: &std::path::Path) -> String {
 async fn collect_search_results(executor: &SearchExecutor, query: &str) -> Vec<String> {
     let result = executor.search(query, "test-sid".to_string(), 0, None).await;
     match result {
-        Ok((mut rx, _highlights)) => {
+        Ok(mut rx) => {
             let mut paths = Vec::new();
             while let Some(event) = rx.recv().await {
                 if let SearchEvent::Success(res) = event {

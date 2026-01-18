@@ -70,7 +70,7 @@ SOURCES = ["orl://local{}?glob=*.log"]
 
     assert!(result.is_ok(), "Search should succeed: {:?}", result.err());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集结果
@@ -179,7 +179,7 @@ SOURCES = ["orl://local{}?glob=*/*.log"]
 
     assert!(result.is_ok(), "Search should succeed: {:?}", result.err());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     let mut success_count = 0;
     let mut matched_paths = Vec::new();
