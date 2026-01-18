@@ -37,7 +37,7 @@ impl Default for SearchExecutorConfig {
 
 /// 搜索请求：封装用户输入的原始请求参数
 #[derive(Clone)]
-struct SearchRequest {
+pub struct SearchRequest {
   pub query: String,
   pub encoding: Option<String>,
   pub path_includes: Vec<String>,
@@ -248,7 +248,8 @@ impl SearchExecutor {
     }
   }
 
-  async fn get_sources(&self, query: &str, context_lines: usize) -> Result<(Vec<ORL>, SearchRequest), ServiceError> {
+  /// 规划搜索：解析原始查询，确定数据源并生成清理后的搜索请求
+  pub async fn plan(&self, query: &str, context_lines: usize) -> Result<(Vec<ORL>, SearchRequest), ServiceError> {
     let mut app: Option<String> = None;
     let mut encoding: Option<String> = None;
     let mut path_includes: Vec<String> = Vec::new();
@@ -299,7 +300,8 @@ impl SearchExecutor {
     Ok((plan.sources, request))
   }
 
-  fn parse_query(&self, query: &str) -> Result<Arc<Query>, ServiceError> {
+  /// 解析清理后的查询字符串为匹配规格
+  pub fn parse_query(&self, query: &str) -> Result<Arc<Query>, ServiceError> {
     let spec =
       Query::parse_github_like(query).map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
     Ok(Arc::new(spec))
@@ -394,20 +396,11 @@ impl SearchExecutor {
     &self,
     context: SearchContext,
     request: SearchRequest,
+    spec: Arc<Query>,
   ) {
     let source_name = context.orl.display_name();
 
     info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, request.context_lines);
-
-    // 解析查询
-    let spec = match self.parse_query(&request.query) {
-      Ok(q) => q,
-      Err(e) => {
-        tracing::error!("[SearchExecutor] 查询解析失败 err={}", e);
-        context.send_error(format!("查询解析失败: {}", e)).await;
-        return;
-      }
-    };
 
     let mut estream = match create_entry_stream(&self.pool, &context.orl).await {
       Ok(s) => s,
@@ -466,19 +459,20 @@ impl SearchExecutor {
     sid: String,
     context_lines: usize,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
-  ) -> Result<(mpsc::Receiver<SearchEvent>, Vec<crate::query::KeywordHighlight>), ServiceError> {
+  ) -> Result<mpsc::Receiver<SearchEvent>, ServiceError> {
     tracing::info!("[SearchExecutor] 开始搜索: q={}", query);
 
-    let (sources, request) = self.get_sources(query, context_lines).await?;
+    // 规划：解析查询并获取数据源
+    let (sources, request) = self.plan(query, context_lines).await?;
     tracing::info!("[SearchExecutor] 获取到 {} 个存储源配置", sources.len());
 
+    // 解析查询以供内部使用
     let spec = self.parse_query(&request.query)?;
-    let highlights = spec.highlights.clone();
 
     if sources.is_empty() {
       let (tx, rx) = mpsc::channel(1);
       drop(tx);
-      return Ok((rx, highlights));
+      return Ok(rx);
     }
 
     let (tx, rx) = mpsc::channel(self.config.stream_channel_capacity);
@@ -490,6 +484,7 @@ impl SearchExecutor {
       let tx = tx.clone();
       let token = cancel_token.clone();
       let request = request.clone();
+      let spec = spec.clone();
       let executor = self.clone();
 
       tokio::spawn(async move {
@@ -507,7 +502,7 @@ impl SearchExecutor {
             executor.search_agent_source(context, request).await;
           }
           Ok(EndpointType::Local) | Ok(EndpointType::S3) => {
-            executor.search_entry_stream_source(context, request).await;
+            executor.search_entry_stream_source(context, request, spec).await;
           }
           Err(e) => {
             tracing::error!("Invalid Endpoint Type: {}", e);
@@ -516,7 +511,7 @@ impl SearchExecutor {
       });
     }
     drop(tx);
-    Ok((rx, highlights))
+    Ok(rx)
   }
 }
 
@@ -653,7 +648,7 @@ SOURCES = [
     let config = SearchExecutorConfig::default();
     let executor = SearchExecutor::new(pool, config);
 
-    let result = executor.get_sources("error", 3).await;
+    let result = executor.plan("error", 3).await;
     assert!(result.is_ok());
 
     let (sources, request) = result.unwrap();
@@ -670,7 +665,7 @@ SOURCES = [
     let config = SearchExecutorConfig::default();
     let executor = SearchExecutor::new(pool, config);
 
-    let result = executor.get_sources("encoding:GBK error", 3).await;
+    let result = executor.plan("encoding:GBK error", 3).await;
     assert!(result.is_ok());
 
     let (sources, request) = result.unwrap();
@@ -687,7 +682,7 @@ SOURCES = [
     let config = SearchExecutorConfig::default();
     let executor = SearchExecutor::new(pool, config);
 
-    let result = executor.get_sources("app:test error", 3).await;
+    let result = executor.plan("app:test error", 3).await;
     assert!(result.is_ok());
 
     let (sources, request) = result.unwrap();
@@ -787,7 +782,7 @@ SOURCES = [
       eprintln!("Search failed: {:?}", e);
     }
     assert!(result.is_ok());
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 验证 sid 生成
 
@@ -840,7 +835,7 @@ SOURCES = [
     let result = executor.search("test query", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (_rx, _highlights) = result.unwrap();
+    let _rx = result.unwrap();
 
     // 验证 sid 格式（应该是 UUID）
 
@@ -877,7 +872,7 @@ SOURCES = [
 
     // 验证搜索启动成功
     assert!(result.is_ok());
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 验证 sid 生成
 
@@ -1140,7 +1135,7 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 尝试获取数据源配置（应该失败，因为没有默认 planner）
-    let result = executor.get_sources("error", 3).await;
+    let result = executor.plan("error", 3).await;
 
     // 应该返回错误
     assert!(result.is_err());
@@ -1174,7 +1169,7 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 尝试获取数据源配置（应该失败，因为脚本有语法错误）
-    let result = executor.get_sources("error", 3).await;
+    let result = executor.plan("error", 3).await;
 
     // 应该返回错误
     assert!(result.is_err());
@@ -1229,7 +1224,7 @@ SOURCES = []
     // 应该成功
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 验证搜索启动成功
 
@@ -1273,7 +1268,7 @@ SOURCES = [
     let result = executor.search("test", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集所有事件
@@ -1334,7 +1329,7 @@ SOURCES = [
     let result = executor.search("test", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集事件
     let mut found_error = false;
@@ -1386,7 +1381,7 @@ SOURCES = [
     let result = executor.search("test", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 查找错误事件
     while let Some(event) = rx.recv().await {
@@ -1429,7 +1424,7 @@ SOURCES = [
     let result = executor.search("test", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集所有事件
     let mut error_count = 0;
@@ -1485,7 +1480,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集事件
@@ -1551,7 +1546,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集事件（预期会失败，因为 Agent 不存在）
@@ -1608,7 +1603,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集事件
@@ -1662,7 +1657,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集事件
@@ -1717,7 +1712,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集事件
@@ -1771,7 +1766,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集事件
     let mut found_error = false;
@@ -1813,7 +1808,7 @@ SOURCES = [
     let result = executor.search("test", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集事件
@@ -1884,7 +1879,7 @@ SOURCES = [
     let result = executor.search("test", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集事件
@@ -1926,7 +1921,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 3, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集事件
     let mut found_agent_id = false;
@@ -1963,7 +1958,7 @@ SOURCES = [
 
     // 应该能够处理大查询（可能成功或失败，取决于解析器限制）
     // 如果成功，验证返回值
-    if let Ok((mut rx, _highlights)) = result {
+    if let Ok(mut rx) = result {
 
       // 消费一些事件
       let mut event_count = 0;
@@ -1991,7 +1986,7 @@ SOURCES = [
     // 应该成功
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 消费事件
@@ -2018,7 +2013,7 @@ SOURCES = [
     // 应该成功（上下文行数应该被接受）
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 消费事件
@@ -2068,7 +2063,7 @@ SOURCES = [
     // 应该成功启动
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 消费一些事件（不需要等待所有 100 个数据源完成）
@@ -2103,7 +2098,7 @@ SOURCES = [
     // 应该成功（即使通道容量很小）
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 消费事件
@@ -2137,7 +2132,7 @@ SOURCES = [
       let result = executor.search(query, "test-sid".to_string(), 3, None).await;
 
       // 应该能够处理特殊字符（可能成功或失败）
-      if let Ok((mut rx, _highlights)) = result {
+      if let Ok(mut rx) = result {
 
         // 消费一些事件
         while let Some(_event) = rx.recv().await {
@@ -2162,7 +2157,7 @@ SOURCES = [
     // 应该成功（空查询是有效的）
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 消费事件
@@ -2185,7 +2180,7 @@ SOURCES = [
     // 应该成功
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 消费事件
@@ -2238,7 +2233,7 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 测试多个 encoding 限定词（只有最后一个应该生效）
-    let result = executor.get_sources("encoding:UTF-8 encoding:GBK error", 3).await;
+    let result = executor.plan("encoding:UTF-8 encoding:GBK error", 3).await;
 
     // 应该成功
     assert!(result.is_ok());
@@ -2258,7 +2253,7 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 测试多个 app 限定词（只有最后一个应该生效）
-    let result = executor.get_sources("app:test app:test error", 3).await;
+    let result = executor.plan("app:test app:test error", 3).await;
 
     // 应该成功（使用 test planner）
     assert!(result.is_ok());
@@ -2277,7 +2272,7 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 测试混合限定词
-    let result = executor.get_sources("app:test encoding:UTF-8 error AND warning", 3).await;
+    let result = executor.plan("app:test encoding:UTF-8 error AND warning", 3).await;
 
     // 应该成功
     assert!(result.is_ok());
@@ -2299,7 +2294,7 @@ SOURCES = [
     let result = executor.search("test", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 消费所有事件直到通道关闭
     let mut event_count = 0;
@@ -2331,7 +2326,7 @@ SOURCES = [
 
       assert!(result.is_ok(), "第 {} 次搜索应该成功", i + 1);
 
-      let (mut rx, _highlights) = result.unwrap();
+      let mut rx = result.unwrap();
 
 
       // 消费事件
@@ -2356,7 +2351,7 @@ SOURCES = [
       let result = executor.search("test", "test-sid".to_string(), 1, None).await;
       assert!(result.is_ok());
 
-      let (mut rx, _highlights) = result.unwrap();
+      let mut rx = result.unwrap();
 
 
       // 验证 sid 唯一性
@@ -2418,7 +2413,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 1, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
 
     // 收集结果
@@ -2483,7 +2478,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 2, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut found_context = false;
@@ -2535,7 +2530,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut found_files = Vec::new();
@@ -2590,7 +2585,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut success_count = 0;
@@ -2639,7 +2634,7 @@ SOURCES = [
     let result = executor.search("encoding:UTF-8 错误", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut found_match = false;
@@ -2691,7 +2686,7 @@ SOURCES = [
     let result = executor.search("error AND timeout", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut found_match = false;
@@ -2745,7 +2740,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut success_count = 0;
@@ -2792,7 +2787,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 消费事件
     while let Some(_event) = rx.recv().await {
@@ -2853,7 +2848,7 @@ SOURCES = [
     let result = executor.search("error", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果（可能找到也可能找不到，取决于归档处理）
     let mut event_count = 0;
@@ -2899,7 +2894,7 @@ SOURCES = [
     let result = executor.search("error OR warning", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut success_count = 0;
@@ -2947,7 +2942,7 @@ SOURCES = [
     let result = executor.search("error NOT warning", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut event_count = 0;
@@ -2996,7 +2991,7 @@ SOURCES = [
     let result = executor.search(r#"/\d{3}/"#, "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut found_match = false;
@@ -3043,7 +3038,7 @@ SOURCES = [
     let result = executor.search("ERROR", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut found_match = false;
@@ -3091,7 +3086,7 @@ SOURCES = [
     let result = executor.search("path:*.log error", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut found_files = Vec::new();
@@ -3141,7 +3136,7 @@ SOURCES = [
     let result = executor.search("nonexistent", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
 
     // 收集结果
     let mut success_count = 0;
@@ -3191,7 +3186,7 @@ SOURCES = [
 
     // 1. 测试 excluide: -path:test/**
     let result = executor.search("-path:test/** error", "test-sid".to_string(), 0, None).await;
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
     let mut found_files = Vec::new();
     while let Some(event) = rx.recv().await {
       if let SearchEvent::Success(res) = event {
@@ -3205,7 +3200,7 @@ SOURCES = [
     // 2. 测试 include combination: path:src/** path:test/**
     // 注意：Strict glob requires ** to match directories.
     let result = executor.search("path:src/** path:test/** error", "test-sid".to_string(), 0, None).await;
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
     let mut found_files = Vec::new();
     while let Some(event) = rx.recv().await {
       if let SearchEvent::Success(res) = event {
@@ -3219,7 +3214,7 @@ SOURCES = [
 
     // 3. 测试 mixed: path:src/** -path:**/utils.rs
     let result = executor.search("path:src/** -path:**/utils.rs error", "test-sid".to_string(), 0, None).await;
-    let (mut rx, _highlights) = result.unwrap();
+    let mut rx = result.unwrap();
     let mut found_files = Vec::new();
     while let Some(event) = rx.recv().await {
       if let SearchEvent::Success(res) = event {

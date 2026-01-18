@@ -26,7 +26,7 @@ async fn http_route_usage(pool: SqlitePool, query: &str) {
 
   // 执行搜索
   match executor.search(query, "test-sid".to_string(), 3, None).await {
-    Ok((mut rx, _highlights)) => {
+    Ok(mut rx) => {
 
 
       // 消费搜索结果并转换为 NDJSON 流
@@ -65,7 +65,7 @@ async fn cli_tool_usage(pool: SqlitePool, query: &str) {
 
   // 执行搜索
   match executor.search(query, "test-sid".to_string(), 5, None).await {
-    Ok((mut rx, _highlights)) => {
+    Ok(mut rx) => {
       let mut total_matches = 0;
 
       // 实时显示搜索结果
@@ -99,7 +99,7 @@ async fn scheduled_task_usage(pool: SqlitePool, queries: Vec<&str>) {
     println!("\n处理查询: {}", query);
 
     match executor.search(query, "test-sid".to_string(), 2, None).await {
-      Ok((mut rx, _highlights)) => {
+      Ok(mut rx) => {
         let mut result_count = 0;
 
         // 收集结果用于后续处理（如发送告警、生成报告等）
