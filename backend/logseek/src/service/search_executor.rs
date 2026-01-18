@@ -7,7 +7,7 @@ use crate::query::Query;
 use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::service::ServiceError;
 use crate::service::entry_stream::{EntryStreamProcessor, create_entry_stream};
-use crate::service::search::{SearchEvent, SearchProcessor};
+use crate::service::search::{SearchEvent, SearchProcessor, SearchResult};
 use futures::StreamExt;
 use opsbox_core::SqlitePool;
 use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
@@ -85,7 +85,7 @@ impl SearchContext {
   }
 
   /// 缓存结果并发送成功事件，返回是否应继续
-  async fn cache_and_send(&self, mut result: crate::service::search::SearchResult) -> bool {
+  async fn cache_and_send(&self, mut result: SearchResult) -> bool {
     let result_orl = self.build_result_orl(&result.path);
     simple_cache()
       .put_lines(
