@@ -395,7 +395,6 @@ impl SearchExecutor {
 
     info!("[SearchExecutor] 开始数据源搜索: source={} ctx={}", source_name, request.context_lines);
 
-    // 解析查询（Agent 不需要，因为它自己会处理）
     let spec = match Query::parse_github_like(&request.query) {
       Ok(q) => Arc::new(q),
       Err(e) => {
