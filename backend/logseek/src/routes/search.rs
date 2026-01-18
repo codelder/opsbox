@@ -3,7 +3,6 @@
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
 use crate::api::{LogSeekApiError, models::SearchBody};
-use crate::query::Query;
 use crate::service::search::SearchEvent;
 use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
 use axum::{
@@ -12,6 +11,7 @@ use axum::{
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
 use bytes::Bytes;
+use crate::repository::cache::{cache as simple_cache, new_sid};
 use futures::Stream;
 use opsbox_core::SqlitePool;
 use tokio::sync::mpsc;
@@ -131,10 +131,11 @@ pub async fn stream_search(
   let cancel_token = tokio_util::sync::CancellationToken::new();
   let token_for_drop = cancel_token.clone();
 
-  let (result_rx, sid) = executor.search(&body.q, ctx, Some(cancel_token)).await?;
+  let sid = new_sid();
+  let (result_rx, highlights) = executor.search(&body.q, sid.clone(), ctx, Some(cancel_token)).await?;
 
-  let query = Query::parse_github_like(&body.q).unwrap_or_default();
-  let highlights = query.highlights.clone();
+  // 缓存搜索关键词，用于后续文件查看高亮
+  simple_cache().put_keywords(&sid, highlights.clone()).await;
 
   let inner_stream = convert_to_ndjson_stream(result_rx, highlights);
   let stream = async_stream::stream! {
