@@ -24,7 +24,7 @@ pub struct ListRequest {
   pub orl: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ListResponse {
   pub items: Vec<ResourceItem>,
 }

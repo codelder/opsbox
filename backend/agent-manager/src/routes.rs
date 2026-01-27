@@ -16,6 +16,7 @@ use std::sync::Arc;
 // 从 opsbox-core 复用共享的日志 API 类型
 pub use opsbox_core::logging::repository::LogConfigResponse;
 pub use opsbox_core::logging::{UpdateLogLevelRequest, UpdateRetentionRequest};
+pub use opsbox_core::response::SuccessResponse;
 
 /// 查询参数
 #[derive(Debug, Deserialize)]
@@ -53,11 +54,8 @@ pub struct RemoveTagRequest {
   pub value: String,
 }
 
-/// 通用成功响应（日志代理 API 专用）
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct SuccessResponse {
-  pub message: String,
-}
+// 使用 opsbox-core 的 SuccessResponse<T>，T=() 表示无数据
+// pub use opsbox_core::response::SuccessResponse; 已在上面重新导出
 
 /// 构造禁用代理的 HTTP 客户端，保证访问本地 Agent 时不会被系统代理劫持
 fn build_agent_http_client() -> Result<reqwest::Client, (StatusCode, String)> {
@@ -354,7 +352,7 @@ async fn proxy_agent_log_level(
   State(manager): State<Arc<AgentManager>>,
   Path(agent_id): Path<String>,
   Json(req): Json<UpdateLogLevelRequest>,
-) -> Result<Json<SuccessResponse>, (StatusCode, String)> {
+) -> Result<Json<SuccessResponse<()>>, (StatusCode, String)> {
   // 1. 获取 Agent 信息（包含 host 和 listen_port 标签）
   let agent = manager
     .get_agent(&agent_id)
@@ -406,7 +404,7 @@ async fn proxy_agent_log_level(
     return Err((StatusCode::BAD_GATEWAY, format!("Agent 返回错误: {}", status)));
   }
 
-  let result = response.json::<SuccessResponse>().await.map_err(|e| {
+  let result = response.json::<SuccessResponse<()>>().await.map_err(|e| {
     tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
     (StatusCode::INTERNAL_SERVER_ERROR, format!("解析响应失败: {}", e))
   })?;
@@ -420,7 +418,7 @@ async fn proxy_agent_log_retention(
   State(manager): State<Arc<AgentManager>>,
   Path(agent_id): Path<String>,
   Json(req): Json<UpdateRetentionRequest>,
-) -> Result<Json<SuccessResponse>, (StatusCode, String)> {
+) -> Result<Json<SuccessResponse<()>>, (StatusCode, String)> {
   // 1. 获取 Agent 信息（包含 host 和 listen_port 标签）
   let agent = manager
     .get_agent(&agent_id)
@@ -472,7 +470,7 @@ async fn proxy_agent_log_retention(
     return Err((StatusCode::BAD_GATEWAY, format!("Agent 返回错误: {}", status)));
   }
 
-  let result = response.json::<SuccessResponse>().await.map_err(|e| {
+  let result = response.json::<SuccessResponse<()>>().await.map_err(|e| {
     tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
     (StatusCode::INTERNAL_SERVER_ERROR, format!("解析响应失败: {}", e))
   })?;

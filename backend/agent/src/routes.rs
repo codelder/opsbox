@@ -113,7 +113,7 @@ pub async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogCon
 pub async fn update_log_level(
   State(state): State<AppState>,
   Json(req): Json<UpdateLogLevelRequest>,
-) -> Result<Json<SuccessResponse>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>, ApiError> {
   // 验证日志级别
   let level = LogLevel::from_str(&req.level).map_err(|e| ApiError::InvalidLevel(e.to_string()))?;
 
@@ -129,16 +129,14 @@ pub async fn update_log_level(
 
   info!("日志级别已更新为: {}", level);
 
-  Ok(Json(SuccessResponse {
-    message: format!("日志级别已更新为: {}", level),
-  }))
+  Ok(Json(SuccessResponse::<()>::with_message(format!("日志级别已更新为: {}", level))))
 }
 
 /// 更新日志保留数量
 pub async fn update_log_retention(
   State(_state): State<AppState>,
   Json(req): Json<UpdateRetentionRequest>,
-) -> Result<Json<SuccessResponse>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>, ApiError> {
   // 验证保留数量
   if req.retention_count == 0 || req.retention_count > 365 {
     return Err(ApiError::InvalidRetention("保留数量必须在 1-365 之间".to_string()));
@@ -148,9 +146,7 @@ pub async fn update_log_retention(
   // 重启后会使用命令行参数指定的值
   info!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count);
 
-  Ok(Json(SuccessResponse {
-    message: format!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count),
-  }))
+  Ok(Json(SuccessResponse::<()>::with_message(format!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count))))
 }
 
 /// 列出目录文件

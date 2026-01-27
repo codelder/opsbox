@@ -6,6 +6,7 @@ use crate::models::{AgentInfo, AgentStatus, AgentTag};
 use crate::repository::AgentRepository;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
+use tracing;
 
 /// Agent 管理器
 pub struct AgentManager {
@@ -39,11 +40,12 @@ impl AgentManager {
     info.update_heartbeat();
 
     tracing::info!(
-      "注册 Agent: id={}, name={}, hostname={}, tags={:?}",
+      "注册 Agent: id={}, name={}, hostname={}, tags={:?}, last_heartbeat={}",
       info.id,
       info.name,
       info.hostname,
-      info.tags.iter().map(|t| t.to_string()).collect::<Vec<_>>()
+      info.tags.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+      info.last_heartbeat
     );
 
     self
@@ -188,10 +190,27 @@ impl AgentManager {
   /// 获取在线 Agent（动态过滤）
   pub async fn list_online_agents(&self) -> Vec<AgentInfo> {
     let list = self.list_agents().await;
-    list
+    let now = chrono::Utc::now().timestamp();
+    tracing::info!("AgentManager::list_online_agents: total {} agents, heartbeat_timeout={}", list.len(), self.heartbeat_timeout);
+
+    let online_agents: Vec<AgentInfo> = list
       .into_iter()
-      .filter(|a| a.is_online(self.heartbeat_timeout))
-      .collect()
+      .filter(|a| {
+        let is_online = a.is_online(self.heartbeat_timeout);
+        if !is_online {
+          tracing::info!("  Agent offline: id={}, last_heartbeat={}, age={}s (timeout={}s)",
+            a.id, a.last_heartbeat, now - a.last_heartbeat, self.heartbeat_timeout);
+        }
+        is_online
+      })
+      .collect();
+
+    tracing::info!("AgentManager::list_online_agents: returning {} online agents", online_agents.len());
+    for agent in &online_agents {
+      tracing::info!("  Online agent: id={}, name={}", agent.id, agent.name);
+    }
+
+    online_agents
   }
 
   /// 按标签筛选 Agent（动态状态）

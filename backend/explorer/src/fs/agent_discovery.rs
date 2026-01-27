@@ -5,6 +5,7 @@ use opsbox_core::odfs::orl::OpsPath;
 use opsbox_core::odfs::types::{OpsEntry, OpsFileType, OpsMetadata};
 use std::io;
 use std::sync::Arc;
+use tracing;
 
 /// Agent 发现文件系统
 /// 提供在线 Agent 的虚拟目录视图
@@ -36,6 +37,13 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
 
   async fn read_dir(&self, _path: &OpsPath) -> io::Result<Vec<OpsEntry>> {
     let agents = self.manager.list_online_agents().await;
+
+    tracing::info!("AgentDiscoveryFileSystem::read_dir: found {} online agents", agents.len());
+    for agent in &agents {
+        tracing::info!("  Agent: id={}, name={}, last_heartbeat={}, is_online={}",
+            agent.id, agent.name, agent.last_heartbeat,
+            agent.is_online(90));
+    }
 
     let entries = agents
       .into_iter()

@@ -10,6 +10,7 @@ use crate::config::AgentConfig;
 // 从 opsbox-core 重新导出共享类型
 pub use opsbox_core::logging::repository::LogConfigResponse;
 pub use opsbox_core::logging::{UpdateLogLevelRequest, UpdateRetentionRequest};
+pub use opsbox_core::response::SuccessResponse;
 
 /// 应用状态
 #[derive(Clone)]
@@ -17,11 +18,8 @@ pub struct AppState {
   pub config: Arc<AgentConfig>,
 }
 
-/// 通用成功响应（简化版，用于日志 API）
-#[derive(Debug, serde::Serialize)]
-pub struct SuccessResponse {
-  pub message: String,
-}
+// 使用 opsbox-core 的 SuccessResponse<T>，T=() 表示无数据
+// pub use opsbox_core::response::SuccessResponse; 已在上面重新导出
 
 /// 错误响应
 #[derive(Debug, serde::Serialize)]

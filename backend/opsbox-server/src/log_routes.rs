@@ -15,15 +15,13 @@ use opsbox_core::{
     LogLevel,
     repository::{LogConfigRepository, LogConfigResponse},
   },
+  response::SuccessResponse,
 };
 use serde::Serialize;
 use std::str::FromStr;
 
-/// 通用成功响应（日志 API 专用）
-#[derive(Debug, Serialize)]
-pub struct SuccessResponse {
-  pub message: String,
-}
+// 使用 opsbox-core 的 SuccessResponse<T>，T=() 表示无数据
+// SuccessResponse 已从 opsbox_core::response 导入
 
 /// 错误响应
 #[derive(Debug, Serialize)]
@@ -78,7 +76,7 @@ async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigR
 async fn update_log_level(
   State(state): State<AppState>,
   Json(req): Json<UpdateLogLevelRequest>,
-) -> Result<Json<SuccessResponse>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>, ApiError> {
   // 验证日志级别
   let level = LogLevel::from_str(&req.level).map_err(|e| ApiError::InvalidLevel(e.to_string()))?;
 
@@ -98,16 +96,14 @@ async fn update_log_level(
 
   tracing::info!("日志级别已更新为: {}", level);
 
-  Ok(Json(SuccessResponse {
-    message: format!("日志级别已更新为: {}", level),
-  }))
+  Ok(Json(SuccessResponse::<()>::with_message(format!("日志级别已更新为: {}", level))))
 }
 
 /// 更新日志保留数量
 async fn update_log_retention(
   State(state): State<AppState>,
   Json(req): Json<UpdateRetentionRequest>,
-) -> Result<Json<SuccessResponse>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>, ApiError> {
   // 验证保留数量
   if req.retention_count == 0 || req.retention_count > 365 {
     return Err(ApiError::InvalidRetention("保留数量必须在 1-365 之间".to_string()));
@@ -122,9 +118,7 @@ async fn update_log_retention(
 
   tracing::info!("日志保留数量已更新为: {} 天", req.retention_count);
 
-  Ok(Json(SuccessResponse {
-    message: format!("日志保留数量已更新为: {} 天", req.retention_count),
-  }))
+  Ok(Json(SuccessResponse::<()>::with_message(format!("日志保留数量已更新为: {} 天", req.retention_count))))
 }
 
 /// 创建日志配置路由

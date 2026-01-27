@@ -47,7 +47,7 @@
   let items: ResourceItem[] = $state([]);
   let loading = $state(false);
   let error: string | null = $state(null);
-  let urlOrl = page.url.searchParams.get('orl') || page.url.searchParams.get('odfi');
+  let urlOrl = page.url.searchParams.get('orl');
   let viewMode = $state<'table' | 'grid'>('grid');
   let showHidden = $state(false);
 
@@ -94,7 +94,7 @@
     }
   }
 
-  // Derived active state from ODFI
+  // Derived active state from ORL
   let activeType = $derived.by(() => {
     if (currentOrlStr.startsWith('orl://local')) return 'local';
     if (currentOrlStr.startsWith('orl://s3')) return 's3';
@@ -145,11 +145,11 @@
     }
   }
 
-  async function loadResources(odfi: string): Promise<boolean> {
+  async function loadResources(orl: string): Promise<boolean> {
     loading = true;
     error = null;
     try {
-      items = await listResources(odfi);
+      items = await listResources(orl);
       return true;
     } catch (e: any) {
       error = e.message;
@@ -221,7 +221,7 @@
 
   function handleDownload(item: ResourceItem) {
     if (!item.path) return;
-    const url = `/api/v1/explorer/download?odfi=${encodeURIComponent(item.path)}`;
+    const url = `/api/v1/explorer/download?orl=${encodeURIComponent(item.path)}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = '';
@@ -275,7 +275,7 @@
         }
       }
     } catch (e) {
-      console.error('Failed to parse ODFI for parent navigation', e);
+      console.error('Failed to parse ORL for parent navigation', e);
       if (currentOrlStr.includes('/')) {
         const parts = currentOrlStr.split('/');
         parts.pop();
@@ -829,7 +829,7 @@
                 <div class="w-full flex-1 space-y-6 text-left">
                   <div>
                     <h3 class="text-2xl font-normal text-foreground">资源列举失败</h3>
-                    <p class="mt-2 text-muted-foreground">在访问指定的 ODFI 路径时发生了错误。</p>
+                    <p class="mt-2 text-muted-foreground">在访问指定的 ORL 路径时发生了错误。</p>
                   </div>
 
                   <!-- Error Details Box -->
@@ -861,7 +861,7 @@
                       </summary>
                       <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
                         <ul class="ml-2 list-inside list-disc space-y-1">
-                          <li>检查 ODFI 语法是否正确</li>
+                          <li>检查 ORL 语法是否正确</li>
                           <li>确保远程代理 (Agent) 处于在线状态</li>
                           <li>如果是 S3，请检查子账户是否有对应 Bucket 的权限 (ListBuckets/ListObjects)</li>
                           <li>检查网络连接是否正常</li>

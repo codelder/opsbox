@@ -129,10 +129,21 @@ impl ORL {
 
   /// 对于 S3，ProfileName 就在 id 里
   /// 对于 Local，如果 id 为空则意味着 localhost
+  /// 对于 Agent，如果 id 为空则意味着 root
   pub fn effective_id(&self) -> Cow<'_, str> {
     match self.endpoint_id() {
       Some(id) => Cow::Borrowed(id),
-      None => Cow::Borrowed("localhost"),
+      None => {
+        // 根据端点类型决定默认ID
+        if let Ok(endpoint_type) = self.endpoint_type() {
+          match endpoint_type {
+            EndpointType::Agent => Cow::Borrowed("root"),
+            _ => Cow::Borrowed("localhost"),
+          }
+        } else {
+          Cow::Borrowed("localhost")
+        }
+      }
     }
   }
 
@@ -349,6 +360,16 @@ mod tests {
         let orl = ORL::parse("orl://local/path").unwrap();
         assert_eq!(orl.endpoint_id(), None);
         assert_eq!(orl.effective_id(), "localhost");
+
+        // Test agent endpoint without ID
+        let orl = ORL::parse("orl://agent/path").unwrap();
+        assert_eq!(orl.endpoint_id(), None);
+        assert_eq!(orl.effective_id(), "root");
+
+        // Test agent endpoint with hostname
+        let orl = ORL::parse("orl://agent.web-01/path").unwrap();
+        assert_eq!(orl.endpoint_id(), None);
+        assert_eq!(orl.effective_id(), "root"); // Still root because no userinfo
     }
 
     #[test]
