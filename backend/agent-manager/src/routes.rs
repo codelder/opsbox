@@ -13,6 +13,10 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+// 从 opsbox-core 复用共享的日志 API 类型
+pub use opsbox_core::logging::repository::LogConfigResponse;
+pub use opsbox_core::logging::{UpdateLogLevelRequest, UpdateRetentionRequest};
+
 /// 查询参数
 #[derive(Debug, Deserialize)]
 pub struct AgentQuery {
@@ -49,32 +53,7 @@ pub struct RemoveTagRequest {
   pub value: String,
 }
 
-/// 日志配置响应
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct LogConfigResponse {
-  /// 日志级别
-  pub level: String,
-  /// 日志保留数量（天）
-  pub retention_count: usize,
-  /// 日志目录
-  pub log_dir: String,
-}
-
-/// 更新日志级别请求
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct UpdateLogLevelRequest {
-  /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
-  pub level: String,
-}
-
-/// 更新保留数量请求
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct UpdateRetentionRequest {
-  /// 保留数量（天）
-  pub retention_count: usize,
-}
-
-/// 通用成功响应
+/// 通用成功响应（日志代理 API 专用）
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct SuccessResponse {
   pub message: String,
@@ -575,7 +554,11 @@ mod tests {
       .header("content-type", "application/json")
       .body(axum::body::Body::from(serde_json::to_string(&agent_info).unwrap()))
       .unwrap();
-    req.extensions_mut().insert(axum::extract::connect_info::ConnectInfo::<std::net::SocketAddr>("127.0.0.1:12345".parse().unwrap()));
+    req
+      .extensions_mut()
+      .insert(axum::extract::connect_info::ConnectInfo::<std::net::SocketAddr>(
+        "127.0.0.1:12345".parse().unwrap(),
+      ));
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED);
 
@@ -612,7 +595,9 @@ mod tests {
       .method("POST")
       .uri(format!("/{}/tags/add", agent_id))
       .header("content-type", "application/json")
-      .body(axum::body::Body::from(serde_json::json!({"key": "env", "value": "test"}).to_string()))
+      .body(axum::body::Body::from(
+        serde_json::json!({"key": "env", "value": "test"}).to_string(),
+      ))
       .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -631,7 +616,9 @@ mod tests {
       .method("DELETE")
       .uri(format!("/{}/tags/remove", agent_id))
       .header("content-type", "application/json")
-      .body(axum::body::Body::from(serde_json::json!({"key": "env", "value": "test"}).to_string()))
+      .body(axum::body::Body::from(
+        serde_json::json!({"key": "env", "value": "test"}).to_string(),
+      ))
       .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);

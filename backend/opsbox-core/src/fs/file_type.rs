@@ -116,7 +116,7 @@ fn is_looks_like_text(data: &[u8]) -> bool {
 
     // 统计可打印字符
     let printable = data.iter().filter(|&&b| {
-        b == 0x09 || b == 0x0A || b == 0x0D || (0x20 <= b && b <= 0x7E)
+        b == 0x09 || b == 0x0A || b == 0x0D || (0x20..=0x7E).contains(&b)
     }).count();
 
     // 如果可打印字符占比超过 90%，或者是很短的片段，认为是文本

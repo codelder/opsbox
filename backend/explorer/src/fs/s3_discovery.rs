@@ -51,7 +51,7 @@ impl OpsFileSystem for S3DiscoveryFileSystem {
     if path_str == "/" {
       let profiles = list_s3_profiles(&self.db_pool)
         .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
       let entries = profiles
         .into_iter()
@@ -90,13 +90,13 @@ impl OpsFileSystem for S3DiscoveryFileSystem {
 
     let profile = load_s3_profile(&self.db_pool, profile_name)
       .await
-      .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?
+      .map_err(|e| io::Error::other(e.to_string()))?
       .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "Profile not found"))?;
 
     let client = get_or_create_s3_client(&profile.endpoint, &profile.access_key, &profile.secret_key)
-       .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+       .map_err(|e| io::Error::other(e.to_string()))?;
 
-    let resp = client.list_buckets().send().await.map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let resp = client.list_buckets().send().await.map_err(|e| io::Error::other(e.to_string()))?;
 
     let entries = resp.buckets.unwrap_or_default().into_iter().map(|b| {
          let name = b.name.unwrap_or_default();

@@ -132,15 +132,12 @@ impl ExplorerService {
        use opsbox_core::storage::s3::get_or_create_s3_client;
 
        if let Some((profile_name, bucket_name)) = id_part.split_once(':') {
-           if let Ok(Some(profile)) = load_s3_profile(pool, profile_name).await {
-               if let Ok(client) = get_or_create_s3_client(&profile.endpoint, &profile.access_key, &profile.secret_key) {
+           if let Ok(Some(profile)) = load_s3_profile(pool, profile_name).await
+               && let Ok(client) = get_or_create_s3_client(&profile.endpoint, &profile.access_key, &profile.secret_key) {
                    return Some(Arc::new(S3OpsFS::new((*client).clone(), bucket_name)) as Arc<dyn OpsFileSystem>);
                }
-           }
-       } else {
-           if let Ok(Some(_)) = load_s3_profile(pool, id_part).await {
-               return Some(Arc::new(S3DiscoveryFileSystem::new(pool.clone())) as Arc<dyn OpsFileSystem>);
-           }
+       } else if let Ok(Some(_)) = load_s3_profile(pool, id_part).await {
+           return Some(Arc::new(S3DiscoveryFileSystem::new(pool.clone())) as Arc<dyn OpsFileSystem>);
        }
        None
   }

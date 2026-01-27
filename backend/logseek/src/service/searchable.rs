@@ -75,7 +75,7 @@ pub struct SearchContext {
 
 impl SearchContext {
     pub fn is_cancelled(&self) -> bool {
-        self.cancel_token.as_ref().map_or(false, |t| t.is_cancelled())
+        self.cancel_token.as_ref().is_some_and(|t| t.is_cancelled())
     }
 }
 
@@ -326,11 +326,10 @@ async fn search_with_entry_stream(
     }
 
     // 5. 路径过滤：ORL 携带的内置过滤
-    if let Some(glob) = ctx.orl.filter_glob() {
-        if let Ok(filter) = crate::query::path_glob_to_filter(&glob) {
+    if let Some(glob) = ctx.orl.filter_glob()
+        && let Ok(filter) = crate::query::path_glob_to_filter(&glob) {
             processor = processor.with_extra_path_filter(filter);
         }
-    }
 
     // 6. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
@@ -342,7 +341,7 @@ async fn search_with_entry_stream(
     processor
         .process_stream(&mut *estream, ctx.tx.clone())
         .await
-        .map_err(|e| ServiceError::ProcessingError(e))?;
+        .map_err(ServiceError::ProcessingError)?;
 
     Ok(())
 }

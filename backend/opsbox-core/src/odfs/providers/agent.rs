@@ -75,7 +75,7 @@ impl OpsFileSystem for AgentOpsFS {
     let encoded_parent = utf8_percent_encode(&parent_str, NON_ALPHANUMERIC).to_string();
     let list_url = format!("/api/v1/list_files?path={}", encoded_parent);
     let list_resp: AgentListResponse = self.client.get(&list_url).await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
 
     if let Some(item) = list_resp.items.into_iter().find(|i| i.name == name_to_find) {
          Ok(OpsMetadata {
@@ -101,7 +101,7 @@ impl OpsFileSystem for AgentOpsFS {
 
   async fn read_dir(&self, path: &OpsPath) -> io::Result<Vec<OpsEntry>> {
     let resp: AgentListResponse = self.client.get_with_query("/api/v1/list_files", &[("path", path.as_str())]).await
-         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+         .map_err(|e| io::Error::other(e.to_string()))?;
 
     let entries = resp.items.into_iter().map(|item| {
         OpsEntry {
@@ -125,7 +125,7 @@ impl OpsFileSystem for AgentOpsFS {
 
   async fn open_read(&self, path: &OpsPath) -> io::Result<OpsRead> {
       let resp = self.client.get_raw_with_query("/api/v1/file_raw", &[("path", path.as_str())]).await
-          .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+          .map_err(|e| io::Error::other(e.to_string()))?;
 
       let stream = resp.bytes_stream().map_err(std::io::Error::other);
       let reader = StreamReader::new(stream);

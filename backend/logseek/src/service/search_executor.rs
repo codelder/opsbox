@@ -171,10 +171,10 @@ impl SearchExecutor {
     let mut tokens: Vec<&str> = Vec::new();
 
     for t in query.split_whitespace() {
-      if let Some(rest) = t.strip_prefix("app:") { if !rest.is_empty() { app = Some(rest.to_string()); continue; } }
-      if let Some(rest) = t.strip_prefix("encoding:") { if !rest.is_empty() { encoding = Some(rest.to_string()); continue; } }
-      if let Some(rest) = t.strip_prefix("path:") { if !rest.is_empty() { path_includes.push(rest.to_string()); continue; } }
-      if let Some(rest) = t.strip_prefix("-path:") { if !rest.is_empty() { path_excludes.push(rest.to_string()); continue; } }
+      if let Some(rest) = t.strip_prefix("app:") && !rest.is_empty() { app = Some(rest.to_string()); continue; }
+      if let Some(rest) = t.strip_prefix("encoding:") && !rest.is_empty() { encoding = Some(rest.to_string()); continue; }
+      if let Some(rest) = t.strip_prefix("path:") && !rest.is_empty() { path_includes.push(rest.to_string()); continue; }
+      if let Some(rest) = t.strip_prefix("-path:") && !rest.is_empty() { path_excludes.push(rest.to_string()); continue; }
       tokens.push(t);
     }
     let cleaned_before_plan = tokens.join(" ");
