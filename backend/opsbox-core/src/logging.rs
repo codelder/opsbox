@@ -15,6 +15,26 @@ use std::fmt as stdfmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
+
+// ========================================
+// 共享的日志 API 请求/响应类型
+// ========================================
+
+/// 更新日志级别请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateLogLevelRequest {
+  /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
+  pub level: String,
+}
+
+/// 更新日志保留数量请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRetentionRequest {
+  /// 保留数量（天）
+  pub retention_count: usize,
+}
+
+// ========================================
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::LevelFilter;

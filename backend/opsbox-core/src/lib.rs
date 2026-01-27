@@ -25,7 +25,7 @@ pub mod response;
 pub use database::{DatabaseConfig, health_check, init_pool, run_migration};
 pub use error::{AppError, Result};
 pub use logging::{
-  LogConfig, LogError, LogLevel, ReloadHandle,
+  LogConfig, LogError, LogLevel, ReloadHandle, UpdateLogLevelRequest, UpdateRetentionRequest,
   repository::{LogConfigModel, LogConfigRepository, LogConfigResponse},
 };
 pub use module::{Module, get_all_modules};
