@@ -10,30 +10,16 @@ use axum::{
   routing::{get, put},
 };
 use opsbox_core::{
-  SqlitePool,
+  SqlitePool, UpdateLogLevelRequest, UpdateRetentionRequest,
   logging::{
     LogLevel,
     repository::{LogConfigRepository, LogConfigResponse},
   },
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::str::FromStr;
 
-/// 更新日志级别请求
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateLogLevelRequest {
-  /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
-  pub level: String,
-}
-
-/// 更新保留数量请求
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UpdateRetentionRequest {
-  /// 保留数量（天）
-  pub retention_count: usize,
-}
-
-/// 通用成功响应
+/// 通用成功响应（日志 API 专用）
 #[derive(Debug, Serialize)]
 pub struct SuccessResponse {
   pub message: String,
