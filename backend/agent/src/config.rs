@@ -238,6 +238,10 @@ impl AgentConfig {
     #[cfg(windows)]
     let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string());
 
+    let last_heartbeat = chrono::Utc::now().timestamp();
+    tracing::info!("AgentConfig::to_agent_info: id={}, last_heartbeat={}, enable_heartbeat={}",
+      self.agent_id, last_heartbeat, self.enable_heartbeat);
+
     AgentInfo {
       id: self.agent_id.clone(),
       name: self.agent_name.clone(),
@@ -245,7 +249,7 @@ impl AgentConfig {
       hostname,
       tags: vec![],
       search_roots: self.search_roots.clone(),
-      last_heartbeat: chrono::Utc::now().timestamp(),
+      last_heartbeat,
       status: AgentStatus::Online,
     }
   }

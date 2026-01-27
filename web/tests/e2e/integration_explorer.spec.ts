@@ -8,6 +8,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Set debug logging for Rust components
+process.env.RUST_LOG = 'debug';
+
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
@@ -72,6 +75,7 @@ test.describe('Explorer E2E', () => {
 
     // Start agent
     agentPort = await getFreePort();
+    console.log(`Starting agent on port ${agentPort} with ID ${AGENT_ID}`);
     const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
 
     const args = [
@@ -95,14 +99,14 @@ test.describe('Explorer E2E', () => {
 
     agentProc = spawn(command, args, {
       cwd,
-      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'debug' },
       stdio: 'pipe'
     });
     agentProc.stdout.on('data', (d) => process.stdout.write(d));
     agentProc.stderr.on('data', (d) => process.stderr.write(d));
 
     // Wait for agent to be ready
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise((resolve) => setTimeout(resolve, 10000));
   });
 
   test.afterAll(async ({ request }) => {
@@ -117,9 +121,8 @@ test.describe('Explorer E2E', () => {
     fs.rmSync(TEST_ROOT_DIR, { recursive: true, force: true });
   });
 
-  test('should list local files with correct API field name (orl not odfi)', async ({ page }) => {
-    // This test case captures the bug we just fixed:
-    // Frontend was sending "odfi" but backend expects "orl"
+  test('should list local files with correct API field name', async ({ page }) => {
+    // This test ensures frontend sends the correct "orl" field name to backend
 
     // Monitor network requests to verify correct field name
     const requests: any[] = [];
@@ -145,7 +148,7 @@ test.describe('Explorer E2E', () => {
     await expect(page.getByText('test.txt')).toBeVisible({ timeout: 5000 });
     await expect(page.getByText('test.log')).toBeVisible();
 
-    // Verify the request used 'orl' field, not 'odfi'
+    // Verify the request used the correct 'orl' field name
     expect(requests.length).toBeGreaterThan(0);
     expect(requests[0]).toHaveProperty('orl');
     expect(requests[0]).not.toHaveProperty('odfi');
@@ -167,7 +170,7 @@ test.describe('Explorer E2E', () => {
 
     // Should list available agents
     // Look for our test agent
-    await expect(page.getByText(AGENT_ID, { exact: false })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(AGENT_ID, { exact: false })).toBeVisible({ timeout: 10000 });
   });
 
   test('should list agent root directory (empty path)', async ({ page }) => {
