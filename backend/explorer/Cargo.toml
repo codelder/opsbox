@@ -22,7 +22,6 @@ tracing = { workspace = true }
 
 # Error Handling
 thiserror = "2"
-anyhow = "1"
 
 # Utilities
 urlencoding = "2"
@@ -37,4 +36,4 @@ tar = "0.4"
 tempfile = "3"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 flate2 = "1.0"
-reqwest = "0.13.1"
+

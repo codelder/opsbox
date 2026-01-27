@@ -31,7 +31,6 @@ libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 
 # Error handling
 thiserror = "2"
-problemdetails = { version = "0.6", features = ["axum"] }
 
 # Logging
 tracing = { workspace = true }
@@ -58,7 +57,6 @@ tokio-util = { version = "0.7", features = ["compat", "io"] }
 uuid = { version = "1.0", features = ["v4"] }
 
 # AWS SDK for S3
-aws-config = "1.1"
 aws-sdk-s3 = { version = "1.15", features = ["behavior-version-latest"] }
 infer = "0.19"
 regex = "1"
