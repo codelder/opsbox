@@ -29,15 +29,12 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
   // 1. First, if it's absolute (or looks like one), try as-is
   let rel_as_path = std::path::Path::new(relative_path);
 
-  if rel_as_path.is_absolute() {
-    if rel_as_path.exists() {
-      if let Ok(cand_c) = canonicalize_existing(rel_as_path) {
-        if is_under_any_root(&cand_c, &canon_roots) {
+  if rel_as_path.is_absolute()
+    && rel_as_path.exists()
+      && let Ok(cand_c) = canonicalize_existing(rel_as_path)
+        && is_under_any_root(&cand_c, &canon_roots) {
           resolved_paths.push(cand_c);
         }
-      }
-    }
-  }
 
   // 2. If no paths resolved yet, or even if they did, try treating it as relative to roots
   // Strip leading slash if present for relative join
@@ -49,34 +46,26 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
       let root_path = PathBuf::from(root);
       let full_path = root_path.join(normalized_path);
 
-      if full_path.exists() {
-        if let Ok(cand_c) = canonicalize_existing(&full_path) {
-          if let Ok(root_c) = canonicalize_existing(&root_path) {
-            if cand_c.starts_with(&root_c) {
-              if !resolved_paths.contains(&cand_c) {
+      if full_path.exists()
+        && let Ok(cand_c) = canonicalize_existing(&full_path)
+          && let Ok(root_c) = canonicalize_existing(&root_path)
+            && cand_c.starts_with(&root_c)
+              && !resolved_paths.contains(&cand_c) {
                 resolved_paths.push(cand_c);
               }
-            }
-          }
-        }
-      }
 
       // 尝试在一级子目录下拼接（兼容原先的"模糊子目录"逻辑）
       if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
           if entry.path().is_dir() {
             let sub_path = entry.path().join(normalized_path);
-            if sub_path.exists() {
-              if let Ok(cand_c) = canonicalize_existing(&sub_path) {
-                if let Ok(root_c) = canonicalize_existing(&root_path) {
-                  if cand_c.starts_with(&root_c) {
-                    if !resolved_paths.contains(&cand_c) {
+            if sub_path.exists()
+              && let Ok(cand_c) = canonicalize_existing(&sub_path)
+                && let Ok(root_c) = canonicalize_existing(&root_path)
+                  && cand_c.starts_with(&root_c)
+                    && !resolved_paths.contains(&cand_c) {
                       resolved_paths.push(cand_c);
                     }
-                  }
-                }
-              }
-            }
           }
         }
       }

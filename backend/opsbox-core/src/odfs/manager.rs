@@ -197,7 +197,7 @@ impl OrlManager {
 
         // 包装为流式解压流
         crate::fs::create_archive_stream_from_reader(reader, Some(adjusted_path.as_str())).await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+            .map_err(|e| io::Error::other(e))
     } else {
         // 普通文件或目录，交给 Provider 处理
         base_fs.as_entry_stream(&adjusted_path, recursive).await

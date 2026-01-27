@@ -87,11 +87,10 @@ pub async fn execute_search(
   let mut extra_filters = Vec::new();
 
   // 4.1 Base Filter (来自 ORL)
-  if let Some(base) = &request.path_filter {
-      if let Ok(f) = logseek::query::path_glob_to_filter(base) {
+  if let Some(base) = &request.path_filter
+      && let Ok(f) = logseek::query::path_glob_to_filter(base) {
          extra_filters.push(f);
       }
-  }
 
   // 4.2 User Filter (path_includes / path_excludes)
   if let Some(user_filter) = combine_filters(&request.path_includes, &request.path_excludes) {
