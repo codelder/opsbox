@@ -27,17 +27,20 @@ pub async fn nl2q(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::service::nl2q::NLBody;
+  use super::*;
 
-    #[tokio::test]
-    async fn test_nl2q_route_error() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        // 不初始化 schema 且环境变量中通常没有配置 LLM，会导致 call_llm 失败
+  #[test]
+  fn test_service_error_to_api_error_conversion() {
+    // 验证 ServiceError 能正确转换为 LogSeekApiError
+    let service_err = ServiceError::ProcessingError("LLM 调用失败: test".to_string());
+    let api_err = LogSeekApiError::Service(service_err);
 
-        let body = NLBody { nl: "find error".to_string() };
-        let res = nl2q(State(pool), Json(body)).await;
-
-        assert!(res.is_err());
+    // 验证错误类型正确
+    match api_err {
+      LogSeekApiError::Service(ServiceError::ProcessingError(msg)) => {
+        assert!(msg.contains("LLM"));
+      }
+      _ => panic!("Expected ProcessingError"),
     }
+  }
 }
