@@ -255,6 +255,10 @@
         pathParts.pop();
         url.pathname = '/' + pathParts.join('/');
 
+        // 清除归档相关参数，避免回退到普通目录时携带 target=archive
+        url.searchParams.delete('target');
+        url.searchParams.delete('entry');
+
         const targetOrl = url.toString();
         const success = await handleNavigate(targetOrl);
 

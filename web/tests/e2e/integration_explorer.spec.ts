@@ -570,4 +570,167 @@ test.describe('Explorer E2E', () => {
       }
     }
   });
+
+  test('should navigate into and out of archive correctly', async ({ page }) => {
+    // 1. Prepare archive file using system tar command
+    const archiveContentDir = path.join(TEST_FILES_DIR, 'archive_content');
+    const archivePath = path.join(TEST_FILES_DIR, 'test_archive.tar');
+
+    fs.mkdirSync(archiveContentDir, { recursive: true });
+    // Create a file in root of archive
+    fs.writeFileSync(path.join(archiveContentDir, 'root_file.txt'), 'root content');
+    // Create a subdir in archive
+    const subDir = path.join(archiveContentDir, 'sub_dir');
+    fs.mkdirSync(subDir, { recursive: true });
+    fs.writeFileSync(path.join(subDir, 'inner_file.txt'), 'inner content');
+
+    // Create tar
+    const { execSync } = await import('child_process');
+    // -C to change directory so we don't include full path
+    execSync(`tar -cf "${archivePath}" -C "${TEST_FILES_DIR}" archive_content`);
+
+    // 2. Navigate to the containing folder
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${TEST_FILES_DIR}`)}`);
+    await page.waitForLoadState('networkidle');
+
+    // 3. Double click the archive file to enter it
+    await page.getByText('test_archive.tar').dblclick();
+
+    // 4. Verify we are "inside" the archive (URL params handling check) and see 'archive_content' folder
+    // Note: tar command usually preserves the top level folder if we tarred 'archive_content'
+    await expect(page.getByText('archive_content')).toBeVisible();
+
+    // Enter 'archive_content' folder
+    await page.getByText('archive_content').dblclick();
+
+    // Verify we see files
+    await expect(page.getByText('root_file.txt')).toBeVisible();
+    await expect(page.getByText('sub_dir')).toBeVisible();
+
+    // 5. Test "Go Up"
+    const upButton = page.locator('button:has(svg.lucide-arrow-left)');
+
+    // Up from archive_content -> archive root (virtual root listing contents of tar)
+    // Note: We are currently at archive.tar?target=archive&entry=archive_content
+    await upButton.click();
+    // Now we are at root of tar. Should see 'archive_content' folder again.
+    await expect(page.getByText('archive_content')).toBeVisible();
+
+    // 6. Up from archive root -> parent directory (TEST_FILES_DIR)
+    await upButton.click();
+
+    // Now we should be back at TEST_FILES_DIR
+    // We should see 'test_archive.tar' as a FILE
+    await expect(page.getByText('test_archive.tar')).toBeVisible();
+
+    // CRITICAL: Check URL does NOT contain target=archive
+    const url = new URL(page.url());
+    expect(url.searchParams.has('target')).toBe(false);
+    expect(url.searchParams.has('entry')).toBe(false);
+  });
+
+  test('should navigate up correctly for Local, Agent, and S3 paths', async ({ page, request }) => {
+    // 1. Setup Local directory structure
+    const localL1 = path.join(TEST_FILES_DIR, 'level1');
+    const localL2 = path.join(localL1, 'level2');
+    fs.mkdirSync(localL2, { recursive: true });
+
+    // --- Local Navigation Test ---
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${localL2}`)}`);
+    await page.waitForLoadState('networkidle');
+
+    const upButton = page.locator('button:has(svg.lucide-arrow-left)');
+
+    // Go Up: level2 -> level1
+    await upButton.click();
+    await expect(page).toHaveURL(new RegExp(encodeURIComponent(`orl://local${localL1}`)));
+
+    // Go Up: level1 -> TEST_FILES_DIR
+    await upButton.click();
+    await expect(page).toHaveURL(new RegExp(encodeURIComponent(`orl://local${TEST_FILES_DIR}`)));
+
+    // --- Agent Navigation Test ---
+    const navAgentId = `${AGENT_ID}-nav`;
+    const agentRoot = path.join(TEST_ROOT_DIR, 'nav_agent_root');
+    const agentSub = path.join(agentRoot, 'subdir');
+    fs.mkdirSync(agentSub, { recursive: true });
+
+    const navPort = await getFreePort();
+    const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
+    const args = [
+      ...argsPrefix,
+      '--agent-id',
+      navAgentId,
+      '--agent-name',
+      'Nav Agent',
+      '--server-endpoint',
+      'http://127.0.0.1:4001',
+      '--search-roots',
+      agentRoot,
+      '--listen-port',
+      String(navPort),
+      '--no-heartbeat',
+      '--log-dir',
+      path.join(TEST_ROOT_DIR, 'nav_agent_logs'),
+      '--log-retention',
+      '1'
+    ];
+
+    const proc = spawn(command, args, { cwd, env: { ...process.env, RUST_LOG: 'info' }, stdio: 'pipe' });
+
+    try {
+      await new Promise((r) => setTimeout(r, 3000));
+
+      // Start deep in agent
+      const agentDeepOrl = `orl://${navAgentId}@agent${agentSub}`;
+      await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(agentDeepOrl)}`);
+      await page.waitForLoadState('networkidle');
+
+      // Go Up: subdir -> agentRoot
+      await upButton.click();
+      const agentRootOrl = `orl://${navAgentId}@agent${agentRoot}`;
+      await expect(page).toHaveURL(new RegExp(encodeURIComponent(agentRootOrl)));
+
+      // Go Up: agentRoot -> Agent Virtual Root (orl://id@agent/)
+      // This verifies the "fallback to root" logic when going up from a search root
+      await upButton.click();
+      const agentVirtualRoot = `orl://${navAgentId}@agent/`;
+      await expect(page).toHaveURL(new RegExp(encodeURIComponent(agentVirtualRoot)));
+    } finally {
+      await stopProcess(proc);
+      try {
+        await request.delete(`http://127.0.0.1:4001/api/v1/agents/${navAgentId}`);
+      } catch {}
+    }
+
+    // --- S3 URL Logic Test ---
+    // Since we don't have a real S3, we rely on the fact that the frontend updates the URL
+    // immediately even if loading fails. This tests the path truncation logic for S3 ORLs.
+    const s3DeepOrl = 'orl://dummy-profile@s3/my-bucket/folder/subfolder';
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(s3DeepOrl)}`);
+    // Note: It will likely show an error or empty list, but we care about the URL state
+
+    // Go Up: subfolder -> folder
+    await upButton.click();
+    const s3FolderOrl = 'orl://dummy-profile@s3/my-bucket/folder';
+    await expect(page).toHaveURL(new RegExp(encodeURIComponent(s3FolderOrl)));
+
+    // Go Up: folder -> my-bucket
+    await upButton.click();
+    const s3BucketOrl = 'orl://dummy-profile@s3/my-bucket';
+    await expect(page).toHaveURL(new RegExp(encodeURIComponent(s3BucketOrl)));
+
+    // Go Up: my-bucket -> S3 Root (orl://s3/)
+    // Our logic pops path parts. if path is 'my-bucket', popping gives empty path -> 'orl://dummy-profile@s3/'
+    // Wait, let's check svelte logic:
+    // pathParts = url.pathname.split('/').filter(p => p);
+    // For 'orl://...@s3/bucket', pathname is '/bucket'. Pop -> empty.
+    // url.pathname = '/'. Result: 'orl://...@s3/'
+    // But usually S3 root is 'orl://s3/' (no profile).
+    // The current implementation preserves authority. So it goes to 'orl://dummy-profile@s3/'
+    // This is acceptable behavior for "Up" within a profile context.
+    await upButton.click();
+    const s3ProfileRoot = 'orl://dummy-profile@s3/';
+    await expect(page).toHaveURL(new RegExp(encodeURIComponent(s3ProfileRoot)));
+  });
 });

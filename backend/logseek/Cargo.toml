@@ -27,7 +27,6 @@ futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 async-trait = "0.1"
 # AWS SDK for S3 (official, better maintained than minio crate)
-aws-config = "1.1"
 aws-sdk-s3 = { version = "1.15", features = ["behavior-version-latest"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -38,7 +37,7 @@ tokio-util = { version = "0.7", features = ["io", "io-util", "compat"] }
 thiserror = "2"
 async-compression = { version = "0.4", features = ["tokio", "gzip", "futures-io"] }
 async-tar = "0.5.1"
-problemdetails = { version = "0.6", features = ["axum"] }
+
 regex = "1"
 fancy-regex = "0.11"
 globset = "0.4"
@@ -46,8 +45,7 @@ memchr = "2.7"
 aho-corasick = "1.1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 chrono-tz = "0.8"
-# 为跨平台交叉编译启用 OpenSSL 源码内置编译（避免目标系统缺失 OpenSSL 开发包）
-openssl = { version = "0.10", features = ["vendored"] }
+
 # 为确保各平台无需系统级 sqlite3，开启 sqlx 的 sqlite 并显式依赖打包版 libsqlite3-sys。
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 libsqlite3-sys = { version = "0.30", features = ["bundled"] }
@@ -67,18 +65,18 @@ starlark = "0.13"
 encoding_rs = "0.8"
 # Character encoding detection library (Mozilla's chardetng)
 chardetng = "0.1"
-mimalloc = "0.1.48"
-libmimalloc-sys = { version = "0.1.44", features = ["extended"] }
+
 url = "2.5.7"
-grep = "0.3"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 grep-matcher = "0.1"
 urlencoding = "2.1.3"
+# Optional: mimalloc 内存收集支持 (仅当启用 mimalloc-collect feature 时)
+libmimalloc-sys = { version = "0.1.44", features = ["extended"], optional = true }
 
 [features]
 # 是否在缓存清理后调用 mimalloc 的 mi_collect(true) 主动尝试归还空闲内存
-mimalloc-collect = []
+mimalloc-collect = ["libmimalloc-sys"]
 
 [dev-dependencies]
 tempfile = "3"
