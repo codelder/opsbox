@@ -70,3 +70,8 @@ web/vite.config.ts.timestamp-*
 *.db
 dist/
 web/tests/e2e/temp_*
+
+# SQLite temporary files
+sqlite::memory:*
+*wal
+*shm
