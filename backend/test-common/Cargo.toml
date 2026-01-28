@@ -1,0 +1,41 @@
+[package]
+name = "opsbox-test-common"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+authors = { workspace = true }
+description = "Shared test utilities for OpsBox"
+
+# 这是一个开发依赖包，仅用于测试
+[lib]
+name = "opsbox_test_common"
+path = "src/lib.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+tempfile = "3"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros"] }
+libsqlite3-sys = { version = "0.30", features = ["bundled"] }
+tracing = "0.1"
+http = "1.0"
+futures = "0.3"
+once_cell = "1.20"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# 归档处理依赖
+async-compression = { version = "0.4", features = ["tokio", "gzip"] }
+async_zip = { version = "0.0.18", features = ["tokio"] }
+tokio-tar = "0.3.1"
+
+# Workspace dependencies
+opsbox-core = { path = "../opsbox-core" }
+logseek = { path = "../logseek" }
+agent-manager = { path = "../agent-manager" }
+explorer = { path = "../explorer" }
+
+# 测试专用依赖
+[dev-dependencies]
+tokio-test = "0.4"

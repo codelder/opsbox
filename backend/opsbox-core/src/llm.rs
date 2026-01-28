@@ -220,8 +220,15 @@ struct OllamaClient {
 impl OllamaClient {
   fn new(cfg: OllamaConfig) -> Self {
     let timeout = Duration::from_secs(cfg.timeout_secs);
-    let http = reqwest::Client::builder()
-      .timeout(timeout)
+    let mut builder = reqwest::Client::builder()
+      .timeout(timeout);
+
+    // 在CI或测试环境中禁用代理检测，避免沙盒环境问题
+    if std::env::var("CI").is_ok() || std::env::var("OPSBOX_NO_PROXY").is_ok() {
+      builder = builder.no_proxy();
+    }
+
+    let http = builder
       .build()
       .expect("创建 HTTP 客户端失败");
 
@@ -393,8 +400,15 @@ struct OpenAIClient {
 impl OpenAIClient {
   fn new(cfg: OpenAIConfig) -> Self {
     let timeout = Duration::from_secs(cfg.timeout_secs);
-    let http = reqwest::Client::builder()
-      .timeout(timeout)
+    let mut builder = reqwest::Client::builder()
+      .timeout(timeout);
+
+    // 在CI或测试环境中禁用代理检测，避免沙盒环境问题
+    if std::env::var("CI").is_ok() || std::env::var("OPSBOX_NO_PROXY").is_ok() {
+      builder = builder.no_proxy();
+    }
+
+    let http = builder
       .build()
       .expect("创建 HTTP 客户端失败");
 

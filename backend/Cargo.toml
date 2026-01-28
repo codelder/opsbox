@@ -6,6 +6,7 @@ members = [
   "logseek",
   "agent",
   "agent-manager", "explorer",
+  "test-common",
 ]
 
 [workspace.package]

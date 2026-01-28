@@ -80,3 +80,4 @@ mimalloc-collect = ["libmimalloc-sys"]
 
 [dev-dependencies]
 tempfile = "3"
+opsbox-test-common = { path = "../test-common" }
