@@ -118,6 +118,21 @@ impl AgentInfo {
     now - self.last_heartbeat < timeout_secs
   }
 
+  /// 统一的在线状态检查方法，支持详细日志记录
+  pub fn check_online_status(&self, timeout_secs: i64, verbose: bool) -> bool {
+    let is_online = self.is_online(timeout_secs);
+
+    if verbose && !is_online {
+      let now = chrono::Utc::now().timestamp();
+      tracing::info!(
+        "Agent offline: id={}, last_heartbeat={}, age={}s (timeout={}s)",
+        self.id, self.last_heartbeat, now - self.last_heartbeat, timeout_secs
+      );
+    }
+
+    is_online
+  }
+
   /// 更新心跳时间
   pub fn update_heartbeat(&mut self) {
     self.last_heartbeat = chrono::Utc::now().timestamp();

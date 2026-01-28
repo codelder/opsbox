@@ -19,13 +19,19 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, warn};
 
 use crate::api::{
-  ApiError, AppState, LogConfigResponse, SuccessResponse, UpdateLogLevelRequest, UpdateRetentionRequest,
+  AppState, LogConfigResponse, SuccessResponse, UpdateLogLevelRequest, UpdateRetentionRequest,
 };
+use opsbox_core::error::{AppError, Result};
 use crate::config::AgentConfig;
 use crate::path::get_available_subdirs;
 use crate::search::execute_search;
 use axum::Router;
 use std::sync::Arc;
+
+/// 解码 URL 编码的路径
+fn decode_path(path: &str) -> String {
+  urlencoding::decode(path).map(|s| s.into_owned()).unwrap_or_else(|_| path.to_string())
+}
 
 /// 健康检查
 pub async fn health() -> &'static str {
@@ -98,7 +104,7 @@ pub async fn handle_cancel(State(_state): State<AppState>, Path(task_id): Path<S
 }
 
 /// 获取日志配置
-pub async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigResponse>, ApiError> {
+pub async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigResponse>> {
   let current_level = state.config.current_log_level.lock().unwrap().clone();
   let response = LogConfigResponse {
     level: current_level,
@@ -113,16 +119,16 @@ pub async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogCon
 pub async fn update_log_level(
   State(state): State<AppState>,
   Json(req): Json<UpdateLogLevelRequest>,
-) -> Result<Json<SuccessResponse<()>>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>> {
   // 验证日志级别
-  let level = LogLevel::from_str(&req.level).map_err(|e| ApiError::InvalidLevel(e.to_string()))?;
+  let level = LogLevel::from_str(&req.level).map_err(|e| AppError::bad_request(format!("无效的日志级别: {}", e)))?;
 
   // 动态重载日志级别
-  let reload_handle = state.config.get_reload_handle().ok_or(ApiError::NotInitialized)?;
+  let reload_handle = state.config.get_reload_handle().ok_or_else(|| AppError::internal("日志系统未初始化".to_string()))?;
 
   reload_handle
     .update_level(level)
-    .map_err(|e| ApiError::ReloadFailed(e.to_string()))?;
+    .map_err(|e| AppError::internal(format!("重载失败: {}", e)))?;
 
   // 更新保存的当前日志级别
   *state.config.current_log_level.lock().unwrap() = req.level.clone();
@@ -136,10 +142,10 @@ pub async fn update_log_level(
 pub async fn update_log_retention(
   State(_state): State<AppState>,
   Json(req): Json<UpdateRetentionRequest>,
-) -> Result<Json<SuccessResponse<()>>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>> {
   // 验证保留数量
   if req.retention_count == 0 || req.retention_count > 365 {
-    return Err(ApiError::InvalidRetention("保留数量必须在 1-365 之间".to_string()));
+    return Err(AppError::bad_request("保留数量必须在 1-365 之间".to_string()));
   }
 
   // 注意：Agent 不持久化配置到数据库，仅在内存中更新
@@ -153,8 +159,8 @@ pub async fn update_log_retention(
 pub async fn handle_list_files(
   State(state): State<AppState>,
   Query(req): Query<AgentListRequest>,
-) -> Result<Json<AgentListResponse>, ApiError> {
-  let path_str = urlencoding::decode(&req.path).map(|s| s.into_owned()).unwrap_or(req.path);
+) -> Result<Json<AgentListResponse>> {
+  let path_str = decode_path(&req.path);
 
   // Special case: empty path or "/" means list all search roots themselves
   if path_str.is_empty() || path_str == "/" {
@@ -201,7 +207,7 @@ pub async fn handle_list_files(
     Ok(p) => p,
     Err(e) => {
       // 访问被拒绝或路径不在允许范围内，统一返回 NotFound 避免泄露信息
-      return Err(ApiError::NotFound(format!("Access denied or path not found: {}", e)));
+      return Err(AppError::not_found(format!("Access denied or path not found: {}", e)));
     }
   };
 
@@ -210,7 +216,7 @@ pub async fn handle_list_files(
 
   let items = opsbox_core::fs::list_directory(path)
     .await
-    .map_err(ApiError::Internal)?;
+    .map_err(|e| AppError::internal(e.to_string()))?;
 
   let items = items
     .into_iter()
@@ -242,8 +248,8 @@ pub struct GetFileRequest {
 pub async fn handle_get_file_raw(
   State(state): State<AppState>,
   Query(req): Query<GetFileRequest>,
-) -> Result<impl IntoResponse, ApiError> {
-  let path_str = urlencoding::decode(&req.path).map(|s| s.into_owned()).unwrap_or(req.path);
+) -> Result<impl IntoResponse> {
+  let path_str = decode_path(&req.path);
 
   // Security check: ensure path is within allowed directories or subdirectories
   use crate::path::resolve_directory_path;
@@ -251,7 +257,7 @@ pub async fn handle_get_file_raw(
     Ok(p) => p,
     Err(e) => {
       warn!("RawFile: Path resolution failed for {}: {}", path_str, e);
-      return Err(ApiError::NotFound(format!("Access denied or path not found: {}", e)));
+      return Err(AppError::not_found(format!("Access denied or path not found: {}", e)));
     }
   };
 
@@ -265,7 +271,7 @@ pub async fn handle_get_file_raw(
       path.exists(),
       path.is_file()
     );
-    return Err(ApiError::NotFound(format!(
+    return Err(AppError::not_found(format!(
       "File not found or not a file: {}",
       path_str
     )));
@@ -274,7 +280,7 @@ pub async fn handle_get_file_raw(
   // Open file
   let file = tokio::fs::File::open(path)
     .await
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .map_err(|e| AppError::internal(e.to_string()))?;
   let stream = tokio_util::io::ReaderStream::new(file);
   let body = Body::from_stream(stream);
 

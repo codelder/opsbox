@@ -54,18 +54,39 @@ pub struct RemoveTagRequest {
   pub value: String,
 }
 
-// 使用 opsbox-core 的 SuccessResponse<T>，T=() 表示无数据
-// pub use opsbox_core::response::SuccessResponse; 已在上面重新导出
+// SuccessResponse 已在上面重新导出
 
-/// 构造禁用代理的 HTTP 客户端，保证访问本地 Agent 时不会被系统代理劫持
-fn build_agent_http_client() -> Result<reqwest::Client, (StatusCode, String)> {
-  reqwest::Client::builder().no_proxy().build().map_err(|e| {
-    tracing::error!("创建 Agent HTTP 客户端失败: {}", e);
-    (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      format!("创建 HTTP 客户端失败: {}", e),
-    )
-  })
+
+/// 处理 Agent 标签操作的通用宏
+macro_rules! handle_agent_operation {
+    ($manager:expr, $operation:expr, $success_msg:expr) => {
+        match $operation {
+            Ok(_) => Ok(Json(serde_json::json!({"message": $success_msg}))),
+            Err(e) => {
+                tracing::error!("操作失败: {}", e);
+                Err(StatusCode::NOT_FOUND)
+            }
+        }
+    };
+}
+
+/// 从 Agent 信息中提取连接端点 (host 和 port)
+fn extract_agent_endpoint(agent: &AgentInfo) -> Result<(String, u16), (StatusCode, String)> {
+  let host = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "host")
+    .map(|t| t.value.clone())
+    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
+
+  let port = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "listen_port")
+    .and_then(|t| t.value.parse::<u16>().ok())
+    .unwrap_or(4001);
+
+  Ok((host, port))
 }
 
 /// 创建 Agent 管理路由
@@ -224,13 +245,7 @@ async fn set_agent_tags(
   Path(agent_id): Path<String>,
   Json(req): Json<SetTagsRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  match manager.set_agent_tags(&agent_id, req.tags).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签设置成功"}))),
-    Err(e) => {
-      tracing::error!("设置标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(manager, manager.set_agent_tags(&agent_id, req.tags).await, "标签设置成功")
 }
 
 /// 获取 Agent 标签
@@ -251,13 +266,7 @@ async fn add_agent_tag(
   Json(req): Json<AddTagRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
   let tag = AgentTag::new(req.key, req.value);
-  match manager.add_agent_tag(&agent_id, tag).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签添加成功"}))),
-    Err(e) => {
-      tracing::error!("添加标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(manager, manager.add_agent_tag(&agent_id, tag).await, "标签添加成功")
 }
 
 /// 移除 Agent 标签
@@ -266,13 +275,7 @@ async fn remove_agent_tag(
   Path(agent_id): Path<String>,
   Json(req): Json<RemoveTagRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  match manager.remove_agent_tag(&agent_id, &req.key, &req.value).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签移除成功"}))),
-    Err(e) => {
-      tracing::error!("移除标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(manager, manager.remove_agent_tag(&agent_id, &req.key, &req.value).await, "标签移除成功")
 }
 
 /// 清空 Agent 标签
@@ -280,13 +283,7 @@ async fn clear_agent_tags(
   State(manager): State<Arc<AgentManager>>,
   Path(agent_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  match manager.clear_agent_tags(&agent_id).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签清空成功"}))),
-    Err(e) => {
-      tracing::error!("清空标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(manager, manager.clear_agent_tags(&agent_id).await, "标签清空成功")
 }
 
 /// 代理获取 Agent 日志配置
@@ -301,27 +298,15 @@ async fn proxy_agent_log_config(
     .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
 
   // 2. 从标签中提取 host 和 port
-  let host = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "host")
-    .map(|t| t.value.clone())
-    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
-
-  let port = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "listen_port")
-    .and_then(|t| t.value.parse::<u16>().ok())
-    .unwrap_or(4001);
+  let (host, port) = extract_agent_endpoint(&agent)?;
 
   // 3. 构造 Agent API URL
   let url = format!("http://{}:{}/api/v1/log/config", host, port);
 
   tracing::debug!("代理请求 Agent 日志配置: agent_id={}, url={}", agent_id, url);
 
-  // 4. 转发请求
-  let client = build_agent_http_client()?;
+  // 4. 转发请求（使用缓存的 HTTP 客户端）
+  let client = manager.http_client();
   let response = client
     .get(&url)
     .timeout(std::time::Duration::from_secs(10))
@@ -360,19 +345,7 @@ async fn proxy_agent_log_level(
     .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
 
   // 2. 从标签中提取 host 和 port
-  let host = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "host")
-    .map(|t| t.value.clone())
-    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
-
-  let port = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "listen_port")
-    .and_then(|t| t.value.parse::<u16>().ok())
-    .unwrap_or(4001);
+  let (host, port) = extract_agent_endpoint(&agent)?;
 
   // 3. 构造 Agent API URL
   let url = format!("http://{}:{}/api/v1/log/level", host, port);
@@ -384,8 +357,8 @@ async fn proxy_agent_log_level(
     url
   );
 
-  // 4. 转发请求
-  let client = build_agent_http_client()?;
+  // 4. 转发请求（使用缓存的 HTTP 客户端）
+  let client = manager.http_client();
   let response = client
     .put(&url)
     .json(&req)
@@ -426,19 +399,7 @@ async fn proxy_agent_log_retention(
     .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
 
   // 2. 从标签中提取 host 和 port
-  let host = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "host")
-    .map(|t| t.value.clone())
-    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
-
-  let port = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "listen_port")
-    .and_then(|t| t.value.parse::<u16>().ok())
-    .unwrap_or(4001);
+  let (host, port) = extract_agent_endpoint(&agent)?;
 
   // 3. 构造 Agent API URL
   let url = format!("http://{}:{}/api/v1/log/retention", host, port);
@@ -450,8 +411,8 @@ async fn proxy_agent_log_retention(
     url
   );
 
-  // 4. 转发请求
-  let client = build_agent_http_client()?;
+  // 4. 转发请求（使用缓存的 HTTP 客户端）
+  let client = manager.http_client();
   let response = client
     .put(&url)
     .json(&req)

@@ -190,7 +190,7 @@ async fn test_update_log_level_invalid() {
   let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
   let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-  assert!(json["error"].as_str().unwrap().contains("无效的日志级别"));
+  assert!(json["detail"].as_str().unwrap().contains("无效的日志级别"));
 }
 
 #[tokio::test]
@@ -281,7 +281,7 @@ async fn test_update_log_retention_invalid_zero() {
   let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
   let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-  assert!(json["error"].as_str().unwrap().contains("保留数量必须在 1-365 之间"));
+  assert!(json["detail"].as_str().unwrap().contains("保留数量必须在 1-365 之间"));
 }
 
 #[tokio::test]
@@ -310,7 +310,7 @@ async fn test_update_log_retention_invalid_too_large() {
   let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
   let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-  assert!(json["error"].as_str().unwrap().contains("保留数量必须在 1-365 之间"));
+  assert!(json["detail"].as_str().unwrap().contains("保留数量必须在 1-365 之间"));
 }
 
 #[tokio::test]

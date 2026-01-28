@@ -51,6 +51,29 @@ async function stopProcess(proc: ChildProcessWithoutNullStreams) {
   await new Promise<void>((resolve) => proc.once('exit', () => resolve()));
 }
 
+/**
+ * 等待agent注册到服务器（通过API检查）
+ */
+async function waitForAgentReady(request: any, agentId: string, maxWait = 15000): Promise<void> {
+  const start = Date.now();
+  const interval = 500;
+
+  while (Date.now() - start < maxWait) {
+    try {
+      const response = await request.get(`http://127.0.0.1:4001/api/v1/agents/${agentId}`);
+      if (response.ok()) {
+        console.log(`Agent ${agentId} is ready after ${Date.now() - start}ms`);
+        return;
+      }
+    } catch (error) {
+      // API调用失败，agent可能还未注册
+    }
+    await new Promise(r => setTimeout(r, interval));
+  }
+  throw new Error(`Agent ${agentId} not ready after ${maxWait}ms`);
+}
+
+
 test.describe('Explorer E2E', () => {
   test.describe.configure({ mode: 'serial' });
 
@@ -65,7 +88,7 @@ test.describe('Explorer E2E', () => {
   let agentProc: ChildProcessWithoutNullStreams | null = null;
   let agentPort: number | null = null;
 
-  test.beforeAll(async () => {
+  test.beforeAll(async ({ request }) => {
     test.setTimeout(120000);
     // Create test files
     fs.mkdirSync(TEST_FILES_DIR, { recursive: true });
@@ -105,8 +128,17 @@ test.describe('Explorer E2E', () => {
     agentProc.stdout.on('data', (d) => process.stdout.write(d));
     agentProc.stderr.on('data', (d) => process.stderr.write(d));
 
-    // Wait for agent to be ready
-    await new Promise((resolve) => setTimeout(resolve, 10000));
+    // Wait for agent to be ready - rely only on API registration (Scheme A)
+    try {
+      await waitForAgentReady(request, AGENT_ID, 15000);
+      console.log(`Agent ${AGENT_ID} fully ready`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to wait for agent: ${errorMessage}`);
+      // Fall back to old behavior for compatibility
+      console.log(`Falling back to fixed 10-second wait...`);
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    }
   });
 
   test.afterAll(async ({ request }) => {
@@ -331,9 +363,13 @@ test.describe('Explorer E2E', () => {
       stdio: 'pipe'
     });
 
+    // Capture agent process output for debugging
+    proc.stdout.on('data', (d) => process.stdout.write(d));
+    proc.stderr.on('data', (d) => process.stderr.write(d));
+
     try {
-      // Wait for agent to register
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Wait for agent to register - use smart waiting instead of fixed delay
+      await waitForAgentReady(request, multiRootAgentId, 10000);
 
       // Go to agent root: orl://agent-id@agent/
       await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${multiRootAgentId}@agent/`)}`);
@@ -403,7 +439,8 @@ test.describe('Explorer E2E', () => {
     });
 
     try {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Wait for agent to register - use smart waiting instead of fixed delay
+      await waitForAgentReady(request, escapeAgentId, 10000);
 
       // Navigate directly into the root folder
       const rootOrl = `orl://${escapeAgentId}@agent${innerRoot}`;
@@ -478,8 +515,13 @@ test.describe('Explorer E2E', () => {
       stdio: 'pipe'
     });
 
+    // Capture agent process output for debugging
+    proc.stdout.on('data', (d) => process.stdout.write(d));
+    proc.stderr.on('data', (d) => process.stderr.write(d));
+
     try {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Wait for agent to register - use smart waiting instead of fixed delay
+      await waitForAgentReady(request, restrictedAgentId, 10000);
 
       // 2. Try to manually navigate to the forbidden directory by typing ORL
       // Note: We use the absolute path of forbiddenDir to test access control
@@ -551,8 +593,13 @@ test.describe('Explorer E2E', () => {
       stdio: 'pipe'
     });
 
+    // Capture agent process output for debugging
+    proc.stdout.on('data', (d) => process.stdout.write(d));
+    proc.stderr.on('data', (d) => process.stderr.write(d));
+
     try {
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      // Wait for agent to register - use smart waiting instead of fixed delay
+      await waitForAgentReady(request, chineseAgentId, 10000);
 
       // 1. Visit the directory
       const rootOrl = `orl://${chineseAgentId}@agent${chineseRoot}`;
@@ -681,8 +728,13 @@ test.describe('Explorer E2E', () => {
 
     const proc = spawn(command, args, { cwd, env: { ...process.env, RUST_LOG: 'info' }, stdio: 'pipe' });
 
+    // Capture agent process output for debugging
+    proc.stdout.on('data', (d) => process.stdout.write(d));
+    proc.stderr.on('data', (d) => process.stderr.write(d));
+
     try {
-      await new Promise((r) => setTimeout(r, 3000));
+      // Wait for agent to register - use smart waiting instead of fixed delay
+      await waitForAgentReady(request, navAgentId, 10000);
 
       // Start deep in agent
       const agentDeepOrl = `orl://${navAgentId}@agent${agentSub}`;
