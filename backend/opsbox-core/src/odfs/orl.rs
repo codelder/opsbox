@@ -114,8 +114,8 @@ impl ORL {
     let auth = self.uri().authority().ok_or(OrlError::MissingAuthority)?;
     let host = auth.host();
 
-    // 简单策略：Host 即 Type (针对 `odfi://local` 或 `odfi://agent`)
-    // 或者 Host 是 `type.addr` (针对 `odfi://agent.10.0.1.5`)
+    // 简单策略：Host 即 Type (针对 `orl://local` 或 `orl://agent`)
+    // 或者 Host 是 `type.addr` (针对 `orl://agent.10.0.1.5`)
     let type_str = host.split('.').next().unwrap_or(host);
 
     EndpointType::from_str(type_str)

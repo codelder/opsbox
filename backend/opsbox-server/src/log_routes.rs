@@ -5,53 +5,22 @@
 use axum::{
   Json, Router,
   extract::State,
-  http::StatusCode,
-  response::{IntoResponse, Response},
   routing::{get, put},
 };
 use opsbox_core::{
   SqlitePool, UpdateLogLevelRequest, UpdateRetentionRequest,
+  error::{AppError, Result},
   logging::{
     LogLevel,
     repository::{LogConfigRepository, LogConfigResponse},
   },
   response::SuccessResponse,
 };
-use serde::Serialize;
 use std::str::FromStr;
 
 // 使用 opsbox-core 的 SuccessResponse<T>，T=() 表示无数据
 // SuccessResponse 已从 opsbox_core::response 导入
 
-/// 错误响应
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-  error: String,
-}
-
-/// API 错误类型
-#[derive(Debug)]
-pub enum ApiError {
-  InvalidLevel(String),
-  InvalidRetention(String),
-  DatabaseError(String),
-  ReloadFailed(String),
-  NotInitialized,
-}
-
-impl IntoResponse for ApiError {
-  fn into_response(self) -> Response {
-    let (status, message) = match self {
-      ApiError::InvalidLevel(msg) => (StatusCode::BAD_REQUEST, format!("无效的日志级别: {}", msg)),
-      ApiError::InvalidRetention(msg) => (StatusCode::BAD_REQUEST, format!("无效的保留数量: {}", msg)),
-      ApiError::DatabaseError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("数据库错误: {}", msg)),
-      ApiError::ReloadFailed(msg) => (StatusCode::INTERNAL_SERVER_ERROR, format!("重载失败: {}", msg)),
-      ApiError::NotInitialized => (StatusCode::INTERNAL_SERVER_ERROR, "日志系统未初始化".to_string()),
-    };
-
-    (status, Json(ErrorResponse { error: message })).into_response()
-  }
-}
 
 /// 应用状态
 #[derive(Clone)]
@@ -61,13 +30,12 @@ struct AppState {
 }
 
 /// 获取日志配置
-async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigResponse>, ApiError> {
+async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigResponse>> {
   let repo = LogConfigRepository::new(state.pool);
 
   let response = repo
     .get_response("server", state.log_dir)
-    .await
-    .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+    .await?;
 
   Ok(Json(response))
 }
@@ -76,23 +44,22 @@ async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigR
 async fn update_log_level(
   State(state): State<AppState>,
   Json(req): Json<UpdateLogLevelRequest>,
-) -> Result<Json<SuccessResponse<()>>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>> {
   // 验证日志级别
-  let level = LogLevel::from_str(&req.level).map_err(|e| ApiError::InvalidLevel(e.to_string()))?;
+  let level = LogLevel::from_str(&req.level).map_err(|e| AppError::bad_request(format!("无效的日志级别: {}", e)))?;
 
   // 更新数据库
   let repo = LogConfigRepository::new(state.pool);
   repo
     .update_level("server", level)
-    .await
-    .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+    .await?;
 
   // 动态重载日志级别
-  let reload_handle = crate::server::get_log_reload_handle().ok_or(ApiError::NotInitialized)?;
+  let reload_handle = crate::server::get_log_reload_handle().ok_or_else(|| AppError::internal("日志系统未初始化".to_string()))?;
 
   reload_handle
     .update_level(level)
-    .map_err(|e| ApiError::ReloadFailed(e.to_string()))?;
+    .map_err(|e| AppError::internal(format!("重载失败: {}", e)))?;
 
   tracing::info!("日志级别已更新为: {}", level);
 
@@ -103,18 +70,17 @@ async fn update_log_level(
 async fn update_log_retention(
   State(state): State<AppState>,
   Json(req): Json<UpdateRetentionRequest>,
-) -> Result<Json<SuccessResponse<()>>, ApiError> {
+) -> Result<Json<SuccessResponse<()>>> {
   // 验证保留数量
   if req.retention_count == 0 || req.retention_count > 365 {
-    return Err(ApiError::InvalidRetention("保留数量必须在 1-365 之间".to_string()));
+    return Err(AppError::bad_request("保留数量必须在 1-365 之间".to_string()));
   }
 
   // 更新数据库
   let repo = LogConfigRepository::new(state.pool);
   repo
     .update_retention("server", req.retention_count)
-    .await
-    .map_err(|e| ApiError::DatabaseError(e.to_string()))?;
+    .await?;
 
   tracing::info!("日志保留数量已更新为: {} 天", req.retention_count);
 

@@ -6,6 +6,8 @@ use axum::{
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::logging::LogError;
+
 /// 统一错误类型
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -81,6 +83,17 @@ impl AppError {
       Self::BadRequest(_) => "bad_request",
       Self::NotFound(_) => "not_found",
       Self::ExternalService(_) => "external_service_error",
+    }
+  }
+}
+
+impl From<LogError> for AppError {
+  fn from(err: LogError) -> Self {
+    match err {
+      LogError::DirectoryCreation(e) => AppError::Internal(format!("日志目录创建失败: {}", e)),
+      LogError::InvalidConfig(msg) => AppError::Config(msg),
+      LogError::InvalidLevel(msg) => AppError::BadRequest(format!("无效的日志级别: {}", msg)),
+      LogError::ReloadFailed(msg) => AppError::Internal(format!("日志重载失败: {}", msg)),
     }
   }
 }
