@@ -71,4 +71,5 @@ fluent-uri = "0.4.1"
 
 [dev-dependencies]
 tar = "0.4"
+test-log = "0.2"
 

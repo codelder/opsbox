@@ -46,3 +46,4 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono"
 tower = "0.5"
 tempfile = "3.0"
 futures = "0.3"
+opsbox-test-common = { path = "../test-common" }
