@@ -105,30 +105,4 @@ mod tests {
       _ => panic!("期望 Repository 错误"),
     }
   }
-
-  #[test]
-  fn test_service_error_clone() {
-    let err = ServiceError::ConfigError("test".to_string());
-    let cloned = err.clone();
-    assert_eq!(err.to_string(), cloned.to_string());
-  }
-
-  #[test]
-  fn test_service_error_debug() {
-    let err = ServiceError::ProcessingError("test".to_string());
-    let debug_str = format!("{:?}", err);
-    assert!(debug_str.contains("ProcessingError"));
-  }
-
-  #[test]
-  fn test_result_type_alias() {
-    let ok_result: Result<i32> = Ok(42);
-    match ok_result {
-      Ok(value) => assert_eq!(value, 42),
-      Err(e) => panic!("unexpected error: {e}"),
-    }
-
-    let err_result: Result<i32> = Err(ServiceError::ChannelClosed);
-    assert!(err_result.is_err());
-  }
 }

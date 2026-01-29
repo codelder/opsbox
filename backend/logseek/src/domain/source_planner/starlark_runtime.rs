@@ -219,11 +219,17 @@ pub async fn plan_with_starlark_with_script(
   let mut sources: Vec<opsbox_core::odfs::orl::ORL> = Vec::with_capacity(list.len());
   for (i, v) in list.iter().enumerate() {
     let orl_str = v.unpack_str().ok_or_else(|| {
-      crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!("SOURCES[{}] 不是字符串类型 (期望 ORL)", i)))
+      crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
+        "SOURCES[{}] 不是字符串类型 (期望 ORL)",
+        i
+      )))
     })?;
 
     let orl = opsbox_core::odfs::orl::ORL::parse(orl_str).map_err(|e| {
-      crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!("解析 ORL 失败: {}; URL={}", e, orl_str)))
+      crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
+        "解析 ORL 失败: {}; URL={}",
+        e, orl_str
+      )))
     })?;
 
     tracing::debug!("[Planner] 来源[{}]: {}", i, orl);
@@ -347,81 +353,87 @@ fn esc_single(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use chrono::NaiveDate;
+  use super::*;
+  use chrono::NaiveDate;
 
-    #[test]
-    fn test_parse_date_directives() {
-        let today = NaiveDate::from_ymd_opt(2024, 1, 10).unwrap();
+  #[test]
+  fn test_parse_date_directives() {
+    let today = NaiveDate::from_ymd_opt(2024, 1, 10).unwrap();
 
-        // 单个日期
-        let (q, range) = parse_date_directives_from_query("error dt:20240101", today);
-        assert_eq!(q, "error");
-        assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
-        assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+    // 单个日期
+    let (q, range) = parse_date_directives_from_query("error dt:20240101", today);
+    assert_eq!(q, "error");
+    assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+    assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
 
-        // 日期范围
-        let (q, range) = parse_date_directives_from_query("fdt:20240101 tdt:20240105 warn", today);
-        assert_eq!(q, "warn");
-        assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
-        assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 5).unwrap());
+    // 日期范围
+    let (q, range) = parse_date_directives_from_query("fdt:20240101 tdt:20240105 warn", today);
+    assert_eq!(q, "warn");
+    assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+    assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 5).unwrap());
 
-        // 默认日期（今天）
-        let (q, range) = parse_date_directives_from_query("info", today);
-        assert_eq!(q, "info");
-        assert_eq!(range.start, today);
-        assert_eq!(range.end, today);
-    }
+    // 默认日期（今天）
+    let (q, range) = parse_date_directives_from_query("info", today);
+    assert_eq!(q, "info");
+    assert_eq!(range.start, today);
+    assert_eq!(range.end, today);
+  }
 
-    #[test]
-    fn test_esc_single() {
-        assert_eq!(esc_single("a'b"), "a\\'b");
-        assert_eq!(esc_single("a\\b"), "a\\\\b");
-        assert_eq!(esc_single("a'\\b"), "a\\'\\\\b");
-    }
+  #[test]
+  fn test_esc_single() {
+    assert_eq!(esc_single("a'b"), "a\\'b");
+    assert_eq!(esc_single("a\\b"), "a\\\\b");
+    assert_eq!(esc_single("a'\\b"), "a\\'\\\\b");
+  }
 
-    #[tokio::test]
-    async fn test_plan_with_starlark_with_script_basic() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        crate::init_schema(&pool).await.unwrap();
-        let query = "error";
-        let script = r#"
+  #[tokio::test]
+  async fn test_plan_with_starlark_with_script_basic() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::init_schema(&pool).await.unwrap();
+    let query = "error";
+    let script = r#"
 SOURCES = ["orl://local/tmp/log"]
 print("hello world")
 "#;
-        let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script)).await.unwrap();
-        assert_eq!(res.sources.len(), 1);
-        assert_eq!(res.sources[0].to_string(), "orl://local/tmp/log");
-        assert!(res.debug_logs.contains(&"hello world".to_string()));
-    }
+    let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script))
+      .await
+      .unwrap();
+    assert_eq!(res.sources.len(), 1);
+    assert_eq!(res.sources[0].to_string(), "orl://local/tmp/log");
+    assert!(res.debug_logs.contains(&"hello world".to_string()));
+  }
 
-    #[tokio::test]
-    async fn test_plan_with_starlark_with_script_cleaned_query_override() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        crate::init_schema(&pool).await.unwrap();
-        let query = "error";
-        let script = r#"
+  #[tokio::test]
+  async fn test_plan_with_starlark_with_script_cleaned_query_override() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::init_schema(&pool).await.unwrap();
+    let query = "error";
+    let script = r#"
 SOURCES = []
 CLEANED_QUERY = "overridden"
 "#;
-        let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script)).await.unwrap();
-        assert_eq!(res.cleaned_query, "overridden");
-    }
+    let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script))
+      .await
+      .unwrap();
+    assert_eq!(res.cleaned_query, "overridden");
+  }
 
-    #[tokio::test]
-    async fn test_plan_with_starlark_with_script_context_vars() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        crate::init_schema(&pool).await.unwrap();
-        let query = "fdt:20240101 tdt:20240102 error";
-        let script = r#"
+  #[tokio::test]
+  async fn test_plan_with_starlark_with_script_context_vars() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::init_schema(&pool).await.unwrap();
+    let query = "fdt:20240101 tdt:20240102 error";
+    let script = r#"
 # 验证 DATES 注入
 if len(DATES) == 2:
     SOURCES = ["orl://local/" + DATES[0]["yyyymmdd"]]
 else:
     SOURCES = []
 "#;
-        let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script)).await.unwrap();
-        assert_eq!(res.sources.len(), 1);
-        assert_eq!(res.sources[0].path(), "/20240101");
-    }
+    let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script))
+      .await
+      .unwrap();
+    assert_eq!(res.sources.len(), 1);
+    assert_eq!(res.sources[0].path(), "/20240101");
+  }
 }

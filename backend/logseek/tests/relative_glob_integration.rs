@@ -46,7 +46,9 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
 
     // 构建本地流（递归）
     let mut estream = Box::new(
-        opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(root), true).await.expect("构建流失败")
+      opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(root), true)
+        .await
+        .expect("构建流失败"),
     );
 
     tokio::spawn(async move {
@@ -87,7 +89,9 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 
     let mut estream = Box::new(
-        opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(root), true).await.expect("构建流失败")
+      opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(root), true)
+        .await
+        .expect("构建流失败"),
     );
 
     tokio::spawn(async move {

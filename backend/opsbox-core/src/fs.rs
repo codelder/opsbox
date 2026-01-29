@@ -1,6 +1,6 @@
 pub mod entry_stream;
-pub mod list;
 pub mod file_type;
+pub mod list;
 
 pub use entry_stream::{
   ArchiveKind, EntryMeta, EntrySource, EntryStream, FsEntryStream, GzipEntryStream, MultiFileEntryStream,

@@ -38,20 +38,27 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
   async fn read_dir(&self, _path: &OpsPath) -> io::Result<Vec<OpsEntry>> {
     let agents = self.manager.list_online_agents().await;
 
-    tracing::info!("AgentDiscoveryFileSystem::read_dir: found {} online agents", agents.len());
+    tracing::info!(
+      "AgentDiscoveryFileSystem::read_dir: found {} online agents",
+      agents.len()
+    );
     for agent in &agents {
-        tracing::info!("  Agent: id={}, name={}, last_heartbeat={}, is_online={}",
-            agent.id, agent.name, agent.last_heartbeat,
-            agent.is_online(90));
+      tracing::info!(
+        "  Agent: id={}, name={}, last_heartbeat={}, is_online={}",
+        agent.id,
+        agent.name,
+        agent.last_heartbeat,
+        agent.is_online(90)
+      );
     }
 
     let entries = agents
       .into_iter()
       .map(|a| {
         let name = if a.name.is_empty() {
-           a.id.clone()
+          a.id.clone()
         } else {
-           format!("{} ({})", a.name, a.id)
+          format!("{} ({})", a.name, a.id)
         };
 
         let path = format!("orl://{}@agent/", a.id);
@@ -61,9 +68,9 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
           file_type: OpsFileType::Directory,
           size: 0,
           modified: if a.last_heartbeat > 0 {
-             Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(a.last_heartbeat as u64))
+            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(a.last_heartbeat as u64))
           } else {
-             None
+            None
           },
           mode: 0755,
           mime_type: None,
@@ -71,11 +78,7 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
           is_archive: false, // Agent is not an archive itself, it's a directory-like provider
         };
 
-        OpsEntry {
-          name,
-          path,
-          metadata,
-        }
+        OpsEntry { name, path, metadata }
       })
       .collect();
 
@@ -83,7 +86,10 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
   }
 
   async fn open_read(&self, _path: &OpsPath) -> io::Result<OpsRead> {
-    Err(io::Error::new(io::ErrorKind::PermissionDenied, "Cannot read agent list as file"))
+    Err(io::Error::new(
+      io::ErrorKind::PermissionDenied,
+      "Cannot read agent list as file",
+    ))
   }
 
   fn name(&self) -> &str {

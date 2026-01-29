@@ -77,6 +77,8 @@ libmimalloc-sys = { version = "0.1.44", features = ["extended"], optional = true
 [features]
 # 是否在缓存清理后调用 mimalloc 的 mi_collect(true) 主动尝试归还空闲内存
 mimalloc-collect = ["libmimalloc-sys"]
+# 用于测试需要网络访问的集成测试
+network-tests = []
 
 [dev-dependencies]
 tempfile = "3"

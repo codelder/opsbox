@@ -96,6 +96,16 @@ jobs:
             --release `
             --all-features
 
+      - name: Run ignored tests (slow)
+        shell: pwsh
+        run: |
+          # 运行被忽略的测试（性能和安全测试）
+          cargo test `
+            --manifest-path backend/Cargo.toml `
+            --release `
+            --all-features `
+            -- --ignored
+
       - name: Build backend
         shell: pwsh
         run: |

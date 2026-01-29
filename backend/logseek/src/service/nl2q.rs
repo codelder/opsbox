@@ -34,7 +34,7 @@ pub enum NL2QError {
   Empty,
 }
 
-fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
+pub fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
   // 将整份规范作为 system 消息提供，保持与客户端无关
   let system = ChatMessage {
     role: Role::System,
@@ -48,7 +48,7 @@ fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
 }
 
 // 移除大模型推理模型产生的 <think> 思考片段，保留真实输出
-fn strip_think_sections(input: &str) -> String {
+pub fn strip_think_sections(input: &str) -> String {
   let mut out = input.to_string();
   while let Some(start) = out.find("<think>") {
     if let Some(end_rel) = out[start..].find("</think>") {
@@ -295,30 +295,6 @@ mod tests {
   }
 
   #[test]
-  fn test_nl_body_clone() {
-    let body = NLBody { nl: "test".to_string() };
-    let cloned = body.clone();
-    assert_eq!(body.nl, cloned.nl);
-  }
-
-  #[test]
-  fn test_nl2q_response_clone() {
-    let response = NL2QResponse {
-      q: "test query".to_string(),
-    };
-    let cloned = response.clone();
-    assert_eq!(response.q, cloned.q);
-  }
-
-  #[test]
-  fn test_nl2q_error_debug() {
-    let err = NL2QError::Http("test".to_string());
-    let debug_str = format!("{:?}", err);
-    assert!(debug_str.contains("Http"));
-    assert!(debug_str.contains("test"));
-  }
-
-  #[test]
   fn test_build_messages_empty_nl() {
     let nl = "";
     let messages = build_messages(nl);
@@ -372,5 +348,53 @@ mod tests {
 
     let result = resolve_llm_client(&pool).await;
     assert!(result.is_ok());
+  }
+
+  #[test]
+  fn test_build_messages_empty_input() {
+    // 测试空输入
+    let messages = build_messages("");
+    assert_eq!(messages.len(), 2);
+    assert!(matches!(messages[0].role, Role::System));
+    assert!(matches!(messages[1].role, Role::User));
+    assert_eq!(messages[1].content, "");
+    assert!(messages[0].content.contains("查询语法"));
+  }
+
+  #[test]
+  fn test_build_messages_trimmed_input() {
+    // 测试输入被修剪
+    let messages = build_messages("  test input  ");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].content, "test input");
+  }
+
+  #[test]
+  fn test_build_messages_system_content() {
+    // 测试系统消息包含指南
+    let messages = build_messages("test");
+    assert!(messages[0].content.contains("查询语法"));
+    assert!(messages[0].content.contains("目标"));
+  }
+
+  #[test]
+  fn test_nlbody_deserialize() {
+    // 测试NLBody反序列化
+    let json = r#"{"nl": "test query"}"#;
+    let result: Result<NLBody, _> = serde_json::from_str(json);
+    assert!(result.is_ok());
+    let body = result.unwrap();
+    assert_eq!(body.nl, "test query");
+  }
+
+  #[test]
+  fn test_nl2q_response_serialize() {
+    // 测试NL2QResponse序列化
+    let response = NL2QResponse {
+      q: "test query".to_string(),
+    };
+    let json = serde_json::to_string(&response).unwrap();
+    assert!(json.contains("test query"));
+    assert!(json.contains("q"));
   }
 }

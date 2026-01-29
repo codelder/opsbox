@@ -49,36 +49,38 @@ pub async fn delete_profile(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::repository::s3::init_schema;
+  use super::*;
+  use crate::repository::s3::init_schema;
 
-    async fn setup_test_db() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        init_schema(&pool).await.unwrap();
-        pool
-    }
+  async fn setup_test_db() -> SqlitePool {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    init_schema(&pool).await.unwrap();
+    pool
+  }
 
-    #[tokio::test]
-    async fn test_profile_routes() {
-        let pool = setup_test_db().await;
+  #[tokio::test]
+  async fn test_profile_routes() {
+    let pool = setup_test_db().await;
 
-        // 1. Save a profile
-        let payload = S3ProfilePayload {
-            profile_name: "test-profile".to_string(),
-            endpoint: "http://minio:9000".to_string(),
-            access_key: "ak".to_string(),
-            secret_key: "sk".to_string(),
-        };
-        save_profile(State(pool.clone()), Json(payload.clone())).await.unwrap();
+    // 1. Save a profile
+    let payload = S3ProfilePayload {
+      profile_name: "test-profile".to_string(),
+      endpoint: "http://minio:9000".to_string(),
+      access_key: "ak".to_string(),
+      secret_key: "sk".to_string(),
+    };
+    save_profile(State(pool.clone()), Json(payload.clone())).await.unwrap();
 
-        // 2. List profiles
-        let resp = list_profiles(State(pool.clone())).await.unwrap();
-        assert_eq!(resp.profiles.len(), 1);
-        assert_eq!(resp.profiles[0].profile_name, "test-profile");
+    // 2. List profiles
+    let resp = list_profiles(State(pool.clone())).await.unwrap();
+    assert_eq!(resp.profiles.len(), 1);
+    assert_eq!(resp.profiles[0].profile_name, "test-profile");
 
-        // 3. Delete profile
-        delete_profile(State(pool.clone()), Path("test-profile".to_string())).await.unwrap();
-        let resp = list_profiles(State(pool.clone())).await.unwrap();
-        assert_eq!(resp.profiles.len(), 0);
-    }
+    // 3. Delete profile
+    delete_profile(State(pool.clone()), Path("test-profile".to_string()))
+      .await
+      .unwrap();
+    let resp = list_profiles(State(pool.clone())).await.unwrap();
+    assert_eq!(resp.profiles.len(), 0);
+  }
 }

@@ -32,7 +32,9 @@ impl AgentManager {
       .map_err(|e| format!("数据库表初始化失败: {}", e))?;
 
     // 构建可重用的 HTTP 客户端（禁用代理，避免本地请求被劫持）
-    let http_client = reqwest::Client::builder().no_proxy().build()
+    let http_client = reqwest::Client::builder()
+      .no_proxy()
+      .build()
       .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
     Ok(Self {
@@ -203,14 +205,21 @@ impl AgentManager {
   /// 获取在线 Agent（动态过滤）
   pub async fn list_online_agents(&self) -> Vec<AgentInfo> {
     let list = self.list_agents().await;
-    tracing::info!("AgentManager::list_online_agents: total {} agents, heartbeat_timeout={}", list.len(), self.heartbeat_timeout);
+    tracing::info!(
+      "AgentManager::list_online_agents: total {} agents, heartbeat_timeout={}",
+      list.len(),
+      self.heartbeat_timeout
+    );
 
     let online_agents: Vec<AgentInfo> = list
       .into_iter()
       .filter(|a| a.check_online_status(self.heartbeat_timeout, true))
       .collect();
 
-    tracing::info!("AgentManager::list_online_agents: returning {} online agents", online_agents.len());
+    tracing::info!(
+      "AgentManager::list_online_agents: returning {} online agents",
+      online_agents.len()
+    );
     for agent in &online_agents {
       tracing::info!("  Online agent: id={}, name={}", agent.id, agent.name);
     }

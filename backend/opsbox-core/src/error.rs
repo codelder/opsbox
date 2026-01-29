@@ -146,32 +146,32 @@ pub type Result<T> = std::result::Result<T, AppError>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_error_constructors() {
-        let err = AppError::config("config error");
-        assert!(matches!(err, AppError::Config(msg) if msg == "config error"));
+  #[test]
+  fn test_error_constructors() {
+    let err = AppError::config("config error");
+    assert!(matches!(err, AppError::Config(msg) if msg == "config error"));
 
-        let err = AppError::internal("internal error");
-        assert!(matches!(err, AppError::Internal(msg) if msg == "internal error"));
+    let err = AppError::internal("internal error");
+    assert!(matches!(err, AppError::Internal(msg) if msg == "internal error"));
 
-        let err = AppError::bad_request("bad request");
-        assert!(matches!(err, AppError::BadRequest(msg) if msg == "bad request"));
+    let err = AppError::bad_request("bad request");
+    assert!(matches!(err, AppError::BadRequest(msg) if msg == "bad request"));
 
-        let err = AppError::not_found("not found");
-        assert!(matches!(err, AppError::NotFound(msg) if msg == "not found"));
+    let err = AppError::not_found("not found");
+    assert!(matches!(err, AppError::NotFound(msg) if msg == "not found"));
 
-        let err = AppError::external_service("external error");
-        assert!(matches!(err, AppError::ExternalService(msg) if msg == "external error"));
-    }
+    let err = AppError::external_service("external error");
+    assert!(matches!(err, AppError::ExternalService(msg) if msg == "external error"));
+  }
 
-    #[test]
-    fn test_status_codes() {
-        assert_eq!(AppError::config("").status_code(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(AppError::internal("").status_code(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(AppError::bad_request("").status_code(), StatusCode::BAD_REQUEST);
-        assert_eq!(AppError::not_found("").status_code(), StatusCode::NOT_FOUND);
-        assert_eq!(AppError::external_service("").status_code(), StatusCode::BAD_GATEWAY);
-    }
+  #[test]
+  fn test_status_codes() {
+    assert_eq!(AppError::config("").status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(AppError::internal("").status_code(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(AppError::bad_request("").status_code(), StatusCode::BAD_REQUEST);
+    assert_eq!(AppError::not_found("").status_code(), StatusCode::NOT_FOUND);
+    assert_eq!(AppError::external_service("").status_code(), StatusCode::BAD_GATEWAY);
+  }
 }

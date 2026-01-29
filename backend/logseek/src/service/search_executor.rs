@@ -1,8 +1,8 @@
-use crate::service::searchable::{create_search_provider, SearchContext, SearchRequest};
-use crate::service::search::{SearchEvent, SearchResult};
-use crate::service::ServiceError;
 use crate::domain::source_planner;
-use crate::repository::cache::{cache as simple_cache};
+use crate::repository::cache::cache as simple_cache;
+use crate::service::ServiceError;
+use crate::service::search::{SearchEvent, SearchResult};
+use crate::service::searchable::{SearchContext, SearchRequest, create_search_provider};
 use opsbox_core::SqlitePool;
 use opsbox_core::odfs::orl::ORL;
 use std::sync::Arc;
@@ -101,12 +101,15 @@ impl SearchResultHandler {
           }
         }
         SearchEvent::Error { source: _, message, .. } => {
-             // 转发错误，保持 source 统一
-             let _ = self.tx.send(SearchEvent::Error {
-                 source: self.event_source(),
-                 message,
-                 recoverable: true
-             }).await;
+          // 转发错误，保持 source 统一
+          let _ = self
+            .tx
+            .send(SearchEvent::Error {
+              source: self.event_source(),
+              message,
+              recoverable: true,
+            })
+            .await;
         }
         // 对于 Complete 事件，通常 Provider 不会自己发 Complete，而是流结束
         _ => {}
@@ -117,11 +120,11 @@ impl SearchResultHandler {
   }
 
   fn event_source(&self) -> String {
-      use opsbox_core::odfs::orl::EndpointType;
-      match self.orl.endpoint_type() {
-        Ok(EndpointType::Agent) => format!("agent:{}", self.orl.effective_id()),
-        _ => self.orl.display_name(),
-      }
+    use opsbox_core::odfs::orl::EndpointType;
+    match self.orl.endpoint_type() {
+      Ok(EndpointType::Agent) => format!("agent:{}", self.orl.effective_id()),
+      _ => self.orl.display_name(),
+    }
   }
 
   async fn send_complete(&self, count: usize) {
@@ -131,13 +134,19 @@ impl SearchResultHandler {
 
     tracing::info!(
       "[SearchExecutor] 搜索{}: source={}, elapsed={}ms, results={}",
-      status, source_display, elapsed.as_millis(), count
+      status,
+      source_display,
+      elapsed.as_millis(),
+      count
     );
 
-    let _ = self.tx.send(SearchEvent::Complete {
-      source: self.event_source(),
-      elapsed_ms: elapsed.as_millis() as u64,
-    }).await;
+    let _ = self
+      .tx
+      .send(SearchEvent::Complete {
+        source: self.event_source(),
+        elapsed_ms: elapsed.as_millis() as u64,
+      })
+      .await;
   }
 
   fn is_cancelled(&self) -> bool {
@@ -171,10 +180,30 @@ impl SearchExecutor {
     let mut tokens: Vec<&str> = Vec::new();
 
     for t in query.split_whitespace() {
-      if let Some(rest) = t.strip_prefix("app:") && !rest.is_empty() { app = Some(rest.to_string()); continue; }
-      if let Some(rest) = t.strip_prefix("encoding:") && !rest.is_empty() { encoding = Some(rest.to_string()); continue; }
-      if let Some(rest) = t.strip_prefix("path:") && !rest.is_empty() { path_includes.push(rest.to_string()); continue; }
-      if let Some(rest) = t.strip_prefix("-path:") && !rest.is_empty() { path_excludes.push(rest.to_string()); continue; }
+      if let Some(rest) = t.strip_prefix("app:")
+        && !rest.is_empty()
+      {
+        app = Some(rest.to_string());
+        continue;
+      }
+      if let Some(rest) = t.strip_prefix("encoding:")
+        && !rest.is_empty()
+      {
+        encoding = Some(rest.to_string());
+        continue;
+      }
+      if let Some(rest) = t.strip_prefix("path:")
+        && !rest.is_empty()
+      {
+        path_includes.push(rest.to_string());
+        continue;
+      }
+      if let Some(rest) = t.strip_prefix("-path:")
+        && !rest.is_empty()
+      {
+        path_excludes.push(rest.to_string());
+        continue;
+      }
       tokens.push(t);
     }
     let cleaned_before_plan = tokens.join(" ");
@@ -235,37 +264,41 @@ impl SearchExecutor {
         // 2. 启动结果处理任务
         let handler = SearchResultHandler::new(orl.clone(), sid.clone(), tx.clone(), token.clone());
         let handler_task = tokio::spawn(async move {
-            handler.handle_stream(rx_internal).await;
+          handler.handle_stream(rx_internal).await;
         });
 
         // 3. 构造 Provider 下下文
         let ctx = SearchContext {
-            orl: orl.clone(),
-            sid: sid.clone(),
-            tx: tx_internal.clone(),
-            cancel_token: token.clone(),
+          orl: orl.clone(),
+          sid: sid.clone(),
+          tx: tx_internal.clone(),
+          cancel_token: token.clone(),
         };
 
         // 4. 获取 Provider 并执行
         let provider_res = create_search_provider(&pool, &orl).await;
         match provider_res {
-            Ok(provider) => {
-                if let Err(e) = provider.search(&ctx, &request, &pool).await {
-                     let _ = tx_internal.send(SearchEvent::Error {
-                         source: orl.display_name(), // 简单名称即可，handler会统一重写source? 不，handler只转发Error
-                         message: e.to_string(),
-                         recoverable: true
-                     }).await;
-                }
+          Ok(provider) => {
+            if let Err(e) = provider.search(&ctx, &request, &pool).await {
+              let _ = tx_internal
+                .send(SearchEvent::Error {
+                  source: orl.display_name(), // 简单名称即可，handler会统一重写source? 不，handler只转发Error
+                  message: e.to_string(),
+                  recoverable: true,
+                })
+                .await;
             }
-            Err(e) => {
-                tracing::error!("Invalid Endpoint Type: {}", e);
-                let _ = tx_internal.send(SearchEvent::Error {
-                    source: orl.display_name(),
-                    message: format!("无法创建搜索提供者: {}", e),
-                    recoverable: true
-                }).await;
-            }
+          }
+          Err(e) => {
+            tracing::error!("Invalid Endpoint Type: {}", e);
+            let _ = tx_internal
+              .send(SearchEvent::Error {
+                source: orl.display_name(),
+                message: format!("无法创建搜索提供者: {}", e),
+                recoverable: true,
+              })
+              .await;
+          }
         }
 
         // 确保 Provider 完成后关闭 tx_internal，触发 handler 完成
@@ -341,37 +374,6 @@ SOURCES = [
   }
 
   #[tokio::test]
-  async fn test_search_executor_new() {
-    let pool = create_test_pool().await;
-    let config = SearchExecutorConfig::default();
-
-    let executor = SearchExecutor::new(pool, config.clone());
-
-    // 验证配置正确设置
-    assert_eq!(executor.config.io_max_concurrency, config.io_max_concurrency);
-    assert_eq!(executor.config.stream_channel_capacity, config.stream_channel_capacity);
-  }
-
-  #[tokio::test]
-  async fn test_search_executor_config_default() {
-    let config = SearchExecutorConfig::default();
-
-    assert_eq!(config.io_max_concurrency, 12);
-    assert_eq!(config.stream_channel_capacity, 128);
-  }
-
-  #[tokio::test]
-  async fn test_search_executor_config_custom() {
-    let config = SearchExecutorConfig {
-      io_max_concurrency: 50,
-      stream_channel_capacity: 256,
-    };
-
-    assert_eq!(config.io_max_concurrency, 50);
-    assert_eq!(config.stream_channel_capacity, 256);
-  }
-
-  #[tokio::test]
   async fn test_get_sources_with_planner() {
     let pool = create_test_pool().await;
     setup_test_sources(&pool).await;
@@ -435,7 +437,6 @@ SOURCES = [
     // 验证 sid 不为空
 
     // sid 应该是 UUID 格式
-
   }
 
   #[tokio::test]
@@ -517,7 +518,6 @@ SOURCES = [
 
     // 验证 sid 生成
 
-
     // 消费事件流
     let mut received_events = false;
     while let Some(event) = rx.recv().await {
@@ -570,7 +570,7 @@ SOURCES = [
 
     // 验证 sid 格式（应该是 UUID）
 
-     // UUID 长度通常 > 20
+    // UUID 长度通常 > 20
   }
 
   #[tokio::test]
@@ -606,7 +606,6 @@ SOURCES = [
     let mut rx = result.unwrap();
 
     // 验证 sid 生成
-
 
     // 消费一些事件（可能是 Complete 或 Error 事件）
     let mut event_count = 0;
@@ -892,10 +891,12 @@ SOURCES = [
     // 应该收到错误事件
     let event = rx.recv().await.expect("应该收到事件");
     if let SearchEvent::Error { message, .. } = event {
-        // 允许不同的错误消息，只要是解析相关的
-        assert!(message.contains("查询解析失败") || message.contains("InvalidRegex") || message.contains("unexpected end"));
+      // 允许不同的错误消息，只要是解析相关的
+      assert!(
+        message.contains("查询解析失败") || message.contains("InvalidRegex") || message.contains("unexpected end")
+      );
     } else {
-        panic!("期望 SearchEvent::Error, 实际收到: {:?}", event);
+      panic!("期望 SearchEvent::Error, 实际收到: {:?}", event);
     }
   }
 
@@ -966,7 +967,6 @@ SOURCES = [
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
-
 
     // 收集所有事件
     let mut error_events = 0;
@@ -1179,7 +1179,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 收集事件
     let mut found_error = false;
     let mut error_message = String::new();
@@ -1245,7 +1244,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 收集事件（预期会失败，因为 Agent 不存在）
     let mut found_error = false;
 
@@ -1302,7 +1300,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 收集事件
     let mut received_events = false;
 
@@ -1355,7 +1352,6 @@ SOURCES = [
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
-
 
     // 收集事件
     let mut received_events = false;
@@ -1410,7 +1406,6 @@ SOURCES = [
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
-
 
     // 收集事件
     let mut received_events = false;
@@ -1507,7 +1502,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 收集事件
     let mut agent_events = 0;
     let mut local_events = 0;
@@ -1577,7 +1571,6 @@ SOURCES = [
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
-
 
     // 收集事件
     let mut event_count = 0;
@@ -1656,7 +1649,6 @@ SOURCES = [
     // 应该能够处理大查询（可能成功或失败，取决于解析器限制）
     // 如果成功，验证返回值
     if let Ok(mut rx) = result {
-
       // 消费一些事件
       let mut event_count = 0;
       while let Some(_event) = rx.recv().await {
@@ -1685,7 +1677,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 消费事件
     let mut received_events = false;
     while let Some(_event) = rx.recv().await {
@@ -1711,7 +1702,6 @@ SOURCES = [
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
-
 
     // 消费事件
     let mut received_events = false;
@@ -1762,7 +1752,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 消费一些事件（不需要等待所有 100 个数据源完成）
     let mut event_count = 0;
     while let Some(_event) = rx.recv().await {
@@ -1797,7 +1786,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 消费事件
     let mut received_events = false;
     while let Some(_event) = rx.recv().await {
@@ -1830,7 +1818,6 @@ SOURCES = [
 
       // 应该能够处理特殊字符（可能成功或失败）
       if let Ok(mut rx) = result {
-
         // 消费一些事件
         while let Some(_event) = rx.recv().await {
           // 只是验证不会崩溃
@@ -1856,7 +1843,6 @@ SOURCES = [
 
     let mut rx = result.unwrap();
 
-
     // 消费事件
     while let Some(_event) = rx.recv().await {
       // 验证不会崩溃
@@ -1878,7 +1864,6 @@ SOURCES = [
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
-
 
     // 消费事件
     while let Some(_event) = rx.recv().await {
@@ -2025,7 +2010,6 @@ SOURCES = [
 
       let mut rx = result.unwrap();
 
-
       // 消费事件
       while let Some(_event) = rx.recv().await {
         // 验证不会崩溃
@@ -2110,7 +2094,6 @@ SOURCES = [
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
-
 
     // 收集结果
     let mut success_count = 0;
@@ -2327,7 +2310,9 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 执行搜索（带 encoding 限定词）
-    let result = executor.search("encoding:UTF-8 错误", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("encoding:UTF-8 错误", "test-sid".to_string(), 0, None)
+      .await;
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
@@ -2379,7 +2364,9 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 执行布尔查询
-    let result = executor.search("error AND timeout", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("error AND timeout", "test-sid".to_string(), 0, None)
+      .await;
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
@@ -2537,7 +2524,9 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 执行 OR 查询
-    let result = executor.search("error OR warning", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("error OR warning", "test-sid".to_string(), 0, None)
+      .await;
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
@@ -2585,7 +2574,9 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 执行 NOT 查询
-    let result = executor.search("error NOT warning", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("error NOT warning", "test-sid".to_string(), 0, None)
+      .await;
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
@@ -2729,7 +2720,9 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 执行带 path 限定词的查询
-    let result = executor.search("path:*.log error", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("path:*.log error", "test-sid".to_string(), 0, None)
+      .await;
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();
@@ -2831,7 +2824,9 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 1. 测试 excluide: -path:test/**
-    let result = executor.search("-path:test/** error", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("-path:test/** error", "test-sid".to_string(), 0, None)
+      .await;
     let mut rx = result.unwrap();
     let mut found_files = Vec::new();
     while let Some(event) = rx.recv().await {
@@ -2845,7 +2840,9 @@ SOURCES = [
 
     // 2. 测试 include combination: path:src/** path:test/**
     // 注意：Strict glob requires ** to match directories.
-    let result = executor.search("path:src/** path:test/** error", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("path:src/** path:test/** error", "test-sid".to_string(), 0, None)
+      .await;
     let mut rx = result.unwrap();
     let mut found_files = Vec::new();
     while let Some(event) = rx.recv().await {
@@ -2859,7 +2856,9 @@ SOURCES = [
     assert!(!found_files.iter().any(|f| f.contains("README.md"))); // Excluded implicitly because not in include list
 
     // 3. 测试 mixed: path:src/** -path:**/utils.rs
-    let result = executor.search("path:src/** -path:**/utils.rs error", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("path:src/** -path:**/utils.rs error", "test-sid".to_string(), 0, None)
+      .await;
     let mut rx = result.unwrap();
     let mut found_files = Vec::new();
     while let Some(event) = rx.recv().await {

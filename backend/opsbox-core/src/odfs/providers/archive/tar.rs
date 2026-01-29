@@ -193,7 +193,9 @@ mod tests {
       header.set_path("test.txt").unwrap();
       header.set_size(13);
       header.set_cksum();
-      builder.append_data(&mut header, "test.txt", b"hello content".as_slice()).unwrap();
+      builder
+        .append_data(&mut header, "test.txt", b"hello content".as_slice())
+        .unwrap();
 
       // Add a directory entry (optional but good for test_read_dir)
       let mut dir_header = tar::Header::new_gnu();
@@ -208,7 +210,9 @@ mod tests {
       log_header.set_path("logs/app.log").unwrap();
       log_header.set_size(8);
       log_header.set_cksum();
-      builder.append_data(&mut log_header, "logs/app.log", b"log data".as_slice()).unwrap();
+      builder
+        .append_data(&mut log_header, "logs/app.log", b"log data".as_slice())
+        .unwrap();
 
       builder.finish().unwrap();
     }

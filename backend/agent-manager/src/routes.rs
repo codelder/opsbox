@@ -56,7 +56,6 @@ pub struct RemoveTagRequest {
 
 // SuccessResponse 已在上面重新导出
 
-
 /// 处理 Agent 标签操作的通用宏
 macro_rules! handle_agent_operation {
     ($manager:expr, $operation:expr, $success_msg:expr) => {
@@ -245,7 +244,11 @@ async fn set_agent_tags(
   Path(agent_id): Path<String>,
   Json(req): Json<SetTagsRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  handle_agent_operation!(manager, manager.set_agent_tags(&agent_id, req.tags).await, "标签设置成功")
+  handle_agent_operation!(
+    manager,
+    manager.set_agent_tags(&agent_id, req.tags).await,
+    "标签设置成功"
+  )
 }
 
 /// 获取 Agent 标签
@@ -275,7 +278,11 @@ async fn remove_agent_tag(
   Path(agent_id): Path<String>,
   Json(req): Json<RemoveTagRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  handle_agent_operation!(manager, manager.remove_agent_tag(&agent_id, &req.key, &req.value).await, "标签移除成功")
+  handle_agent_operation!(
+    manager,
+    manager.remove_agent_tag(&agent_id, &req.key, &req.value).await,
+    "标签移除成功"
+  )
 }
 
 /// 清空 Agent 标签

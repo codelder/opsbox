@@ -236,122 +236,126 @@ pub async fn set_default(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::repository::llm::init_schema;
+  use super::*;
+  use crate::repository::llm::init_schema;
 
-    async fn setup_test_db() -> SqlitePool {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        init_schema(&pool).await.unwrap();
-        pool
-    }
+  async fn setup_test_db() -> SqlitePool {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    init_schema(&pool).await.unwrap();
+    pool
+  }
 
-    #[test]
-    fn test_payload_conversions() {
-        let p = ProviderKindPayload::Ollama;
-        let k: ProviderKind = p.into();
-        assert_eq!(k, ProviderKind::Ollama);
+  #[test]
+  fn test_payload_conversions() {
+    let p = ProviderKindPayload::Ollama;
+    let k: ProviderKind = p.into();
+    assert_eq!(k, ProviderKind::Ollama);
 
-        let p2: ProviderKindPayload = k.into();
-        assert!(matches!(p2, ProviderKindPayload::Ollama));
-    }
+    let p2: ProviderKindPayload = k.into();
+    assert!(matches!(p2, ProviderKindPayload::Ollama));
+  }
 
-    #[tokio::test]
-    async fn test_llm_default_routes() {
-        let pool = setup_test_db().await;
+  #[tokio::test]
+  async fn test_llm_default_routes() {
+    let pool = setup_test_db().await;
 
-        // Initially none
-        let resp = get_default(State(pool.clone())).await.unwrap();
-        assert!(resp.0.is_none());
+    // Initially none
+    let resp = get_default(State(pool.clone())).await.unwrap();
+    assert!(resp.0.is_none());
 
-        // We can't easily set default to a non-existent backend because set_default checks for existence
-        // But we can test the API error if it fails
-        let res = set_default(State(pool.clone()), Json(DefaultLlmPayload { name: "non-existent".into() })).await;
-        assert!(res.is_err());
-    }
+    // We can't easily set default to a non-existent backend because set_default checks for existence
+    // But we can test the API error if it fails
+    let res = set_default(
+      State(pool.clone()),
+      Json(DefaultLlmPayload {
+        name: "non-existent".into(),
+      }),
+    )
+    .await;
+    assert!(res.is_err());
+  }
 
-    #[tokio::test]
-    async fn test_list_backends_empty() {
-        let pool = setup_test_db().await;
-        let resp = list_backends(State(pool)).await.unwrap();
-        assert_eq!(resp.backends.len(), 0);
-        assert!(resp.default.is_none());
-    }
+  #[tokio::test]
+  async fn test_list_backends_empty() {
+    let pool = setup_test_db().await;
+    let resp = list_backends(State(pool)).await.unwrap();
+    assert_eq!(resp.backends.len(), 0);
+    assert!(resp.default.is_none());
+  }
 
-    #[test]
-    fn test_provider_kind_payload_openai() {
-        let p = ProviderKindPayload::OpenAI;
-        let k: ProviderKind = p.into();
-        assert_eq!(k, ProviderKind::OpenAI);
+  #[test]
+  fn test_provider_kind_payload_openai() {
+    let p = ProviderKindPayload::OpenAI;
+    let k: ProviderKind = p.into();
+    assert_eq!(k, ProviderKind::OpenAI);
 
-        let p2: ProviderKindPayload = k.into();
-        assert!(matches!(p2, ProviderKindPayload::OpenAI));
-    }
+    let p2: ProviderKindPayload = k.into();
+    assert!(matches!(p2, ProviderKindPayload::OpenAI));
+  }
 
-    #[test]
-    fn test_llm_backend_list_item_from_public() {
-        let public = crate::repository::llm::LlmBackendPublic {
-            name: "test".to_string(),
-            provider: ProviderKind::Ollama,
-            base_url: "http://localhost:11434".to_string(),
-            model: "llama2".to_string(),
-            timeout_secs: 60,
-            has_api_key: false,
-        };
+  #[test]
+  fn test_llm_backend_list_item_from_public() {
+    let public = crate::repository::llm::LlmBackendPublic {
+      name: "test".to_string(),
+      provider: ProviderKind::Ollama,
+      base_url: "http://localhost:11434".to_string(),
+      model: "llama2".to_string(),
+      timeout_secs: 60,
+      has_api_key: false,
+    };
 
-        let item: LlmBackendListItem = public.into();
-        assert_eq!(item.name, "test");
-        assert!(matches!(item.provider, ProviderKindPayload::Ollama));
-        assert_eq!(item.base_url, "http://localhost:11434");
-        assert_eq!(item.model, "llama2");
-        assert_eq!(item.timeout_secs, 60);
-        assert!(!item.has_api_key);
-    }
+    let item: LlmBackendListItem = public.into();
+    assert_eq!(item.name, "test");
+    assert!(matches!(item.provider, ProviderKindPayload::Ollama));
+    assert_eq!(item.base_url, "http://localhost:11434");
+    assert_eq!(item.model, "llama2");
+    assert_eq!(item.timeout_secs, 60);
+    assert!(!item.has_api_key);
+  }
 
-    #[test]
-    fn test_llm_models_response() {
-        let resp = LlmModelsResponse {
-            models: vec!["model1".to_string(), "model2".to_string()],
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("model1"));
-        assert!(json.contains("model2"));
-    }
+  #[test]
+  fn test_llm_models_response() {
+    let resp = LlmModelsResponse {
+      models: vec!["model1".to_string(), "model2".to_string()],
+    };
+    let json = serde_json::to_string(&resp).unwrap();
+    assert!(json.contains("model1"));
+    assert!(json.contains("model2"));
+  }
 
-    #[test]
-    fn test_default_llm_payload() {
-        let payload = DefaultLlmPayload {
-            name: "my-backend".to_string(),
-        };
-        assert_eq!(payload.name, "my-backend");
-    }
+  #[test]
+  fn test_default_llm_payload() {
+    let payload = DefaultLlmPayload {
+      name: "my-backend".to_string(),
+    };
+    assert_eq!(payload.name, "my-backend");
+  }
 
-    #[tokio::test]
-    async fn test_list_models_by_backend_not_found() {
-        let pool = setup_test_db().await;
-        let result = list_models_by_backend(State(pool), Path("non-existent".to_string())).await;
-        // Should return error because backend doesn't exist
-        assert!(result.is_err());
-    }
+  #[tokio::test]
+  async fn test_list_models_by_backend_not_found() {
+    let pool = setup_test_db().await;
+    let result = list_models_by_backend(State(pool), Path("non-existent".to_string())).await;
+    // Should return error because backend doesn't exist
+    assert!(result.is_err());
+  }
 
-    #[tokio::test]
-    async fn test_upsert_backend_validation() {
-        use crate::api::LogSeekApiError;
+  #[tokio::test]
+  async fn test_upsert_backend_validation() {
+    // Test payload with empty name (should still work but trimmed)
+    let payload = LlmBackendUpsertPayload {
+      name: "  test-backend  ".to_string(),
+      provider: ProviderKindPayload::Ollama,
+      base_url: "  http://localhost:11434  ".to_string(),
+      model: "  llama2  ".to_string(),
+      timeout_secs: 0,                 // Will be clamped to 60
+      api_key: Some("  ".to_string()), // Will be filtered out
+      organization: None,
+      project: None,
+      verify_strict: false,
+    };
 
-        // Test payload with empty name (should still work but trimmed)
-        let payload = LlmBackendUpsertPayload {
-            name: "  test-backend  ".to_string(),
-            provider: ProviderKindPayload::Ollama,
-            base_url: "  http://localhost:11434  ".to_string(),
-            model: "  llama2  ".to_string(),
-            timeout_secs: 0, // Will be clamped to 60
-            api_key: Some("  ".to_string()), // Will be filtered out
-            organization: None,
-            project: None,
-            verify_strict: false,
-        };
-
-        assert_eq!(payload.name.trim(), "test-backend");
-        assert_eq!(payload.base_url.trim(), "http://localhost:11434");
-        assert_eq!(payload.model.trim(), "llama2");
-    }
+    assert_eq!(payload.name.trim(), "test-backend");
+    assert_eq!(payload.base_url.trim(), "http://localhost:11434");
+    assert_eq!(payload.model.trim(), "llama2");
+  }
 }

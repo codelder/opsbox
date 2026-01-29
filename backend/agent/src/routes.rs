@@ -18,19 +18,19 @@ use tokio_stream::StreamExt;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, warn};
 
-use crate::api::{
-  AppState, LogConfigResponse, SuccessResponse, UpdateLogLevelRequest, UpdateRetentionRequest,
-};
-use opsbox_core::error::{AppError, Result};
+use crate::api::{AppState, LogConfigResponse, SuccessResponse, UpdateLogLevelRequest, UpdateRetentionRequest};
 use crate::config::AgentConfig;
 use crate::path::get_available_subdirs;
 use crate::search::execute_search;
 use axum::Router;
+use opsbox_core::error::{AppError, Result};
 use std::sync::Arc;
 
 /// 解码 URL 编码的路径
 fn decode_path(path: &str) -> String {
-  urlencoding::decode(path).map(|s| s.into_owned()).unwrap_or_else(|_| path.to_string())
+  urlencoding::decode(path)
+    .map(|s| s.into_owned())
+    .unwrap_or_else(|_| path.to_string())
 }
 
 /// 健康检查
@@ -124,7 +124,10 @@ pub async fn update_log_level(
   let level = LogLevel::from_str(&req.level).map_err(|e| AppError::bad_request(format!("无效的日志级别: {}", e)))?;
 
   // 动态重载日志级别
-  let reload_handle = state.config.get_reload_handle().ok_or_else(|| AppError::internal("日志系统未初始化".to_string()))?;
+  let reload_handle = state
+    .config
+    .get_reload_handle()
+    .ok_or_else(|| AppError::internal("日志系统未初始化".to_string()))?;
 
   reload_handle
     .update_level(level)
@@ -135,7 +138,10 @@ pub async fn update_log_level(
 
   info!("日志级别已更新为: {}", level);
 
-  Ok(Json(SuccessResponse::<()>::with_message(format!("日志级别已更新为: {}", level))))
+  Ok(Json(SuccessResponse::<()>::with_message(format!(
+    "日志级别已更新为: {}",
+    level
+  ))))
 }
 
 /// 更新日志保留数量
@@ -152,7 +158,10 @@ pub async fn update_log_retention(
   // 重启后会使用命令行参数指定的值
   info!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count);
 
-  Ok(Json(SuccessResponse::<()>::with_message(format!("日志保留数量已更新为: {} 天（重启后失效）", req.retention_count))))
+  Ok(Json(SuccessResponse::<()>::with_message(format!(
+    "日志保留数量已更新为: {} 天（重启后失效）",
+    req.retention_count
+  ))))
 }
 
 /// 列出目录文件
@@ -323,8 +332,8 @@ mod tests {
   use axum::http::{Request, StatusCode};
   use std::path::PathBuf;
   use std::sync::{Arc, Mutex};
-  use tower::ServiceExt;
   use tempfile;
+  use tower::ServiceExt;
 
   fn create_test_config(roots: Vec<String>) -> Arc<AgentConfig> {
     Arc::new(AgentConfig {
@@ -398,9 +407,12 @@ mod tests {
     let app = create_router(create_test_config(vec![path_str.clone()]));
 
     let response = app
-      .oneshot(Request::builder()
-        .uri(format!("/api/v1/list_files?path={}", urlencoding::encode(&path_str)))
-        .body(Body::empty()).unwrap())
+      .oneshot(
+        Request::builder()
+          .uri(format!("/api/v1/list_files?path={}", urlencoding::encode(&path_str)))
+          .body(Body::empty())
+          .unwrap(),
+      )
       .await
       .unwrap();
 
@@ -422,9 +434,15 @@ mod tests {
     let app = create_router(create_test_config(vec![canon_root.to_string_lossy().to_string()]));
 
     let response = app
-      .oneshot(Request::builder()
-        .uri(format!("/api/v1/file_raw?path={}", urlencoding::encode(&canon_file.to_string_lossy())))
-        .body(Body::empty()).unwrap())
+      .oneshot(
+        Request::builder()
+          .uri(format!(
+            "/api/v1/file_raw?path={}",
+            urlencoding::encode(&canon_file.to_string_lossy())
+          ))
+          .body(Body::empty())
+          .unwrap(),
+      )
       .await
       .unwrap();
 
@@ -438,31 +456,45 @@ mod tests {
     let app = create_router(create_test_config(vec!["/tmp".to_string()]));
 
     // GET config
-    let response = app.clone()
-      .oneshot(Request::builder().uri("/api/v1/log/config").body(Body::empty()).unwrap())
+    let response = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/api/v1/log/config")
+          .body(Body::empty())
+          .unwrap(),
+      )
       .await
       .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
     // PUT level
-    let response = app.clone()
-      .oneshot(Request::builder()
-        .method("PUT")
-        .uri("/api/v1/log/level")
-        .header("content-type", "application/json")
-        .body(Body::from(r#"{"level":"debug"}"#)).unwrap())
+    let response = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .method("PUT")
+          .uri("/api/v1/log/level")
+          .header("content-type", "application/json")
+          .body(Body::from(r#"{"level":"debug"}"#))
+          .unwrap(),
+      )
       .await
       .unwrap();
     // 由于 Mock 配置中没有 reload_handle，预期返回 500 ReloadFailed
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 
     // PUT retention
-    let response = app.clone()
-      .oneshot(Request::builder()
-        .method("PUT")
-        .uri("/api/v1/log/retention")
-        .header("content-type", "application/json")
-        .body(Body::from(r#"{"retention_count":10}"#)).unwrap())
+    let response = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .method("PUT")
+          .uri("/api/v1/log/retention")
+          .header("content-type", "application/json")
+          .body(Body::from(r#"{"retention_count":10}"#))
+          .unwrap(),
+      )
       .await
       .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -494,11 +526,14 @@ mod tests {
     });
 
     let response = app
-      .oneshot(Request::builder()
-        .method("POST")
-        .uri("/api/v1/search")
-        .header("content-type", "application/json")
-        .body(Body::from(serde_json::to_string(&search_req).unwrap())).unwrap())
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/api/v1/search")
+          .header("content-type", "application/json")
+          .body(Body::from(serde_json::to_string(&search_req).unwrap()))
+          .unwrap(),
+      )
       .await
       .unwrap();
 
@@ -511,18 +546,20 @@ mod tests {
     let mut found_complete = false;
 
     while let Some(chunk_res) = stream.next().await {
-        let chunk = chunk_res.unwrap();
-        let s = String::from_utf8_lossy(&chunk);
-        for line in s.lines() {
-            if line.trim().is_empty() { continue; }
-            let json: serde_json::Value = serde_json::from_str(line).unwrap();
-            if json["type"] == "result" {
-                found_match = true;
-            }
-            if json["type"] == "complete" {
-                found_complete = true;
-            }
+      let chunk = chunk_res.unwrap();
+      let s = String::from_utf8_lossy(&chunk);
+      for line in s.lines() {
+        if line.trim().is_empty() {
+          continue;
         }
+        let json: serde_json::Value = serde_json::from_str(line).unwrap();
+        if json["type"] == "result" {
+          found_match = true;
+        }
+        if json["type"] == "complete" {
+          found_complete = true;
+        }
+      }
     }
 
     assert!(found_match, "Should find at least one match result in stream");
@@ -534,10 +571,13 @@ mod tests {
     let app = create_router(create_test_config(vec!["/tmp".to_string()]));
 
     let response = app
-      .oneshot(Request::builder()
-        .method("POST")
-        .uri("/api/v1/cancel/test-task")
-        .body(Body::empty()).unwrap())
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/api/v1/cancel/test-task")
+          .body(Body::empty())
+          .unwrap(),
+      )
       .await
       .unwrap();
 

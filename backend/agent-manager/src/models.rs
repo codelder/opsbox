@@ -126,7 +126,10 @@ impl AgentInfo {
       let now = chrono::Utc::now().timestamp();
       tracing::info!(
         "Agent offline: id={}, last_heartbeat={}, age={}s (timeout={}s)",
-        self.id, self.last_heartbeat, now - self.last_heartbeat, timeout_secs
+        self.id,
+        self.last_heartbeat,
+        now - self.last_heartbeat,
+        timeout_secs
       );
     }
 

@@ -177,107 +177,105 @@ pub struct AgentListResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_agent_tag_new() {
-        let tag = AgentTag::new("env".to_string(), "prod".to_string());
-        assert_eq!(tag.key, "env");
-        assert_eq!(tag.value, "prod");
-    }
+  #[test]
+  fn test_agent_tag_new() {
+    let tag = AgentTag::new("env".to_string(), "prod".to_string());
+    assert_eq!(tag.key, "env");
+    assert_eq!(tag.value, "prod");
+  }
 
-    #[test]
-    fn test_agent_tag_from_string() {
-        let tag = AgentTag::from_string("env=production").unwrap();
-        assert_eq!(tag.key, "env");
-        assert_eq!(tag.value, "production");
+  #[test]
+  fn test_agent_tag_from_string() {
+    let tag = AgentTag::from_string("env=production").unwrap();
+    assert_eq!(tag.key, "env");
+    assert_eq!(tag.value, "production");
 
-        let tag = AgentTag::from_string(" key = value ").unwrap();
-        assert_eq!(tag.key, "key");
-        assert_eq!(tag.value, "value");
+    let tag = AgentTag::from_string(" key = value ").unwrap();
+    assert_eq!(tag.key, "key");
+    assert_eq!(tag.value, "value");
 
-        assert!(AgentTag::from_string("invalid").is_none());
-    }
+    assert!(AgentTag::from_string("invalid").is_none());
+  }
 
-    #[test]
-    fn test_agent_tag_display() {
-        let tag = AgentTag::new("env".to_string(), "prod".to_string());
-        assert_eq!(tag.to_string(), "env=prod");
-    }
+  #[test]
+  fn test_agent_tag_display() {
+    let tag = AgentTag::new("env".to_string(), "prod".to_string());
+    assert_eq!(tag.to_string(), "env=prod");
+  }
 
-    #[test]
-    fn test_agent_status_display() {
-        assert_eq!(AgentStatus::Online.to_string(), "Online");
-        assert_eq!(AgentStatus::Offline.to_string(), "Offline");
-        assert_eq!(AgentStatus::Busy { tasks: 3 }.to_string(), "Busy");
-    }
+  #[test]
+  fn test_agent_status_display() {
+    assert_eq!(AgentStatus::Online.to_string(), "Online");
+    assert_eq!(AgentStatus::Offline.to_string(), "Offline");
+    assert_eq!(AgentStatus::Busy { tasks: 3 }.to_string(), "Busy");
+  }
 
-    #[test]
-    fn test_agent_status_serialization() {
-        let status = AgentStatus::Online;
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("Online"));
+  #[test]
+  fn test_agent_status_serialization() {
+    let status = AgentStatus::Online;
+    let json = serde_json::to_string(&status).unwrap();
+    assert!(json.contains("Online"));
 
-        let status = AgentStatus::Busy { tasks: 5 };
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("Busy"));
-        assert!(json.contains("5"));
-    }
+    let status = AgentStatus::Busy { tasks: 5 };
+    let json = serde_json::to_string(&status).unwrap();
+    assert!(json.contains("Busy"));
+    assert!(json.contains("5"));
+  }
 
-    #[test]
-    fn test_agent_list_request_serialization() {
-        let req = AgentListRequest {
-            path: "/var/log".to_string(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("/var/log"));
+  #[test]
+  fn test_agent_list_request_serialization() {
+    let req = AgentListRequest {
+      path: "/var/log".to_string(),
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(json.contains("/var/log"));
 
-        let deserialized: AgentListRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.path, "/var/log");
-    }
+    let deserialized: AgentListRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.path, "/var/log");
+  }
 
-    #[test]
-    fn test_agent_file_item_serialization() {
-        let item = AgentFileItem {
-            name: "test.log".to_string(),
-            path: "/var/log/test.log".to_string(),
-            is_dir: false,
-            is_symlink: false,
-            size: Some(1024),
-            modified: Some(1234567890),
-            child_count: None,
-            hidden_child_count: None,
-            mime_type: Some("text/plain".to_string()),
-        };
+  #[test]
+  fn test_agent_file_item_serialization() {
+    let item = AgentFileItem {
+      name: "test.log".to_string(),
+      path: "/var/log/test.log".to_string(),
+      is_dir: false,
+      is_symlink: false,
+      size: Some(1024),
+      modified: Some(1234567890),
+      child_count: None,
+      hidden_child_count: None,
+      mime_type: Some("text/plain".to_string()),
+    };
 
-        let json = serde_json::to_string(&item).unwrap();
-        assert!(json.contains("test.log"));
-        assert!(json.contains("1024"));
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains("test.log"));
+    assert!(json.contains("1024"));
 
-        let deserialized: AgentFileItem = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.name, "test.log");
-        assert_eq!(deserialized.size, Some(1024));
-    }
+    let deserialized: AgentFileItem = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.name, "test.log");
+    assert_eq!(deserialized.size, Some(1024));
+  }
 
-    #[test]
-    fn test_agent_list_response() {
-        let response = AgentListResponse {
-            items: vec![
-                AgentFileItem {
-                    name: "file1.log".to_string(),
-                    path: "/var/log/file1.log".to_string(),
-                    is_dir: false,
-                    is_symlink: false,
-                    size: Some(100),
-                    modified: None,
-                    child_count: None,
-                    hidden_child_count: None,
-                    mime_type: None,
-                },
-            ],
-        };
+  #[test]
+  fn test_agent_list_response() {
+    let response = AgentListResponse {
+      items: vec![AgentFileItem {
+        name: "file1.log".to_string(),
+        path: "/var/log/file1.log".to_string(),
+        is_dir: false,
+        is_symlink: false,
+        size: Some(100),
+        modified: None,
+        child_count: None,
+        hidden_child_count: None,
+        mime_type: None,
+      }],
+    };
 
-        assert_eq!(response.items.len(), 1);
-        assert_eq!(response.items[0].name, "file1.log");
-    }
+    assert_eq!(response.items.len(), 1);
+    assert_eq!(response.items[0].name, "file1.log");
+  }
 }

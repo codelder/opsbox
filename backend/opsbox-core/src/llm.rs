@@ -220,17 +220,14 @@ struct OllamaClient {
 impl OllamaClient {
   fn new(cfg: OllamaConfig) -> Self {
     let timeout = Duration::from_secs(cfg.timeout_secs);
-    let mut builder = reqwest::Client::builder()
-      .timeout(timeout);
+    let mut builder = reqwest::Client::builder().timeout(timeout);
 
     // 在CI或测试环境中禁用代理检测，避免沙盒环境问题
     if std::env::var("CI").is_ok() || std::env::var("OPSBOX_NO_PROXY").is_ok() {
       builder = builder.no_proxy();
     }
 
-    let http = builder
-      .build()
-      .expect("创建 HTTP 客户端失败");
+    let http = builder.build().expect("创建 HTTP 客户端失败");
 
     let mut base = Url::parse(&cfg.base_url).unwrap_or_else(|_| Url::parse("http://127.0.0.1:11434").unwrap());
     // /api/chat
@@ -400,17 +397,14 @@ struct OpenAIClient {
 impl OpenAIClient {
   fn new(cfg: OpenAIConfig) -> Self {
     let timeout = Duration::from_secs(cfg.timeout_secs);
-    let mut builder = reqwest::Client::builder()
-      .timeout(timeout);
+    let mut builder = reqwest::Client::builder().timeout(timeout);
 
     // 在CI或测试环境中禁用代理检测，避免沙盒环境问题
     if std::env::var("CI").is_ok() || std::env::var("OPSBOX_NO_PROXY").is_ok() {
       builder = builder.no_proxy();
     }
 
-    let http = builder
-      .build()
-      .expect("创建 HTTP 客户端失败");
+    let http = builder.build().expect("创建 HTTP 客户端失败");
 
     // 构造聊天 URL：在保留 base_url 现有路径前缀的基础上追加 chat/completions
     // 规则：
@@ -584,74 +578,77 @@ impl LlmClient for OpenAIClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_ollama_config_env() {
-        // Need to be careful with global env vars in tests.
-        // We can just test default behavior if vars are not set,
-        // or set them and risk race conditions with other tests if running in parallel.
-        // Let's rely on fallback defaults if not set.
-        let config = OllamaConfig::from_env();
-        // Just assert defaults or whatever is in env
-        if std::env::var("OLLAMA_BASE_URL").is_err() {
-            assert_eq!(config.base_url, "http://127.0.0.1:11434");
-        }
-        if std::env::var("OLLAMA_MODEL").is_err() {
-            assert_eq!(config.model, "qwen3:8b");
-        }
+  #[test]
+  fn test_ollama_config_env() {
+    // Need to be careful with global env vars in tests.
+    // We can just test default behavior if vars are not set,
+    // or set them and risk race conditions with other tests if running in parallel.
+    // Let's rely on fallback defaults if not set.
+    let config = OllamaConfig::from_env();
+    // Just assert defaults or whatever is in env
+    if std::env::var("OLLAMA_BASE_URL").is_err() {
+      assert_eq!(config.base_url, "http://127.0.0.1:11434");
     }
-
-    #[test]
-    fn test_openai_config_validation() {
-        // OpenAI requires API KEY
-        if std::env::var("OPENAI_API_KEY").is_err() {
-            assert!(OpenAIConfig::from_env().is_err());
-        }
+    if std::env::var("OLLAMA_MODEL").is_err() {
+      assert_eq!(config.model, "qwen3:8b");
     }
+  }
 
-    #[test]
-    fn test_ollama_client_url_normalization() {
-        let config = OllamaConfig {
-            base_url: "http://localhost:11434".to_string(),
-            model: "llama2".to_string(),
-            timeout_secs: 10,
-        };
-        let client = OllamaClient::new(config);
-        assert_eq!(client.base_chat_url.as_str(), "http://localhost:11434/api/chat");
+  #[test]
+  fn test_openai_config_validation() {
+    // OpenAI requires API KEY
+    if std::env::var("OPENAI_API_KEY").is_err() {
+      assert!(OpenAIConfig::from_env().is_err());
     }
+  }
 
-    #[test]
-    fn test_openai_client_url_normalization() {
-        let config = OpenAIConfig {
-            base_url: "https://api.openai.com".to_string(),
-            api_key: "sk-xxx".to_string(),
-            model: "gpt-3.5".to_string(),
-            timeout_secs: 10,
-            organization: None,
-            project: None,
-        };
-        let client = OpenAIClient::new(config);
-        assert_eq!(client.chat_url.as_str(), "https://api.openai.com/v1/chat/completions");
+  #[test]
+  fn test_ollama_client_url_normalization() {
+    let config = OllamaConfig {
+      base_url: "http://localhost:11434".to_string(),
+      model: "llama2".to_string(),
+      timeout_secs: 10,
+    };
+    let client = OllamaClient::new(config);
+    assert_eq!(client.base_chat_url.as_str(), "http://localhost:11434/api/chat");
+  }
 
-        // Custom base url
-        let config2 = OpenAIConfig {
-            base_url: "https://my-proxy.com/v1".to_string(),
-            api_key: "sk-xxx".to_string(),
-            model: "gpt-3.5".to_string(),
-            timeout_secs: 10,
-            organization: None,
-            project: None,
-        };
-        let client2 = OpenAIClient::new(config2);
-        assert_eq!(client2.chat_url.as_str(), "https://my-proxy.com/v1/chat/completions");
-    }
+  #[test]
+  fn test_openai_client_url_normalization() {
+    let config = OpenAIConfig {
+      base_url: "https://api.openai.com".to_string(),
+      api_key: "sk-xxx".to_string(),
+      model: "gpt-3.5".to_string(),
+      timeout_secs: 10,
+      organization: None,
+      project: None,
+    };
+    let client = OpenAIClient::new(config);
+    assert_eq!(client.chat_url.as_str(), "https://api.openai.com/v1/chat/completions");
 
-    #[test]
-    fn test_chat_response_serialization() {
-       let msg = ChatMessage { role: Role::User, content: "hi".to_string() };
-       let json = serde_json::to_string(&msg).unwrap();
-       assert!(json.contains("user"));
-       assert!(json.contains("hi"));
-    }
+    // Custom base url
+    let config2 = OpenAIConfig {
+      base_url: "https://my-proxy.com/v1".to_string(),
+      api_key: "sk-xxx".to_string(),
+      model: "gpt-3.5".to_string(),
+      timeout_secs: 10,
+      organization: None,
+      project: None,
+    };
+    let client2 = OpenAIClient::new(config2);
+    assert_eq!(client2.chat_url.as_str(), "https://my-proxy.com/v1/chat/completions");
+  }
+
+  #[test]
+  fn test_chat_response_serialization() {
+    let msg = ChatMessage {
+      role: Role::User,
+      content: "hi".to_string(),
+    };
+    let json = serde_json::to_string(&msg).unwrap();
+    assert!(json.contains("user"));
+    assert!(json.contains("hi"));
+  }
 }

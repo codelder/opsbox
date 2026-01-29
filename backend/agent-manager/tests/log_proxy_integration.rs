@@ -48,33 +48,35 @@ fn create_test_agent(id: &str, host: &str, port: u16) -> AgentInfo {
 /// 启动模拟 Agent 服务器（优雅降级版本）
 /// 返回：(端口, 可选的服务器实例)
 async fn setup_mock_agent() -> (u16, Option<agent_mock::MockAgentServer>) {
-    // 查找可用端口，如果找不到则使用默认端口
-    let port = match agent_mock::find_available_port(
-        opsbox_test_common::constants::AGENT_PORT_START,
-        opsbox_test_common::constants::AGENT_PORT_END,
-    ) {
-        Some(port) => port,
-        None => {
-            println!("⚠️ 找不到可用端口，使用默认端口 {}", opsbox_test_common::constants::AGENT_PORT_START);
-            opsbox_test_common::constants::AGENT_PORT_START
-        }
-    };
-
-    match agent_mock::start_mock_agent_server(port).await {
-        Ok(server) => {
-            // 等待服务器启动
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            (port, Some(server))
-        }
-        Err(e) => {
-            // 如果启动失败（例如CI环境限制），使用默认端口并继续测试
-            // 注意：实际的网络请求会失败，但至少可以测试业务逻辑
-            println!("⚠️ 无法启动模拟Agent服务器: {}，使用端口 {}", e, port);
-            (port, None)
-        }
+  // 查找可用端口，如果找不到则使用默认端口
+  let port = match agent_mock::find_available_port(
+    opsbox_test_common::constants::AGENT_PORT_START,
+    opsbox_test_common::constants::AGENT_PORT_END,
+  ) {
+    Some(port) => port,
+    None => {
+      println!(
+        "⚠️ 找不到可用端口，使用默认端口 {}",
+        opsbox_test_common::constants::AGENT_PORT_START
+      );
+      opsbox_test_common::constants::AGENT_PORT_START
     }
-}
+  };
 
+  match agent_mock::start_mock_agent_server(port).await {
+    Ok(server) => {
+      // 等待服务器启动
+      tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+      (port, Some(server))
+    }
+    Err(e) => {
+      // 如果启动失败（例如CI环境限制），使用默认端口并继续测试
+      // 注意：实际的网络请求会失败，但至少可以测试业务逻辑
+      println!("⚠️ 无法启动模拟Agent服务器: {}，使用端口 {}", e, port);
+      (port, None)
+    }
+  }
+}
 
 #[tokio::test]
 async fn test_proxy_get_log_config_success() {
@@ -238,21 +240,21 @@ async fn test_proxy_agent_not_found() {
 
 #[tokio::test]
 async fn test_proxy_agent_offline() {
-  // 获取一个可用端口（测试不会启动服务器，模拟离线场景），如果找不到则使用默认端口
-  let port = match agent_mock::find_available_port(
-      opsbox_test_common::constants::AGENT_PORT_START,
-      opsbox_test_common::constants::AGENT_PORT_END,
-  ) {
-      Some(port) => port,
-      None => {
-          println!("⚠️ 找不到可用端口，使用默认端口 {}", opsbox_test_common::constants::AGENT_PORT_START);
-          opsbox_test_common::constants::AGENT_PORT_START
-      }
-  };
+  // 使用高端口号模拟离线场景（避免与其他测试端口冲突）
+  // 59999 远离常规测试端口范围（4001-4100），不太可能被占用
+  let port: u16 = 59999;
+
+  // 确保端口确实没有被占用
+  use std::net::TcpListener;
+  if TcpListener::bind(("127.0.0.1", port)).is_err() {
+    println!("⚠️ 端口 {} 被占用，跳过离线 Agent 测试", port);
+    return;
+  }
 
   // 创建 Agent Manager 并注册 Agent（但不启动服务器）
+  // 使用高端口号确保不会有其他测试的服务器在监听
   let manager = create_test_manager().await;
-  let agent = create_test_agent("offline-agent", "127.0.0.1", port); // 使用未监听的端口
+  let agent = create_test_agent("offline-agent", "127.0.0.1", port);
   manager.register_agent(agent).await.expect("注册 Agent 失败");
 
   // 创建路由
@@ -286,14 +288,17 @@ async fn test_proxy_agent_offline() {
 async fn test_proxy_agent_missing_host_tag() {
   // 获取一个可用端口（测试不需要实际连接），如果找不到则使用默认端口
   let port = match agent_mock::find_available_port(
-      opsbox_test_common::constants::AGENT_PORT_START,
-      opsbox_test_common::constants::AGENT_PORT_END,
+    opsbox_test_common::constants::AGENT_PORT_START,
+    opsbox_test_common::constants::AGENT_PORT_END,
   ) {
-      Some(port) => port,
-      None => {
-          println!("⚠️ 找不到可用端口，使用默认端口 {}", opsbox_test_common::constants::AGENT_PORT_START);
-          opsbox_test_common::constants::AGENT_PORT_START
-      }
+    Some(port) => port,
+    None => {
+      println!(
+        "⚠️ 找不到可用端口，使用默认端口 {}",
+        opsbox_test_common::constants::AGENT_PORT_START
+      );
+      opsbox_test_common::constants::AGENT_PORT_START
+    }
   };
 
   // 创建 Agent Manager 并注册 Agent（缺少 host 标签）
@@ -442,14 +447,17 @@ async fn test_proxy_concurrent_requests() {
 async fn test_proxy_timeout_scenario() {
   // 查找可用端口，如果找不到则使用默认端口
   let port = match agent_mock::find_available_port(
-      opsbox_test_common::constants::AGENT_PORT_START,
-      opsbox_test_common::constants::AGENT_PORT_END,
+    opsbox_test_common::constants::AGENT_PORT_START,
+    opsbox_test_common::constants::AGENT_PORT_END,
   ) {
-      Some(port) => port,
-      None => {
-          println!("⚠️ 找不到可用端口，使用默认端口 {}", opsbox_test_common::constants::AGENT_PORT_START);
-          opsbox_test_common::constants::AGENT_PORT_START
-      }
+    Some(port) => port,
+    None => {
+      println!(
+        "⚠️ 找不到可用端口，使用默认端口 {}",
+        opsbox_test_common::constants::AGENT_PORT_START
+      );
+      opsbox_test_common::constants::AGENT_PORT_START
+    }
   };
 
   // 尝试创建一个会超时的模拟服务器

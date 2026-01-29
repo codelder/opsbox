@@ -88,13 +88,14 @@ pub async fn execute_search(
 
   // 4.1 Base Filter (来自 ORL)
   if let Some(base) = &request.path_filter
-      && let Ok(f) = logseek::query::path_glob_to_filter(base) {
-         extra_filters.push(f);
-      }
+    && let Ok(f) = logseek::query::path_glob_to_filter(base)
+  {
+    extra_filters.push(f);
+  }
 
   // 4.2 User Filter (path_includes / path_excludes)
   if let Some(user_filter) = combine_filters(&request.path_includes, &request.path_excludes) {
-      extra_filters.push(user_filter);
+    extra_filters.push(user_filter);
   }
 
   let filtered_paths = base_paths;
@@ -120,70 +121,56 @@ pub async fn execute_search(
 
     let path_str = search_path.to_string_lossy().to_string();
     let target_hint = match &request.target {
-      ConfigTarget::Files { .. } => {
-        Some(ConfigTarget::Files {
-          paths: vec![path_str.clone()],
-        })
-      }
-      ConfigTarget::Dir { recursive, .. } => {
-        Some(ConfigTarget::Dir {
-          path: ".".to_string(),
-          recursive: *recursive,
-        })
-      }
-      ConfigTarget::Archive { path, .. } => {
-        Some(ConfigTarget::Archive {
-          path: path.clone(),
-          entry: None,
-        })
-      }
+      ConfigTarget::Files { .. } => Some(ConfigTarget::Files {
+        paths: vec![path_str.clone()],
+      }),
+      ConfigTarget::Dir { recursive, .. } => Some(ConfigTarget::Dir {
+        path: ".".to_string(),
+        recursive: *recursive,
+      }),
+      ConfigTarget::Archive { path, .. } => Some(ConfigTarget::Archive {
+        path: path.clone(),
+        entry: None,
+      }),
     };
 
     // Create estream
     let mut estream: Box<dyn opsbox_core::fs::EntryStream> = match target_hint {
-        Some(ConfigTarget::Dir { path, recursive }) => {
-             let full_path = if path == "." {
-                 search_path.clone()
-             } else {
-                 search_path.join(path)
-             };
-             match opsbox_core::fs::FsEntryStream::new(full_path, recursive).await {
-                 Ok(s) => Box::new(s),
-                 Err(e) => {
-                     warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
-                     continue;
-                 }
-             }
-        },
-        Some(ConfigTarget::Files { paths }) => {
-             Box::new(opsbox_core::fs::MultiFileEntryStream::new(paths))
-        },
-        Some(ConfigTarget::Archive { path, .. }) => {
-             match tokio::fs::File::open(&path).await {
-                 Ok(f) => {
-                     match opsbox_core::fs::create_archive_stream_from_reader(f, Some(&path)).await {
-                         Ok(s) => s,
-                         Err(e) => {
-                             warn!("打开归档流失败 {}: {}", path, e);
-                             continue;
-                         }
-                     }
-                 },
-                 Err(e) => {
-                     warn!("打开归档文件失败 {}: {}", path, e);
-                     continue;
-                 }
-             }
-        },
-        None => {
-             match opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(&path_str), true).await {
-                 Ok(s) => Box::new(s),
-                 Err(e) => {
-                     warn!("构建本地条目流失败 {}: {}", path_str, e);
-                     continue;
-                 }
-             }
+      Some(ConfigTarget::Dir { path, recursive }) => {
+        let full_path = if path == "." {
+          search_path.clone()
+        } else {
+          search_path.join(path)
+        };
+        match opsbox_core::fs::FsEntryStream::new(full_path, recursive).await {
+          Ok(s) => Box::new(s),
+          Err(e) => {
+            warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
+            continue;
+          }
         }
+      }
+      Some(ConfigTarget::Files { paths }) => Box::new(opsbox_core::fs::MultiFileEntryStream::new(paths)),
+      Some(ConfigTarget::Archive { path, .. }) => match tokio::fs::File::open(&path).await {
+        Ok(f) => match opsbox_core::fs::create_archive_stream_from_reader(f, Some(&path)).await {
+          Ok(s) => s,
+          Err(e) => {
+            warn!("打开归档流失败 {}: {}", path, e);
+            continue;
+          }
+        },
+        Err(e) => {
+          warn!("打开归档文件失败 {}: {}", path, e);
+          continue;
+        }
+      },
+      None => match opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(&path_str), true).await {
+        Ok(s) => Box::new(s),
+        Err(e) => {
+          warn!("构建本地条目流失败 {}: {}", path_str, e);
+          continue;
+        }
+      },
     };
 
     let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
@@ -191,13 +178,13 @@ pub async fn execute_search(
 
     if matches!(&request.target, ConfigTarget::Dir { .. }) {
       if search_path.is_file() {
-          if let Some(parent) = search_path.parent() {
-              stream_processor = stream_processor.with_base_path(parent.to_path_buf());
-          } else {
-              stream_processor = stream_processor.with_base_path(search_path.clone());
-          }
-      } else {
+        if let Some(parent) = search_path.parent() {
+          stream_processor = stream_processor.with_base_path(parent.to_path_buf());
+        } else {
           stream_processor = stream_processor.with_base_path(search_path.clone());
+        }
+      } else {
+        stream_processor = stream_processor.with_base_path(search_path.clone());
       }
     } else if let Some(parent) = search_path.parent() {
       stream_processor = stream_processor.with_base_path(parent.to_path_buf());
@@ -221,92 +208,89 @@ pub async fn execute_search(
   info!("搜索完成: task_id={}", task_id);
 }
 
-fn combine_filters(
-    includes: &[String],
-    excludes: &[String],
-) -> Option<logseek::query::PathFilter> {
-    let mut final_filter = logseek::query::PathFilter::default();
-    let mut has_filter = false;
+fn combine_filters(includes: &[String], excludes: &[String]) -> Option<logseek::query::PathFilter> {
+  let mut final_filter = logseek::query::PathFilter::default();
+  let mut has_filter = false;
 
-    if !includes.is_empty() {
-        let mut builder = globset::GlobSetBuilder::new();
-        for p in includes {
-             match globset::GlobBuilder::new(p).literal_separator(true).build() {
-                Ok(g) => { builder.add(g); },
-                Err(e) => warn!("无效的 path glob: {} ({})", p, e),
-             }
+  if !includes.is_empty() {
+    let mut builder = globset::GlobSetBuilder::new();
+    for p in includes {
+      match globset::GlobBuilder::new(p).literal_separator(true).build() {
+        Ok(g) => {
+          builder.add(g);
         }
-        if let Ok(set) = builder.build() {
-            final_filter.include = Some(set);
-            has_filter = true;
-        }
+        Err(e) => warn!("无效的 path glob: {} ({})", p, e),
+      }
     }
+    if let Ok(set) = builder.build() {
+      final_filter.include = Some(set);
+      has_filter = true;
+    }
+  }
 
-    if !excludes.is_empty() {
-        let mut builder = globset::GlobSetBuilder::new();
-        for p in excludes {
-             match globset::GlobBuilder::new(p).literal_separator(true).build() {
-                Ok(g) => { builder.add(g); },
-                Err(e) => warn!("无效的 -path glob: {} ({})", p, e),
-             }
+  if !excludes.is_empty() {
+    let mut builder = globset::GlobSetBuilder::new();
+    for p in excludes {
+      match globset::GlobBuilder::new(p).literal_separator(true).build() {
+        Ok(g) => {
+          builder.add(g);
         }
-        if let Ok(set) = builder.build() {
-            final_filter.exclude = Some(set);
-            has_filter = true;
-        }
+        Err(e) => warn!("无效的 -path glob: {} ({})", p, e),
+      }
     }
+    if let Ok(set) = builder.build() {
+      final_filter.exclude = Some(set);
+      has_filter = true;
+    }
+  }
 
-    if has_filter {
-        Some(final_filter)
-    } else {
-        None
-    }
+  if has_filter { Some(final_filter) } else { None }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_combine_filters_empty() {
-        let result = combine_filters(&[], &[]);
-        assert!(result.is_none());
-    }
+  #[test]
+  fn test_combine_filters_empty() {
+    let result = combine_filters(&[], &[]);
+    assert!(result.is_none());
+  }
 
-    #[test]
-    fn test_combine_filters_with_includes() {
-        let result = combine_filters(&["*.log".to_string()], &[]);
-        assert!(result.is_some());
-        let filter = result.unwrap();
-        assert!(filter.include.is_some());
-        assert!(filter.exclude.is_none());
-    }
+  #[test]
+  fn test_combine_filters_with_includes() {
+    let result = combine_filters(&["*.log".to_string()], &[]);
+    assert!(result.is_some());
+    let filter = result.unwrap();
+    assert!(filter.include.is_some());
+    assert!(filter.exclude.is_none());
+  }
 
-    #[test]
-    fn test_combine_filters_with_excludes() {
-        let result = combine_filters(&[], &["*.tmp".to_string()]);
-        assert!(result.is_some());
-        let filter = result.unwrap();
-        assert!(filter.include.is_none());
-        assert!(filter.exclude.is_some());
-    }
+  #[test]
+  fn test_combine_filters_with_excludes() {
+    let result = combine_filters(&[], &["*.tmp".to_string()]);
+    assert!(result.is_some());
+    let filter = result.unwrap();
+    assert!(filter.include.is_none());
+    assert!(filter.exclude.is_some());
+  }
 
-    #[test]
-    fn test_combine_filters_with_both() {
-        let result = combine_filters(&["*.log".to_string()], &["*.tmp".to_string()]);
-        assert!(result.is_some());
-        let filter = result.unwrap();
-        assert!(filter.include.is_some());
-        assert!(filter.exclude.is_some());
-    }
+  #[test]
+  fn test_combine_filters_with_both() {
+    let result = combine_filters(&["*.log".to_string()], &["*.tmp".to_string()]);
+    assert!(result.is_some());
+    let filter = result.unwrap();
+    assert!(filter.include.is_some());
+    assert!(filter.exclude.is_some());
+  }
 
-    #[test]
-    fn test_combine_filters_invalid_glob() {
-        // Invalid glob pattern should be handled gracefully
-        // When all includes are invalid, an empty filter is returned
-        let result = combine_filters(&["[invalid".to_string()], &[]);
-        // The function logs a warning for invalid globs but still returns a filter
-        // with empty include/exclude sets
-        assert!(result.is_some());
-    }
+  #[test]
+  fn test_combine_filters_invalid_glob() {
+    // Invalid glob pattern should be handled gracefully
+    // When all includes are invalid, an empty filter is returned
+    let result = combine_filters(&["[invalid".to_string()], &[]);
+    // The function logs a warning for invalid globs but still returns a filter
+    // with empty include/exclude sets
+    assert!(result.is_some());
+  }
 }

@@ -11,5 +11,5 @@ pub mod server;
 
 // 重新导出需要的类型
 pub use api::{AppError, AppState, LogConfigResponse, SuccessResponse, UpdateLogLevelRequest, UpdateRetentionRequest};
-pub use opsbox_core::error::Result;
 pub use config::AgentConfig;
+pub use opsbox_core::error::Result;

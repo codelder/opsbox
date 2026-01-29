@@ -82,29 +82,29 @@ pub fn router(db_pool: SqlitePool) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[tokio::test]
-    async fn test_router_creation() {
-        let pool = SqlitePool::connect(":memory:").await.unwrap();
-        let router = router(pool);
+  #[tokio::test]
+  async fn test_router_creation() {
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    let router = router(pool);
 
-        // Router should be created successfully
-        // We can't easily test routes without making actual HTTP requests,
-        // but we can verify the router is constructed
-        assert!(std::mem::size_of_val(&router) > 0);
-    }
+    // Router should be created successfully
+    // We can't easily test routes without making actual HTTP requests,
+    // but we can verify the router is constructed
+    assert!(std::mem::size_of_val(&router) > 0);
+  }
 
-    #[test]
-    fn test_module_exports() {
-        // Test that re-exported functions are accessible
-        let capacity = stream_channel_capacity();
-        assert_eq!(capacity, 256);
+  #[test]
+  fn test_module_exports() {
+    // Test that re-exported functions are accessible
+    let capacity = stream_channel_capacity();
+    assert_eq!(capacity, 256);
 
-        let s3_concurrency = s3_max_concurrency();
-        assert!(s3_concurrency >= 1 && s3_concurrency <= 128);
+    let s3_concurrency = s3_max_concurrency();
+    assert!(s3_concurrency >= 1 && s3_concurrency <= 128);
 
-        let cpu_concurrency = cpu_max_concurrency();
-        assert!(cpu_concurrency >= 1 && cpu_concurrency <= 16);
-    }
+    let cpu_concurrency = cpu_max_concurrency();
+    assert!(cpu_concurrency >= 1 && cpu_concurrency <= 16);
+  }
 }

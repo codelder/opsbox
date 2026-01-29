@@ -46,7 +46,9 @@ mod tests {
 
   #[test]
   fn test_nl2q_out_serialization() {
-    let out = NL2QOut { q: "test query".to_string() };
+    let out = NL2QOut {
+      q: "test query".to_string(),
+    };
     let json = serde_json::to_string(&out).unwrap();
     assert!(json.contains("\"q\":\"test query\""));
   }

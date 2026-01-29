@@ -219,11 +219,7 @@ mod tests {
 
   #[test]
   fn test_agent_client_new_with_http() {
-    let client = AgentClient::new(
-      "test-agent".to_string(),
-      "http://localhost:8080".to_string(),
-      None,
-    );
+    let client = AgentClient::new("test-agent".to_string(), "http://localhost:8080".to_string(), None);
     assert_eq!(client.agent_id, "test-agent");
     assert_eq!(client.endpoint, "http://localhost:8080");
     assert_eq!(client.timeout, Duration::from_secs(60));
@@ -231,21 +227,13 @@ mod tests {
 
   #[test]
   fn test_agent_client_new_without_protocol() {
-    let client = AgentClient::new(
-      "test-agent".to_string(),
-      "localhost:8080".to_string(),
-      None,
-    );
+    let client = AgentClient::new("test-agent".to_string(), "localhost:8080".to_string(), None);
     assert_eq!(client.endpoint, "http://localhost:8080");
   }
 
   #[test]
   fn test_agent_client_new_with_https() {
-    let client = AgentClient::new(
-      "test-agent".to_string(),
-      "https://localhost:8080".to_string(),
-      None,
-    );
+    let client = AgentClient::new("test-agent".to_string(), "https://localhost:8080".to_string(), None);
     assert_eq!(client.endpoint, "https://localhost:8080");
   }
 
@@ -261,11 +249,7 @@ mod tests {
 
   #[test]
   fn test_agent_client_clone() {
-    let client = AgentClient::new(
-      "test-agent".to_string(),
-      "localhost:8080".to_string(),
-      None,
-    );
+    let client = AgentClient::new("test-agent".to_string(), "localhost:8080".to_string(), None);
     let cloned = client.clone();
     assert_eq!(client.agent_id, cloned.agent_id);
     assert_eq!(client.endpoint, cloned.endpoint);

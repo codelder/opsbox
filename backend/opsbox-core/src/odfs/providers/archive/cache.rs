@@ -78,55 +78,63 @@ impl ArchiveCache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[tokio::test]
-    async fn test_archive_cache_hit_and_miss() {
-        let cache = ArchiveCache::new(2);
-        let key = "test-key".to_string();
-        let orl = ORL::parse("orl://local/tmp/test.tar").unwrap();
+  #[tokio::test]
+  async fn test_archive_cache_hit_and_miss() {
+    let cache = ArchiveCache::new(2);
+    let key = "test-key".to_string();
+    let orl = ORL::parse("orl://local/tmp/test.tar").unwrap();
 
-        // 模拟下载函数：创建一个简单的空 tar
-        let download_fn = || async {
-            let tar_data = vec![0u8; 1024]; // 模拟数据
-            Ok(Box::pin(io::Cursor::new(tar_data)) as OpsRead)
-        };
+    // 模拟下载函数：创建一个简单的空 tar
+    let download_fn = || async {
+      let tar_data = vec![0u8; 1024]; // 模拟数据
+      Ok(Box::pin(io::Cursor::new(tar_data)) as OpsRead)
+    };
 
-        // 第一次：Miss
-        let fs1 = cache.get_or_download(key.clone(), &orl, download_fn).await.unwrap();
-        assert_eq!(fs1.name(), "TarOpsFS");
+    // 第一次：Miss
+    let fs1 = cache.get_or_download(key.clone(), &orl, download_fn).await.unwrap();
+    assert_eq!(fs1.name(), "TarOpsFS");
 
-        // 第二次：Hit
-        let fs2 = cache.get_or_download(key, &orl, || async { unreachable!() }).await.unwrap();
-        assert!(Arc::ptr_eq(&fs1, &fs2));
+    // 第二次：Hit
+    let fs2 = cache
+      .get_or_download(key, &orl, || async { unreachable!() })
+      .await
+      .unwrap();
+    assert!(Arc::ptr_eq(&fs1, &fs2));
+  }
+
+  #[tokio::test]
+  async fn test_archive_cache_zip() {
+    let cache = ArchiveCache::new(2);
+    let orl = ORL::parse("orl://local/tmp/test.zip").unwrap();
+    let key = "zip-key".to_string();
+
+    let fs = cache
+      .get_or_download(key, &orl, || async {
+        let zip_data = vec![0u8; 1024]; // Basic buffer
+        Ok(Box::pin(io::Cursor::new(zip_data)) as OpsRead)
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(fs.name(), "ZipOpsFS");
+  }
+
+  #[tokio::test]
+  async fn test_archive_cache_unsupported_type() {
+    let cache = ArchiveCache::new(2);
+    let orl = ORL::parse("orl://local/tmp/test.txt").unwrap();
+
+    let res = cache
+      .get_or_download("key".into(), &orl, || async {
+        Ok(Box::pin(io::Cursor::new(vec![])) as OpsRead)
+      })
+      .await;
+
+    match res {
+      Err(e) => assert_eq!(e.kind(), io::ErrorKind::Unsupported),
+      Ok(_) => panic!("Should have failed"),
     }
-
-    #[tokio::test]
-    async fn test_archive_cache_zip() {
-        let cache = ArchiveCache::new(2);
-        let orl = ORL::parse("orl://local/tmp/test.zip").unwrap();
-        let key = "zip-key".to_string();
-
-        let fs = cache.get_or_download(key, &orl, || async {
-            let zip_data = vec![0u8; 1024]; // Basic buffer
-            Ok(Box::pin(io::Cursor::new(zip_data)) as OpsRead)
-        }).await.unwrap();
-
-        assert_eq!(fs.name(), "ZipOpsFS");
-    }
-
-    #[tokio::test]
-    async fn test_archive_cache_unsupported_type() {
-        let cache = ArchiveCache::new(2);
-        let orl = ORL::parse("orl://local/tmp/test.txt").unwrap();
-
-        let res = cache.get_or_download("key".into(), &orl, || async {
-            Ok(Box::pin(io::Cursor::new(vec![])) as OpsRead)
-        }).await;
-
-        match res {
-            Err(e) => assert_eq!(e.kind(), io::ErrorKind::Unsupported),
-            Ok(_) => panic!("Should have failed"),
-        }
-    }
+  }
 }

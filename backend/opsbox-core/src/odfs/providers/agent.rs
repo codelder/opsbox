@@ -2,7 +2,7 @@ use crate::agent::{AgentClient, models::AgentListResponse};
 use crate::odfs::{OpsEntry, OpsFileSystem, OpsFileType, OpsMetadata, OpsPath, OpsRead};
 use async_trait::async_trait;
 use futures::TryStreamExt;
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use std::io;
 use tokio_util::io::StreamReader;
 
@@ -59,77 +59,98 @@ impl OpsFileSystem for AgentOpsFS {
     let name_to_find = p.file_name().unwrap_or_default().to_string_lossy();
 
     if path.as_str() == "/" || path.as_str().is_empty() {
-        return Ok(OpsMetadata {
-            name: "/".to_string(),
-            file_type: OpsFileType::Directory,
-            size: 0,
-            modified: None,
-            mode: 0755,
-            mime_type: None,
-            compression: None,
-            is_archive: false,
-        });
+      return Ok(OpsMetadata {
+        name: "/".to_string(),
+        file_type: OpsFileType::Directory,
+        size: 0,
+        modified: None,
+        mode: 0755,
+        mime_type: None,
+        compression: None,
+        is_archive: false,
+      });
     }
 
     let parent_str = parent.to_string_lossy();
     let encoded_parent = utf8_percent_encode(&parent_str, NON_ALPHANUMERIC).to_string();
     let list_url = format!("/api/v1/list_files?path={}", encoded_parent);
-    let list_resp: AgentListResponse = self.client.get(&list_url).await
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    let list_resp: AgentListResponse = self
+      .client
+      .get(&list_url)
+      .await
+      .map_err(|e| io::Error::other(e.to_string()))?;
 
     if let Some(item) = list_resp.items.into_iter().find(|i| i.name == name_to_find) {
-         Ok(OpsMetadata {
-            name: item.name,
-            file_type: if item.is_dir {
-                OpsFileType::Directory
-            } else if item.is_symlink {
-                OpsFileType::Symlink
-            } else {
-                OpsFileType::File
-            },
-            size: item.size.unwrap_or(0),
-            modified: item.modified.map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs(t as u64)),
-            mode: 0,
-            mime_type: item.mime_type,
-            compression: None,
-            is_archive: false, // Could check extension
-        })
+      Ok(OpsMetadata {
+        name: item.name,
+        file_type: if item.is_dir {
+          OpsFileType::Directory
+        } else if item.is_symlink {
+          OpsFileType::Symlink
+        } else {
+          OpsFileType::File
+        },
+        size: item.size.unwrap_or(0),
+        modified: item
+          .modified
+          .map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs(t as u64)),
+        mode: 0,
+        mime_type: item.mime_type,
+        compression: None,
+        is_archive: false, // Could check extension
+      })
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"))
+      Err(io::Error::new(io::ErrorKind::NotFound, "Path not found"))
     }
   }
 
   async fn read_dir(&self, path: &OpsPath) -> io::Result<Vec<OpsEntry>> {
-    let resp: AgentListResponse = self.client.get_with_query("/api/v1/list_files", &[("path", path.as_str())]).await
-         .map_err(|e| io::Error::other(e.to_string()))?;
+    let resp: AgentListResponse = self
+      .client
+      .get_with_query("/api/v1/list_files", &[("path", path.as_str())])
+      .await
+      .map_err(|e| io::Error::other(e.to_string()))?;
 
-    let entries = resp.items.into_iter().map(|item| {
+    let entries = resp
+      .items
+      .into_iter()
+      .map(|item| {
         OpsEntry {
-            name: item.name.clone(),
-            path: item.path.clone(), // Agent returns absolute path?
-            metadata: OpsMetadata {
-                name: item.name,
-                file_type: if item.is_dir { OpsFileType::Directory } else { OpsFileType::File }, // Simplify
-                size: item.size.unwrap_or(0),
-            modified: item.modified.map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs(t as u64)),
-                mode: 0,
-                mime_type: item.mime_type,
-                compression: None,
-                is_archive: false,
-            }
+          name: item.name.clone(),
+          path: item.path.clone(), // Agent returns absolute path?
+          metadata: OpsMetadata {
+            name: item.name,
+            file_type: if item.is_dir {
+              OpsFileType::Directory
+            } else {
+              OpsFileType::File
+            }, // Simplify
+            size: item.size.unwrap_or(0),
+            modified: item
+              .modified
+              .map(|t| std::time::UNIX_EPOCH + std::time::Duration::from_secs(t as u64)),
+            mode: 0,
+            mime_type: item.mime_type,
+            compression: None,
+            is_archive: false,
+          },
         }
-    }).collect();
+      })
+      .collect();
 
     Ok(entries)
   }
 
   async fn open_read(&self, path: &OpsPath) -> io::Result<OpsRead> {
-      let resp = self.client.get_raw_with_query("/api/v1/file_raw", &[("path", path.as_str())]).await
-          .map_err(|e| io::Error::other(e.to_string()))?;
+    let resp = self
+      .client
+      .get_raw_with_query("/api/v1/file_raw", &[("path", path.as_str())])
+      .await
+      .map_err(|e| io::Error::other(e.to_string()))?;
 
-      let stream = resp.bytes_stream().map_err(std::io::Error::other);
-      let reader = StreamReader::new(stream);
+    let stream = resp.bytes_stream().map_err(std::io::Error::other);
+    let reader = StreamReader::new(stream);
 
-      Ok(Box::pin(reader))
+    Ok(Box::pin(reader))
   }
 }
