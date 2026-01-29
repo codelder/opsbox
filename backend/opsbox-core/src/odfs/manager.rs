@@ -2,12 +2,13 @@ use super::fs::{OpsFileSystem, OpsRead};
 use super::orl::{EndpointType, ORL, OpsPath, TargetType};
 use super::providers::archive::cache::ArchiveCache;
 use super::types::{OpsEntry, OpsMetadata};
-use std::io;
-use std::sync::Arc;
-use std::pin::Pin;
 use std::future::Future;
+use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
 
-pub type OpsFileSystemResolver = Box<dyn Fn(String) -> Pin<Box<dyn Future<Output = Option<Arc<dyn OpsFileSystem>>> + Send>> + Send + Sync>;
+pub type OpsFileSystemResolver =
+  Box<dyn Fn(String) -> Pin<Box<dyn Future<Output = Option<Arc<dyn OpsFileSystem>>> + Send>> + Send + Sync>;
 
 /// ORL 管理器 (The Router)
 pub struct OrlManager {
@@ -46,12 +47,19 @@ impl OrlManager {
 
   async fn get_provider(&self, key: &str) -> io::Result<Arc<dyn OpsFileSystem>> {
     if let Some(fs) = self.providers.get(key) {
-        Ok(fs.clone())
+      Ok(fs.clone())
     } else if let Some(resolver) = &self.resolver {
-        resolver(key.to_string()).await
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("Provider not found: {} (resolved)", key)))
+      resolver(key.to_string()).await.ok_or_else(|| {
+        io::Error::new(
+          io::ErrorKind::NotFound,
+          format!("Provider not found: {} (resolved)", key),
+        )
+      })
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, format!("Provider not found: {}", key)))
+      Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("Provider not found: {}", key),
+      ))
     }
   }
 
@@ -60,22 +68,20 @@ impl OrlManager {
   async fn resolve(&self, url: &ORL) -> io::Result<(Arc<dyn OpsFileSystem>, OpsPath)> {
     // 1. Resolve Base Provider
     // ORL methods now return values or Results
-    let endpoint_type = url.endpoint_type().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let endpoint_type = url
+      .endpoint_type()
+      .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let endpoint_id = url.endpoint_id(); // Use endpoint_id directly, not effective_id
 
     let key = match endpoint_type {
       EndpointType::Local => "local".to_string(),
-      EndpointType::S3 => {
-          match endpoint_id {
-              Some(id) if !id.is_empty() => format!("s3.{}", id),
-              _ => "s3.root".to_string(),
-          }
+      EndpointType::S3 => match endpoint_id {
+        Some(id) if !id.is_empty() => format!("s3.{}", id),
+        _ => "s3.root".to_string(),
       },
-      EndpointType::Agent => {
-          match endpoint_id {
-              Some(id) if !id.is_empty() => format!("agent.{}", id),
-              _ => "agent.root".to_string(),
-          }
+      EndpointType::Agent => match endpoint_id {
+        Some(id) if !id.is_empty() => format!("agent.{}", id),
+        _ => "agent.root".to_string(),
       },
     };
 
@@ -83,8 +89,8 @@ impl OrlManager {
 
     // Decode path
     let decoded_path = percent_encoding::percent_decode_str(url.path())
-        .decode_utf8_lossy()
-        .into_owned();
+      .decode_utf8_lossy()
+      .into_owned();
 
     // 2. Handle Directory (Standard)
     if url.target_type() == TargetType::Dir {
@@ -140,67 +146,74 @@ impl OrlManager {
   pub async fn get_entry_stream(&self, orl: &ORL, recursive: bool) -> io::Result<Box<dyn crate::fs::EntryStream>> {
     // 1. 手动解析 Provider，绕过 resolve 方法对 Archive 的自动挂载逻辑
     // 因为我们需要获取归档文件本身的流，而不是挂载后的视图
-    let endpoint_type = orl.endpoint_type().map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let endpoint_type = orl
+      .endpoint_type()
+      .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let endpoint_id = orl.effective_id();
 
     let key = match endpoint_type {
       EndpointType::Local => "local".to_string(),
       EndpointType::S3 => {
-          if endpoint_id.is_empty() {
-              "s3.root".to_string()
-          } else {
-              format!("s3.{}", endpoint_id)
-          }
-      },
+        if endpoint_id.is_empty() {
+          "s3.root".to_string()
+        } else {
+          format!("s3.{}", endpoint_id)
+        }
+      }
       EndpointType::Agent => {
-          if endpoint_id.is_empty() {
-              "agent.root".to_string()
-          } else {
-              format!("agent.{}", endpoint_id)
-          }
-      },
+        if endpoint_id.is_empty() {
+          "agent.root".to_string()
+        } else {
+          format!("agent.{}", endpoint_id)
+        }
+      }
     };
 
     let base_fs = self.get_provider(&key).await?;
 
     let decoded_path = percent_encoding::percent_decode_str(orl.path())
-        .decode_utf8_lossy()
-        .into_owned();
+      .decode_utf8_lossy()
+      .into_owned();
     let path = OpsPath::new(decoded_path);
 
     // S3 特殊处理：ORL 路径包含 bucket，但 S3OpsFS 已绑定 bucket，需剥离
     let adjusted_path = if matches!(endpoint_type, EndpointType::S3) {
-        let p = path.as_str().trim_start_matches('/');
-        let key = p.split_once('/').map(|(_, k)| k).unwrap_or("");
-        OpsPath::new(key)
+      let p = path.as_str().trim_start_matches('/');
+      let key = p.split_once('/').map(|(_, k)| k).unwrap_or("");
+      OpsPath::new(key)
     } else {
-        path.clone()
+      path.clone()
     };
 
     let path_str = adjusted_path.as_str().to_lowercase();
 
     // 2. 探测是否为归档
     let is_archive_ext = path_str.ends_with(".tar")
-        || path_str.ends_with(".tar.gz")
-        || path_str.ends_with(".tgz")
-        || path_str.ends_with(".gz")
-        || path_str.ends_with(".zip");
+      || path_str.ends_with(".tar.gz")
+      || path_str.ends_with(".tgz")
+      || path_str.ends_with(".gz")
+      || path_str.ends_with(".zip");
 
     tracing::info!(
-        "OrlManager::get_entry_stream orl={}, raw_path={}, adjusted_path={}, is_archive_ext={}, target_type={:?}",
-        orl, path.as_str(), adjusted_path.as_str(), is_archive_ext, orl.target_type()
+      "OrlManager::get_entry_stream orl={}, raw_path={}, adjusted_path={}, is_archive_ext={}, target_type={:?}",
+      orl,
+      path.as_str(),
+      adjusted_path.as_str(),
+      is_archive_ext,
+      orl.target_type()
     );
 
     if orl.target_type() == TargetType::Archive || is_archive_ext {
-        // 获取归档文件原始流
-        let reader = base_fs.open_read(&adjusted_path).await?;
+      // 获取归档文件原始流
+      let reader = base_fs.open_read(&adjusted_path).await?;
 
-        // 包装为流式解压流
-        crate::fs::create_archive_stream_from_reader(reader, Some(adjusted_path.as_str())).await
-            .map_err(|e| io::Error::other(e))
+      // 包装为流式解压流
+      crate::fs::create_archive_stream_from_reader(reader, Some(adjusted_path.as_str()))
+        .await
+        .map_err(|e| io::Error::other(e))
     } else {
-        // 普通文件或目录，交给 Provider 处理
-        base_fs.as_entry_stream(&adjusted_path, recursive).await
+      // 普通文件或目录，交给 Provider 处理
+      base_fs.as_entry_stream(&adjusted_path, recursive).await
     }
   }
 }

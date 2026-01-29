@@ -682,49 +682,48 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use tokio::io::AsyncReadExt;
+  use super::*;
+  use tokio::io::AsyncReadExt;
 
-    #[tokio::test]
-    async fn test_prefixed_reader() {
-        let prefix = vec![1, 2, 3];
-        let inner = std::io::Cursor::new(vec![4, 5, 6]);
-        let mut reader = PrefixedReader::new(prefix, inner);
-        let mut buf = Vec::new();
-        reader.read_to_end(&mut buf).await.unwrap();
-        assert_eq!(buf, vec![1, 2, 3, 4, 5, 6]);
-    }
+  #[tokio::test]
+  async fn test_prefixed_reader() {
+    let prefix = vec![1, 2, 3];
+    let inner = std::io::Cursor::new(vec![4, 5, 6]);
+    let mut reader = PrefixedReader::new(prefix, inner);
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf).await.unwrap();
+    assert_eq!(buf, vec![1, 2, 3, 4, 5, 6]);
+  }
 
-    #[test]
-    fn test_normalize_archive_entry_path() {
-        assert_eq!(normalize_archive_entry_path("foo/bar"), "foo/bar");
-        assert_eq!(normalize_archive_entry_path("./foo/bar"), "foo/bar");
-        assert_eq!(normalize_archive_entry_path("/foo/bar"), "foo/bar");
-        assert_eq!(normalize_archive_entry_path("///foo/bar"), "foo/bar");
-    }
+  #[test]
+  fn test_normalize_archive_entry_path() {
+    assert_eq!(normalize_archive_entry_path("foo/bar"), "foo/bar");
+    assert_eq!(normalize_archive_entry_path("./foo/bar"), "foo/bar");
+    assert_eq!(normalize_archive_entry_path("/foo/bar"), "foo/bar");
+    assert_eq!(normalize_archive_entry_path("///foo/bar"), "foo/bar");
+  }
 
-    #[test]
-    fn test_sniff_archive_kind_tar() {
-        let mut head = vec![0u8; 512];
-        // ustar at 257
-        head[257] = b'u';
-        head[258] = b's';
-        head[259] = b't';
-        head[260] = b'a';
-        head[261] = b'r';
-        assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Tar);
-    }
+  #[test]
+  fn test_sniff_archive_kind_tar() {
+    let mut head = vec![0u8; 512];
+    // ustar at 257
+    head[257] = b'u';
+    head[258] = b's';
+    head[259] = b't';
+    head[260] = b'a';
+    head[261] = b'r';
+    assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Tar);
+  }
 
-    #[test]
-    fn test_sniff_archive_kind_gzip() {
-        let head = vec![0x1F, 0x8B, 0x08];
-        assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Gzip);
-    }
+  #[test]
+  fn test_sniff_archive_kind_gzip() {
+    let head = vec![0x1F, 0x8B, 0x08];
+    assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Gzip);
+  }
 
-    #[test]
-    fn test_sniff_archive_kind_zip() {
-         let head = vec![0x50, 0x4B, 0x03, 0x04];
-         assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Zip);
-    }
+  #[test]
+  fn test_sniff_archive_kind_zip() {
+    let head = vec![0x50, 0x4B, 0x03, 0x04];
+    assert_eq!(sniff_archive_kind(&head, None), ArchiveKind::Zip);
+  }
 }
-

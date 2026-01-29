@@ -63,14 +63,14 @@ mod tests {
   #[test]
   fn test_metadata_helpers() {
     let mut meta = OpsMetadata {
-        name: "test".to_string(),
-        file_type: OpsFileType::File,
-        size: 0,
-        modified: None,
-        mode: 0,
-        mime_type: None,
-        compression: None,
-        is_archive: false,
+      name: "test".to_string(),
+      file_type: OpsFileType::File,
+      size: 0,
+      modified: None,
+      mode: 0,
+      mime_type: None,
+      compression: None,
+      is_archive: false,
     };
 
     assert!(meta.is_file());

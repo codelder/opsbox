@@ -133,9 +133,9 @@ impl OpsFileSystem for ZipOpsFS {
             entries.push(OpsEntry {
               name: component.to_string(),
               path: if dir_path.is_empty() {
-                  component.to_string()
+                component.to_string()
               } else {
-                  format!("{}/{}", dir_path, component)
+                format!("{}/{}", dir_path, component)
               }, // Construct full path
               metadata: OpsMetadata {
                 name: component.to_string(),
@@ -218,12 +218,12 @@ impl OpsFileSystem for ZipOpsFS {
 mod tests {
   use super::*;
   use crate::odfs::OpsPath;
+  use async_zip::Compression;
   use async_zip::ZipEntryBuilder;
   use async_zip::tokio::write::ZipFileWriter;
   use tempfile::NamedTempFile;
   use tokio::fs::File;
   use tokio::io::AsyncReadExt;
-  use async_zip::Compression;
 
   async fn create_test_zip() -> NamedTempFile {
     let file = NamedTempFile::new().unwrap();

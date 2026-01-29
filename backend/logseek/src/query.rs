@@ -116,44 +116,47 @@ pub struct Query {
 }
 
 impl Query {
-
   pub fn new(terms: Vec<Term>) -> Self {
-       let expr = if terms.is_empty() {
-         None
-       } else {
-         let atoms: Vec<Expr> = (0..terms.len()).map(Expr::Atom).collect();
-         Some(Expr::And(atoms))
-       };
-       let highlights = terms.iter().flat_map(|t| t.highlight()).collect();
-       Self {
-         terms,
-         expr,
-         path_filter: PathFilter::default(),
-         highlights,
-         byte_matchers: vec![],
-       }
+    let expr = if terms.is_empty() {
+      None
+    } else {
+      let atoms: Vec<Expr> = (0..terms.len()).map(Expr::Atom).collect();
+      Some(Expr::And(atoms))
+    };
+    let highlights = terms.iter().flat_map(|t| t.highlight()).collect();
+    Self {
+      terms,
+      expr,
+      path_filter: PathFilter::default(),
+      highlights,
+      byte_matchers: vec![],
     }
+  }
 
   pub fn with_path_filter(mut self, pattern: Option<String>) -> Result<Self, String> {
-        if let Some(p) = pattern {
-            if let Some(stripped) = p.strip_prefix('!') {
-                 let glob = globset::GlobBuilder::new(stripped)
-                    .literal_separator(true).build().map_err(|e|e.to_string())?;
-                 let mut builder = globset::GlobSetBuilder::new();
-                 builder.add(glob);
-                 let set = builder.build().map_err(|e|e.to_string())?;
-                 self.path_filter.exclude = Some(set);
-            } else {
-                 let glob = globset::GlobBuilder::new(&p)
-                    .literal_separator(true).build().map_err(|e|e.to_string())?;
-                 let mut builder = globset::GlobSetBuilder::new();
-                 builder.add(glob);
-                 let set = builder.build().map_err(|e|e.to_string())?;
-                 self.path_filter.include = Some(set);
-            }
-        }
-        Ok(self)
+    if let Some(p) = pattern {
+      if let Some(stripped) = p.strip_prefix('!') {
+        let glob = globset::GlobBuilder::new(stripped)
+          .literal_separator(true)
+          .build()
+          .map_err(|e| e.to_string())?;
+        let mut builder = globset::GlobSetBuilder::new();
+        builder.add(glob);
+        let set = builder.build().map_err(|e| e.to_string())?;
+        self.path_filter.exclude = Some(set);
+      } else {
+        let glob = globset::GlobBuilder::new(&p)
+          .literal_separator(true)
+          .build()
+          .map_err(|e| e.to_string())?;
+        let mut builder = globset::GlobSetBuilder::new();
+        builder.add(glob);
+        let set = builder.build().map_err(|e| e.to_string())?;
+        self.path_filter.include = Some(set);
+      }
     }
+    Ok(self)
+  }
 
   pub fn from_keywords(keywords: &[String]) -> Self {
     let mut terms: Vec<Term> = Vec::new();
@@ -298,7 +301,10 @@ mod tests {
 
     // Regex
     let re = regex::Regex::new(r"\d+").unwrap();
-    let term = Term::RegexStd { pattern: r"\d+".to_string(), re };
+    let term = Term::RegexStd {
+      pattern: r"\d+".to_string(),
+      re,
+    };
     assert!(term.matches("line 123"));
     assert!(!term.matches("no numbers"));
   }
@@ -352,11 +358,7 @@ mod tests {
 
     // Mixed
     out.clear();
-    let expr = Expr::And(vec![
-      Expr::Atom(0),
-      Expr::Not(Box::new(Expr::Atom(1))),
-      Expr::Atom(2),
-    ]);
+    let expr = Expr::And(vec![Expr::Atom(0), Expr::Not(Box::new(Expr::Atom(1))), Expr::Atom(2)]);
     collect_positive_atoms(&expr, false, &mut out);
     assert_eq!(out, vec![0, 2]);
   }
@@ -391,4 +393,3 @@ mod tests {
     assert_eq!(deserialized, hl);
   }
 }
-

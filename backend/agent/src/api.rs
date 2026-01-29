@@ -21,4 +21,3 @@ pub struct AppState {
 
 // 使用 opsbox-core 的 SuccessResponse<T>，T=() 表示无数据
 // pub use opsbox_core::response::SuccessResponse; 已在上面重新导出
-

@@ -85,59 +85,59 @@ opsbox_core::register_module!(AgentManagerModule);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use opsbox_core::Module;
+  use super::*;
+  use opsbox_core::Module;
 
-    #[test]
-    fn test_agent_manager_module_name() {
-        let module = AgentManagerModule::default();
-        assert_eq!(module.name(), "AgentManager");
-        assert_eq!(module.api_prefix(), "/api/v1/agents");
+  #[test]
+  fn test_agent_manager_module_name() {
+    let module = AgentManagerModule::default();
+    assert_eq!(module.name(), "AgentManager");
+    assert_eq!(module.api_prefix(), "/api/v1/agents");
+  }
+
+  #[tokio::test]
+  async fn test_agent_manager_module_lifecycle() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let module = AgentManagerModule::default();
+
+    // Test name and prefix
+    assert_eq!(module.name(), "AgentManager");
+    assert_eq!(module.api_prefix(), "/api/v1/agents");
+
+    // Test init_schema (will also init global manager)
+    let result = module.init_schema(&pool).await;
+    assert!(result.is_ok());
+
+    // Test configure and cleanup
+    module.configure();
+    module.cleanup();
+
+    // Test get_global_agent_manager after init
+    let manager = get_global_agent_manager();
+    assert!(manager.is_some());
+
+    // Test duplicate init
+    let result = init_global_agent_manager(pool.clone()).await;
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), "全局 Agent Manager 已初始化");
+  }
+
+  #[tokio::test]
+  async fn test_agent_manager_direct_usage() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    // 确保数据库中有表
+    AgentRepository::new(pool.clone()).init_schema().await.unwrap();
+
+    // 初始化全局管理器
+    let _ = init_global_agent_manager(pool).await;
+
+    // 直接使用 AgentManager 的方法而不是便利函数
+    if let Some(manager) = get_global_agent_manager() {
+      let online_agents = manager.list_online_agents().await;
+      assert_eq!(online_agents.len(), 0);
+
+      let all_tags = manager.get_all_tags().await;
+      assert_eq!(all_tags.len(), 0);
     }
-
-    #[tokio::test]
-    async fn test_agent_manager_module_lifecycle() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        let module = AgentManagerModule::default();
-
-        // Test name and prefix
-        assert_eq!(module.name(), "AgentManager");
-        assert_eq!(module.api_prefix(), "/api/v1/agents");
-
-        // Test init_schema (will also init global manager)
-        let result = module.init_schema(&pool).await;
-        assert!(result.is_ok());
-
-        // Test configure and cleanup
-        module.configure();
-        module.cleanup();
-
-        // Test get_global_agent_manager after init
-        let manager = get_global_agent_manager();
-        assert!(manager.is_some());
-
-        // Test duplicate init
-        let result = init_global_agent_manager(pool.clone()).await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "全局 Agent Manager 已初始化");
-    }
-
-    #[tokio::test]
-    async fn test_agent_manager_direct_usage() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        // 确保数据库中有表
-        AgentRepository::new(pool.clone()).init_schema().await.unwrap();
-
-        // 初始化全局管理器
-        let _ = init_global_agent_manager(pool).await;
-
-        // 直接使用 AgentManager 的方法而不是便利函数
-        if let Some(manager) = get_global_agent_manager() {
-            let online_agents = manager.list_online_agents().await;
-            assert_eq!(online_agents.len(), 0);
-
-            let all_tags = manager.get_all_tags().await;
-            assert_eq!(all_tags.len(), 0);
-        }
-    }
+  }
 }

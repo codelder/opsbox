@@ -1,13 +1,10 @@
 use super::RepositoryError;
 use super::error::Result;
 use crate::utils::storage::{self, S3Error};
+pub use opsbox_core::repository::s3::{S3Profile, S3Settings};
+use opsbox_core::repository::s3::{list_s3_profiles as core_list_s3_profiles, load_s3_profile as core_load_s3_profile};
 use opsbox_core::{SqlitePool, run_migration};
 use tracing::{debug, error, info};
-pub use opsbox_core::repository::s3::{S3Settings, S3Profile};
-use opsbox_core::repository::s3::{
-    load_s3_profile as core_load_s3_profile,
-    list_s3_profiles as core_list_s3_profiles
-};
 
 // Structs moved to opsbox_core::repository::s3
 

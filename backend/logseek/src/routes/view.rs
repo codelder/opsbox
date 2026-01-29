@@ -77,11 +77,12 @@ pub async fn view_cache_json(
           let agent_id = orl.effective_id();
           // 检查是否是归档条目
           let is_archive_target = orl.target_type() == TargetType::Archive;
-            // 归档条目：使用 create_entry_stream 下载归档并读取条目
+          // 归档条目：使用 create_entry_stream 下载归档并读取条目
           if is_archive_target {
             debug!(
               "🚀 Agent 归档条目：使用 create_entry_stream 读取: agent_id={}, path={}",
-              agent_id, orl.path()
+              agent_id,
+              orl.path()
             );
 
             let mut stream = create_entry_stream(&pool, &orl)
@@ -127,16 +128,17 @@ pub async fn view_cache_json(
             }
 
             if !found {
-               tracing::warn!("在归档中未找到指定条目: {:?}, 共检查 {} 个条目", target_entry, checked_count);
+              tracing::warn!(
+                "在归档中未找到指定条目: {:?}, 共检查 {} 个条目",
+                target_entry,
+                checked_count
+              );
             }
           } else {
             // 普通文件：使用 Agent search API 读取 (or should we use file_raw API?)
             // Legacy uses search API for text files?
             // "普通文件：使用 search API 读取"
-            debug!(
-              "🚀 准备调用 Agent 读取文件: agent_id={}, path={}",
-              agent_id, orl.path()
-            );
+            debug!("🚀 准备调用 Agent 读取文件: agent_id={}, path={}", agent_id, orl.path());
 
             let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
               .await
@@ -146,13 +148,18 @@ pub async fn view_cache_json(
 
             // Reconstruct exact target options for Agent Search
             let target = match orl.target_type() {
-               TargetType::Dir => crate::domain::config::Target::Dir { path: orl.path().to_string(), recursive: true },
-               // ORL for single file usually mapped to Dir/Files target in legacy logic if not archive entry
-               // But usually we just want to search *this file*.
-               // Agent SearchOptions needs a target.
-               // If it's a file, we want to read it.
-               // Using Files target.
-               _ => crate::domain::config::Target::Files { paths: vec![orl.path().to_string()] }
+              TargetType::Dir => crate::domain::config::Target::Dir {
+                path: orl.path().to_string(),
+                recursive: true,
+              },
+              // ORL for single file usually mapped to Dir/Files target in legacy logic if not archive entry
+              // But usually we just want to search *this file*.
+              // Agent SearchOptions needs a target.
+              // If it's a file, we want to read it.
+              // Using Files target.
+              _ => crate::domain::config::Target::Files {
+                paths: vec![orl.path().to_string()],
+              },
             };
 
             let options = crate::agent::SearchOptions {
@@ -476,9 +483,11 @@ pub async fn view_raw_file(
 
         // 尽力读取
         while n < 1024 {
-             let read_n = buf_reader.read(&mut head[n..]).await.unwrap_or(0);
-             if read_n == 0 { break; }
-             n += read_n;
+          let read_n = buf_reader.read(&mut head[n..]).await.unwrap_or(0);
+          if read_n == 0 {
+            break;
+          }
+          n += read_n;
         }
         head.truncate(n);
 
@@ -495,7 +504,10 @@ pub async fn view_raw_file(
 
         HttpResponse::builder()
           .status(200)
-          .header(CONTENT_TYPE, HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")))
+          .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+          )
           // .header("Cache-Control", "public, max-age=3600") // 可选：添加缓存控制
           .body(Body::from_stream(stream))
           .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建响应失败: {}", e))))
@@ -508,151 +520,153 @@ pub async fn view_raw_file(
   }
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use axum::extract::Query;
-    use axum::http::StatusCode;
-    use crate::repository::cache::cache as simple_cache;
-    use crate::api::models::ViewParams;
+  use super::*;
+  use crate::api::models::ViewParams;
+  use crate::repository::cache::cache as simple_cache;
+  use axum::extract::Query;
+  use axum::http::StatusCode;
 
-    #[tokio::test]
-    async fn test_view_cache_json_hit() {
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        let sid = "test-sid-hit".to_string();
-        let file = "orl://local/tmp/test.log".to_string();
-        let lines = vec!["line 1".to_string(), "line 2".to_string(), "line 3".to_string()];
+  #[tokio::test]
+  async fn test_view_cache_json_hit() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let sid = "test-sid-hit".to_string();
+    let file = "orl://local/tmp/test.log".to_string();
+    let lines = vec!["line 1".to_string(), "line 2".to_string(), "line 3".to_string()];
 
-        // Populate cache
-        simple_cache().put_lines(&sid, &file, &lines, "UTF-8".to_string()).await;
+    // Populate cache
+    simple_cache().put_lines(&sid, &file, &lines, "UTF-8".to_string()).await;
 
-        let params = ViewParams {
-            sid: sid.clone(),
-            file: file.clone(),
-            start: Some(1),
-            end: Some(2),
-        };
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file.clone(),
+      start: Some(1),
+      end: Some(2),
+    };
 
-        let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+    let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 
-        // Use axum::body::to_bytes to read the response body
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    // Use axum::body::to_bytes to read the response body
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert_eq!(json["total"], 3);
-        assert_eq!(json["start"], 1);
-        assert_eq!(json["end"], 2);
-        assert_eq!(json["lines"].as_array().unwrap().len(), 2);
-        assert_eq!(json["lines"][0]["no"], 1);
-        assert_eq!(json["lines"][0]["text"], "line 1");
-    }
+    assert_eq!(json["total"], 3);
+    assert_eq!(json["start"], 1);
+    assert_eq!(json["end"], 2);
+    assert_eq!(json["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(json["lines"][0]["no"], 1);
+    assert_eq!(json["lines"][0]["text"], "line 1");
+  }
 
-    #[tokio::test]
-    async fn test_get_file_list_json_success() {
-        let sid = "test-sid-list".to_string();
-        let file1 = "file1".to_string();
-        let file2 = "file2".to_string();
+  #[tokio::test]
+  async fn test_get_file_list_json_success() {
+    let sid = "test-sid-list".to_string();
+    let file1 = "file1".to_string();
+    let file2 = "file2".to_string();
 
-        // Populate cache via put_lines (indirectly creates file list)
-        simple_cache().put_lines(&sid, &file1, &["line1".to_string()], "UTF-8".to_string()).await;
-        simple_cache().put_lines(&sid, &file2, &["line2".to_string()], "UTF-8".to_string()).await;
+    // Populate cache via put_lines (indirectly creates file list)
+    simple_cache()
+      .put_lines(&sid, &file1, &["line1".to_string()], "UTF-8".to_string())
+      .await;
+    simple_cache()
+      .put_lines(&sid, &file2, &["line2".to_string()], "UTF-8".to_string())
+      .await;
 
-        let params = FileListParams { sid: sid.clone() };
-        let resp = get_file_list_json(Query(params)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+    let params = FileListParams { sid: sid.clone() };
+    let resp = get_file_list_json(Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert_eq!(json["sid"], sid);
-        assert_eq!(json["count"], 2);
-        let files = json["files"].as_array().unwrap();
-        assert_eq!(files.len(), 2);
-        assert!(files.contains(&serde_json::json!("file1")));
-        assert!(files.contains(&serde_json::json!("file2")));
-    }
+    assert_eq!(json["sid"], sid);
+    assert_eq!(json["count"], 2);
+    let files = json["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert!(files.contains(&serde_json::json!("file1")));
+    assert!(files.contains(&serde_json::json!("file2")));
+  }
 
-    #[tokio::test]
-    async fn test_download_file_success() {
-        let sid = "test-sid-download".to_string();
-        let file = "orl://local/tmp/down.log".to_string();
-        let lines = vec!["hello".to_string(), "world".to_string()];
+  #[tokio::test]
+  async fn test_download_file_success() {
+    let sid = "test-sid-download".to_string();
+    let file = "orl://local/tmp/down.log".to_string();
+    let lines = vec!["hello".to_string(), "world".to_string()];
 
-        simple_cache().put_lines(&sid, &file, &lines, "UTF-8".to_string()).await;
+    simple_cache().put_lines(&sid, &file, &lines, "UTF-8".to_string()).await;
 
-        let params = ViewParams {
-            sid: sid.clone(),
-            file: file.clone(),
-            start: None,
-            end: None,
-        };
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file.clone(),
+      start: None,
+      end: None,
+    };
 
-        let resp = download_file(Query(params)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+    let resp = download_file(Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let content = String::from_utf8(body_bytes.to_vec()).unwrap();
-        assert_eq!(content, "hello\nworld");
-    }
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let content = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(content, "hello\nworld");
+  }
 
-    #[tokio::test]
-    async fn test_view_cache_json_miss_local() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("miss.log");
-        std::fs::write(&file_path, "miss content line 1\nline 2").unwrap();
+  #[tokio::test]
+  async fn test_view_cache_json_miss_local() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("miss.log");
+    std::fs::write(&file_path, "miss content line 1\nline 2").unwrap();
 
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        let sid = "test-sid-miss".to_string();
-        let file_url = format!("orl://local{}", file_path.to_str().unwrap());
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let sid = "test-sid-miss".to_string();
+    let file_url = format!("orl://local{}", file_path.to_str().unwrap());
 
-        let params = ViewParams {
-            sid: sid.clone(),
-            file: file_url.clone(),
-            start: None, // Defaults to 1..1000
-            end: None,
-        };
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file_url.clone(),
+      start: None, // Defaults to 1..1000
+      end: None,
+    };
 
-        let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+    let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
-        assert_eq!(json["total"], 2);
-        assert_eq!(json["lines"][0]["text"], "miss content line 1");
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["lines"][0]["text"], "miss content line 1");
 
-        // Verify it was cached
-        let cached = simple_cache().get_lines_slice(&sid, &file_url, 1, 10).await;
-        assert!(cached.is_some());
-        assert_eq!(cached.unwrap().0, 2);
-    }
+    // Verify it was cached
+    let cached = simple_cache().get_lines_slice(&sid, &file_url, 1, 10).await;
+    assert!(cached.is_some());
+    assert_eq!(cached.unwrap().0, 2);
+  }
 
-    #[tokio::test]
-    async fn test_view_raw_file_local() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let file_path = temp_dir.path().join("raw.png");
-        // Write some bytes to trigger sniff
-        let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        std::fs::write(&file_path, &png_header).unwrap();
+  #[tokio::test]
+  async fn test_view_raw_file_local() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("raw.png");
+    // Write some bytes to trigger sniff
+    let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    std::fs::write(&file_path, &png_header).unwrap();
 
-        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-        let file_url = format!("orl://local{}", file_path.to_str().unwrap());
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let file_url = format!("orl://local{}", file_path.to_str().unwrap());
 
-        let params = ViewParams {
-            sid: "any".into(),
-            file: file_url,
-            start: None,
-            end: None,
-        };
+    let params = ViewParams {
+      sid: "any".into(),
+      file: file_url,
+      start: None,
+      end: None,
+    };
 
-        let resp = view_raw_file(State(pool), Query(params)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "image/png");
+    let resp = view_raw_file(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "image/png");
 
-        let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
-        assert_eq!(&body_bytes[..8], &png_header);
-    }
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    assert_eq!(&body_bytes[..8], &png_header);
+  }
 }

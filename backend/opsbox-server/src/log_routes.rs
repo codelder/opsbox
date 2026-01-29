@@ -21,7 +21,6 @@ use std::str::FromStr;
 // 使用 opsbox-core 的 SuccessResponse<T>，T=() 表示无数据
 // SuccessResponse 已从 opsbox_core::response 导入
 
-
 /// 应用状态
 #[derive(Clone)]
 struct AppState {
@@ -33,9 +32,7 @@ struct AppState {
 async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigResponse>> {
   let repo = LogConfigRepository::new(state.pool);
 
-  let response = repo
-    .get_response("server", state.log_dir)
-    .await?;
+  let response = repo.get_response("server", state.log_dir).await?;
 
   Ok(Json(response))
 }
@@ -50,12 +47,11 @@ async fn update_log_level(
 
   // 更新数据库
   let repo = LogConfigRepository::new(state.pool);
-  repo
-    .update_level("server", level)
-    .await?;
+  repo.update_level("server", level).await?;
 
   // 动态重载日志级别
-  let reload_handle = crate::server::get_log_reload_handle().ok_or_else(|| AppError::internal("日志系统未初始化".to_string()))?;
+  let reload_handle =
+    crate::server::get_log_reload_handle().ok_or_else(|| AppError::internal("日志系统未初始化".to_string()))?;
 
   reload_handle
     .update_level(level)
@@ -63,7 +59,10 @@ async fn update_log_level(
 
   tracing::info!("日志级别已更新为: {}", level);
 
-  Ok(Json(SuccessResponse::<()>::with_message(format!("日志级别已更新为: {}", level))))
+  Ok(Json(SuccessResponse::<()>::with_message(format!(
+    "日志级别已更新为: {}",
+    level
+  ))))
 }
 
 /// 更新日志保留数量
@@ -78,13 +77,14 @@ async fn update_log_retention(
 
   // 更新数据库
   let repo = LogConfigRepository::new(state.pool);
-  repo
-    .update_retention("server", req.retention_count)
-    .await?;
+  repo.update_retention("server", req.retention_count).await?;
 
   tracing::info!("日志保留数量已更新为: {} 天", req.retention_count);
 
-  Ok(Json(SuccessResponse::<()>::with_message(format!("日志保留数量已更新为: {} 天", req.retention_count))))
+  Ok(Json(SuccessResponse::<()>::with_message(format!(
+    "日志保留数量已更新为: {} 天",
+    req.retention_count
+  ))))
 }
 
 /// 创建日志配置路由

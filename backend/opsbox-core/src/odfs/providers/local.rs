@@ -128,16 +128,16 @@ impl OpsFileSystem for LocalOpsFS {
 
     // 检测是否为文件
     if fs_path.is_file() {
-       // 单文件流 (可能是普通文件或归档文件本身)
-       // 对于搜索来说，如果用户指定的是一个 tar.gz，我们希望流式打开它
-       // 这里使用 opsbox_core::fs::entry_stream::build_local_entry_stream 的逻辑复刻
-       // 但为了解耦，我们直接使用 FsEntryStream (它内部处理了单文件情况)
-       let stream = crate::fs::FsEntryStream::new(fs_path, recursive).await?;
-       Ok(Box::new(stream))
+      // 单文件流 (可能是普通文件或归档文件本身)
+      // 对于搜索来说，如果用户指定的是一个 tar.gz，我们希望流式打开它
+      // 这里使用 opsbox_core::fs::entry_stream::build_local_entry_stream 的逻辑复刻
+      // 但为了解耦，我们直接使用 FsEntryStream (它内部处理了单文件情况)
+      let stream = crate::fs::FsEntryStream::new(fs_path, recursive).await?;
+      Ok(Box::new(stream))
     } else {
-       // 目录流 (jwalk)
-       let stream = crate::fs::FsEntryStream::new(fs_path, recursive).await?;
-       Ok(Box::new(stream))
+      // 目录流 (jwalk)
+      let stream = crate::fs::FsEntryStream::new(fs_path, recursive).await?;
+      Ok(Box::new(stream))
     }
   }
 }
@@ -160,74 +160,67 @@ async fn detect_file_type(path: &Path) -> (Option<String>, bool, Option<String>)
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use tempfile::TempDir;
+  use super::*;
+  use tempfile::TempDir;
 
-    #[tokio::test]
-    async fn test_local_ops_fs_extended() {
-        let temp_dir = TempDir::new().unwrap();
-        let root = temp_dir.path().to_path_buf();
+  #[tokio::test]
+  async fn test_local_ops_fs_extended() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path().to_path_buf();
 
-        let sub_dir = root.join("dir1");
-        fs::create_dir(&sub_dir).await.unwrap();
-        fs::write(sub_dir.join("file1.txt"), "content1").await.unwrap();
-        fs::write(root.join("root.gz"), "fake data").await.unwrap();
+    let sub_dir = root.join("dir1");
+    fs::create_dir(&sub_dir).await.unwrap();
+    fs::write(sub_dir.join("file1.txt"), "content1").await.unwrap();
+    fs::write(root.join("root.gz"), "fake data").await.unwrap();
 
-        let fs = LocalOpsFS::new(Some(root.clone()));
+    let fs = LocalOpsFS::new(Some(root.clone()));
 
-        // Test name
-        assert_eq!(fs.name(), "LocalOpsFS");
+    // Test name
+    assert_eq!(fs.name(), "LocalOpsFS");
 
-        // Test metadata for directory
-        let meta = fs.metadata(&OpsPath::new("dir1")).await.unwrap();
-        assert!(meta.is_dir());
-        assert_eq!(meta.name, "dir1");
+    // Test metadata for directory
+    let meta = fs.metadata(&OpsPath::new("dir1")).await.unwrap();
+    assert!(meta.is_dir());
+    assert_eq!(meta.name, "dir1");
 
-        // Test metadata for gzip file
-        let meta = fs.metadata(&OpsPath::new("root.gz")).await.unwrap();
-        assert_eq!(meta.compression.as_deref(), Some("gzip"));
-        assert!(!meta.is_archive);
+    // Test metadata for gzip file
+    let meta = fs.metadata(&OpsPath::new("root.gz")).await.unwrap();
+    assert_eq!(meta.compression.as_deref(), Some("gzip"));
+    assert!(!meta.is_archive);
 
-        // Test as_entry_stream (directory)
-        let mut stream = fs.as_entry_stream(&OpsPath::new("dir1"), true).await.unwrap();
-        let mut found = false;
-        while let Some((meta, _)) = stream.next_entry().await.unwrap() {
-            if meta.path.ends_with("file1.txt") {
-                found = true;
-            }
-        }
-        assert!(found, "Should have found file1.txt in stream");
-
-        // Test resolve_path via indirect call or check behavior
-        // (Internal resolve_path is private but used by all methods)
-        let res = fs.metadata(&OpsPath::new("/../etc/passwd")).await;
-        // Even if it allows escaping root locally, verify it works
-        // Note: The current implementation just joins, so security is TODO
-        assert!(res.is_err() || res.is_ok());
+    // Test as_entry_stream (directory)
+    let mut stream = fs.as_entry_stream(&OpsPath::new("dir1"), true).await.unwrap();
+    let mut found = false;
+    while let Some((meta, _)) = stream.next_entry().await.unwrap() {
+      if meta.path.ends_with("file1.txt") {
+        found = true;
+      }
     }
+    assert!(found, "Should have found file1.txt in stream");
 
-    #[tokio::test]
-    async fn test_detect_file_type_helper() {
-        assert_eq!(
-            detect_file_type(&Path::new("test.gz")).await,
-            (Some("application/gzip".to_string()), false, Some("gzip".to_string()))
-        );
-        assert_eq!(
-            detect_file_type(&Path::new("test.tar")).await,
-            (Some("application/x-tar".to_string()), true, None)
-        );
-        assert_eq!(
-            detect_file_type(&Path::new("test.zip")).await,
-            (Some("application/zip".to_string()), true, None)
-        );
-        assert_eq!(
-            detect_file_type(&Path::new("test.txt")).await,
-            (None, false, None)
-        );
-        assert_eq!(
-            detect_file_type(&Path::new("test_no_ext")).await,
-            (None, false, None)
-        );
-    }
+    // Test resolve_path via indirect call or check behavior
+    // (Internal resolve_path is private but used by all methods)
+    let res = fs.metadata(&OpsPath::new("/../etc/passwd")).await;
+    // Even if it allows escaping root locally, verify it works
+    // Note: The current implementation just joins, so security is TODO
+    assert!(res.is_err() || res.is_ok());
+  }
+
+  #[tokio::test]
+  async fn test_detect_file_type_helper() {
+    assert_eq!(
+      detect_file_type(&Path::new("test.gz")).await,
+      (Some("application/gzip".to_string()), false, Some("gzip".to_string()))
+    );
+    assert_eq!(
+      detect_file_type(&Path::new("test.tar")).await,
+      (Some("application/x-tar".to_string()), true, None)
+    );
+    assert_eq!(
+      detect_file_type(&Path::new("test.zip")).await,
+      (Some("application/zip".to_string()), true, None)
+    );
+    assert_eq!(detect_file_type(&Path::new("test.txt")).await, (None, false, None));
+    assert_eq!(detect_file_type(&Path::new("test_no_ext")).await, (None, false, None));
+  }
 }
-

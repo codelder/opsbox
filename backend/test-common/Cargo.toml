@@ -29,6 +29,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-compression = { version = "0.4", features = ["tokio", "gzip"] }
 async_zip = { version = "0.0.18", features = ["tokio"] }
 tokio-tar = "0.3.1"
+tokio-util = { version = "0.7", features = ["compat"] }
 
 # Workspace dependencies
 opsbox-core = { path = "../opsbox-core" }

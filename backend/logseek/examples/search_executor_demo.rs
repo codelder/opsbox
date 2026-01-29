@@ -27,8 +27,6 @@ async fn http_route_usage(pool: SqlitePool, query: &str) {
   // 执行搜索
   match executor.search(query, "test-sid".to_string(), 3, None).await {
     Ok(mut rx) => {
-
-
       // 消费搜索结果并转换为 NDJSON 流
       while let Some(event) = rx.recv().await {
         match event {

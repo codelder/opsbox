@@ -7,9 +7,9 @@ use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
 use opsbox_core::fs::{EntrySource, EntryStream, PrefixedReader};
+use opsbox_core::odfs::OrlManager;
 use opsbox_core::odfs::orl::EndpointType;
 use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
-use opsbox_core::odfs::OrlManager;
 
 use crate::utils::storage;
 
@@ -175,8 +175,7 @@ impl EntryStreamProcessor {
             }
           }
           out.to_string_lossy().into_owned()
-        } else if let (Ok(canon_path), Ok(canon_base)) =
-          (std::fs::canonicalize(path_obj), std::fs::canonicalize(base))
+        } else if let (Ok(canon_path), Ok(canon_base)) = (std::fs::canonicalize(path_obj), std::fs::canonicalize(base))
         {
           // canonicalize 后如果能 strip_prefix，则必须使用相对路径进行匹配，
           // 否则在 strict glob（literal_separator=true）下，像 "*.log" 这类模式会因为包含分隔符而无法匹配绝对路径。
@@ -203,21 +202,19 @@ impl EntryStreamProcessor {
         std::path::Path::new(&meta.path).to_string_lossy().into_owned()
       };
 
-
       // 检查所有额外过滤器 (AND 逻辑)
       let mut matched = true;
       for filter in &self.extra_path_filters {
-         if !self.processor.should_process_path_with(&path_str, Some(filter)) {
-            matched = false;
-            break;
-         }
+        if !self.processor.should_process_path_with(&path_str, Some(filter)) {
+          matched = false;
+          break;
+        }
       }
 
       if !matched {
         trace!(
           "路径不匹配 (extra filters)，跳过: meta.path={} path_str_for_filter={}",
-          &meta.path,
-          &path_str
+          &meta.path, &path_str
         );
         continue;
       }
@@ -378,29 +375,31 @@ use opsbox_core::odfs::fs::OpsFileSystem;
 /// 核心：从已有的 OpsFileSystem 实例创建 Stream
 /// 这将重用 OrlManager 的所有智能路由逻辑（归档探测、路径处理等）
 pub async fn get_entry_stream_from_fs(
-    fs: Arc<dyn OpsFileSystem + Send + Sync>,
-    orl: &opsbox_core::odfs::orl::ORL,
-    recursive: bool
+  fs: Arc<dyn OpsFileSystem + Send + Sync>,
+  orl: &opsbox_core::odfs::orl::ORL,
+  recursive: bool,
 ) -> Result<Box<dyn EntryStream>, String> {
-    // 根据 OrlManager 的内部约定生成注册 Key，以匹配其查找逻辑
-    let id = match orl.endpoint_type() {
-        Ok(EndpointType::Local) => "local".to_string(),
-        Ok(EndpointType::S3) => match orl.endpoint_id() {
-            Some(id) if !id.is_empty() => format!("s3.{}", id),
-            _ => "s3.root".to_string(),
-        },
-        Ok(EndpointType::Agent) => match orl.endpoint_id() {
-            Some(id) if !id.is_empty() => format!("agent.{}", id),
-            _ => "agent.root".to_string(),
-        },
-        _ => orl.effective_id().to_string(),
-    };
+  // 根据 OrlManager 的内部约定生成注册 Key，以匹配其查找逻辑
+  let id = match orl.endpoint_type() {
+    Ok(EndpointType::Local) => "local".to_string(),
+    Ok(EndpointType::S3) => match orl.endpoint_id() {
+      Some(id) if !id.is_empty() => format!("s3.{}", id),
+      _ => "s3.root".to_string(),
+    },
+    Ok(EndpointType::Agent) => match orl.endpoint_id() {
+      Some(id) if !id.is_empty() => format!("agent.{}", id),
+      _ => "agent.root".to_string(),
+    },
+    _ => orl.effective_id().to_string(),
+  };
 
-    let mut manager = OrlManager::new();
-    // 关键：注册实例，让 Manager 可以 resolve 它
-    manager.register(id, fs);
-    manager.get_entry_stream(orl, recursive).await
-        .map_err(|e| format!("获取流失败: {}", e))
+  let mut manager = OrlManager::new();
+  // 关键：注册实例，让 Manager 可以 resolve 它
+  manager.register(id, fs);
+  manager
+    .get_entry_stream(orl, recursive)
+    .await
+    .map_err(|e| format!("获取流失败: {}", e))
 }
 
 /// 创建条目流（不含 Agent）
@@ -426,12 +425,9 @@ pub async fn create_entry_stream(
         .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
 
       // 构造 S3 客户端
-      let client = storage::get_or_create_s3_client(
-        &profile_row.endpoint,
-        &profile_row.access_key,
-        &profile_row.secret_key,
-      )
-      .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
+      let client =
+        storage::get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
+          .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
 
       // 注册 S3 Provider
       let (bucket_name, _) = orl
@@ -443,9 +439,7 @@ pub async fn create_entry_stream(
       Arc::new(S3OpsFS::new(client.as_ref().clone(), bucket_name))
     }
     // Agent 类型由 search_agent_source 处理，不应到达这里
-    _ => return Err(
-      "create_entry_stream 仅处理 Local/S3 类型，Agent 应由 search_agent_source 处理".to_string()
-    ),
+    _ => return Err("create_entry_stream 仅处理 Local/S3 类型，Agent 应由 search_agent_source 处理".to_string()),
   };
 
   get_entry_stream_from_fs(fs, orl, true).await
@@ -502,45 +496,151 @@ where
   Ok((processed_count, matched_count))
 }
 
-
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_entry_concurrency_default() {
-        let conc = entry_concurrency();
-        assert!(conc >= 1);
-        assert!(conc <= 128);
-    }
+  #[test]
+  fn test_entry_concurrency_default() {
+    let conc = entry_concurrency();
+    assert!(conc >= 1);
+    assert!(conc <= 128);
+  }
 
-    #[tokio::test]
-    async fn test_preload_entry_small() {
-        let content = b"hello world";
-        let mut reader = &content[..];
-        // max size larger than content
-        let res = preload_entry(&mut reader, 100).await.expect("preload failed");
-        match res {
-            PreloadResult::Complete(c) => assert_eq!(c, content),
-            PreloadResult::Partial(_) => panic!("should be complete"),
-        }
+  #[tokio::test]
+  async fn test_preload_entry_small() {
+    let content = b"hello world";
+    let mut reader = &content[..];
+    // max size larger than content
+    let res = preload_entry(&mut reader, 100).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => assert_eq!(c, content),
+      PreloadResult::Partial(_) => panic!("should be complete"),
     }
+  }
 
-    #[tokio::test]
-    async fn test_preload_entry_large() {
-        // Create content slightly larger than our max check, but smaller than the chunk size (64KB)
-        let content = vec![0u8; 100];
-        let mut reader = &content[..];
-        // max size smaller than content
-        let res = preload_entry(&mut reader, 50).await.expect("preload failed");
-        match res {
-            PreloadResult::Partial(c) => {
-                 // It reads in chunks of 64KB. So the first read will read all 100 bytes.
-                 // Then buffer.len() is 100. 100 > 50. Returns Partial(100 bytes).
-                 assert_eq!(c.len(), 100);
-            }
-            PreloadResult::Complete(_) => panic!("should be partial"),
-        }
+  #[tokio::test]
+  async fn test_preload_entry_large() {
+    // Create content slightly larger than our max check, but smaller than the chunk size (64KB)
+    let content = vec![0u8; 100];
+    let mut reader = &content[..];
+    // max size smaller than content
+    let res = preload_entry(&mut reader, 50).await.expect("preload failed");
+    match res {
+      PreloadResult::Partial(c) => {
+        // It reads in chunks of 64KB. So the first read will read all 100 bytes.
+        // Then buffer.len() is 100. 100 > 50. Returns Partial(100 bytes).
+        assert_eq!(c.len(), 100);
+      }
+      PreloadResult::Complete(_) => panic!("should be partial"),
     }
+  }
+
+  #[test]
+  fn test_entry_concurrency_env_var_valid() {
+    // 测试环境变量解析 - 有效值
+    // 使用unsafe块修改环境变量，测试后恢复
+    unsafe {
+      let original = std::env::var("ENTRY_CONCURRENCY").ok();
+
+      // 测试有效值
+      std::env::set_var("ENTRY_CONCURRENCY", "64");
+      let conc = entry_concurrency();
+      assert_eq!(conc, 64);
+
+      // 测试边界值
+      std::env::set_var("ENTRY_CONCURRENCY", "1");
+      let conc = entry_concurrency();
+      assert_eq!(conc, 1);
+
+      std::env::set_var("ENTRY_CONCURRENCY", "128");
+      let conc = entry_concurrency();
+      assert_eq!(conc, 128);
+
+      // 恢复原始值
+      if let Some(val) = original {
+        std::env::set_var("ENTRY_CONCURRENCY", val);
+      } else {
+        std::env::remove_var("ENTRY_CONCURRENCY");
+      }
+    }
+  }
+
+  #[test]
+  fn test_entry_concurrency_env_var_invalid() {
+    // 测试无效环境变量值应使用默认值
+    unsafe {
+      let original = std::env::var("ENTRY_CONCURRENCY").ok();
+
+      // 测试无效值（非数字）
+      std::env::set_var("ENTRY_CONCURRENCY", "not-a-number");
+      let conc = entry_concurrency();
+      // 无效值应回退到默认计算
+      assert!(conc >= 1 && conc <= 128);
+
+      // 测试超出范围的值
+      std::env::set_var("ENTRY_CONCURRENCY", "0"); // 小于最小值
+      let conc = entry_concurrency();
+      assert_eq!(conc, 1); // 被clamp到1
+
+      std::env::set_var("ENTRY_CONCURRENCY", "999"); // 大于最大值
+      let conc = entry_concurrency();
+      assert_eq!(conc, 128); // 被clamp到128
+
+      // 恢复原始值
+      if let Some(val) = original {
+        std::env::set_var("ENTRY_CONCURRENCY", val);
+      } else {
+        std::env::remove_var("ENTRY_CONCURRENCY");
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn test_preload_entry_empty() {
+    // 测试空文件
+    let content = vec![];
+    let mut reader = &content[..];
+    let res = preload_entry(&mut reader, 100).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => {
+        assert!(c.is_empty());
+      }
+      PreloadResult::Partial(_) => panic!("empty file should be complete"),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_preload_entry_exact_boundary() {
+    // 测试正好达到max_size边界的情况
+    // 注意：函数以64KB块读取，所以测试需要小心
+
+    // 创建正好64KB的内容（块的边界）
+    let content = vec![0u8; 64 * 1024]; // 64KB
+    let mut reader = &content[..];
+
+    // max_size设为64KB，应该返回Complete（因为buffer.len() == max_size，不是>）
+    let res = preload_entry(&mut reader, 64 * 1024).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => {
+        assert_eq!(c.len(), 64 * 1024);
+      }
+      PreloadResult::Partial(_) => panic!("exact size should be complete"),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_preload_entry_single_byte() {
+    // 测试单字节文件
+    let content = vec![42u8];
+    let mut reader = &content[..];
+    let res = preload_entry(&mut reader, 100).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => {
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0], 42);
+      }
+      PreloadResult::Partial(_) => panic!("single byte should be complete"),
+    }
+  }
 }

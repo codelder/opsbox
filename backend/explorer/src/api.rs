@@ -42,8 +42,7 @@ async fn list_resources(
   Json(payload): Json<ListRequest>,
 ) -> opsbox_core::Result<impl IntoResponse> {
   // Parse ORL
-  let orl = ORL::parse(payload.orl)
-    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
+  let orl = ORL::parse(payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   let items = state
     .service
@@ -62,8 +61,7 @@ async fn download_resource(
   State(state): State<Arc<AppState>>,
   Query(payload): Query<ListRequest>,
 ) -> Result<impl IntoResponse, opsbox_core::AppError> {
-  let orl = ORL::parse(payload.orl)
-    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
+  let orl = ORL::parse(payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   let (filename, size, reader) = state
     .service

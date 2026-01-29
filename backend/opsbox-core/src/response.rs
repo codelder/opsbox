@@ -1,5 +1,5 @@
 use axum::{Json, http::StatusCode, response::IntoResponse};
-use serde::{Serialize, Deserialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 fn default_success() -> bool {
   true
@@ -79,41 +79,41 @@ pub fn no_content() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+  use super::*;
 
-    #[test]
-    fn test_success_response_structure() {
-        let resp = SuccessResponse::<String>::with_data("hello".to_string());
-        assert!(resp.success);
-        assert_eq!(resp.data, Some("hello".to_string()));
-        assert_eq!(resp.message, None);
+  #[test]
+  fn test_success_response_structure() {
+    let resp = SuccessResponse::<String>::with_data("hello".to_string());
+    assert!(resp.success);
+    assert_eq!(resp.data, Some("hello".to_string()));
+    assert_eq!(resp.message, None);
 
-        let resp = SuccessResponse::<()>::with_message("msg");
-        assert!(resp.success);
-        assert!(resp.data.is_none());
-        assert_eq!(resp.message, Some("msg".to_string()));
+    let resp = SuccessResponse::<()>::with_message("msg");
+    assert!(resp.success);
+    assert!(resp.data.is_none());
+    assert_eq!(resp.message, Some("msg".to_string()));
 
-        let resp = SuccessResponse::<i32>::with_data_and_message(123, "ok");
-        assert!(resp.success);
-        assert_eq!(resp.data, Some(123));
-        assert_eq!(resp.message, Some("ok".to_string()));
-    }
+    let resp = SuccessResponse::<i32>::with_data_and_message(123, "ok");
+    assert!(resp.success);
+    assert_eq!(resp.data, Some(123));
+    assert_eq!(resp.message, Some("ok".to_string()));
+  }
 
-    #[test]
-    fn test_serialization() {
-        let resp = SuccessResponse::with_data(1);
-        let val = serde_json::to_value(&resp).unwrap();
-        assert_eq!(val["success"], true);
-        assert_eq!(val["data"], 1);
-        assert!(val.get("message").is_none());
-    }
+  #[test]
+  fn test_serialization() {
+    let resp = SuccessResponse::with_data(1);
+    let val = serde_json::to_value(&resp).unwrap();
+    assert_eq!(val["success"], true);
+    assert_eq!(val["data"], 1);
+    assert!(val.get("message").is_none());
+  }
 
-    #[tokio::test]
-    async fn test_helpers() {
-        // Test helper functions just strictly by return types or simple check
-        let _ = ok(1);
-        let _ = ok_message("foo");
-        let _ = created(1);
-        let _ = no_content();
-    }
+  #[tokio::test]
+  async fn test_helpers() {
+    // Test helper functions just strictly by return types or simple check
+    let _ = ok(1);
+    let _ = ok_message("foo");
+    let _ = created(1);
+    let _ = no_content();
+  }
 }
