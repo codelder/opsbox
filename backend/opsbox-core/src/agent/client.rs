@@ -212,3 +212,84 @@ impl AgentClient {
     Ok(response)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_agent_client_new_with_http() {
+    let client = AgentClient::new(
+      "test-agent".to_string(),
+      "http://localhost:8080".to_string(),
+      None,
+    );
+    assert_eq!(client.agent_id, "test-agent");
+    assert_eq!(client.endpoint, "http://localhost:8080");
+    assert_eq!(client.timeout, Duration::from_secs(60));
+  }
+
+  #[test]
+  fn test_agent_client_new_without_protocol() {
+    let client = AgentClient::new(
+      "test-agent".to_string(),
+      "localhost:8080".to_string(),
+      None,
+    );
+    assert_eq!(client.endpoint, "http://localhost:8080");
+  }
+
+  #[test]
+  fn test_agent_client_new_with_https() {
+    let client = AgentClient::new(
+      "test-agent".to_string(),
+      "https://localhost:8080".to_string(),
+      None,
+    );
+    assert_eq!(client.endpoint, "https://localhost:8080");
+  }
+
+  #[test]
+  fn test_agent_client_new_with_custom_timeout() {
+    let client = AgentClient::new(
+      "test-agent".to_string(),
+      "localhost:8080".to_string(),
+      Some(Duration::from_secs(30)),
+    );
+    assert_eq!(client.timeout, Duration::from_secs(30));
+  }
+
+  #[test]
+  fn test_agent_client_clone() {
+    let client = AgentClient::new(
+      "test-agent".to_string(),
+      "localhost:8080".to_string(),
+      None,
+    );
+    let cloned = client.clone();
+    assert_eq!(client.agent_id, cloned.agent_id);
+    assert_eq!(client.endpoint, cloned.endpoint);
+  }
+
+  #[test]
+  fn test_agent_client_error_display() {
+    let err = AgentClientError::ConnectionError("test error".to_string());
+    assert!(err.to_string().contains("test error"));
+
+    let err = AgentClientError::AgentUnavailable("agent-01".to_string());
+    assert!(err.to_string().contains("agent-01"));
+
+    let err = AgentClientError::Timeout;
+    assert!(err.to_string().contains("超时"));
+
+    let err = AgentClientError::Other("other error".to_string());
+    assert!(err.to_string().contains("other error"));
+  }
+
+  #[test]
+  fn test_agent_client_error_from_io() {
+    let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+    let err: AgentClientError = io_err.into();
+    assert!(matches!(err, AgentClientError::Io(_)));
+  }
+}

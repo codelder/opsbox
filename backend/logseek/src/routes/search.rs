@@ -263,4 +263,61 @@ mod tests {
         assert!(json.contains("\"type\":\"complete\""));
         assert!(json.contains("\"source\":\"test\""));
     }
+
+    #[tokio::test]
+    async fn test_build_ndjson_response() {
+        use futures::stream;
+
+        let stream = stream::iter(vec![
+            Ok(Bytes::from(r#"{"type":"complete"}"#)),
+        ]);
+
+        let response = build_ndjson_response(stream, "test-sid".to_string()).unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(CONTENT_TYPE).unwrap(),
+            "application/x-ndjson; charset=utf-8"
+        );
+        assert_eq!(
+            response.headers().get("X-Logseek-SID").unwrap(),
+            "test-sid"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_convert_to_ndjson_stream_multiple_events() {
+        let (tx, rx) = mpsc::channel(10);
+        let highlights = vec![];
+
+        let mut stream = Box::pin(convert_to_ndjson_stream(rx, highlights));
+
+        // Send multiple events
+        tx.send(SearchEvent::Complete { source: "source1".into(), elapsed_ms: 100 }).await.unwrap();
+        tx.send(SearchEvent::Complete { source: "source2".into(), elapsed_ms: 200 }).await.unwrap();
+        tx.send(SearchEvent::Error { source: "err".into(), message: "test error".into(), recoverable: true }).await.unwrap();
+        drop(tx);
+
+        let mut count = 0;
+        while let Some(res) = stream.next().await {
+            let item = res.unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+            assert!(json.get("type").is_some());
+            count += 1;
+        }
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_search_response_error_serialization() {
+        let res = SearchResponse::Error {
+            source: "test-source".into(),
+            message: "test error message".into(),
+            recoverable: true,
+        };
+        let json = serde_json::to_string(&res).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("\"source\":\"test-source\""));
+        assert!(json.contains("\"message\":\"test error message\""));
+        assert!(json.contains("\"recoverable\":true"));
+    }
 }

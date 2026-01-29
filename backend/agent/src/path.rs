@@ -255,3 +255,75 @@ pub fn canonicalize_roots(roots: &[String]) -> Vec<PathBuf> {
 pub fn is_under_any_root(path: &StdPath, canon_roots: &[PathBuf]) -> bool {
   canon_roots.iter().any(|root| path.starts_with(root))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_is_under_any_root_basic() {
+        let roots = vec![PathBuf::from("/var/log"), PathBuf::from("/tmp")];
+        assert!(is_under_any_root(&PathBuf::from("/var/log/app"), &roots));
+        assert!(is_under_any_root(&PathBuf::from("/tmp/file"), &roots));
+        assert!(!is_under_any_root(&PathBuf::from("/etc/config"), &roots));
+    }
+
+    #[test]
+    fn test_is_under_any_root_empty_roots() {
+        let roots: Vec<PathBuf> = vec![];
+        assert!(!is_under_any_root(&PathBuf::from("/any/path"), &roots));
+    }
+
+    #[test]
+    fn test_canonicalize_roots_empty() {
+        let roots: Vec<String> = vec![];
+        let result = canonicalize_roots(&roots);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_canonicalize_roots_nonexistent() {
+        let roots = vec!["/nonexistent/path/12345".to_string()];
+        let result = canonicalize_roots(&roots);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_apply_path_filter_with_real_file() {
+        // Create temporary files
+        let temp_dir = tempfile::tempdir().unwrap();
+        let log_file = temp_dir.path().join("app.log");
+        let txt_file = temp_dir.path().join("app.txt");
+        std::fs::write(&log_file, "log content").unwrap();
+        std::fs::write(&txt_file, "text content").unwrap();
+
+        let paths = vec![log_file.clone(), txt_file.clone()];
+        let result = apply_path_filter(&paths, "*.log").unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].ends_with("app.log"));
+    }
+
+    #[test]
+    fn test_apply_path_filter_no_match() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let log_file = temp_dir.path().join("app.log");
+        std::fs::write(&log_file, "log content").unwrap();
+
+        let paths = vec![log_file];
+        let result = apply_path_filter(&paths, "*.txt").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_apply_path_filter_invalid_pattern() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let log_file = temp_dir.path().join("app.log");
+        std::fs::write(&log_file, "log content").unwrap();
+
+        let paths = vec![log_file];
+        // Invalid glob pattern
+        let result = apply_path_filter(&paths, "[invalid");
+        assert!(result.is_err());
+    }
+}

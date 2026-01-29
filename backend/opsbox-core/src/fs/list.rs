@@ -185,4 +185,113 @@ mod tests {
         let result = list_directory("/nonexistent/path/12345").await;
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_list_directory_empty() {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().unwrap();
+        let result = list_directory(temp_dir.path()).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_files() {
+        use tempfile::TempDir;
+        use tokio::fs;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // 创建测试文件
+        fs::write(dir_path.join("file1.txt"), "content1").await.unwrap();
+        fs::write(dir_path.join("file2.log"), "content2").await.unwrap();
+        fs::create_dir(dir_path.join("subdir")).await.unwrap();
+
+        let result = list_directory(dir_path).await;
+        assert!(result.is_ok());
+
+        let items = result.unwrap();
+        assert_eq!(items.len(), 3);
+
+        // 验证目录排在前面
+        assert!(items[0].is_dir);
+        assert_eq!(items[0].name, "subdir");
+        assert_eq!(items[0].child_count, Some(0));
+
+        // 验证文件
+        let file_names: Vec<String> = items.iter().skip(1).map(|i| i.name.clone()).collect();
+        assert!(file_names.contains(&"file1.txt".to_string()));
+        assert!(file_names.contains(&"file2.log".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_hidden_files() {
+        use tempfile::TempDir;
+        use tokio::fs;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // 创建隐藏文件和普通文件
+        fs::write(dir_path.join(".hidden"), "hidden").await.unwrap();
+        fs::write(dir_path.join("visible"), "visible").await.unwrap();
+        fs::create_dir(dir_path.join(".hidden_dir")).await.unwrap();
+
+        let result = list_directory(dir_path).await;
+        assert!(result.is_ok());
+
+        let items = result.unwrap();
+
+        // 找到隐藏目录
+        let hidden_dir = items.iter().find(|i| i.name == ".hidden_dir");
+        assert!(hidden_dir.is_some());
+        assert_eq!(hidden_dir.unwrap().hidden_child_count, Some(0));
+
+        // 找到隐藏文件
+        let hidden_file = items.iter().find(|i| i.name == ".hidden");
+        assert!(hidden_file.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_mime_type() {
+        use tempfile::TempDir;
+        use tokio::fs;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // 创建PNG文件（有明确的magic bytes）
+        let png_header: &[u8] = &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        fs::write(dir_path.join("test.png"), png_header).await.unwrap();
+
+        let result = list_directory(dir_path).await;
+        assert!(result.is_ok());
+
+        let items = result.unwrap();
+        assert_eq!(items.len(), 1);
+        // MIME类型应该被检测（PNG文件有明确的magic bytes）
+        assert!(items[0].mime_type.is_some(), "MIME type should be detected for PNG file");
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_nested() {
+        use tempfile::TempDir;
+        use tokio::fs;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // 创建嵌套目录结构
+        fs::create_dir(dir_path.join("level1")).await.unwrap();
+        fs::write(dir_path.join("level1/file.txt"), "nested").await.unwrap();
+
+        let result = list_directory(dir_path).await;
+        assert!(result.is_ok());
+
+        let items = result.unwrap();
+        let level1 = items.iter().find(|i| i.name == "level1");
+        assert!(level1.is_some());
+        assert_eq!(level1.unwrap().child_count, Some(1));
+    }
 }

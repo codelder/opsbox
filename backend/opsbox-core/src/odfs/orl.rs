@@ -444,4 +444,141 @@ mod tests {
         let joined = path.join("/app.log");
         assert_eq!(joined.as_str(), "/var/log/app.log");
     }
+
+    #[test]
+    fn test_orl_parse_errors() {
+        // 无效格式
+        assert!(ORL::parse("not-a-valid-url").is_err());
+        // 不支持的 scheme
+        assert!(ORL::parse("http://local/path").is_err());
+        assert!(ORL::parse("https://local/path").is_err());
+        assert!(ORL::parse("ftp://local/path").is_err());
+    }
+
+    #[test]
+    fn test_orl_from_str() {
+        let orl: Result<ORL, _> = "orl://local/var/log".parse();
+        assert!(orl.is_ok());
+        assert_eq!(orl.unwrap().as_str(), "orl://local/var/log");
+    }
+
+    #[test]
+    fn test_orl_filter_glob() {
+        let orl = ORL::parse("orl://local/var/log?glob=*.log").unwrap();
+        assert_eq!(orl.filter_glob(), Some(Cow::Borrowed("*.log")));
+
+        let orl = ORL::parse("orl://local/var/log").unwrap();
+        assert_eq!(orl.filter_glob(), None);
+    }
+
+    #[test]
+    fn test_orl_target_type_variations() {
+        // 各种归档格式
+        let archive_extensions = vec![
+            "file.tar",
+            "file.tar.gz",
+            "file.tgz",
+            "file.zip",
+        ];
+        for ext in archive_extensions {
+            let orl = ORL::parse(&format!("orl://local/path/{}?entry=inner", ext)).unwrap();
+            assert_eq!(orl.target_type(), TargetType::Archive, "{} should be Archive", ext);
+        }
+    }
+
+    #[test]
+    fn test_orl_equality() {
+        let orl1 = ORL::parse("orl://local/path").unwrap();
+        let orl2 = ORL::parse("orl://local/path").unwrap();
+        let orl3 = ORL::parse("orl://local/other").unwrap();
+
+        assert_eq!(orl1, orl2);
+        assert_ne!(orl1, orl3);
+    }
+
+    #[test]
+    fn test_orl_hash() {
+        use std::collections::HashSet;
+        let orl1 = ORL::parse("orl://local/path").unwrap();
+        let orl2 = ORL::parse("orl://local/path").unwrap();
+        let orl3 = ORL::parse("orl://local/other").unwrap();
+
+        let mut set = HashSet::new();
+        set.insert(orl1);
+        set.insert(orl2);
+        set.insert(orl3);
+
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_orl_deserialize_error() {
+        let json = "\"invalid-url\"";
+        let result: Result<ORL, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_orl_join_with_query_fails() {
+        let orl = ORL::parse("orl://local/path?entry=inner").unwrap();
+        assert!(orl.join("subpath").is_err());
+    }
+
+    #[test]
+    fn test_ops_path_as_ref() {
+        let path = OpsPath::new("/var/log");
+        let s: &str = path.as_ref();
+        assert_eq!(s, "/var/log");
+    }
+
+    #[test]
+    fn test_orl_debug() {
+        let orl = ORL::parse("orl://local/path").unwrap();
+        let debug_str = format!("{:?}", orl);
+        assert!(debug_str.contains("ORL"));
+        assert!(debug_str.contains("orl://local/path"));
+    }
+
+    #[test]
+    fn test_endpoint_type_equality() {
+        assert_eq!(EndpointType::Local, EndpointType::Local);
+        assert_eq!(EndpointType::Agent, EndpointType::Agent);
+        assert_eq!(EndpointType::S3, EndpointType::S3);
+        assert_ne!(EndpointType::Local, EndpointType::Agent);
+    }
+
+    #[test]
+    fn test_orl_clone() {
+        let orl = ORL::parse("orl://local/path").unwrap();
+        let cloned = orl.clone();
+        assert_eq!(orl, cloned);
+    }
+
+    #[test]
+    fn test_orl_path_with_special_chars() {
+        let orl = ORL::parse("orl://local/path/with%20space").unwrap();
+        assert_eq!(orl.path(), "/path/with%20space");
+    }
+
+    #[test]
+    fn test_orl_with_s3_profile() {
+        let orl = ORL::parse("orl://profile@s3/bucket/path").unwrap();
+        assert_eq!(orl.endpoint_type().unwrap(), EndpointType::S3);
+        assert_eq!(orl.endpoint_id(), Some("profile"));
+    }
+
+    #[test]
+    fn test_orl_query_param_multiple() {
+        let orl = ORL::parse("orl://local/path?entry=inner&glob=*.log").unwrap();
+        assert_eq!(orl.entry_path(), Some(Cow::Borrowed("inner")));
+        assert_eq!(orl.filter_glob(), Some(Cow::Borrowed("*.log")));
+    }
+
+    #[test]
+    fn test_orl_empty_path() {
+        // orl://local without path has empty path, not "/"
+        let orl = ORL::parse("orl://local").unwrap();
+        // Empty path is valid
+        assert!(orl.path().is_empty() || orl.path() == "/");
+    }
 }

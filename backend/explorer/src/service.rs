@@ -331,3 +331,60 @@ mod tests {
           mime_type: entry.metadata.mime_type,
       }
   }
+
+#[cfg(test)]
+mod map_entry_tests {
+    use super::*;
+    use opsbox_core::odfs::types::{OpsEntry, OpsMetadata, OpsFileType};
+
+    #[test]
+    fn test_map_entry_file() {
+        let entry = OpsEntry {
+            name: "test.log".to_string(),
+            path: "/var/log/test.log".to_string(),
+            metadata: OpsMetadata {
+                name: "test.log".to_string(),
+                file_type: OpsFileType::File,
+                size: 1024,
+                modified: Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1234567890)),
+                mode: 0o644,
+                mime_type: Some("text/plain".to_string()),
+                compression: None,
+                is_archive: false,
+            },
+        };
+
+        let orl = ORL::parse("orl://local/var/log").unwrap();
+        let item = map_entry(entry, &orl);
+
+        assert_eq!(item.name, "test.log");
+        assert_eq!(item.r#type, ResourceType::File);
+        assert_eq!(item.size, Some(1024));
+        assert_eq!(item.mime_type, Some("text/plain".to_string()));
+    }
+
+    #[test]
+    fn test_map_entry_directory() {
+        let entry = OpsEntry {
+            name: "logs".to_string(),
+            path: "/var/logs".to_string(),
+            metadata: OpsMetadata {
+                name: "logs".to_string(),
+                file_type: OpsFileType::Directory,
+                size: 0,
+                modified: None,
+                mode: 0o755,
+                mime_type: None,
+                compression: None,
+                is_archive: false,
+            },
+        };
+
+        let orl = ORL::parse("orl://local/var").unwrap();
+        let item = map_entry(entry, &orl);
+
+        assert_eq!(item.name, "logs");
+        assert_eq!(item.r#type, ResourceType::Dir);
+        assert_eq!(item.has_children, Some(true));
+    }
+}
