@@ -262,3 +262,51 @@ fn combine_filters(
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_combine_filters_empty() {
+        let result = combine_filters(&[], &[]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_combine_filters_with_includes() {
+        let result = combine_filters(&["*.log".to_string()], &[]);
+        assert!(result.is_some());
+        let filter = result.unwrap();
+        assert!(filter.include.is_some());
+        assert!(filter.exclude.is_none());
+    }
+
+    #[test]
+    fn test_combine_filters_with_excludes() {
+        let result = combine_filters(&[], &["*.tmp".to_string()]);
+        assert!(result.is_some());
+        let filter = result.unwrap();
+        assert!(filter.include.is_none());
+        assert!(filter.exclude.is_some());
+    }
+
+    #[test]
+    fn test_combine_filters_with_both() {
+        let result = combine_filters(&["*.log".to_string()], &["*.tmp".to_string()]);
+        assert!(result.is_some());
+        let filter = result.unwrap();
+        assert!(filter.include.is_some());
+        assert!(filter.exclude.is_some());
+    }
+
+    #[test]
+    fn test_combine_filters_invalid_glob() {
+        // Invalid glob pattern should be handled gracefully
+        // When all includes are invalid, an empty filter is returned
+        let result = combine_filters(&["[invalid".to_string()], &[]);
+        // The function logs a warning for invalid globs but still returns a filter
+        // with empty include/exclude sets
+        assert!(result.is_some());
+    }
+}

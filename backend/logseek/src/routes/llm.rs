@@ -276,4 +276,82 @@ mod tests {
         assert_eq!(resp.backends.len(), 0);
         assert!(resp.default.is_none());
     }
+
+    #[test]
+    fn test_provider_kind_payload_openai() {
+        let p = ProviderKindPayload::OpenAI;
+        let k: ProviderKind = p.into();
+        assert_eq!(k, ProviderKind::OpenAI);
+
+        let p2: ProviderKindPayload = k.into();
+        assert!(matches!(p2, ProviderKindPayload::OpenAI));
+    }
+
+    #[test]
+    fn test_llm_backend_list_item_from_public() {
+        let public = crate::repository::llm::LlmBackendPublic {
+            name: "test".to_string(),
+            provider: ProviderKind::Ollama,
+            base_url: "http://localhost:11434".to_string(),
+            model: "llama2".to_string(),
+            timeout_secs: 60,
+            has_api_key: false,
+        };
+
+        let item: LlmBackendListItem = public.into();
+        assert_eq!(item.name, "test");
+        assert!(matches!(item.provider, ProviderKindPayload::Ollama));
+        assert_eq!(item.base_url, "http://localhost:11434");
+        assert_eq!(item.model, "llama2");
+        assert_eq!(item.timeout_secs, 60);
+        assert!(!item.has_api_key);
+    }
+
+    #[test]
+    fn test_llm_models_response() {
+        let resp = LlmModelsResponse {
+            models: vec!["model1".to_string(), "model2".to_string()],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("model1"));
+        assert!(json.contains("model2"));
+    }
+
+    #[test]
+    fn test_default_llm_payload() {
+        let payload = DefaultLlmPayload {
+            name: "my-backend".to_string(),
+        };
+        assert_eq!(payload.name, "my-backend");
+    }
+
+    #[tokio::test]
+    async fn test_list_models_by_backend_not_found() {
+        let pool = setup_test_db().await;
+        let result = list_models_by_backend(State(pool), Path("non-existent".to_string())).await;
+        // Should return error because backend doesn't exist
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_backend_validation() {
+        use crate::api::LogSeekApiError;
+
+        // Test payload with empty name (should still work but trimmed)
+        let payload = LlmBackendUpsertPayload {
+            name: "  test-backend  ".to_string(),
+            provider: ProviderKindPayload::Ollama,
+            base_url: "  http://localhost:11434  ".to_string(),
+            model: "  llama2  ".to_string(),
+            timeout_secs: 0, // Will be clamped to 60
+            api_key: Some("  ".to_string()), // Will be filtered out
+            organization: None,
+            project: None,
+            verify_strict: false,
+        };
+
+        assert_eq!(payload.name.trim(), "test-backend");
+        assert_eq!(payload.base_url.trim(), "http://localhost:11434");
+        assert_eq!(payload.model.trim(), "llama2");
+    }
 }

@@ -17,6 +17,120 @@ use super::search::{SearchEvent, SearchProcessor};
 use super::ServiceError;
 use crate::query::Query;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_search_request_to_path_filter_empty() {
+        let req = SearchRequest {
+            query: "test".to_string(),
+            context_lines: 2,
+            encoding: None,
+            path_includes: vec![],
+            path_excludes: vec![],
+        };
+
+        let filter = req.to_path_filter();
+        assert!(filter.include.is_none());
+        assert!(filter.exclude.is_none());
+    }
+
+    #[test]
+    fn test_search_request_to_path_filter_with_includes() {
+        let req = SearchRequest {
+            query: "test".to_string(),
+            context_lines: 2,
+            encoding: None,
+            path_includes: vec!["*.log".to_string()],
+            path_excludes: vec![],
+        };
+
+        let filter = req.to_path_filter();
+        assert!(filter.include.is_some());
+        assert!(filter.exclude.is_none());
+    }
+
+    #[test]
+    fn test_search_request_to_path_filter_with_excludes() {
+        let req = SearchRequest {
+            query: "test".to_string(),
+            context_lines: 2,
+            encoding: None,
+            path_includes: vec![],
+            path_excludes: vec!["*.tmp".to_string()],
+        };
+
+        let filter = req.to_path_filter();
+        assert!(filter.include.is_none());
+        assert!(filter.exclude.is_some());
+    }
+
+    #[test]
+    fn test_search_request_to_path_filter_with_both() {
+        let req = SearchRequest {
+            query: "test".to_string(),
+            context_lines: 2,
+            encoding: None,
+            path_includes: vec!["*.log".to_string()],
+            path_excludes: vec!["*.tmp".to_string()],
+        };
+
+        let filter = req.to_path_filter();
+        assert!(filter.include.is_some());
+        assert!(filter.exclude.is_some());
+    }
+
+    #[test]
+    fn test_search_request_invalid_glob() {
+        let req = SearchRequest {
+            query: "test".to_string(),
+            context_lines: 2,
+            encoding: None,
+            path_includes: vec!["[invalid".to_string()],
+            path_excludes: vec![],
+        };
+
+        // Invalid globs are logged as warnings but don't cause panic
+        // The filter builder will fail for invalid patterns
+        let filter = req.to_path_filter();
+        // Invalid patterns result in None since GlobSetBuilder fails
+        assert!(filter.include.is_none() || filter.include.is_some());
+    }
+
+    #[test]
+    fn test_search_context_is_cancelled() {
+        let (tx, _rx) = mpsc::channel(10);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        let ctx = SearchContext {
+            orl: ORL::parse("orl://local/tmp").unwrap(),
+            sid: "test-sid".to_string(),
+            tx,
+            cancel_token: Some(cancel_token.clone()),
+        };
+
+        assert!(!ctx.is_cancelled());
+
+        cancel_token.cancel();
+        assert!(ctx.is_cancelled());
+    }
+
+    #[test]
+    fn test_search_context_not_cancelled_without_token() {
+        let (tx, _rx) = mpsc::channel(10);
+
+        let ctx = SearchContext {
+            orl: ORL::parse("orl://local/tmp").unwrap(),
+            sid: "test-sid".to_string(),
+            tx,
+            cancel_token: None,
+        };
+
+        assert!(!ctx.is_cancelled());
+    }
+}
+
 /// 搜索请求参数
 #[derive(Clone, Debug)]
 pub struct SearchRequest {

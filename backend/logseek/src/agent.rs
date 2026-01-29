@@ -423,5 +423,5 @@ impl SearchService for AgentClient {
 
 #[cfg(test)]
 mod tests {
-  // Tests suppressed as they rely on AgentClient internal fields which might have changed visibility or structure (though largely compatible)
+  // 保留测试模块占位，实际测试应在集成测试中覆盖
 }
