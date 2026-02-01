@@ -1,5 +1,6 @@
 use std::{io, path::PathBuf, sync::Arc, time::Duration};
 
+use async_trait::async_trait;
 use futures::{StreamExt, stream::FuturesUnordered};
 use num_cpus;
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -8,10 +9,51 @@ use tracing::{trace, warn};
 use opsbox_core::SqlitePool;
 use opsbox_core::fs::{EntrySource, EntryStream, PrefixedReader};
 use opsbox_core::odfs::OrlManager;
-use opsbox_core::odfs::orl::EndpointType;
+use opsbox_core::odfs::orl::EndpointType as OrlEndpointType;
 use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
 
 use crate::utils::storage;
+
+// 新增：导入 EndpointConnector 相关类型
+use opsbox_domain::resource::{ResourcePath};
+use opsbox_resource::{LocalEndpointConnector, S3EndpointConnector, EndpointConnectorExt};
+
+// EntryStream 适配器：将 opsbox-resource 的 EntryStream 转换为 opsbox-core 的 EntryStream
+pub struct EntryStreamAdapter {
+    inner: Box<dyn opsbox_resource::EntryStream>,
+}
+
+impl EntryStreamAdapter {
+    pub fn new(inner: Box<dyn opsbox_resource::EntryStream>) -> Self {
+        Self { inner }
+    }
+}
+
+#[async_trait::async_trait]
+impl opsbox_core::fs::EntryStream for EntryStreamAdapter {
+    async fn next_entry(&mut self) -> io::Result<Option<(opsbox_core::fs::EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
+        match self.inner.next_entry().await {
+            Ok(Some((meta, reader))) => {
+                // 转换 EntryMeta
+                let core_meta = opsbox_core::fs::EntryMeta {
+                    path: meta.path,
+                    container_path: meta.container_path,
+                    size: meta.size,
+                    is_compressed: meta.is_compressed,
+                    source: match meta.source {
+                        opsbox_resource::EntrySource::File => opsbox_core::fs::EntrySource::File,
+                        opsbox_resource::EntrySource::Tar => opsbox_core::fs::EntrySource::Tar,
+                        opsbox_resource::EntrySource::TarGz => opsbox_core::fs::EntrySource::TarGz,
+                        opsbox_resource::EntrySource::Gz => opsbox_core::fs::EntrySource::Gz,
+                    },
+                };
+                Ok(Some((core_meta, reader)))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+}
 
 use super::search::{SearchEvent, SearchProcessor};
 
@@ -380,12 +422,12 @@ pub async fn get_entry_stream_from_fs(
 ) -> Result<Box<dyn EntryStream>, String> {
   // 根据 OrlManager 的内部约定生成注册 Key，以匹配其查找逻辑
   let id = match orl.endpoint_type() {
-    Ok(EndpointType::Local) => "local".to_string(),
-    Ok(EndpointType::S3) => match orl.endpoint_id() {
+    Ok(OrlEndpointType::Local) => "local".to_string(),
+    Ok(OrlEndpointType::S3) => match orl.endpoint_id() {
       Some(id) if !id.is_empty() => format!("s3.{}", id),
       _ => "s3.root".to_string(),
     },
-    Ok(EndpointType::Agent) => match orl.endpoint_id() {
+    Ok(OrlEndpointType::Agent) => match orl.endpoint_id() {
       Some(id) if !id.is_empty() => format!("agent.{}", id),
       _ => "agent.root".to_string(),
     },
@@ -403,19 +445,19 @@ pub async fn get_entry_stream_from_fs(
 
 /// 创建条目流（不含 Agent）
 ///
-/// 根据 ORL 配置创建对应的条目流：
+/// 根据 ORL 配置创建对应的条目流（V1 - 旧实现）：
 /// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
 /// - S3: Archive（自动探测；zip 暂不支持）
-pub async fn create_entry_stream(
+pub async fn create_entry_stream_v1(
   db_pool: &SqlitePool,
   orl: &opsbox_core::odfs::orl::ORL,
 ) -> Result<Box<dyn EntryStream>, String> {
   let fs: Arc<dyn OpsFileSystem + Send + Sync> = match orl.endpoint_type() {
-    Ok(EndpointType::Local) => {
+    Ok(OrlEndpointType::Local) => {
       // 注册 Local Provider
       Arc::new(LocalOpsFS::new(None))
     }
-    Ok(EndpointType::S3) => {
+    Ok(OrlEndpointType::S3) => {
       let profile = orl.effective_id();
       // 加载 Profile
       let profile_row = crate::repository::s3::load_s3_profile(db_pool, &profile)
@@ -443,6 +485,87 @@ pub async fn create_entry_stream(
 
   get_entry_stream_from_fs(fs, orl, true).await
 }
+
+/// 创建条目流 V2（基于 EndpointConnector）
+///
+/// 使用 EndpointConnector 替代 OpsFileSystem 的新实现。
+/// 保留旧函数 create_entry_stream 作为 create_entry_stream_v1 以便兼容。
+///
+/// 根据 ORL 配置创建对应的条目流：
+/// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
+/// - S3: Archive（自动探测；zip 暂不支持）
+pub async fn create_entry_stream_v2(
+  db_pool: &SqlitePool,
+  orl: &opsbox_core::odfs::orl::ORL,
+) -> Result<Box<dyn EntryStream>, String> {
+  use opsbox_core::storage;
+
+  // 将 ORL 端点类型转换为 Domain EndpointType
+  let endpoint_type = orl.endpoint_type()
+    .map_err(|e| format!("无效的端点类型: {:?}", e))?;
+
+  match endpoint_type {
+    OrlEndpointType::Local => {
+      // 创建 LocalEndpointConnector
+      let connector = LocalEndpointConnector::new("/".to_string());
+      let path = ResourcePath::new(orl.path());
+
+      // 使用 EndpointConnectorExt 获取 EntryStream
+      let stream = connector.as_entry_stream(&path, true).await
+        .map_err(|e| format!("创建流失败: {}", e))?;
+
+      // 使用适配器包装
+      Ok(Box::new(EntryStreamAdapter::new(stream)))
+    }
+    OrlEndpointType::S3 => {
+      let profile = orl.effective_id();
+      // 加载 S3 Profile
+      let profile_row = crate::repository::s3::load_s3_profile(db_pool, &profile)
+        .await
+        .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+        .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
+
+      // 构造 S3 客户端
+      let client = storage::get_or_create_s3_client(
+        &profile_row.endpoint,
+        &profile_row.access_key,
+        &profile_row.secret_key
+      ).map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
+
+      let (bucket_name, _) = orl
+        .path()
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or((orl.path().trim_start_matches('/'), ""));
+
+      // 创建 S3EndpointConnector
+      let connector = S3EndpointConnector::new(client.as_ref().clone(), bucket_name.to_string());
+      let path = ResourcePath::new(orl.path());
+
+      // 使用 EndpointConnectorExt 获取 EntryStream
+      let stream = connector.as_entry_stream(&path, true).await
+        .map_err(|e| format!("创建流失败: {}", e))?;
+
+      // 使用适配器包装
+      Ok(Box::new(EntryStreamAdapter::new(stream)))
+    }
+    // Agent 类型由 search_agent_source 处理，不应到达这里
+    OrlEndpointType::Agent => {
+      Err("create_entry_stream_v2 仅处理 Local/S3 类型，Agent 应由 search_agent_source 处理".to_string())
+    }
+  }
+}
+
+// ============================================================================
+// 条件编译：根据特性标志选择使用新实现还是旧实现
+// ============================================================================
+
+// 默认使用新实现（EndpointConnector），如果禁用了 use-endpoint-connector 特性则使用旧实现
+#[cfg(feature = "use-endpoint-connector")]
+pub use create_entry_stream_v2 as create_entry_stream;
+
+#[cfg(not(feature = "use-endpoint-connector"))]
+pub use create_entry_stream_v1 as create_entry_stream;
 
 /// 通用条目流处理函数（支持基于回调的结果处理）
 ///

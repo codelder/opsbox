@@ -85,6 +85,11 @@ libmimalloc-sys = { version = "0.1.44", features = ["extended"], optional = true
 mimalloc-collect = ["libmimalloc-sys"]
 # 用于测试需要网络访问的集成测试
 network-tests = []
+# 使用 EndpointConnector 替代 OpsFileSystem（新实现）
+# 默认启用，如果需要回滚到旧实现，可以使用 --no-default-features 或显式禁用
+use-endpoint-connector = []
+# 默认特性
+default = ["use-endpoint-connector"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -8,6 +8,8 @@ edition.workspace = true
 opsbox-domain = { path = "../opsbox-domain" }
 # 核心库（复用现有的 OpsFileSystem）
 opsbox-core = { path = "../opsbox-core" }
+# Agent Manager（用于发现连接器）
+agent-manager = { path = "../agent-manager" }
 # 异步支持
 async-trait = "0.1"
 tokio = { version = "1", features = ["io-util", "fs"] }
@@ -16,10 +18,21 @@ async-compression = { version = "0.4", features = ["tokio", "gzip", "zlib"] }
 async-tar = "0.5"
 async_zip = { version = "0.0.18", features = ["tokio"] }
 futures = "0.3"
+futures-io = "0.3"
 tokio-util = { version = "0.7", features = ["compat", "io"] }
+# 文件类型检测和目录遍历
+infer = "0.16"
+jwalk = "0.8"
 # S3 支持
 aws-sdk-s3 = "1.15"
+# URL编码
+percent-encoding = "2.1"
 # 错误处理
 thiserror = "2.0"
 # 日志
 tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+flate2 = "1"
+tar = "0.4"

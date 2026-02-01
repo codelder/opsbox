@@ -3,6 +3,7 @@
 //! 将 EndpointConnector 适配到 LocalOpsFS。
 
 use std::pin::Pin;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -18,26 +19,37 @@ use opsbox_domain::resource::{
 /// 委托给 LocalOpsFS 实现。
 pub struct LocalEndpointConnector {
     inner: Arc<LocalOpsFS>,
+    root: PathBuf,
 }
 
 impl LocalEndpointConnector {
     /// 创建新的本地连接器
     pub fn new(root: String) -> Self {
+        let root_path = PathBuf::from(&root);
         Self {
-            inner: Arc::new(LocalOpsFS::new(Some(root.into()))),
+            inner: Arc::new(LocalOpsFS::new(Some(root_path.clone()))),
+            root: root_path,
         }
     }
 
     /// 从现有的 LocalOpsFS 创建
     pub fn from_opsfs(fs: Arc<LocalOpsFS>) -> Self {
+        // 注意：无法从 LocalOpsFS 获取 root，因为它是私有的
+        // 这个方法主要用于测试，使用默认 root
         Self {
             inner: fs,
+            root: PathBuf::from("/"),
         }
     }
 
     /// 获取内部文件系统引用
     pub fn inner(&self) -> &LocalOpsFS {
         &self.inner
+    }
+
+    /// 获取 root 路径
+    pub fn root(&self) -> &PathBuf {
+        &self.root
     }
 }
 
@@ -110,11 +122,119 @@ fn convert_metadata(ops_meta: opsbox_core::odfs::types::OpsMetadata) -> Resource
 mod tests {
     use super::*;
     use opsbox_core::odfs::OpsFileSystem;
+    use tokio::io::AsyncReadExt;
 
     #[test]
     fn test_local_connector_new() {
         let connector = LocalEndpointConnector::new("/tmp".to_string());
         // 验证创建成功
         assert_eq!(connector.inner().name(), "LocalOpsFS");
+    }
+
+    #[tokio::test]
+    async fn test_local_connector_metadata() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        // 创建测试文件和目录
+        let sub_dir = root.join("test_dir");
+        tokio::fs::create_dir(&sub_dir).await.unwrap();
+        tokio::fs::write(sub_dir.join("file.txt"), "hello world").await.unwrap();
+        tokio::fs::write(root.join("root.txt"), "root content").await.unwrap();
+
+        let connector = LocalEndpointConnector::new(root.to_str().unwrap().to_string());
+
+        // 测试目录元数据
+        let meta = connector.metadata(&ResourcePath::new("test_dir")).await.unwrap();
+        assert!(meta.is_dir);
+        assert_eq!(meta.name, "test_dir");
+
+        // 测试文件元数据
+        let meta = connector.metadata(&ResourcePath::new("root.txt")).await.unwrap();
+        assert!(!meta.is_dir);
+        assert_eq!(meta.name, "root.txt");
+        assert_eq!(meta.size, 12); // "root content" = 12 bytes
+    }
+
+    #[tokio::test]
+    async fn test_local_connector_list() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        // 创建测试结构
+        let sub_dir = root.join("dir1");
+        tokio::fs::create_dir(&sub_dir).await.unwrap();
+        tokio::fs::write(sub_dir.join("file1.txt"), "content1").await.unwrap();
+        tokio::fs::write(sub_dir.join("file2.txt"), "content2").await.unwrap();
+        tokio::fs::write(root.join("root_file.txt"), "root content").await.unwrap();
+
+        let connector = LocalEndpointConnector::new(root.to_str().unwrap().to_string());
+
+        // 列出根目录
+        let items = connector.list(&ResourcePath::new("/")).await.unwrap();
+        assert_eq!(items.len(), 2); // dir1 和 root_file.txt
+
+        // 列出子目录
+        let items = connector.list(&ResourcePath::new("dir1")).await.unwrap();
+        assert_eq!(items.len(), 2); // file1.txt 和 file2.txt
+
+        let names: Vec<&str> = items.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"file1.txt"));
+        assert!(names.contains(&"file2.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_local_connector_read() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        let test_content = "hello from local connector";
+        tokio::fs::write(root.join("test.txt"), test_content).await.unwrap();
+
+        let connector = LocalEndpointConnector::new(root.to_str().unwrap().to_string());
+
+        // 读取文件
+        let mut reader = connector.read(&ResourcePath::new("test.txt")).await.unwrap();
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+
+        assert_eq!(String::from_utf8(buffer).unwrap(), test_content);
+    }
+
+    #[tokio::test]
+    async fn test_local_connector_exists() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        tokio::fs::write(root.join("exists.txt"), "content").await.unwrap();
+
+        let connector = LocalEndpointConnector::new(root.to_str().unwrap().to_string());
+
+        // 测试存在的文件
+        assert!(connector.exists(&ResourcePath::new("exists.txt")).await.unwrap());
+
+        // 测试不存在的文件
+        assert!(!connector.exists(&ResourcePath::new("not_exists.txt")).await.unwrap());
+
+        // 测试存在的目录
+        assert!(connector.exists(&ResourcePath::new("/")).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_local_connector_not_found() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let connector = LocalEndpointConnector::new(temp_dir.path().to_str().unwrap().to_string());
+
+        // 测试不存在的文件
+        let result = connector.metadata(&ResourcePath::new("not_found.txt")).await;
+        assert!(result.is_err());
+
+        // 测试不存在的目录列表
+        let result = connector.list(&ResourcePath::new("not_found_dir")).await;
+        assert!(result.is_err());
+
+        // 测试读取不存在的文件
+        let result = connector.read(&ResourcePath::new("not_found.txt")).await;
+        assert!(result.is_err());
     }
 }

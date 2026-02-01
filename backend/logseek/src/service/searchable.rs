@@ -9,11 +9,15 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use opsbox_core::SqlitePool;
-use opsbox_core::odfs::orl::ORL;
+use opsbox_core::odfs::orl::{ORL, EndpointType as OrlEndpointType};
 use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
 
+// 新增：导入 EndpointConnector 相关类型
+use opsbox_domain::resource::ResourcePath;
+use opsbox_resource::{LocalEndpointConnector, S3EndpointConnector, EndpointConnectorExt};
+
 use super::ServiceError;
-use super::entry_stream::EntryStreamProcessor;
+use super::entry_stream::{EntryStreamProcessor, EntryStreamAdapter};
 use super::search::{SearchEvent, SearchProcessor};
 use crate::query::Query;
 
@@ -215,20 +219,65 @@ pub trait SearchableFileSystem: Send + Sync {
 // 工厂函数
 // ============================================================================
 
-/// 创建搜索提供者
-pub async fn create_search_provider(
+/// 创建搜索提供者 V2（基于 EndpointConnector）
+///
+/// 使用 EndpointConnector 替代 OpsFileSystem 的新实现。
+/// 保留旧函数 create_search_provider 作为 create_search_provider_v1 以便兼容。
+pub async fn create_search_provider_v2(
   pool: &SqlitePool,
   orl: &ORL,
 ) -> Result<Box<dyn SearchableFileSystem>, ServiceError> {
   use crate::utils::storage;
-  use opsbox_core::odfs::orl::EndpointType;
 
   match orl
     .endpoint_type()
     .map_err(|e| ServiceError::ProcessingError(e.to_string()))?
   {
-    EndpointType::Local => Ok(Box::new(LocalOpsFS::new(None)) as Box<dyn SearchableFileSystem>),
-    EndpointType::S3 => {
+    OrlEndpointType::Local => {
+      // 新实现：直接使用 EndpointConnector
+      Ok(Box::new(LocalEndpointConnector::new("/".to_string())) as Box<dyn SearchableFileSystem>)
+    }
+    OrlEndpointType::S3 => {
+      let profile = orl.effective_id();
+      // 加载 Profile
+      let profile_row = crate::repository::s3::load_s3_profile(pool, &profile)
+        .await
+        .map_err(|e| ServiceError::ProcessingError(format!("加载 S3 Profile 失败: {:?}", e)))?
+        .ok_or_else(|| ServiceError::ProcessingError(format!("S3 Profile 不存在: {}", profile)))?;
+
+      // 构造 S3 客户端
+      let client =
+        storage::get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
+          .map_err(|e| ServiceError::ProcessingError(format!("创建 S3 客户端失败: {:?}", e)))?;
+
+      let (bucket_name, _) = orl
+        .path()
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or((orl.path().trim_start_matches('/'), ""));
+
+      Ok(Box::new(S3EndpointConnector::new(client.as_ref().clone(), bucket_name.to_string())) as Box<dyn SearchableFileSystem>)
+    }
+    OrlEndpointType::Agent => {
+      // Agent 保持不变，使用 AgentSearchProvider
+      Ok(Box::new(AgentSearchProvider) as Box<dyn SearchableFileSystem>)
+    }
+  }
+}
+
+/// 创建搜索提供者 V1（旧版本，保留以便兼容）
+pub async fn create_search_provider_v1(
+  pool: &SqlitePool,
+  orl: &ORL,
+) -> Result<Box<dyn SearchableFileSystem>, ServiceError> {
+  use crate::utils::storage;
+
+  match orl
+    .endpoint_type()
+    .map_err(|e| ServiceError::ProcessingError(e.to_string()))?
+  {
+    OrlEndpointType::Local => Ok(Box::new(LocalOpsFS::new(None)) as Box<dyn SearchableFileSystem>),
+    OrlEndpointType::S3 => {
       let profile = orl.effective_id();
       // 加载 Profile
       let profile_row = crate::repository::s3::load_s3_profile(pool, &profile)
@@ -249,7 +298,7 @@ pub async fn create_search_provider(
 
       Ok(Box::new(S3OpsFS::new(client.as_ref().clone(), bucket_name)) as Box<dyn SearchableFileSystem>)
     }
-    EndpointType::Agent => {
+    OrlEndpointType::Agent => {
       // 使用内部定义的专用 search provider
       Ok(Box::new(AgentSearchProvider) as Box<dyn SearchableFileSystem>)
     }
@@ -278,6 +327,124 @@ impl SearchableFileSystem for S3OpsFS {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
     let fs: Arc<dyn opsbox_core::odfs::fs::OpsFileSystem + Send + Sync> = Arc::new(self.clone());
     search_with_entry_stream(fs, ctx, req, false).await
+  }
+}
+
+// ============================================================================
+// LocalEndpointConnector 实现（新实现，使用 EndpointConnector）
+// ============================================================================
+
+#[async_trait]
+impl SearchableFileSystem for LocalEndpointConnector {
+  async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
+    use opsbox_core::odfs::orl::{EndpointType as OrlEndpointType, TargetType};
+
+    // 1. 解析查询
+    let spec = Query::parse_github_like(&req.query)
+      .map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
+
+    // 2. 使用 EndpointConnectorExt 创建 entry stream
+    let path = ResourcePath::new(ctx.orl.path());
+    // 注意：始终使用递归搜索，路径过滤由 EntryStreamProcessor 处理
+    let resource_stream = self.as_entry_stream(&path, true).await
+      .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?;
+
+    // 3. 使用适配器包装
+    let mut estream = Box::new(EntryStreamAdapter::new(resource_stream));
+
+    // 4. 创建 EntryStreamProcessor
+    let search_proc = Arc::new(SearchProcessor::new_with_encoding(
+      Arc::new(spec),
+      req.context_lines,
+      req.encoding.clone(),
+    ));
+    let mut processor = EntryStreamProcessor::new(search_proc);
+
+    if let Some(token) = ctx.cancel_token.clone() {
+      processor = processor.with_cancel_token(token);
+    }
+
+    // 5. 路径过滤：base_path（仅 Local + Dir）
+    if ctx.orl.endpoint_type().unwrap_or(OrlEndpointType::Local) == OrlEndpointType::Local
+      && ctx.orl.target_type() == TargetType::Dir
+    {
+      processor = processor.with_base_path(ctx.orl.path());
+    }
+
+    // 6. 路径过滤：ORL 携带的内置过滤
+    if let Some(glob) = ctx.orl.filter_glob()
+      && let Ok(filter) = crate::query::path_glob_to_filter(&glob)
+    {
+      processor = processor.with_extra_path_filter(filter);
+    }
+
+    // 7. 路径过滤：用户输入的额外过滤
+    let extra_filter = req.to_path_filter();
+    if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
+      processor = processor.with_extra_path_filter(extra_filter);
+    }
+
+    // 8. 处理并发送结果
+    processor
+      .process_stream(&mut *estream, ctx.tx.clone())
+      .await
+      .map_err(ServiceError::ProcessingError)?;
+
+    Ok(())
+  }
+}
+
+// ============================================================================
+// S3EndpointConnector 实现（新实现，使用 EndpointConnector）
+// ============================================================================
+
+#[async_trait]
+impl SearchableFileSystem for S3EndpointConnector {
+  async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
+    // 1. 解析查询
+    let spec = Query::parse_github_like(&req.query)
+      .map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
+
+    // 2. 使用 EndpointConnectorExt 创建 entry stream
+    let path = ResourcePath::new(ctx.orl.path());
+    let resource_stream = self.as_entry_stream(&path, true).await
+      .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?;
+
+    // 3. 使用适配器包装
+    let mut estream = Box::new(EntryStreamAdapter::new(resource_stream));
+
+    // 4. 创建 EntryStreamProcessor
+    let search_proc = Arc::new(SearchProcessor::new_with_encoding(
+      Arc::new(spec),
+      req.context_lines,
+      req.encoding.clone(),
+    ));
+    let mut processor = EntryStreamProcessor::new(search_proc);
+
+    if let Some(token) = ctx.cancel_token.clone() {
+      processor = processor.with_cancel_token(token);
+    }
+
+    // 5. 路径过滤：ORL 携带的内置过滤
+    if let Some(glob) = ctx.orl.filter_glob()
+      && let Ok(filter) = crate::query::path_glob_to_filter(&glob)
+    {
+      processor = processor.with_extra_path_filter(filter);
+    }
+
+    // 6. 路径过滤：用户输入的额外过滤
+    let extra_filter = req.to_path_filter();
+    if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
+      processor = processor.with_extra_path_filter(extra_filter);
+    }
+
+    // 7. 处理并发送结果
+    processor
+      .process_stream(&mut *estream, ctx.tx.clone())
+      .await
+      .map_err(ServiceError::ProcessingError)?;
+
+    Ok(())
   }
 }
 
@@ -442,3 +609,14 @@ async fn search_with_entry_stream(
 
   Ok(())
 }
+
+// ============================================================================
+// 条件编译：根据特性标志选择使用新实现还是旧实现
+// ============================================================================
+
+// 默认使用新实现（EndpointConnector），如果禁用了 use-endpoint-connector 特性则使用旧实现
+#[cfg(feature = "use-endpoint-connector")]
+pub use create_search_provider_v2 as create_search_provider;
+
+#[cfg(not(feature = "use-endpoint-connector"))]
+pub use create_search_provider_v1 as create_search_provider;

@@ -114,5 +114,122 @@ mod tests {
         let connector = S3EndpointConnector::new(client, "test-bucket".to_string());
         // 验证创建成功
         assert_eq!(connector.inner().name(), "S3OpsFS");
+        assert_eq!(connector.inner().bucket(), "test-bucket");
+    }
+
+    #[test]
+    fn test_s3_connector_from_opsfs() {
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .build();
+        let client = Client::from_conf(config);
+        let opsfs = Arc::new(S3OpsFS::new(client, "my-bucket".to_string()));
+        let connector = S3EndpointConnector::from_opsfs(opsfs);
+        // 验证创建成功
+        assert_eq!(connector.inner().bucket(), "my-bucket");
+    }
+
+    #[tokio::test]
+    async fn test_s3_connector_metadata_not_found() {
+        // 注意：这个测试需要实际的 S3 连接才能完整测试
+        // 这里我们验证错误处理路径是否正确
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .build();
+        let client = Client::from_conf(config);
+        let connector = S3EndpointConnector::new(client, "test-bucket".to_string());
+
+        // 尝试获取不存在的文件元数据（会失败，因为没有真实连接）
+        let result = connector.metadata(&ResourcePath::new("not_found.txt")).await;
+        // 期望失败（因为 mock 客户端无法连接）
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_s3_connector_list_empty() {
+        // 验证空目录列表的错误处理
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .build();
+        let client = Client::from_conf(config);
+        let connector = S3EndpointConnector::new(client, "test-bucket".to_string());
+
+        // 尝试列出目录（会失败，因为没有真实连接）
+        let result = connector.list(&ResourcePath::new("/")).await;
+        // 期望失败（因为 mock 客户端无法连接）
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_convert_metadata_file() {
+        use opsbox_core::odfs::types::{OpsMetadata, OpsFileType};
+
+        // 测试文件元数据转换
+        let ops_meta = OpsMetadata {
+            name: "test.txt".to_string(),
+            file_type: OpsFileType::File,
+            size: 1024,
+            modified: Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1234567890)),
+            mode: 0o644,
+            mime_type: Some("text/plain".to_string()),
+            compression: None,
+            is_archive: false,
+        };
+
+        let resource_meta = convert_metadata(ops_meta);
+        assert_eq!(resource_meta.name, "test.txt");
+        assert!(!resource_meta.is_dir);
+        assert_eq!(resource_meta.size, 1024);
+        assert_eq!(resource_meta.modified, Some(1234567890));
+        assert_eq!(resource_meta.mime_type, Some("text/plain".to_string()));
+        assert!(!resource_meta.is_archive);
+    }
+
+    #[test]
+    fn test_convert_metadata_directory() {
+        use opsbox_core::odfs::types::{OpsMetadata, OpsFileType};
+
+        // 测试目录元数据转换
+        let ops_meta = OpsMetadata {
+            name: "mydir".to_string(),
+            file_type: OpsFileType::Directory,
+            size: 0,
+            modified: None,
+            mode: 0o755,
+            mime_type: None,
+            compression: None,
+            is_archive: false,
+        };
+
+        let resource_meta = convert_metadata(ops_meta);
+        assert_eq!(resource_meta.name, "mydir");
+        assert!(resource_meta.is_dir);
+        assert_eq!(resource_meta.size, 0);
+        assert_eq!(resource_meta.modified, None);
+        assert!(resource_meta.mime_type.is_none());
+    }
+
+    #[test]
+    fn test_convert_metadata_archive() {
+        use opsbox_core::odfs::types::{OpsMetadata, OpsFileType};
+
+        // 测试归档文件元数据转换
+        let ops_meta = OpsMetadata {
+            name: "data.tar.gz".to_string(),
+            file_type: OpsFileType::File,
+            size: 4096,
+            modified: None,
+            mode: 0o644,
+            mime_type: Some("application/x-tar".to_string()),
+            compression: Some("gzip".to_string()),
+            is_archive: true,
+        };
+
+        let resource_meta = convert_metadata(ops_meta);
+        assert_eq!(resource_meta.name, "data.tar.gz");
+        assert!(!resource_meta.is_dir);
+        assert_eq!(resource_meta.size, 4096);
+        assert!(resource_meta.is_archive);
+        assert_eq!(resource_meta.mime_type, Some("application/x-tar".to_string()));
     }
 }

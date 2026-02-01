@@ -22,6 +22,16 @@ impl S3OpsFS {
       bucket: bucket.into(),
     }
   }
+
+  /// 获取 S3 客户端引用
+  pub fn client(&self) -> &Client {
+    &self.client
+  }
+
+  /// 获取 bucket 名称
+  pub fn bucket(&self) -> &str {
+    &self.bucket
+  }
 }
 
 #[async_trait]

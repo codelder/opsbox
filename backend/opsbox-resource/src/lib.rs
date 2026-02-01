@@ -18,7 +18,17 @@ pub mod local;
 pub mod s3;
 pub mod agent;
 pub mod archive;
+pub mod stream;
+pub mod connector_ext;
+pub mod discovery;
 
 pub use local::LocalEndpointConnector;
 pub use s3::S3EndpointConnector;
 pub use agent::AgentEndpointConnector;
+
+pub use stream::{
+    EntryStream, EntryMeta, EntrySource,
+    FsEntryStream, S3EntryStream, TarGzEntryStream, ArchiveEntryStream,
+};
+
+pub use connector_ext::EndpointConnectorExt;
