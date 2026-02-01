@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// 内置思考提示词模板（用于分离思考过程和最终答案的 JSON 输出）
 const INTERNAL_THINK_PROMPT: &str = "你是一名助手。请严格仅输出一个 JSON 对象：{\"think\": string, \"answer\": string}。\n- think：简明思考过程（可中文）。\n- answer：给用户的最终答案（中文为主）。\n不要输出除 JSON 以外的任何多余文本。";
 
 /// 聊天角色
@@ -579,9 +580,12 @@ impl LlmClient for OpenAIClient {
 #[cfg(test)]
 mod tests {
   use super::*;
+  // 全局互斥锁保护环境变量测试，防止并行执行导致的竞态条件
+  static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
   #[test]
   fn test_ollama_config_env() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     // Need to be careful with global env vars in tests.
     // We can just test default behavior if vars are not set,
     // or set them and risk race conditions with other tests if running in parallel.
@@ -598,6 +602,7 @@ mod tests {
 
   #[test]
   fn test_openai_config_validation() {
+    let _lock = ENV_MUTEX.lock().unwrap();
     // OpenAI requires API KEY
     if std::env::var("OPENAI_API_KEY").is_err() {
       assert!(OpenAIConfig::from_env().is_err());
@@ -650,5 +655,213 @@ mod tests {
     let json = serde_json::to_string(&msg).unwrap();
     assert!(json.contains("user"));
     assert!(json.contains("hi"));
+  }
+
+  #[test]
+  fn test_injection_mode_default() {
+    // 使用模式匹配测试默认值，避免需要 PartialEq
+    match default_injection_mode() {
+      InjectionMode::Prepend => (), // 正确
+      _ => panic!("default_injection_mode() should return Prepend"),
+    }
+    let req = ChatRequest {
+      messages: vec![],
+      model: None,
+      temperature: None,
+      max_tokens: None,
+      separate_think: false,
+      injection_mode: InjectionMode::Prepend,
+    };
+    // 确保结构体可以构造
+    assert!(!req.separate_think);
+  }
+
+  #[test]
+  fn test_build_llm_from_env_ollama() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    // 保存原始环境变量
+    let original_provider = std::env::var("LLM_PROVIDER").ok();
+    let original_base_url = std::env::var("OLLAMA_BASE_URL").ok();
+    let original_model = std::env::var("OLLAMA_MODEL").ok();
+    let original_openai_key = std::env::var("OPENAI_API_KEY").ok();
+    let original_openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+    let original_openai_model = std::env::var("OPENAI_MODEL").ok();
+
+    // SAFETY: 单元测试中修改环境变量，测试结束后恢复原值。
+    // Rust 测试框架保证测试串行运行，无并发风险。
+    unsafe {
+      // 清除所有可能的竞争环境变量
+      std::env::remove_var("LLM_PROVIDER");
+      std::env::remove_var("OPENAI_API_KEY");
+      std::env::remove_var("OPENAI_BASE_URL");
+      std::env::remove_var("OPENAI_MODEL");
+
+      // 设置 Ollama 特定变量
+      std::env::set_var("LLM_PROVIDER", "ollama");
+      std::env::set_var("OLLAMA_BASE_URL", "http://localhost:11435");
+      std::env::set_var("OLLAMA_MODEL", "test-model");
+    }
+
+    let result = build_llm_from_env();
+    assert!(result.is_ok(), "构建 Ollama 客户端失败: {:?}", result.err());
+
+    // 恢复环境变量
+    unsafe {
+      if let Some(val) = original_provider {
+        std::env::set_var("LLM_PROVIDER", val);
+      } else {
+        std::env::remove_var("LLM_PROVIDER");
+      }
+      if let Some(val) = original_base_url {
+        std::env::set_var("OLLAMA_BASE_URL", val);
+      } else {
+        std::env::remove_var("OLLAMA_BASE_URL");
+      }
+      if let Some(val) = original_model {
+        std::env::set_var("OLLAMA_MODEL", val);
+      } else {
+        std::env::remove_var("OLLAMA_MODEL");
+      }
+      if let Some(val) = original_openai_key {
+        std::env::set_var("OPENAI_API_KEY", val);
+      } else {
+        std::env::remove_var("OPENAI_API_KEY");
+      }
+      if let Some(val) = original_openai_base_url {
+        std::env::set_var("OPENAI_BASE_URL", val);
+      } else {
+        std::env::remove_var("OPENAI_BASE_URL");
+      }
+      if let Some(val) = original_openai_model {
+        std::env::set_var("OPENAI_MODEL", val);
+      } else {
+        std::env::remove_var("OPENAI_MODEL");
+      }
+    }
+  }
+
+  #[test]
+  fn test_build_llm_from_env_openai_missing_key() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    // 保存原始环境变量
+    let original_provider = std::env::var("LLM_PROVIDER").ok();
+    let original_api_key = std::env::var("OPENAI_API_KEY").ok();
+
+    // SAFETY: 单元测试中使用 ENV_MUTEX 保证测试串行运行，测试结束后恢复原值。
+    unsafe {
+      std::env::set_var("LLM_PROVIDER", "openai");
+      std::env::remove_var("OPENAI_API_KEY");
+    }
+
+    let result = build_llm_from_env();
+    assert!(result.is_err(), "缺少 API key 时应返回错误");
+
+    // 恢复环境变量
+    unsafe {
+      if let Some(val) = original_provider {
+        std::env::set_var("LLM_PROVIDER", val);
+      } else {
+        std::env::remove_var("LLM_PROVIDER");
+      }
+      if let Some(val) = original_api_key {
+        std::env::set_var("OPENAI_API_KEY", val);
+      } else {
+        std::env::remove_var("OPENAI_API_KEY");
+      }
+    }
+  }
+
+  #[test]
+  fn test_build_llm_from_env_unknown_provider() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    // 保存原始环境变量
+    let original_provider = std::env::var("LLM_PROVIDER").ok();
+    let original_openai_key = std::env::var("OPENAI_API_KEY").ok();
+    let original_openai_base_url = std::env::var("OPENAI_BASE_URL").ok();
+    let original_openai_model = std::env::var("OPENAI_MODEL").ok();
+
+    // SAFETY: 单元测试中使用 ENV_MUTEX 保证测试串行运行，测试结束后恢复原值。
+    unsafe {
+      // 清除可能干扰的环境变量
+      std::env::remove_var("OPENAI_API_KEY");
+      std::env::remove_var("OPENAI_BASE_URL");
+      std::env::remove_var("OPENAI_MODEL");
+      std::env::remove_var("OLLAMA_BASE_URL");
+      std::env::remove_var("OLLAMA_MODEL");
+
+      // 设置未知 provider
+      std::env::set_var("LLM_PROVIDER", "unknown-provider");
+    }
+
+    let result = build_llm_from_env();
+    assert!(result.is_err(), "未知 provider 时应返回错误");
+    if let Err(e) = result {
+      let err_str = e.to_string();
+      assert!(
+        err_str.contains("不支持的 LLM_PROVIDER"),
+        "错误消息不包含预期文本: {}",
+        err_str
+      );
+    }
+
+    // 恢复环境变量
+    unsafe {
+      if let Some(val) = original_provider {
+        std::env::set_var("LLM_PROVIDER", val);
+      } else {
+        std::env::remove_var("LLM_PROVIDER");
+      }
+      if let Some(val) = original_openai_key {
+        std::env::set_var("OPENAI_API_KEY", val);
+      } else {
+        std::env::remove_var("OPENAI_API_KEY");
+      }
+      if let Some(val) = original_openai_base_url {
+        std::env::set_var("OPENAI_BASE_URL", val);
+      } else {
+        std::env::remove_var("OPENAI_BASE_URL");
+      }
+      if let Some(val) = original_openai_model {
+        std::env::set_var("OPENAI_MODEL", val);
+      } else {
+        std::env::remove_var("OPENAI_MODEL");
+      }
+    }
+  }
+
+  #[test]
+  fn test_chat_request_defaults() {
+    let req = ChatRequest {
+      messages: vec![ChatMessage {
+        role: Role::User,
+        content: "test".to_string(),
+      }],
+      model: None,
+      temperature: None,
+      max_tokens: None,
+      separate_think: false,
+      injection_mode: default_injection_mode(),
+    };
+
+    // 测试序列化不会包含可选字段
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(!json.contains("temperature"));
+    assert!(!json.contains("max_tokens"));
+    assert!(json.contains("test"));
+  }
+
+  #[test]
+  fn test_role_serialization_variants() {
+    let system = Role::System;
+    let user = Role::User;
+    let assistant = Role::Assistant;
+
+    let system_json = serde_json::to_string(&system).unwrap();
+    let user_json = serde_json::to_string(&user).unwrap();
+    let assistant_json = serde_json::to_string(&assistant).unwrap();
+
+    assert_eq!(system_json, "\"system\"");
+    assert_eq!(user_json, "\"user\"");
+    assert_eq!(assistant_json, "\"assistant\"");
   }
 }

@@ -105,7 +105,7 @@ impl PerformanceRunner {
   /// 测量多次迭代的平均时间
   pub fn measure_iterations<F>(&mut self, operation: impl Into<String>, iterations: usize, mut f: F)
   where
-    F: FnMut(usize) -> (),
+    F: FnMut(usize),
   {
     let operation_name = operation.into();
     let start = Instant::now();

@@ -46,17 +46,16 @@ enum PreloadResult {
   Partial(Vec<u8>),
 }
 
-/// 组合 Reader：先读取 prefix，然后读取 inner
-/// 用于处理预读时已读取的部分内容
-// 移除 ChainedReader，改用 opsbox_core::fs::PrefixedReader
+/// 预读缓冲区默认大小（64KB）
+const DEFAULT_PRELOAD_BUFFER_SIZE: usize = 64 * 1024;
 
 /// 预读文件条目到内存
 /// 返回：
 /// - Complete(content): 文件完全读取（小文件）
 /// - Partial(content): 文件太大，只读取了部分（reader 已被部分消费）
 async fn preload_entry(reader: &mut (dyn AsyncRead + Send + Unpin), max_size: usize) -> io::Result<PreloadResult> {
-  let mut buffer = Vec::with_capacity(64 * 1024); // 64KB 初始容量
-  let mut temp = vec![0u8; 64 * 1024];
+  let mut buffer = Vec::with_capacity(DEFAULT_PRELOAD_BUFFER_SIZE);
+  let mut temp = vec![0u8; DEFAULT_PRELOAD_BUFFER_SIZE];
 
   loop {
     let n = reader.read(&mut temp).await?;
@@ -79,7 +78,7 @@ pub struct EntryStreamProcessor {
   content_timeout: Duration,
   // 额外路径过滤器列表，所有过滤器必须同时满足（AND 逻辑）
   extra_path_filters: Vec<crate::query::PathFilter>,
-  cancel_token: Option<tokio_util::sync::CancellationToken>,
+  cancel_token: Option<std::sync::Arc<tokio_util::sync::CancellationToken>>,
   // 基础路径（可选）：如果设置，过滤时将先去除该前缀（用于支持相对路径 glob）
   base_path: Option<PathBuf>,
 }
@@ -96,7 +95,7 @@ impl EntryStreamProcessor {
   }
 
   /// 设置取消令牌
-  pub fn with_cancel_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+  pub fn with_cancel_token(mut self, token: std::sync::Arc<tokio_util::sync::CancellationToken>) -> Self {
     self.cancel_token = Some(token);
     self
   }
@@ -222,7 +221,7 @@ impl EntryStreamProcessor {
       if meta.is_compressed || meta.source == EntrySource::Tar || meta.source == EntrySource::TarGz {
         // tar.gz 等共享底层读取器的来源：必须保证串行读取，但可以预读小文件到内存后并发处理
         // 优化：对于文件（< 120MB），预读到内存后允许并发处理，充分利用多核 CPU
-        const MAX_PRELOAD_SIZE: usize = 120 * 1024 * 1024; // 120MB
+        const MAX_PRELOAD_SIZE: usize = 120 * 1024 * 1024;
 
         // 尝试预读文件到内存
         match preload_entry(&mut reader, MAX_PRELOAD_SIZE).await {
@@ -453,7 +452,7 @@ pub async fn process_entry_stream_with_callback<F>(
   stream: Box<dyn EntryStream>,
   processor: Arc<crate::service::search::SearchProcessor>,
   extra_path_filter: Option<crate::query::PathFilter>,
-  cancel_token: Option<tokio_util::sync::CancellationToken>,
+  cancel_token: Option<std::sync::Arc<tokio_util::sync::CancellationToken>>,
   mut result_callback: F,
 ) -> Result<(usize, usize), String>
 where
@@ -539,7 +538,7 @@ mod tests {
   #[test]
   fn test_entry_concurrency_env_var_valid() {
     // 测试环境变量解析 - 有效值
-    // 使用unsafe块修改环境变量，测试后恢复
+    // SAFETY: 单元测试中修改环境变量，测试后恢复。测试框架保证串行运行。
     unsafe {
       let original = std::env::var("ENTRY_CONCURRENCY").ok();
 
@@ -569,6 +568,7 @@ mod tests {
   #[test]
   fn test_entry_concurrency_env_var_invalid() {
     // 测试无效环境变量值应使用默认值
+    // SAFETY: 单元测试中修改环境变量，测试后恢复。测试框架保证串行运行。
     unsafe {
       let original = std::env::var("ENTRY_CONCURRENCY").ok();
 

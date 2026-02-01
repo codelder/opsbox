@@ -27,18 +27,18 @@ impl Default for SearchExecutorConfig {
 /// 搜索结果处理器：负责缓存结果、统计耗时并转发到下游通道
 struct SearchResultHandler {
   orl: ORL,
-  sid: String,
+  sid: Arc<String>,
   tx: mpsc::Sender<SearchEvent>,
-  cancel_token: Option<tokio_util::sync::CancellationToken>,
+  cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
   start_time: std::time::Instant,
 }
 
 impl SearchResultHandler {
   fn new(
     orl: ORL,
-    sid: String,
+    sid: Arc<String>,
     tx: mpsc::Sender<SearchEvent>,
-    cancel_token: Option<tokio_util::sync::CancellationToken>,
+    cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
   ) -> Self {
     Self {
       orl,
@@ -243,14 +243,22 @@ impl SearchExecutor {
 
     let (tx, rx) = mpsc::channel(self.config.stream_channel_capacity);
 
+    // 优化：将 sid 转换为 Arc 以减少循环内的克隆开销
+    let sid = Arc::new(sid);
+    // 同样优化 request 和 token
+    let request = Arc::new(request);
+    let token = cancel_token.map(Arc::new);
+
     for source in sources {
       let io_sem = self.io_semaphore.clone();
       let orl = source;
-      let sid = sid.clone();
       let tx = tx.clone(); // 下游通道
-      let token = cancel_token.clone();
-      let request = request.clone();
       let pool = self.pool.clone();
+
+      // 克隆 Arc 类型，每个任务使用独立的引用（成本低）
+      let sid = Arc::clone(&sid);
+      let request = Arc::clone(&request);
+      let token = token.clone();
 
       tokio::spawn(async move {
         let _permit = match io_sem.acquire_owned().await {
@@ -261,18 +269,23 @@ impl SearchExecutor {
         // 1. 创建中间通道 (Provider -> Internal -> Handler -> Downstream)
         let (tx_internal, rx_internal) = mpsc::channel(32);
 
-        // 2. 启动结果处理任务
-        let handler = SearchResultHandler::new(orl.clone(), sid.clone(), tx.clone(), token.clone());
+        // 2. 启动结果处理任务 (使用 Arc 克隆，成本低)
+        let handler = SearchResultHandler::new(
+          orl.clone(),
+          Arc::clone(&sid),
+          tx.clone(),
+          token.as_ref().map(Arc::clone),
+        );
         let handler_task = tokio::spawn(async move {
           handler.handle_stream(rx_internal).await;
         });
 
-        // 3. 构造 Provider 下下文
+        // 3. 构造 Provider 上下文 (使用 Arc 克隆，成本低)
         let ctx = SearchContext {
-          orl: orl.clone(),
-          sid: sid.clone(),
-          tx: tx_internal.clone(),
-          cancel_token: token.clone(),
+          orl: orl.clone(), // ORL doesn't impl Copy, so we need to clone
+          sid: Arc::clone(&sid),
+          tx: tx_internal.clone(), // 克隆以保留使用权
+          cancel_token: token.as_ref().map(Arc::clone),
         };
 
         // 4. 获取 Provider 并执行

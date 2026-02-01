@@ -160,7 +160,7 @@ async fn test_process_stream_cancellation() {
   let query = create_simple_query("error");
   let processor = Arc::new(SearchProcessor::new(query, 0));
 
-  let mut stream_processor = EntryStreamProcessor::new(processor).with_cancel_token(token_clone);
+  let mut stream_processor = EntryStreamProcessor::new(processor).with_cancel_token(Arc::new(token_clone));
 
   // 3. 运行
   let (tx, mut rx) = tokio::sync::mpsc::channel(10);
@@ -179,7 +179,10 @@ async fn test_process_stream_cancellation() {
     }
   }
 
-  handle.await.unwrap().unwrap();
+  handle
+    .await
+    .expect("Failed to join stream processing task")
+    .expect("Stream processing should succeed");
 
   assert!(count < 100, "Should have stopped early");
   assert!(count >= 5, "Should have processed at least 5");

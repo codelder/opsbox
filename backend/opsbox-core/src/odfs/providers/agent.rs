@@ -64,7 +64,7 @@ impl OpsFileSystem for AgentOpsFS {
         file_type: OpsFileType::Directory,
         size: 0,
         modified: None,
-        mode: 0755,
+        mode: 0o755,
         mime_type: None,
         compression: None,
         is_archive: false,

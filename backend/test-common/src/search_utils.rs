@@ -223,6 +223,12 @@ pub struct MockSearchEventGenerator {
   events: Vec<logseek::service::search::SearchEvent>,
 }
 
+impl Default for MockSearchEventGenerator {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 impl MockSearchEventGenerator {
   /// 创建新的模拟生成器
   pub fn new() -> Self {

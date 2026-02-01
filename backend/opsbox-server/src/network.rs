@@ -88,6 +88,7 @@ mod tests {
   fn test_init_network_env_defaults() {
     let _guard = ENV_MUTEX.lock().unwrap();
     // 清理环境变量
+    // SAFETY: ENV_MUTEX 保证测试串行运行，无并发修改环境变量的风险。
     unsafe {
       env::remove_var("HTTP_PROXY");
       env::remove_var("http_proxy");
@@ -109,6 +110,7 @@ mod tests {
   #[test]
   fn test_init_network_env_all_proxy_conversion() {
     let _guard = ENV_MUTEX.lock().unwrap();
+    // SAFETY: ENV_MUTEX 保证测试串行运行，无并发修改环境变量的风险。
     unsafe {
       env::remove_var("HTTP_PROXY");
       env::remove_var("http_proxy");
@@ -130,6 +132,7 @@ mod tests {
   #[test]
   fn test_init_network_env_empty_proxy_cleanup() {
     let _guard = ENV_MUTEX.lock().unwrap();
+    // SAFETY: ENV_MUTEX 保证测试串行运行，无并发修改环境变量的风险。
     unsafe {
       env::set_var("HTTP_PROXY", " ");
     }

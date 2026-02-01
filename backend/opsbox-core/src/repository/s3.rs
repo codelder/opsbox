@@ -104,7 +104,10 @@ mod tests {
       .await
       .unwrap();
 
-    let profile = load_s3_profile(&pool, "default").await.unwrap().unwrap();
+    let profile = load_s3_profile(&pool, "default")
+      .await
+      .expect("Failed to load S3 profile")
+      .expect("Expected 'default' profile to exist");
     assert_eq!(profile.endpoint, "http://minio:9000");
     assert_eq!(profile.access_key, "ak");
 
@@ -112,7 +115,10 @@ mod tests {
     assert!(not_found.is_none());
 
     // Empty name defaults to "default"
-    let default_loader = load_s3_profile(&pool, "").await.unwrap().unwrap();
+    let default_loader = load_s3_profile(&pool, "")
+      .await
+      .expect("Failed to load S3 profile with empty name")
+      .expect("Expected empty name to resolve to 'default' profile");
     assert_eq!(default_loader.profile_name, "default");
   }
 

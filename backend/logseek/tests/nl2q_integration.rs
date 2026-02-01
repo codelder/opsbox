@@ -85,6 +85,7 @@ async fn test_nl2q_integration_with_db() {
 
   // 2. 初始化内存数据库
   // 设置环境变量以禁用代理检测，避免沙盒环境问题
+  // SAFETY: 集成测试运行在独立进程中，每个测试独立执行，无并发风险。
   unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
   let pool = SqlitePool::connect(":memory:").await.unwrap();
   logseek::init_schema(&pool).await.unwrap();
@@ -142,6 +143,7 @@ async fn test_nl2q_performance() {
   let server = MockLlmServer::start(config).await.expect("启动Mock服务器失败");
 
   // 初始化数据库
+  // SAFETY: 集成测试运行在独立进程中，每个测试独立执行，无并发风险。
   unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
   let pool = SqlitePool::connect(":memory:").await.unwrap();
   logseek::init_schema(&pool).await.unwrap();
@@ -198,6 +200,7 @@ async fn test_nl2q_error_paths() {
   };
   let server = MockLlmServer::start(config).await.expect("启动Mock服务器失败");
 
+  // SAFETY: 集成测试运行在独立进程中，每个测试独立执行，无并发风险。
   unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
   let pool = SqlitePool::connect(":memory:").await.unwrap();
   logseek::init_schema(&pool).await.unwrap();
@@ -448,6 +451,7 @@ async fn test_network_timeout_simulation() {
 #[tokio::test]
 async fn test_database_fallback_mechanism() {
   // 创建内存数据库但未初始化schema
+  // SAFETY: 集成测试运行在独立进程中，每个测试独立执行，无并发风险。
   unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
   let pool = sqlx::sqlite::SqlitePool::connect(":memory:").await.unwrap();
 

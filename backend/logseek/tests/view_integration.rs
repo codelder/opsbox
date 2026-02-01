@@ -11,6 +11,9 @@ use opsbox_core::SqlitePool;
 use serde_json::json;
 use tokio::net::TcpListener;
 
+/// 集成测试中的响应体最大读取大小（1MB）
+const TEST_MAX_BODY_SIZE: usize = 1024 * 1024;
+
 // Define common structures locally if needed or use from crate
 #[derive(serde::Deserialize)]
 struct RawFileParams {
@@ -194,7 +197,9 @@ async fn test_view_cache_json_agent_integration() {
   // Verify response
   assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
-  let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+  let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+    .await
+    .unwrap();
   let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
   // Mock returns "agent line 1", "agent line 2"

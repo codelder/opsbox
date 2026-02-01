@@ -6,6 +6,7 @@ use crate::agent::SearchService;
 use crate::api::{LogSeekApiError, models::ViewParams};
 use crate::repository::{RepositoryError, cache::cache as simple_cache};
 use crate::service::ServiceError;
+use crate::service::entry_stream::create_entry_stream;
 use axum::{
   body::Body,
   extract::{Query, State},
@@ -15,8 +16,6 @@ use futures::StreamExt;
 use opsbox_core::SqlitePool;
 use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
 use serde::Deserialize;
-// use tokio::io::AsyncBufReadExt;
-use crate::service::entry_stream::create_entry_stream;
 use tracing::debug;
 
 /// 查看缓存中的文件内容
@@ -528,6 +527,9 @@ mod tests {
   use axum::extract::Query;
   use axum::http::StatusCode;
 
+  /// 测试中的响应体最大读取大小（1MB）
+  const TEST_MAX_BODY_SIZE: usize = 1024 * 1024;
+
   #[tokio::test]
   async fn test_view_cache_json_hit() {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -549,7 +551,9 @@ mod tests {
     assert_eq!(resp.status(), StatusCode::OK);
 
     // Use axum::body::to_bytes to read the response body
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
     assert_eq!(json["total"], 3);
@@ -578,7 +582,9 @@ mod tests {
     let resp = get_file_list_json(Query(params)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
     assert_eq!(json["sid"], sid);
@@ -607,7 +613,9 @@ mod tests {
     let resp = download_file(Query(params)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
     let content = String::from_utf8(body_bytes.to_vec()).unwrap();
     assert_eq!(content, "hello\nworld");
   }
@@ -632,7 +640,9 @@ mod tests {
     let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
     assert_eq!(json["total"], 2);
@@ -666,7 +676,9 @@ mod tests {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "image/png");
 
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
     assert_eq!(&body_bytes[..8], &png_header);
   }
 }
