@@ -16,7 +16,7 @@ use crate::utils::storage;
 
 // 新增：导入 EndpointConnector 相关类型
 use opsbox_domain::resource::{ResourcePath};
-use opsbox_resource::{LocalEndpointConnector, S3EndpointConnector, EndpointConnectorExt};
+use opsbox_resource::{LocalEndpointConnector, S3EndpointConnector, EndpointConnectorExt, archive::ArchiveEndpointConnector};
 
 // EntryStream 适配器：将 opsbox-resource 的 EntryStream 转换为 opsbox-core 的 EntryStream
 pub struct EntryStreamAdapter {
@@ -499,6 +499,26 @@ pub async fn create_entry_stream_v2(
   orl: &opsbox_core::odfs::orl::ORL,
 ) -> Result<Box<dyn EntryStream>, String> {
   use opsbox_core::storage;
+  use opsbox_resource::{archive::ArchiveEndpointConnector, EndpointConnectorExt};
+
+  // 解析路径并检测是否为归档文件（使用 urlencoding 进行 URL 解码）
+  let decoded_path = urlencoding::decode(orl.path())
+    .map_err(|e| format!("URL 解码失败: {}", e))?
+    .into_owned();
+
+  let path_str = decoded_path.to_lowercase();
+  let is_archive = path_str.ends_with(".tar")
+    || path_str.ends_with(".tar.gz")
+    || path_str.ends_with(".tgz")
+    || path_str.ends_with(".gz")
+    || path_str.ends_with(".zip");
+
+  tracing::info!(
+    "[create_entry_stream_v2] orl={}, decoded_path={}, is_archive={}",
+    orl,
+    decoded_path,
+    is_archive
+  );
 
   // 将 ORL 端点类型转换为 Domain EndpointType
   let endpoint_type = orl.endpoint_type()
@@ -506,16 +526,26 @@ pub async fn create_entry_stream_v2(
 
   match endpoint_type {
     OrlEndpointType::Local => {
-      // 创建 LocalEndpointConnector
       let connector = LocalEndpointConnector::new("/".to_string());
-      let path = ResourcePath::new(orl.path());
 
-      // 使用 EndpointConnectorExt 获取 EntryStream
-      let stream = connector.as_entry_stream(&path, true).await
-        .map_err(|e| format!("创建流失败: {}", e))?;
+      if is_archive {
+        // 归档文件：使用 ArchiveEndpointConnector 包装
+        tracing::info!("[create_entry_stream_v2] 检测到归档文件，使用 ArchiveEndpointConnector");
+        let archive_path = ResourcePath::new(&decoded_path);
+        let archive_connector = ArchiveEndpointConnector::new(connector, archive_path);
 
-      // 使用适配器包装
-      Ok(Box::new(EntryStreamAdapter::new(stream)))
+        let stream = archive_connector.as_entry_stream(&ResourcePath::new("/"), true).await
+          .map_err(|e| format!("创建归档流失败: {}", e))?;
+
+        Ok(Box::new(EntryStreamAdapter::new(stream)))
+      } else {
+        // 普通文件或目录
+        let path = ResourcePath::new(&decoded_path);
+        let stream = connector.as_entry_stream(&path, true).await
+          .map_err(|e| format!("创建流失败: {}", e))?;
+
+        Ok(Box::new(EntryStreamAdapter::new(stream)))
+      }
     }
     OrlEndpointType::S3 => {
       let profile = orl.effective_id();
@@ -532,22 +562,32 @@ pub async fn create_entry_stream_v2(
         &profile_row.secret_key
       ).map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
 
-      let (bucket_name, _) = orl
+      let (bucket_name, key) = orl
         .path()
         .trim_start_matches('/')
         .split_once('/')
         .unwrap_or((orl.path().trim_start_matches('/'), ""));
 
-      // 创建 S3EndpointConnector
       let connector = S3EndpointConnector::new(client.as_ref().clone(), bucket_name.to_string());
-      let path = ResourcePath::new(orl.path());
 
-      // 使用 EndpointConnectorExt 获取 EntryStream
-      let stream = connector.as_entry_stream(&path, true).await
-        .map_err(|e| format!("创建流失败: {}", e))?;
+      if is_archive {
+        // 归档文件：使用 ArchiveEndpointConnector 包装
+        tracing::info!("[create_entry_stream_v2] 检测到 S3 归档文件，使用 ArchiveEndpointConnector");
+        let archive_path = ResourcePath::new(&format!("/{}", key));
+        let archive_connector = ArchiveEndpointConnector::new(connector, archive_path);
 
-      // 使用适配器包装
-      Ok(Box::new(EntryStreamAdapter::new(stream)))
+        let stream = archive_connector.as_entry_stream(&ResourcePath::new("/"), true).await
+          .map_err(|e| format!("创建 S3 归档流失败: {}", e))?;
+
+        Ok(Box::new(EntryStreamAdapter::new(stream)))
+      } else {
+        // 普通 S3 对象
+        let path = ResourcePath::new(&format!("/{}", key));
+        let stream = connector.as_entry_stream(&path, true).await
+          .map_err(|e| format!("创建流失败: {}", e))?;
+
+        Ok(Box::new(EntryStreamAdapter::new(stream)))
+      }
     }
     // Agent 类型由 search_agent_source 处理，不应到达这里
     OrlEndpointType::Agent => {

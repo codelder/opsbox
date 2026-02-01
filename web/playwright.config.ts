@@ -33,7 +33,7 @@ export default defineConfig({
       }
     },
     {
-      command: 'sh -c "cd ../backend && cargo run --release -p opsbox-server -- --port 4001"',
+      command: 'sh -c "cd ../backend && DATABASE_URL=../tmp/opsbox-e2e.db cargo run --release -p opsbox-server -- --port 4001 --log-dir ../tmp/logs"',
       url: 'http://127.0.0.1:4001/healthy',
       reuseExistingServer: !process.env.CI && process.env.PW_REUSE_SERVER === '1',
       stdout: 'pipe',
@@ -41,7 +41,8 @@ export default defineConfig({
       env: {
         // 让 e2e 时能看到 500 的根因（尤其是 panic/backtrace）
         RUST_LOG: process.env.RUST_LOG ?? 'info',
-        RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1'
+        RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1',
+        DATABASE_URL: '../tmp/opsbox-e2e.db'
       },
       timeout: process.env.CI ? 300000 : 120000 // CI 环境需要更长时间编译
     }

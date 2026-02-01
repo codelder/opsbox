@@ -101,6 +101,12 @@ pub struct ArchiveEntryStream {
 enum ArchiveEntryStreamInner {
     /// tar.gz 格式 - 存储具体的entries类型
     TarGz(async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<PrefixedReader<Box<dyn AsyncRead + Send + Unpin>>>>>>),
+    /// 普通 tar 格式（无压缩）- 存储预读取的条目列表
+    Tar {
+        entries: Vec<(String, Vec<u8>)>,
+        index: usize,
+        container_path: Option<String>,
+    },
     /// 纯 gzip (单个文件)
     Gz(Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>),
 }
@@ -119,6 +125,57 @@ impl ArchiveEntryStream {
         Ok(Self {
             inner: ArchiveEntryStreamInner::TarGz(entries),
         })
+    }
+
+    /// 创建普通 tar 条目流（无压缩）
+    ///
+    /// 注意：这个方法会预读取所有条目到内存，适合小到中型的 tar 文件
+    pub async fn new_tar<R: AsyncRead + Send + Unpin + 'static>(
+        reader: R,
+        container_path: Option<String>,
+    ) -> io::Result<Self> {
+        use tokio_util::compat::TokioAsyncReadCompatExt;
+
+        let compat = reader.compat();
+        let archive = async_tar::Archive::new(compat);
+        let mut entries = archive.entries()?;
+
+        use futures::StreamExt;
+
+        // 预读取所有条目到内存
+        let mut entries_vec = Vec::new();
+
+        while let Some(result) = entries.next().await {
+            match result {
+                Ok(mut entry) => {
+                    let entry_path = entry
+                        .path()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_else(|_| format!("entry_{}", entries_vec.len()));
+
+                    let entry_size = entry.header().size().unwrap_or(0);
+                    trace!("[TarStream] 条目: path={} size={}", entry_path, entry_size);
+
+                    // 将 tar entry 读入内存
+                    let mut buf = Vec::new();
+                    entry.read_to_end(&mut buf).await?;
+
+                    entries_vec.push((entry_path, buf));
+                }
+                Err(e) => {
+                    return Err(io::Error::other(format!("Tar条目错误: {}", e)));
+                }
+            }
+        }
+
+        // 创建内部存储
+        let inner = ArchiveEntryStreamInner::Tar {
+            entries: entries_vec,
+            index: 0,
+            container_path,
+        };
+
+        Ok(Self { inner })
     }
 
     /// 创建纯 gzip 单条目流
@@ -166,6 +223,23 @@ impl EntryStream for ArchiveEntryStream {
                         None => return Ok(None),
                     }
                 }
+            }
+            ArchiveEntryStreamInner::Tar { entries, index, container_path } => {
+                if *index >= entries.len() {
+                    return Ok(None);
+                }
+                let (path, data) = entries[*index].clone();
+                *index += 1;
+
+                let meta = EntryMeta {
+                    path,
+                    container_path: container_path.clone(),
+                    size: Some(data.len() as u64),
+                    is_compressed: false,
+                    source: EntrySource::TarGz,
+                };
+
+                Ok(Some((meta, Box::new(std::io::Cursor::new(data)))))
             }
             ArchiveEntryStreamInner::Gz(data) => {
                 Ok(data.take())

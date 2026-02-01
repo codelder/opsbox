@@ -17,6 +17,7 @@ use opsbox_domain::resource::{
 /// 本地端点连接器
 ///
 /// 委托给 LocalOpsFS 实现。
+#[derive(Clone)]
 pub struct LocalEndpointConnector {
     inner: Arc<LocalOpsFS>,
     root: PathBuf,

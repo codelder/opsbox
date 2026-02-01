@@ -117,7 +117,7 @@ impl OpsFileSystem for AgentOpsFS {
       .map(|item| {
         OpsEntry {
           name: item.name.clone(),
-          path: item.path.clone(), // Agent returns absolute path?
+          path: item.path.clone(),
           metadata: OpsMetadata {
             name: item.name,
             file_type: if item.is_dir {

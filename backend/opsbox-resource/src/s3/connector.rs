@@ -17,6 +17,7 @@ use opsbox_domain::resource::{
 /// S3 端点连接器
 ///
 /// 委托给 S3OpsFS 实现。
+#[derive(Clone)]
 pub struct S3EndpointConnector {
     inner: Arc<S3OpsFS>,
 }

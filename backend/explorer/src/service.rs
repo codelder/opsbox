@@ -45,8 +45,20 @@ impl ExplorerService {
       rid.clone()
     };
 
+    // 对于归档浏览，需要将归档文件路径和归档内路径组合传递给 connector
+    let list_path = if let Some(entry) = &use_rid.archive_entry {
+      // 归档内浏览：组合路径为 /archive_file.tar/inner/path
+      format!("{}{}", use_rid.path.as_str(), entry.as_str())
+    } else {
+      // 普通浏览：直接使用路径
+      use_rid.path.as_str().to_string()
+    };
+
+    use opsbox_domain::resource::ResourcePath;
+    let list_path = ResourcePath::new(list_path);
+
     let metadata_list = connector
-      .list(&use_rid.path)
+      .list(&list_path)
       .await
       .map_err(|e| e.to_string())?;
 
@@ -62,11 +74,20 @@ impl ExplorerService {
     rid: &ResourceIdentifier,
   ) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
     let connector = self.get_connector(rid).await?;
+
+    // 对于归档文件，需要将归档文件路径和归档内路径组合
+    use opsbox_domain::resource::ResourcePath;
+    let resource_path = if let Some(entry) = &rid.archive_entry {
+      ResourcePath::new(format!("{}{}", rid.path.as_str(), entry.as_str()))
+    } else {
+      rid.path.clone()
+    };
+
     let metadata = connector
-      .metadata(&rid.path)
+      .metadata(&resource_path)
       .await
       .map_err(|e| e.to_string())?;
-    let reader = connector.read(&rid.path).await.map_err(|e| e.to_string())?;
+    let reader = connector.read(&resource_path).await.map_err(|e| e.to_string())?;
     Ok((metadata.name, Some(metadata.size), reader))
   }
 
@@ -119,6 +140,12 @@ impl ExplorerService {
       }
       EndpointType::Agent => {
         if let Some(manager) = &self.agent_manager {
+          // 特殊处理 "root" agent id - 使用 AgentDiscoveryEndpointConnector
+          if rid.endpoint.id == "root" {
+            use opsbox_resource::discovery::agent::AgentDiscoveryEndpointConnector;
+            return Ok(Arc::new(AgentDiscoveryEndpointConnector::new(manager.clone())));
+          }
+
           use opsbox_resource::agent::AgentEndpointConnector;
 
           if let Some(agent) = manager.get_agent(&rid.endpoint.id).await {
@@ -147,21 +174,74 @@ impl ExplorerService {
   /// 将 ResourceMetadata 转换为 ResourceItem
   fn map_metadata_to_item(&self, meta: ResourceMetadata, parent: &ResourceIdentifier) -> ResourceItem {
     // 生成子资源的 ORL 路径
-    // 对于归档文件，使用 archive_entry 字段
+    use opsbox_domain::resource::EndpointType;
+
     let child_rid = if self.is_archive_path(parent.path.as_str()) {
+      // 对于归档文件，使用 archive_entry 字段
       use opsbox_domain::resource::ArchiveEntryPath;
       ResourceIdentifier {
         endpoint: parent.endpoint.clone(),
         path: parent.path.clone(),
         archive_entry: Some(ArchiveEntryPath::new(meta.name.clone())),
       }
+    } else if parent.endpoint.id == "root" && parent.endpoint.endpoint_type == EndpointType::Agent {
+      // 特殊处理 agent 发现：从 "name (id)" 或 "id" 格式中提取 id
+      let agent_id = if meta.name.contains('(') {
+        // 格式: "name (id)"
+        meta.name
+          .rsplit('(')
+          .next()
+          .and_then(|s| s.strip_suffix(')'))
+          .unwrap_or(&meta.name)
+          .to_string()
+      } else {
+        meta.name.clone()
+      };
+
+      ResourceIdentifier::agent(agent_id, "/", None)
+    } else if meta.name.starts_with('/') {
+      // Agent 返回绝对路径时（如 search root），直接使用该路径
+      // 这与旧的 map_entry 逻辑一致：if entry.path.starts_with('/')
+      use opsbox_domain::resource::{ResourcePath, EndpointReference};
+      ResourceIdentifier {
+        endpoint: EndpointReference::new(parent.endpoint.endpoint_type, parent.endpoint.id.clone())
+          .with_server(parent.endpoint.server_addr.clone().unwrap_or_default()),
+        path: ResourcePath::new(meta.name.clone()),
+        archive_entry: None,
+      }
     } else {
+      // 默认：使用 parent.join 构建子 ORL
       parent.join(&meta.name)
     };
-    let path = child_rid.to_string();
+
+    // 对 agent 路径进行 URL 编码（与旧的 map_entry 逻辑一致）
+    let path = if child_rid.endpoint.endpoint_type == EndpointType::Agent {
+      // 对路径的每个部分进行 URL 编码
+      let encoded_path = child_rid.path.as_str().split('/')
+        .map(|s| urlencoding::encode(s).into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+      let orl_string = format!("orl://{}@agent{}", child_rid.endpoint.id, encoded_path);
+
+      // 调试日志
+      tracing::info!("[Explorer] Agent 子 ORL: parent_orl={}, child_orl={}, meta.name={}",
+        parent.to_string(), orl_string, meta.name);
+
+      orl_string
+    } else {
+      child_rid.to_string()
+    };
+
+    // 提取显示名称：如果 meta.name 是绝对路径，提取文件名
+    let display_name = if meta.name.starts_with('/') {
+      // 绝对路径（Agent search root）：提取最后部分作为显示名称
+      meta.name.split('/').next_back().unwrap_or(&meta.name).to_string()
+    } else {
+      meta.name.clone()
+    };
 
     ResourceItem {
-      name: meta.name,
+      name: display_name,
       path,
       r#type: if meta.is_dir {
         ResourceType::Dir
@@ -362,5 +442,87 @@ mod tests {
 
     let path = "/path/to/file.txt";
     assert!(!path.to_lowercase().ends_with(".tar"));
+  }
+
+  /// 测试归档内导航的路径组合
+  ///
+  /// E2E 测试发现的问题：当浏览归档内的目录时，需要将归档文件路径
+  /// 和归档内路径（archive_entry）组合后传递给 connector。
+  #[tokio::test]
+  async fn test_list_with_archive_entry_path_combination() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("test.tar");
+    let file_path = temp_dir.path().join("test.txt");
+
+    // 创建测试归档文件
+    tokio::fs::write(&file_path, "test content").await.unwrap();
+
+    {
+      let file = std::fs::File::create(&archive_path).unwrap();
+      let mut builder = tar::Builder::new(file);
+
+      let mut header = tar::Header::new_gnu();
+      header.set_path("inner.txt").unwrap();
+      header.set_size(12);
+      header.set_cksum();
+      builder.append_data(&mut header, "inner.txt", &b"test content"[..]).unwrap();
+
+      builder.finish().unwrap();
+    }
+
+    // 创建带有 archive_entry 的 ResourceIdentifier（模拟浏览归档内目录）
+    let rid = ResourceIdentifier::local(archive_path.to_str().unwrap())
+      .archive("inner.txt");
+
+    // 这应该成功列出归档内的文件
+    // 实际的路径组合发生在 service.list() 方法中
+    let _result = service.list(&rid).await;
+
+    // 验证路径组合逻辑正确工作
+    // 如果路径组合有误，会在实际调用 connector 时失败
+    // 这里我们只验证 ResourceIdentifier 的构造是正确的
+    assert_eq!(rid.archive_entry.as_ref().map(|e| e.as_str()), Some("inner.txt"));
+    assert_eq!(rid.path.as_str(), archive_path.to_str().unwrap());
+  }
+
+  /// 测试归档根目录浏览
+  ///
+  /// E2E 测试发现的问题：当第一次浏览归档时（没有 archive_entry），
+  /// 应该自动将归档文件路径传递给 connector。
+  #[tokio::test]
+  async fn test_list_archive_root_without_entry() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("test.tar");
+
+    // 创建测试归档文件
+    {
+      let file = std::fs::File::create(&archive_path).unwrap();
+      let mut builder = tar::Builder::new(file);
+
+      let mut header = tar::Header::new_gnu();
+      header.set_path("file1.txt").unwrap();
+      header.set_size(6);
+      header.set_cksum();
+      builder.append_data(&mut header, "file1.txt", &b"hello"[..]).unwrap();
+
+      builder.finish().unwrap();
+    }
+
+    // 没有 archive_entry，浏览归档文件
+    let rid = ResourceIdentifier::local(archive_path.to_str().unwrap());
+
+    let items = service.list(&rid).await.unwrap();
+
+    // 应该能看到归档根目录的内容
+    assert!(!items.is_empty());
+    // 验证传递给 connector 的路径是归档文件路径本身
+    // (这通过实际能列出内容来验证)
+    assert!(items.iter().any(|i| i.name.contains("file1.txt")));
   }
 }

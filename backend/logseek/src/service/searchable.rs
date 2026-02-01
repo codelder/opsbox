@@ -338,21 +338,50 @@ impl SearchableFileSystem for S3OpsFS {
 impl SearchableFileSystem for LocalEndpointConnector {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
     use opsbox_core::odfs::orl::{EndpointType as OrlEndpointType, TargetType};
+    use opsbox_resource::{archive::ArchiveEndpointConnector, EndpointConnectorExt};
 
     // 1. 解析查询
     let spec = Query::parse_github_like(&req.query)
       .map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
 
-    // 2. 使用 EndpointConnectorExt 创建 entry stream
-    let path = ResourcePath::new(ctx.orl.path());
-    // 注意：始终使用递归搜索，路径过滤由 EntryStreamProcessor 处理
-    let resource_stream = self.as_entry_stream(&path, true).await
-      .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?;
+    // 2. URL 解码路径并检测归档文件
+    let decoded_path = urlencoding::decode(ctx.orl.path())
+      .map_err(|e| ServiceError::ProcessingError(format!("URL 解码失败: {}", e)))?
+      .into_owned();
 
-    // 3. 使用适配器包装
+    let path_str = decoded_path.to_lowercase();
+    let is_archive = path_str.ends_with(".tar")
+      || path_str.ends_with(".tar.gz")
+      || path_str.ends_with(".tgz")
+      || path_str.ends_with(".gz")
+      || path_str.ends_with(".zip");
+
+    tracing::info!(
+      "[LocalEndpointConnector::search] orl={}, decoded_path={}, is_archive={}",
+      ctx.orl,
+      decoded_path,
+      is_archive
+    );
+
+    // 3. 使用 EndpointConnectorExt 创建 entry stream
+    let resource_stream = if is_archive {
+      // 归档文件：使用 ArchiveEndpointConnector 包装
+      tracing::info!("[LocalEndpointConnector::search] 检测到归档文件，使用 ArchiveEndpointConnector");
+      let archive_path = ResourcePath::new(&decoded_path);
+      let archive_connector = ArchiveEndpointConnector::new(self.clone(), archive_path);
+      archive_connector.as_entry_stream(&ResourcePath::new("/"), true).await
+        .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
+    } else {
+      // 普通文件或目录
+      let path = ResourcePath::new(&decoded_path);
+      self.as_entry_stream(&path, true).await
+        .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
+    };
+
+    // 4. 使用适配器包装
     let mut estream = Box::new(EntryStreamAdapter::new(resource_stream));
 
-    // 4. 创建 EntryStreamProcessor
+    // 5. 创建 EntryStreamProcessor
     let search_proc = Arc::new(SearchProcessor::new_with_encoding(
       Arc::new(spec),
       req.context_lines,
@@ -364,27 +393,28 @@ impl SearchableFileSystem for LocalEndpointConnector {
       processor = processor.with_cancel_token(token);
     }
 
-    // 5. 路径过滤：base_path（仅 Local + Dir）
-    if ctx.orl.endpoint_type().unwrap_or(OrlEndpointType::Local) == OrlEndpointType::Local
+    // 6. 路径过滤：base_path（仅 Local + Dir，且非归档）
+    if !is_archive
+      && ctx.orl.endpoint_type().unwrap_or(OrlEndpointType::Local) == OrlEndpointType::Local
       && ctx.orl.target_type() == TargetType::Dir
     {
       processor = processor.with_base_path(ctx.orl.path());
     }
 
-    // 6. 路径过滤：ORL 携带的内置过滤
+    // 7. 路径过滤：ORL 携带的内置过滤
     if let Some(glob) = ctx.orl.filter_glob()
       && let Ok(filter) = crate::query::path_glob_to_filter(&glob)
     {
       processor = processor.with_extra_path_filter(filter);
     }
 
-    // 7. 路径过滤：用户输入的额外过滤
+    // 8. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
     if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
       processor = processor.with_extra_path_filter(extra_filter);
     }
 
-    // 8. 处理并发送结果
+    // 9. 处理并发送结果
     processor
       .process_stream(&mut *estream, ctx.tx.clone())
       .await
@@ -401,19 +431,56 @@ impl SearchableFileSystem for LocalEndpointConnector {
 #[async_trait]
 impl SearchableFileSystem for S3EndpointConnector {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
+    use opsbox_resource::{archive::ArchiveEndpointConnector, EndpointConnectorExt};
+
     // 1. 解析查询
     let spec = Query::parse_github_like(&req.query)
       .map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
 
-    // 2. 使用 EndpointConnectorExt 创建 entry stream
-    let path = ResourcePath::new(ctx.orl.path());
-    let resource_stream = self.as_entry_stream(&path, true).await
-      .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?;
+    // 2. URL 解码路径并检测归档文件
+    let decoded_path = urlencoding::decode(ctx.orl.path())
+      .map_err(|e| ServiceError::ProcessingError(format!("URL 解码失败: {}", e)))?
+      .into_owned();
 
-    // 3. 使用适配器包装
+    // S3 路径格式: /bucket/key，需要提取 key 部分
+    let (_, key) = decoded_path
+      .trim_start_matches('/')
+      .split_once('/')
+      .unwrap_or(("", &decoded_path));
+
+    let key_lower = key.to_lowercase();
+    let is_archive = key_lower.ends_with(".tar")
+      || key_lower.ends_with(".tar.gz")
+      || key_lower.ends_with(".tgz")
+      || key_lower.ends_with(".gz")
+      || key_lower.ends_with(".zip");
+
+    tracing::info!(
+      "[S3EndpointConnector::search] orl={}, key={}, is_archive={}",
+      ctx.orl,
+      key,
+      is_archive
+    );
+
+    // 3. 使用 EndpointConnectorExt 创建 entry stream
+    let resource_stream = if is_archive {
+      // 归档文件：使用 ArchiveEndpointConnector 包装
+      tracing::info!("[S3EndpointConnector::search] 检测到 S3 归档文件，使用 ArchiveEndpointConnector");
+      let archive_path = ResourcePath::new(&format!("/{}", key));
+      let archive_connector = ArchiveEndpointConnector::new(self.clone(), archive_path);
+      archive_connector.as_entry_stream(&ResourcePath::new("/"), true).await
+        .map_err(|e| ServiceError::ProcessingError(format!("创建 S3 归档流失败: {}", e)))?
+    } else {
+      // 普通 S3 对象
+      let path = ResourcePath::new(&format!("/{}", key));
+      self.as_entry_stream(&path, true).await
+        .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
+    };
+
+    // 4. 使用适配器包装
     let mut estream = Box::new(EntryStreamAdapter::new(resource_stream));
 
-    // 4. 创建 EntryStreamProcessor
+    // 5. 创建 EntryStreamProcessor
     let search_proc = Arc::new(SearchProcessor::new_with_encoding(
       Arc::new(spec),
       req.context_lines,
@@ -425,20 +492,20 @@ impl SearchableFileSystem for S3EndpointConnector {
       processor = processor.with_cancel_token(token);
     }
 
-    // 5. 路径过滤：ORL 携带的内置过滤
+    // 6. 路径过滤：ORL 携带的内置过滤
     if let Some(glob) = ctx.orl.filter_glob()
       && let Ok(filter) = crate::query::path_glob_to_filter(&glob)
     {
       processor = processor.with_extra_path_filter(filter);
     }
 
-    // 6. 路径过滤：用户输入的额外过滤
+    // 7. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
     if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
       processor = processor.with_extra_path_filter(extra_filter);
     }
 
-    // 7. 处理并发送结果
+    // 8. 处理并发送结果
     processor
       .process_stream(&mut *estream, ctx.tx.clone())
       .await

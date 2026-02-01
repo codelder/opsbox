@@ -5,12 +5,11 @@
 use std::pin::Pin;
 
 use async_compression::tokio::bufread::GzipDecoder;
-use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 
 use opsbox_domain::resource::{EndpointConnector, ResourcePath, DomainError};
 
-use super::stream::{EntryStream, EntryMeta, EntrySource, S3EntryStream, ArchiveEntryStream, TarGzEntryStream};
+use super::stream::{EntryStream, EntryMeta, EntrySource, S3EntryStream, ArchiveEntryStream};
 use super::stream::utils::{PrefixedReader, sniff_archive_kind, ArchiveKind};
 use super::{LocalEndpointConnector, S3EndpointConnector};
 use super::archive::ArchiveEndpointConnector;
@@ -114,20 +113,18 @@ impl<C: EndpointConnector + Send + Sync> EndpointConnectorExt for ArchiveEndpoin
         path: &ResourcePath,
         _recursive: bool,
     ) -> Result<Box<dyn EntryStream>, DomainError> {
-        // 1. URL解码路径（兼容老实现）
-        let decoded_path = percent_encoding::percent_decode_str(path.as_str())
-            .decode_utf8()
-            .map_err(|e| DomainError::InvalidResourceIdentifier(format!("URL解码失败: {}", e)))?
-            .into_owned();
+        // 使用 self.archive_path 读取归档文件，而不是 path 参数
+        // path 参数是归档内部的路径（如 /），archive_path 是归档文件本身的路径
+        let archive_path_str = self.archive_path().as_str().to_string();
 
         tracing::info!(
-            "[ArchiveEndpointConnector] as_entry_stream: path={}, decoded={}",
+            "[ArchiveEndpointConnector] as_entry_stream: inner_path={}, archive_path={}",
             path.as_str(),
-            decoded_path
+            archive_path_str
         );
 
         // 2. 读取归档文件
-        let archive_reader = self.inner().read(&ResourcePath::new(&decoded_path)).await?;
+        let archive_reader = self.inner().read(self.archive_path()).await?;
         let mut archive_reader: Box<dyn AsyncRead + Send + Unpin> =
             unsafe { Pin::into_inner_unchecked(archive_reader) };
 
@@ -147,18 +144,18 @@ impl<C: EndpointConnector + Send + Sync> EndpointConnectorExt for ArchiveEndpoin
         head.truncate(n);
 
         tracing::debug!(
-            "[ArchiveEndpointConnector] 读取头部: {} bytes, path={}",
+            "[ArchiveEndpointConnector] 读取头部: {} bytes, archive_path={}",
             head.len(),
-            decoded_path
+            archive_path_str
         );
 
         // 4. 使用magic bytes检测归档类型
-        let kind = sniff_archive_kind(&head, Some(&decoded_path));
+        let kind = sniff_archive_kind(&head, Some(&archive_path_str));
 
         tracing::info!(
-            "[ArchiveEndpointConnector] 检测归档类型: kind={:?}, path={}",
+            "[ArchiveEndpointConnector] 检测归档类型: kind={:?}, archive_path={}",
             kind,
-            decoded_path
+            archive_path_str
         );
 
         // 5. 对于gzip类型，需要进一步检测是否为tar.gz（在移动数据前完成检测）
@@ -172,7 +169,7 @@ impl<C: EndpointConnector + Send + Sync> EndpointConnectorExt for ArchiveEndpoin
                 }
                 Err(_) => {
                     // 如果内部数据太少，尝试通过后缀名判断
-                    let lower = decoded_path.to_lowercase();
+                    let lower = archive_path_str.to_lowercase();
                     lower.ends_with(".tar.gz") || lower.ends_with(".tgz")
                 }
             }
@@ -191,27 +188,27 @@ impl<C: EndpointConnector + Send + Sync> EndpointConnectorExt for ArchiveEndpoin
 
         match kind {
             ArchiveKind::Tar => {
-                // tar格式（无压缩）
-                let stream = TarGzEntryStream::new(prefixed, Some(decoded_path))
+                // tar格式（无压缩）- 使用 ArchiveEntryStream 预读取所有条目
+                ArchiveEntryStream::new_tar(prefixed, Some(archive_path_str))
                     .await
-                    .map_err(|e| DomainError::ResourceNotFound(format!("读取tar失败: {}", e)))?;
-                Ok(Box::new(stream))
+                    .map_err(|e| DomainError::ResourceNotFound(format!("读取tar失败: {}", e)))
+                    .map(|s| Box::new(s) as Box<dyn EntryStream>)
             }
             ArchiveKind::Gzip => {
                 if is_tar {
                     // tar.gz格式 - 使用PrefixedReader保留已读取的数据
                     let gz = GzipDecoder::new(BufReader::new(prefixed));
 
-                    ArchiveEntryStream::new_tar_gz(gz, Some(decoded_path))
+                    ArchiveEntryStream::new_tar_gz(gz, Some(archive_path_str))
                         .await
                         .map_err(|e| DomainError::ResourceNotFound(format!("解析tar.gz失败: {}", e)))
                         .map(|s| Box::new(s) as Box<dyn EntryStream>)
                 } else {
                     // 纯gzip格式（单文件）
                     let (entry_path, container_path) = if let Some(stem) =
-                        std::path::Path::new(&decoded_path).file_stem()
+                        std::path::Path::new(&archive_path_str).file_stem()
                     {
-                        (stem.to_string_lossy().to_string(), Some(decoded_path))
+                        (stem.to_string_lossy().to_string(), Some(archive_path_str))
                     } else {
                         ("<gzip>".to_string(), None)
                     };
@@ -235,23 +232,24 @@ impl<C: EndpointConnector + Send + Sync> EndpointConnectorExt for ArchiveEndpoin
             }
             ArchiveKind::Unknown => {
                 // 尝试通过扩展名作为最后的补救
-                let lower = decoded_path.to_lowercase();
+                let lower = archive_path_str.to_lowercase();
                 if lower.ends_with(".tar") {
-                    let stream = TarGzEntryStream::new(prefixed, Some(decoded_path))
+                    // tar文件（无压缩）- 使用 ArchiveEntryStream
+                    ArchiveEntryStream::new_tar(prefixed, Some(archive_path_str))
                         .await
-                        .map_err(|e| DomainError::ResourceNotFound(format!("读取tar失败: {}", e)))?;
-                    Ok(Box::new(stream))
+                        .map_err(|e| DomainError::ResourceNotFound(format!("读取tar失败: {}", e)))
+                        .map(|s| Box::new(s) as Box<dyn EntryStream>)
                 } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
                     // tar.gz文件 - 使用保留的数据
                     let gz = GzipDecoder::new(BufReader::new(prefixed));
 
-                    ArchiveEntryStream::new_tar_gz(gz, Some(decoded_path))
+                    ArchiveEntryStream::new_tar_gz(gz, Some(archive_path_str))
                         .await
                         .map_err(|e| DomainError::ResourceNotFound(format!("解析tar.gz失败: {}", e)))
                         .map(|s| Box::new(s) as Box<dyn EntryStream>)
                 } else if lower.ends_with(".gz") {
                     let meta = EntryMeta {
-                        path: decoded_path,
+                        path: archive_path_str,
                         container_path: None,
                         size: None,
                         is_compressed: true,
@@ -262,7 +260,7 @@ impl<C: EndpointConnector + Send + Sync> EndpointConnectorExt for ArchiveEndpoin
                 } else {
                     Err(DomainError::ResourceNotFound(format!(
                         "未知归档格式或不支持的归档: {}",
-                        decoded_path
+                        archive_path_str
                     )))
                 }
             }
@@ -370,5 +368,126 @@ mod tests {
         // 第二次调用应该返回 None
         let result = stream.next_entry().await.unwrap();
         assert!(result.is_none());
+    }
+
+    /// 测试 ArchiveEndpointConnector 的 as_entry_stream 展开归档功能
+    ///
+    /// 这个测试验证了关键的 Bug 修复：
+    /// - as_entry_stream 应该使用 self.archive_path() 读取归档文件
+    /// - 而不是使用 path 参数（path 是归档内的路径，如 "/"）
+    #[tokio::test]
+    async fn test_archive_entry_stream_expansion() {
+        use crate::archive::ArchiveEndpointConnector;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        // 创建一个测试归档文件，包含内部文件
+        let archive_name = "test-archive.tar.gz";
+        let archive_path = root.join(archive_name);
+
+        // 使用标准库创建 tar.gz 文件
+        {
+            let tar_gz_file = std::fs::File::create(&archive_path).unwrap();
+            let enc = flate2::write::GzEncoder::new(tar_gz_file, flate2::Compression::default());
+            let mut tar = tar::Builder::new(enc);
+
+            let temp_file = root.join("temp_test.log");
+            std::fs::write(&temp_file, "2024-01-01 INFO Archive test content\n").unwrap();
+
+            tar.append_file("internal/test.log", &mut std::fs::File::open(&temp_file).unwrap())
+                .unwrap();
+
+            std::fs::remove_file(&temp_file).unwrap();
+        }
+
+        // 创建 LocalEndpointConnector，使用 root 目录
+        let connector = LocalEndpointConnector::new(root.to_str().unwrap().to_string());
+
+        // ArchiveEndpointConnector 的 archive_path 是相对于 connector 的 root
+        let archive = ArchiveEndpointConnector::new(
+            connector,
+            ResourcePath::new(&format!("/{}", archive_name)),
+        );
+
+        // 关键测试：使用 "/" 作为归档内路径，应该能展开归档并读取到内部文件
+        let mut stream = archive.as_entry_stream(&ResourcePath::new("/"), true).await.unwrap();
+
+        // 应该能读取到 internal/test.log
+        let result = stream.next_entry().await.unwrap();
+        assert!(result.is_some(), "应该能读取到归档内的第一个条目");
+
+        let (meta, mut reader) = result.unwrap();
+        assert!(meta.path.contains("test.log"), "路径应该包含 test.log, 实际: {}", meta.path);
+
+        // 验证文件内容
+        let mut content = String::new();
+        reader.read_to_string(&mut content).await.unwrap();
+        assert!(content.contains("Archive test content"), "内容应该包含测试文本");
+
+        // 第二次调用应该返回 None（只有一个文件）
+        let result = stream.next_entry().await.unwrap();
+        assert!(result.is_none(), "应该只有一个条目");
+    }
+
+    /// 测试 ArchiveEndpointConnector 展开包含多个文件的归档
+    #[tokio::test]
+    async fn test_archive_entry_stream_multiple_files() {
+        use crate::archive::ArchiveEndpointConnector;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let root = temp_dir.path().to_path_buf();
+
+        // 创建包含多个文件的归档
+        let archive_name = "multi-archive.tar.gz";
+        let archive_path = root.join(archive_name);
+
+        // 使用标准库创建 tar.gz 文件
+        {
+            let tar_gz_file = std::fs::File::create(&archive_path).unwrap();
+            let enc = flate2::write::GzEncoder::new(tar_gz_file, flate2::Compression::default());
+            let mut tar = tar::Builder::new(enc);
+
+            // 添加多个文件到归档
+            let files = vec![
+                ("logs/app.log", "2024-01-01 INFO App started\n"),
+                ("logs/error.log", "2024-01-01 ERROR An error\n"),
+                ("config.json", "{\"key\": \"value\"}\n"),
+            ];
+
+            for (path, content) in files {
+                let temp_file = root.join(&format!("temp_{}", path.replace("/", "_")));
+                std::fs::write(&temp_file, content).unwrap();
+
+                tar.append_file(path, &mut std::fs::File::open(&temp_file).unwrap())
+                    .unwrap();
+
+                std::fs::remove_file(&temp_file).unwrap();
+            }
+        }
+
+        // 创建 LocalEndpointConnector
+        let connector = LocalEndpointConnector::new(root.to_str().unwrap().to_string());
+
+        // ArchiveEndpointConnector 的 archive_path 是相对于 connector 的 root
+        let archive = ArchiveEndpointConnector::new(
+            connector,
+            ResourcePath::new(&format!("/{}", archive_name)),
+        );
+
+        // 展开归档并验证所有文件
+        let mut stream = archive.as_entry_stream(&ResourcePath::new("/"), true).await.unwrap();
+
+        let mut found_files = Vec::new();
+        while let Some((meta, mut reader)) = stream.next_entry().await.unwrap() {
+            let mut content = String::new();
+            reader.read_to_string(&mut content).await.unwrap();
+            found_files.push((meta.path.clone(), content));
+        }
+
+        assert_eq!(found_files.len(), 3, "应该找到 3 个文件");
+        assert!(found_files.iter().any(|(p, _)| p.contains("app.log")));
+        assert!(found_files.iter().any(|(p, _)| p.contains("error.log")));
+        assert!(found_files.iter().any(|(p, _)| p.contains("config.json")));
     }
 }
