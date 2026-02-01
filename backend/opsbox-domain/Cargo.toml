@@ -1,0 +1,20 @@
+[package]
+name = "opsbox-domain"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# 核心序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# URI 解析（RFC 3986）
+fluent-uri = "0.4"
+# 错误处理
+thiserror = "2.0"
+# 异步支持
+async-trait = "0.1"
+futures = "0.3"
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+# UUID 生成
+uuid = { version = "1.0", features = ["v4"] }
