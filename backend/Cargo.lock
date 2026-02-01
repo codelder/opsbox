@@ -3289,6 +3289,7 @@ dependencies = [
  "libsqlite3-sys",
  "lru 0.16.2",
  "once_cell",
+ "opsbox-test-common",
  "percent-encoding",
  "regex",
  "reqwest",

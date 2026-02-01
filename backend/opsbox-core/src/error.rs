@@ -8,6 +8,9 @@ use thiserror::Error;
 
 use crate::logging::LogError;
 
+/// 错误响应 URL 基础路径
+const ERROR_BASE_URL: &str = "https://opsbox.dev/errors/";
+
 /// 统一错误类型
 #[derive(Error, Debug)]
 pub enum AppError {
@@ -62,28 +65,26 @@ impl AppError {
     Self::ExternalService(msg.into())
   }
 
+  /// 获取错误的 HTTP 状态码和类型标识（合并以避免重复的 match）
+  fn error_metadata(&self) -> (StatusCode, &'static str) {
+    match self {
+      Self::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "database_error"),
+      Self::Config(_) => (StatusCode::INTERNAL_SERVER_ERROR, "configuration_error"),
+      Self::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
+      Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+      Self::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+      Self::ExternalService(_) => (StatusCode::BAD_GATEWAY, "external_service_error"),
+    }
+  }
+
   /// 获取 HTTP 状态码
   fn status_code(&self) -> StatusCode {
-    match self {
-      Self::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
-      Self::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
-      Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-      Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-      Self::NotFound(_) => StatusCode::NOT_FOUND,
-      Self::ExternalService(_) => StatusCode::BAD_GATEWAY,
-    }
+    self.error_metadata().0
   }
 
   /// 获取错误类型标识
   fn error_type(&self) -> &'static str {
-    match self {
-      Self::Database(_) => "database_error",
-      Self::Config(_) => "configuration_error",
-      Self::Internal(_) => "internal_error",
-      Self::BadRequest(_) => "bad_request",
-      Self::NotFound(_) => "not_found",
-      Self::ExternalService(_) => "external_service_error",
-    }
+    self.error_metadata().1
   }
 }
 
@@ -127,7 +128,7 @@ impl IntoResponse for AppError {
     }
 
     let problem = ProblemDetail {
-      r#type: format!("https://opsbox.dev/errors/{}", error_type),
+      r#type: format!("{}{}", ERROR_BASE_URL, error_type),
       title: error_msg.clone(),
       status: status.as_u16(),
       detail: error_msg,
@@ -147,6 +148,7 @@ pub type Result<T> = std::result::Result<T, AppError>;
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::logging::LogError;
 
   #[test]
   fn test_error_constructors() {
@@ -173,5 +175,63 @@ mod tests {
     assert_eq!(AppError::bad_request("").status_code(), StatusCode::BAD_REQUEST);
     assert_eq!(AppError::not_found("").status_code(), StatusCode::NOT_FOUND);
     assert_eq!(AppError::external_service("").status_code(), StatusCode::BAD_GATEWAY);
+  }
+
+  #[test]
+  fn test_error_type_method() {
+    assert_eq!(AppError::config("").error_type(), "configuration_error");
+    assert_eq!(AppError::internal("").error_type(), "internal_error");
+    assert_eq!(AppError::bad_request("").error_type(), "bad_request");
+    assert_eq!(AppError::not_found("").error_type(), "not_found");
+    assert_eq!(AppError::external_service("").error_type(), "external_service_error");
+
+    // Database error needs special handling since it's created via from conversion
+    let db_err = AppError::Database(sqlx::Error::PoolClosed);
+    assert_eq!(db_err.error_type(), "database_error");
+  }
+
+  #[test]
+  fn test_log_error_conversion() {
+    // Test DirectoryCreation variant
+    let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+    let log_err = LogError::DirectoryCreation(io_error);
+    let app_err: AppError = log_err.into();
+
+    assert!(matches!(app_err, AppError::Internal(msg) if msg.contains("日志目录创建失败")));
+
+    // Test InvalidConfig variant
+    let log_err = LogError::InvalidConfig("invalid config".to_string());
+    let app_err: AppError = log_err.into();
+    assert!(matches!(app_err, AppError::Config(msg) if msg == "invalid config"));
+
+    // Test InvalidLevel variant
+    let log_err = LogError::InvalidLevel("invalid level".to_string());
+    let app_err: AppError = log_err.into();
+    assert!(matches!(app_err, AppError::BadRequest(msg) if msg.contains("无效的日志级别")));
+
+    // Test ReloadFailed variant
+    let log_err = LogError::ReloadFailed("reload failed".to_string());
+    let app_err: AppError = log_err.into();
+    assert!(matches!(app_err, AppError::Internal(msg) if msg.contains("日志重载失败")));
+  }
+
+  #[test]
+  fn test_database_error_conversion() {
+    // Test sqlx::Error conversion via From trait
+    let sqlx_err = sqlx::Error::PoolClosed;
+    let app_err: AppError = AppError::from(sqlx_err);
+    assert!(matches!(app_err, AppError::Database(_)));
+  }
+
+  #[test]
+  fn test_result_type_alias() {
+    // Test that Result<T> works correctly with AppError
+    let ok_result: Result<String> = Ok("success".to_string());
+    assert!(ok_result.is_ok());
+    assert_eq!(ok_result.unwrap(), "success");
+
+    let err_result: Result<String> = Err(AppError::config("config error"));
+    assert!(err_result.is_err());
+    assert!(matches!(err_result.unwrap_err(), AppError::Config(msg) if msg == "config error"));
   }
 }

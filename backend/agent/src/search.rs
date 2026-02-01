@@ -174,7 +174,7 @@ pub async fn execute_search(
     };
 
     let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
-      .with_cancel_token(cancel_token.clone());
+      .with_cancel_token(Arc::new(cancel_token.clone()));
 
     if matches!(&request.target, ConfigTarget::Dir { .. }) {
       if search_path.is_file() {

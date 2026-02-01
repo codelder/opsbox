@@ -136,6 +136,31 @@ impl AgentInfo {
   pub fn remove_tag_key(&mut self, key: &str) {
     self.tags.retain(|tag| tag.key != key);
   }
+
+  /// 统一的在线状态检查方法，支持详细日志记录
+  pub fn check_online_status(&self, timeout_secs: i64, verbose: bool) -> bool {
+    let is_online = self.is_online(timeout_secs);
+
+    if verbose && !is_online {
+      let now = chrono::Utc::now().timestamp();
+      tracing::info!(
+        "Agent offline: id={}, last_heartbeat={}, age={}s (timeout={}s)",
+        self.id,
+        self.last_heartbeat,
+        now - self.last_heartbeat,
+        timeout_secs
+      );
+    }
+
+    is_online
+  }
+
+  /// 获取 Agent 基础 URL（用于 API 调用）
+  pub fn get_base_url(&self) -> String {
+    let host = self.get_tag_value("host").unwrap_or(&self.hostname);
+    let port = self.get_tag_value("listen_port").unwrap_or("3976");
+    format!("http://{}:{}", host, port)
+  }
 }
 
 /// Agent 文件列表请求

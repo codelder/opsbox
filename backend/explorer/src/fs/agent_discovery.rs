@@ -28,7 +28,7 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
       file_type: OpsFileType::Directory,
       size: 0,
       modified: None,
-      mode: 0755,
+      mode: 0o755,
       mime_type: None,
       compression: None,
       is_archive: false,
@@ -72,7 +72,7 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
           } else {
             None
           },
-          mode: 0755,
+          mode: 0o755,
           mime_type: None,
           compression: None,
           is_archive: false, // Agent is not an archive itself, it's a directory-like provider

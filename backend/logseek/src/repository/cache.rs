@@ -164,6 +164,9 @@ impl Cache {
               #[cfg(feature = "mimalloc-collect")]
               {
                 tokio::task::spawn_blocking(move || {
+                  // SAFETY: mi_collect 是 mimalloc 的 FFI 函数，用于触发内存回收。
+                  // 参数 `true` 表示强制回收。此函数是线程安全的，可以安全调用。
+                  // 参见: https://docs.rs/mimalloc/latest/mimalloc/
                   unsafe {
                     libmimalloc_sys::mi_collect(true);
                   }

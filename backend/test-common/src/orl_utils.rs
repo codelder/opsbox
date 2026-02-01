@@ -30,12 +30,11 @@ impl OrlGenerator {
 
   /// 创建Agent ORL
   pub fn agent(agent_name: &str, path: &str, server_addr: Option<&str>) -> String {
-    let base = if let Some(addr) = server_addr {
+    if let Some(addr) = server_addr {
       format!("orl://{}@agent.{}{}", agent_name, addr, path)
     } else {
       format!("orl://{}@agent{}", agent_name, path)
-    };
-    base
+    }
   }
 
   /// 创建S3 ORL

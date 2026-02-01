@@ -244,7 +244,7 @@ impl TestMonitor {
     let json = serde_json::to_string_pretty(&report).map_err(|e| TestError::Other(e.to_string()))?;
 
     let report_path = Path::new(&self.report_dir).join("test_report.json");
-    fs::write(&report_path, &json).map_err(|e| TestError::Io(e))?;
+    fs::write(&report_path, &json).map_err(TestError::Io)?;
 
     Ok(json)
   }
@@ -276,7 +276,7 @@ impl TestMonitor {
     for (category, count) in &self.statistics.category_stats {
       markdown.push_str(&format!("- **{}**: {}\n", category.description(), count));
     }
-    markdown.push_str("\n");
+    markdown.push('\n');
 
     // 失败的测试详情
     let failed_tests: Vec<_> = self
@@ -299,7 +299,7 @@ impl TestMonitor {
     }
 
     let report_path = Path::new(&self.report_dir).join("test_report.md");
-    fs::write(&report_path, &markdown).map_err(|e| TestError::Io(e))?;
+    fs::write(&report_path, &markdown).map_err(TestError::Io)?;
 
     Ok(markdown)
   }
@@ -404,7 +404,7 @@ impl TestMonitor {
     html.push_str("</html>\n");
 
     let report_path = Path::new(&self.report_dir).join("test_report.html");
-    fs::write(&report_path, &html).map_err(|e| TestError::Io(e))?;
+    fs::write(&report_path, &html).map_err(TestError::Io)?;
 
     Ok(html)
   }
@@ -486,6 +486,12 @@ impl TestCategoryAnalyzer {
 pub struct TestCoverageTracker {
   /// 覆盖率数据
   coverage_data: HashMap<String, f64>,
+}
+
+impl Default for TestCoverageTracker {
+  fn default() -> Self {
+    Self::new()
+  }
 }
 
 impl TestCoverageTracker {

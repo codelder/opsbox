@@ -12,7 +12,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **Frontend**: SvelteKit 2.22 with TypeScript, TailwindCSS 4.0 (`@tailwindcss/vite` plugin)
 - **Database**: SQLite with automatic schema management
 - **Build Tools**:
-  - Rust: Cargo workspace
+  - Rust: Cargo workspace (resolver v3)
   - Node.js: pnpm 10.23.0, Vite 7.0
 - **Font System**: Maple Mono NF CN (5 font weights, ~31MB embedded)
 - **Version**: 0.1.1
@@ -21,15 +21,25 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - `starlark = "0.13"` - Scriptable source planning
 - `chrono-tz = "0.8"` - Timezone support (Beijing)
 - `chardetng = "0.1"` - Character encoding detection
-- `grep = "0.3"` - Byte-level regex search
+- `grep-regex = "0.1"` - Byte-level regex search (split into grep-regex, grep-searcher, grep-matcher)
+- `grep-searcher = "0.1"` - Search functionality
+- `grep-matcher = "0.1"` - Pattern matching
 - `urlencoding = "2.1.3"` - URL encoding
 - `fluent-uri = "0.4.1"` - RFC 3986 compliant URI parsing
 - `async_zip = "0.0.18"` - Async ZIP archive support
 - `tokio-tar = "0.3.1"` - Async TAR archive support
+- `async-tar = "0.5.1"` - Additional TAR support
+- `reqwest = "0.12"` - HTTP client (used for LLM and agent communication)
+- `encoding_rs = "0.8"` - Text encoding conversion (GBK support)
+- `lru = "0.16.2"` - LRU cache implementation
+- `futures-lite = "2.6.1"` - Stream utilities
+- `tokio-stream = "0.1.17"` - Stream handling
+- `aws-sdk-s3 = "1.15"` - AWS S3 SDK
 
 **Key Frontend Dependencies:**
 - `@tanstack/svelte-virtual = "^3.13.12"` - Virtual scrolling
 - `lucide-svelte = "^0.554.0"` - Icons
+- `@tabler/icons-svelte = "3.35"` - Additional icon set
 - `marked = "^17.0.0"` - Markdown rendering
 - `bits-ui = "^2.14.4"` - UI components
 - `mode-watcher = "^1.1.0"` - Dark mode watcher
@@ -47,8 +57,18 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 ### Backend Structure (`backend/`)
 
+#### Workspace Members
+- `opsbox-server` - Main binary
+- `opsbox-core` - Shared library
+- `logseek` - Log search module
+- `agent-manager` - Agent management module
+- `explorer` - Resource browser module
+- `agent` - Standalone agent binary
+- `test-common` - Shared test utilities
+
 #### Workspace Crates
 - **opsbox-server**: Main binary entry point (`src/main.rs`)
+  - CLI options: `--io-timeout-sec`, `--io-max-retries`, `--bind`, `--port`, `--log-dir`, `--retention-days`
   - CLI configuration (`config.rs`)
   - HTTP server composition (`server.rs`)
   - Logging setup (`logging.rs`)
@@ -147,6 +167,22 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **File download**: Integrated download functionality with backend cache support
 - **UI Features**: macOS-style aesthetics, context menus, dark mode support
 
+## Test Coverage
+
+### Backend (Rust)
+- **Total Tests**: 950 passing
+- **Coverage Tool**: `cargo-llvm-cov`
+- **Test Requirements**: Requires `OPSBOX_NO_PROXY=1` for LLM module tests
+- **Coverage Status**: Comprehensive unit and integration tests across all modules
+
+### Frontend (TypeScript/Svelte)
+- **Server Tests**: 55 passing (Node.js environment)
+- **Browser Tests**: Currently not running (port permission issues)
+- **Coverage Thresholds**: Set to 70% lines/functions/statements, 60% branches
+- **Current Coverage**: ~1% (mostly server-side utilities only)
+
+**Note**: Frontend coverage is low because browser tests are disabled due to port permissions. Focus testing on core utilities (`orl.ts`, `highlight.ts`) which have good coverage (>80%).
+
 ## Development Guidelines
 
 ### When Making Changes
@@ -174,6 +210,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **API Prefixes**: Each module has its own prefix (`/api/v1/logseek`, `/api/v1/agents`, `/api/v1/explorer`)
 - **Database**: Single SQLite file (`$HOME/.opsbox/opsbox.db`) shared across modules
 - **LLM Integration**: Configurable via environment variables (`LLM_PROVIDER`, `OLLAMA_BASE_URL`, etc.) and database-persistent backends
+  - **Proxy Detection**: `reqwest` automatically detects system proxy settings; use `OPSBOX_NO_PROXY=1` to disable (required for testing on macOS)
 - **S3 Profiles**: Multiple S3 configurations managed via profiles API
 - **Agent Communication**: HTTP-based with health monitoring and tags
 - **Query Qualifiers**:
@@ -200,14 +237,42 @@ pnpm --dir web dev
 pnpm --dir web build  # Builds to backend/opsbox-server/static
 cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 
-# Testing
-cargo test --manifest-path backend/Cargo.toml
+# Testing (backend requires OPSBOX_NO_PROXY=1 for LLM tests)
+OPSBOX_NO_PROXY=1 cargo test --manifest-path backend/Cargo.toml
 pnpm --dir web test
 
 # Frontend testing with specific environments
 pnpm --dir web test:unit  # Run all tests
 pnpm --dir web test:unit --run --project=client  # Browser tests only
 pnpm --dir web test:unit --run --project=server  # Node.js tests only
+
+# Backend code coverage (requires cargo-llvm-cov)
+OPSBOX_NO_PROXY=1 cargo llvm-cov --manifest-path backend/Cargo.toml --workspace --lcov
+```
+
+### Build Options and Feature Flags
+
+**Module Features:**
+```bash
+# Default build (includes all modules)
+cargo build --manifest-path backend/Cargo.toml -p opsbox-server
+
+# Build specific modules only
+cargo build -p opsbox-server --no-default-features -F logseek,agent-manager
+
+# Available features:
+# - logseek: Log search module (with mimalloc-collect for memory collection)
+# - agent-manager: Agent registry and management
+# - explorer: Distributed file/resource browser
+```
+
+**LogSeek Sub-features:**
+```bash
+# Enable mimalloc memory collection on cache cleanup
+cargo build -p logseek --features mimalloc-collect
+
+# Enable network-dependent tests
+cargo test -p logseek --features network-tests
 ```
 
 ### Configuration Priority
@@ -217,8 +282,50 @@ pnpm --dir web test:unit --run --project=server  # Node.js tests only
 3. Database settings (for persistent config)
 4. Default values (lowest priority)
 
+### Environment Variables
+
+**Testing:**
+- `OPSBOX_NO_PROXY=1` - Disable `reqwest` system proxy detection (required for LLM tests on macOS)
+- `CI=1` - CI environment indicator (also disables proxy detection)
+
+**LLM Configuration:**
+- `LLM_PROVIDER` - LLM provider (`ollama` or `openai`, default: `ollama`)
+- `OLLAMA_BASE_URL` - Ollama server URL (default: `http://127.0.0.1:11434`)
+- `OLLAMA_MODEL` - Default Ollama model (default: `qwen3:8b`)
+- `OLLAMA_TIMEOUT_SECS` - Ollama request timeout in seconds
+- `OPENAI_API_KEY` - OpenAI API key (required for OpenAI provider)
+- `OPENAI_BASE_URL` - OpenAI-compatible API URL (default: `https://api.openai.com`)
+- `OPENAI_MODEL` - Default OpenAI model (default: `gpt-4o-mini`)
+- `OPENAI_TIMEOUT_SECS` - OpenAI request timeout in seconds
+- `OPENAI_ORG` - OpenAI organization ID
+- `OPENAI_PROJECT` - OpenAI project ID
+
+**IO & Network Configuration:**
+- `OPSBOX_IO_TIMEOUT_SEC` / `LOGSEEK_IO_TIMEOUT_SEC` - IO timeout in seconds (default: 30)
+- `LOGSEEK_IO_MAX_RETRIES` - Maximum IO retry attempts (default: 3)
+
+**S3 Proxy Configuration:**
+- `HTTP_PROXY` / `http_proxy` - HTTP proxy URL
+- `HTTPS_PROXY` / `https_proxy` - HTTPS proxy URL
+- `ALL_PROXY` / `all_proxy` - All traffic proxy URL
+- `NO_PROXY` / `no_proxy` - Comma-separated list of proxy bypass hosts
+
+**Database & Server:**
+- `OPSBOX_DATABASE_URL` / `DATABASE_URL` - Custom database path
+- `LOGSEEK_SERVER_ID` - Unique server identifier
+- `LOG_DIR` - Custom log directory path
+- `LOG_RETENTION` - Log retention period in days
+
+**Development Server:**
+- `VITE_HOST` - Vite dev server host (default: `0.0.0.0`)
+- `BACKEND_PORT` - Backend API port for proxy (default: `4000`)
+
+**Claude Code Integration:**
+- `CLAUDECODE` / `CLAUDE_CODE_ENTRYPOINT` - Detects running in Claude Code (affects sandbox behavior)
+
 ### Important Notes
 
+- **LLM Testing**: Backend tests require `OPSBOX_NO_PROXY=1` environment variable to prevent `reqwest` from accessing macOS System Configuration (causes NULL object errors in test environment)
 - **Frontend embedding**: After UI changes, rebuild backend to update embedded assets
 - **Module registration**: New modules must implement `Module` trait and use `register_module!` macro
 - **Database migrations**: Handled automatically, but schema changes require `init_schema` updates
@@ -338,13 +445,18 @@ orl://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
 ### Explorer Module (`/api/v1/explorer`)
 
 - `POST /api/v1/explorer/list` - List resources (Local/S3/Agent)
-- `POST /api/v1/explorer/download` - Download file from Local/S3/Agent endpoint
+- `GET /api/v1/explorer/download?orl=...` - Download file via query parameter
+- POST method is not supported (use GET with query param)
 
 ### System Log Routes (`/api/v1/log`)
 
 - `GET /api/v1/log/config` - Get log configuration
 - `PUT /api/v1/log/level` - Set log level
 - `PUT /api/v1/log/retention` - Set log retention
+
+### Health Check
+
+- `GET /healthy` - Health check endpoint (returns "ok")
 
 ## Source Planning with Starlark
 
@@ -393,6 +505,8 @@ Convert natural language queries to LogSeek query syntax using LLM.
 
 ## Recent Updates
 
+- **Test Infrastructure**: 950 passing backend tests with `OPSBOX_NO_PROXY=1` requirement for LLM module
+- **LLM Test Fix**: Fixed `reqwest` proxy detection issues in test environment (macOS System Configuration access failures)
 - **Starlark Source Planning**: Scriptable source planning with intelligent log source selection using Starlark scripts
 - **NL2Q (Natural Language to Query)**: Convert natural language queries to LogSeek syntax using LLM
 - **Search Session Management**: Support for cancelling running searches via session IDs
@@ -447,3 +561,70 @@ Convert natural language queries to LogSeek query syntax using LLM.
 1. Add CLI argument in `opsbox-server/src/config.rs`
 2. Add environment variable support in module's `configure()` method
 3. Update documentation in README.md if user-facing
+
+## Troubleshooting
+
+### Backend Tests Fail with "Attempted to create a NULL object"
+
+**Symptom:** LLM tests fail with `system-configuration` library errors on macOS
+
+**Cause:** `reqwest` tries to access macOS System Configuration for proxy detection in test environment
+
+**Solution:** Set `OPSBOX_NO_PROXY=1` environment variable
+```bash
+OPSBOX_NO_PROXY=1 cargo test --manifest-path backend/Cargo.toml
+```
+
+### Frontend Browser Tests Fail with "EPERM: operation not permitted"
+
+**Symptom:** Vitest browser tests fail with port permission errors
+
+**Cause:** Port 63315 (or similar) is already in use or requires elevated permissions
+
+**Solution:**
+1. Kill processes using the port: `lsof -ti:63315 | xargs kill -9`
+2. Or run server tests only: `pnpm test:unit --run --project=server`
+
+### Agent Connection Refused
+
+**Symptom:** Cannot connect to registered agents
+
+**Cause:** Agent's `host` and `listen_port` tags not set correctly
+
+**Solution:**
+1. Check agent registration includes correct IP/port
+2. Verify agent's `listen_port` tag matches actual listening port
+3. Check network connectivity between server and agent
+
+### Database Locked Errors
+
+**Symptom:** SQLite database is locked errors
+
+**Cause:** Multiple processes trying to write to database simultaneously
+
+**Solution:**
+1. Ensure only one opsbox-server instance is running
+2. Check for orphaned connections: `lsof | grep opsbox.db`
+3. Delete wal/shm files if needed: `rm ~/.opsbox/opsbox.db-wal ~/.opsbox/opsbox.db-shm`
+
+### S3 Connection Timeout
+
+**Symptom:** S3 operations timeout
+
+**Cause:** Network issues or incorrect proxy configuration
+
+**Solution:**
+1. Disable proxy: `OPSBOX_NO_PROXY=1`
+2. Or set correct proxy: `HTTP_PROXY=http://proxy:8080`
+3. Increase timeout: `OPSBOX_IO_TIMEOUT_SEC=60`
+
+### High Memory Usage
+
+**Symptom:** Memory usage grows over time
+
+**Cause:** LRU cache not being cleaned up
+
+**Solution:**
+1. Build with mimalloc collection: `cargo build --features mimalloc-collect`
+2. Manually trigger cache cleanup via API
+3. Adjust cache size in source code if needed

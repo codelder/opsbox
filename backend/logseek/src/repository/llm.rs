@@ -839,7 +839,10 @@ mod tests {
     backend.timeout_secs = 90;
     save_backend(&pool, &backend, true).await.unwrap();
 
-    let retrieved = get_backend(&pool, "test").await.unwrap().unwrap();
+    let retrieved = get_backend(&pool, "test")
+      .await
+      .expect("Failed to get backend")
+      .expect("Expected 'test' backend to exist");
     assert_eq!(retrieved.model, "llama3");
     assert_eq!(retrieved.timeout_secs, 90);
   }

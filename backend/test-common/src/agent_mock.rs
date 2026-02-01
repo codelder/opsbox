@@ -178,13 +178,7 @@ pub async fn start_mock_agent_server(port: u16) -> Result<MockAgentServer, TestE
 pub fn find_available_port(start: u16, end: u16) -> Option<u16> {
   use std::net::TcpListener;
 
-  for port in start..=end {
-    if TcpListener::bind(("127.0.0.1", port)).is_ok() {
-      return Some(port);
-    }
-  }
-
-  None
+  (start..=end).find(|&port| TcpListener::bind(("127.0.0.1", port)).is_ok())
 }
 
 /// 创建Agent测试信息

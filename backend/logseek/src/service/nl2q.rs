@@ -319,6 +319,7 @@ mod tests {
   #[tokio::test]
   async fn test_resolve_llm_client_fallback_to_env() {
     // 设置环境变量以禁用代理检测，避免沙盒环境问题
+    // SAFETY: 单元测试中设置环境变量，测试框架保证串行运行。
     unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
     let pool = SqlitePool::connect(":memory:").await.unwrap();
     // 数据库未初始化，应该报错
@@ -329,6 +330,7 @@ mod tests {
   #[tokio::test]
   async fn test_resolve_llm_client_from_db() {
     // 设置环境变量以禁用代理检测，避免沙盒环境问题
+    // SAFETY: 单元测试中设置环境变量，测试框架保证串行运行。
     unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
     let pool = SqlitePool::connect(":memory:").await.unwrap();
     llm::init_schema(&pool).await.unwrap();

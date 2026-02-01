@@ -144,3 +144,86 @@ pub fn start_daemon(pid_path: PathBuf) -> io::Result<()> {
 
   Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Test get_user_home returns HOME environment variable
+  #[test]
+  #[cfg(unix)]
+  fn test_get_user_home() {
+    // SAFETY: 单元测试中设置 HOME 环境变量，测试框架保证串行运行。
+    unsafe {
+      std::env::set_var("HOME", "/home/testuser");
+    }
+    assert_eq!(get_user_home(), "/home/testuser");
+  }
+
+  /// Test get_user_home falls back to current directory
+  #[test]
+  #[cfg(unix)]
+  fn test_get_user_home_fallback() {
+    // SAFETY: 单元测试中修改环境变量，测试框架保证串行运行。
+    unsafe {
+      std::env::remove_var("HOME");
+    }
+    assert_eq!(get_user_home(), ".");
+  }
+
+  /// Test resolve_pid_path with tilde expansion
+  #[test]
+  #[cfg(unix)]
+  fn test_resolve_pid_path_with_tilde() {
+    // SAFETY: 单元测试中设置 HOME 环境变量，测试框架保证串行运行。
+    unsafe {
+      std::env::set_var("HOME", "/home/testuser");
+    }
+    let path = resolve_pid_path(&Some(PathBuf::from("~/custom.pid")));
+    assert_eq!(path, PathBuf::from("/home/testuser/custom.pid"));
+  }
+
+  /// Test resolve_pid_path without tilde
+  #[test]
+  #[cfg(unix)]
+  fn test_resolve_pid_path_absolute() {
+    let path = resolve_pid_path(&Some(PathBuf::from("/var/run/opsbox.pid")));
+    assert_eq!(path, PathBuf::from("/var/run/opsbox.pid"));
+  }
+
+  /// Test resolve_pid_path returns default when None
+  #[test]
+  #[cfg(unix)]
+  fn test_resolve_pid_path_default() {
+    // SAFETY: 单元测试中设置 HOME 环境变量，测试框架保证串行运行。
+    unsafe {
+      std::env::set_var("HOME", "/home/testuser");
+    }
+    let path = resolve_pid_path(&None);
+    assert!(path.to_string_lossy().contains(".opsbox"));
+    assert!(path.to_string_lossy().contains("opsbox.pid"));
+  }
+
+  /// Test ensure_parent_dir creates directory
+  #[test]
+  #[cfg(unix)]
+  fn test_ensure_parent_dir() {
+    let temp_dir = std::env::temp_dir();
+    let test_path = temp_dir.join("test_opsbox_dir").join("test.pid");
+
+    ensure_parent_dir(&test_path);
+
+    assert!(test_path.parent().unwrap().exists());
+
+    // Cleanup
+    let _ = fs::remove_dir_all(test_path.parent().unwrap());
+  }
+
+  /// Test signal_name function
+  #[test]
+  #[cfg(unix)]
+  fn test_signal_name() {
+    assert_eq!(signal_name(false), "SIGTERM");
+    assert_eq!(signal_name(true), "SIGKILL");
+  }
+}

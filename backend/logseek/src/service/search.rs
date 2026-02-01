@@ -3,7 +3,6 @@ use std::{
   sync::Arc,
 };
 
-// use futures::io::AsyncReadExt as FuturesAsyncReadExt;
 use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use grep_regex::RegexMatcherBuilder;
@@ -215,19 +214,11 @@ impl SearchProcessor {
     GrepCapability::None
   }
 
-  /// 使用 grep crate 执行因为 (blocking)
-  /// 利用 mmap 和 SIMD 加速
-  fn grep_file_blocking(
-    path: &str,
-    spec: &Query,
-    context_lines: usize,
-    encoding_override: Option<String>,
-  ) -> Result<Option<SearchResult>, String> {
-    // 1. 构建 Regex Pattern
-    // 我们需要构建一个 pattern 能够命中所有 terms (A|B|C...)
-    // 这样 grep 才能找到所有相关行，然后我们在 sink 里再区分具体命中
-    //
-    // 只有 Literal, Phrase, RegexStd 支持。
+  /// 从查询构建组合正则表达式模式
+  ///
+  /// 将 Query 中的所有 term 组合成一个正则表达式，格式为 (A|B|C...)
+  /// 这样 grep 可以找到所有相关行，然后在 sink 中区分具体命中
+  fn build_combined_pattern(spec: &Query) -> Result<String, String> {
     let mut patterns = Vec::new();
     for term in &spec.terms {
       match term {
@@ -242,61 +233,119 @@ impl SearchProcessor {
     }
 
     if patterns.is_empty() {
-      return Ok(None);
+      return Err("No patterns to match".to_string());
     }
 
-    // Join with |
-    let combined_pattern = patterns.join("|");
-    let matcher = RegexMatcherBuilder::new()
-      .case_insensitive(true) // Default to case insensitive as per Query logic? Query terms handle this?
-      // Query logic: Literal -> to_lowercase(), Regex -> re (flags).
-      // My combined pattern uses generic case-insensitive for now?
-      // Wait, `Term::matches` handles case sensitivity per term.
-      // `Literal` is case-insensitive.
-      // `Phrase` is case-sensitive (contains).
-      // `RegexStd` has its own flags.
-      //
-      // This is a problem: A combined regex `(?i)foo|bar` makes both case insensitive.
-      // If we have mixed case sensitivity, we can't use a single global flag.
-      // We can use inline flags: `(?i:foo)|bar`.
-      //
-      // Let's refine pattern construction.
-      .build(&combined_pattern)
-      .map_err(|e| format!("Regex build failed: {}", e))?;
+    Ok(patterns.join("|"))
+  }
 
-    // 2. Detect Encoding (reuse logic, need to read file header)
-    // Or let grep-searcher handle it? grep-searcher supports "encoding" but we need to know WHICH one.
-    // We can peek 4KB.
-    let mut detected_encoding_label = "UTF-8".to_string();
-    {
+  /// 检测文件编码
+  ///
+  /// 读取文件前 4KB 来检测编码，如果提供了 encoding_override 则使用该值
+  fn detect_file_encoding(path: &str, encoding_override: Option<String>) -> Result<String, String> {
+    // 如果提供了编码覆盖，直接使用
+    if let Some(enc) = encoding_override {
+      return Ok(enc);
+    }
+
+    // 否则检测文件编码
+    let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut buf = [0u8; 4096];
+    let n = {
       use std::io::Read;
-      let mut f = std::fs::File::open(path).map_err(|e| e.to_string())?;
-      let mut buf = [0u8; 4096];
-      let n = f.read(&mut buf).unwrap_or(0);
-      if n > 0
-        && let Some(enc) = detect_encoding(&buf[..n])
+      f.read(&mut buf).unwrap_or(0)
+    };
+
+    // 检测文件编码
+    if n > 0
+      && let Some(enc) = detect_encoding(&buf[..n])
+    {
+      return Ok(enc.name().to_string());
+    }
+
+    // 默认使用 UTF-8
+    Ok("UTF-8".to_string())
+  }
+
+  /// 构建 grep 搜索器
+  ///
+  /// 使用指定的编码创建配置好的 Searcher
+  fn build_grep_searcher(encoding_label: &str) -> Result<grep_searcher::Searcher, String> {
+    let enc_res = GrepEncoding::new(encoding_label);
+    let searcher = SearcherBuilder::new()
+      .binary_detection(BinaryDetection::quit(b'\x00'))
+      .encoding(enc_res.ok())
+      // SAFETY: MmapChoice::auto() 让 grep crate 自动决定是否使用 mmap。
+      // 此函数返回的 MmapChoice 是一个简单的配置枚举，不涉及任何不安全的内存操作。
+      // 不安全要求是 grep crate 的 API 设计，实际操作由 searcher.search_path() 安全处理。
+      .memory_map(unsafe { MmapChoice::auto() })
+      .line_number(true)
+      .build();
+    Ok(searcher)
+  }
+
+  /// 合并上下文范围
+  ///
+  /// 将匹配行的上下文范围合并为连续的高亮区域
+  fn merge_context_ranges(matched_lines: &[usize], context_lines: usize, total_lines: usize) -> Vec<(usize, usize)> {
+    let max_idx = total_lines.saturating_sub(1);
+
+    // 生成每个匹配行的上下文范围
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    for idx in matched_lines {
+      let s = idx.saturating_sub(context_lines);
+      let e = std::cmp::min(idx + context_lines, max_idx);
+      ranges.push((s, e));
+    }
+    ranges.sort_by_key(|r| r.0);
+
+    // 合并重叠或相邻的范围
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (s, e) in ranges {
+      if let Some(last) = merged.last_mut()
+        && s <= last.1 + 1
       {
-        detected_encoding_label = enc.name().to_string();
+        if e > last.1 {
+          last.1 = e;
+        }
+      } else {
+        merged.push((s, e));
       }
     }
 
-    // Override if provided
-    if let Some(enc) = encoding_override {
-      detected_encoding_label = enc;
-    }
+    merged
+  }
 
-    // 3. Build Searcher
-    let enc_res = GrepEncoding::new(&detected_encoding_label);
-    let mut searcher = SearcherBuilder::new()
-      .binary_detection(BinaryDetection::quit(b'\x00'))
-      .encoding(enc_res.ok())
-      .memory_map(unsafe { MmapChoice::auto() }) // Enable mmap!
-      .line_number(true)
-      .build();
+  /// 读取并解码文件内容为行向量
+  fn read_and_decode_file(path: &str, encoding: &'static Encoding) -> Result<Vec<String>, String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    Ok(decode_buffer_to_lines(encoding, &bytes, "grep_file_result "))
+  }
 
-    // 4. Run Sink
+  /// 使用 grep crate 执行文件搜索 (blocking)
+  /// 利用 mmap 和 SIMD 加速
+  fn grep_file_blocking(
+    path: &str,
+    spec: &Query,
+    context_lines: usize,
+    encoding_override: Option<String>,
+  ) -> Result<Option<SearchResult>, String> {
+    // 1. 构建正则表达式匹配器
+    let combined_pattern = Self::build_combined_pattern(spec)?;
+    let matcher = RegexMatcherBuilder::new()
+      .case_insensitive(true)
+      .build(&combined_pattern)
+      .map_err(|e| format!("Regex build failed: {}", e))?;
+
+    // 2. 检测文件编码
+    let detected_encoding_label = Self::detect_file_encoding(path, encoding_override)?;
+
+    // 3. 构建搜索器
+    let mut searcher = Self::build_grep_searcher(&detected_encoding_label)?;
+
+    // 4. 执行搜索
     let mut occurs = vec![false; spec.terms.len()];
-    let mut matched_lines: Vec<usize> = Vec::new(); // 0-based
+    let mut matched_lines: Vec<usize> = Vec::new();
     let mut matched_count = 0;
 
     let mut sink = BooleanContextSink::new(
@@ -311,80 +360,19 @@ impl SearchProcessor {
       .search_path(&matcher, path, &mut sink)
       .map_err(|e| e.to_string())?;
 
-    // 5. Eval Boolean Logic
+    // 5. 评估布尔逻辑
     let expr_match = spec.eval_file(&occurs);
 
     if expr_match && matched_count > 0 {
       matched_lines.sort();
       matched_lines.dedup();
 
-      // 重新读取文件内容 (Full File)以满足前端对行号的预期
-      // 使用之前检测到的 encoding
-
+      // 6. 读取并解码文件内容
       let encoding = Encoding::for_label(detected_encoding_label.as_bytes()).unwrap_or(UTF_8);
-      // 这里的 encoding 是 encoding_rs::Encoding
+      let lines = Self::read_and_decode_file(path, encoding)?;
 
-      // 为了复用 read_lines_* 函数，我们需要 sample。
-      // 或者直接读取。现在的 read_lines_* 需要 sample。
-      // 我们可以 simple read 一点? 或者修改 read_lines_* ?
-      // 复用现有逻辑最安全。grep_context 读取前 4096 作为 sample。
-      // 我们这里可以简单读取前 4096.
-
-      // let's read first 4096 bytes from reader.
-      // Since we use std::fs::read below, we don't need manual sample reading.
-
-      let lines_result = if encoding == UTF_8 {
-        // Async reader require? grep_file_blocking is synchronous (tokio::spawn_blocking wrapper)
-        // BUT read_lines_utf8 takes AsyncRead.
-        // We are in blocking thread. We cannot block_on async functions easily unless we use Handle.
-        //
-        // Refactoring `read_lines_*` to be synchronous is too much work.
-        //
-        // ALTERNATIVE: Use `grep-searcher`'s Sink to collect ALL lines?
-        // No, that scans.
-        //
-        // ALTERNATIVE: Use std::io::BufRead lines()?
-        // We need manual decoding handling.
-        // `decode_buffer_to_lines` is synchronous and pure.
-        // We can read whole file into buffer (mmap?) and decode.
-        // Since we are optimizing for speed, usually mmap is good.
-        // BUT we need `Vec<String>`.
-        //
-        // Let's use `std::fs::read` to get all bytes.
-        // Then decode.
-        // Since `grep_file_blocking` is in blocking thread, it's fine.
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        decode_buffer_to_lines(encoding, &bytes, "grep_file_result ")
-      } else {
-        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        decode_buffer_to_lines(encoding, &bytes, "grep_file_result ")
-      };
-
-      let lines = lines_result;
-
-      // 生成 Merged Ranges (highlight regions)
-      // 逻辑同 grep_context
-      let mut ranges: Vec<(usize, usize)> = Vec::new();
-      let max_idx = lines.len().saturating_sub(1);
-      for idx in matched_lines {
-        let s = idx.saturating_sub(context_lines);
-        let e = std::cmp::min(idx + context_lines, max_idx);
-        ranges.push((s, e));
-      }
-      ranges.sort_by_key(|r| r.0);
-
-      let mut merged: Vec<(usize, usize)> = Vec::new();
-      for (s, e) in ranges {
-        if let Some(last) = merged.last_mut()
-          && s <= last.1 + 1
-        {
-          if e > last.1 {
-            last.1 = e;
-          }
-          continue;
-        }
-        merged.push((s, e));
-      }
+      // 7. 生成合并的上下文范围
+      let merged = Self::merge_context_ranges(&matched_lines, context_lines, lines.len());
 
       return Ok(Some(SearchResult::new(
         path.to_string(),
@@ -396,11 +384,11 @@ impl SearchProcessor {
 
     Ok(None)
   }
+  /// 使用 grep crate 对 Gzip 文件进行流式搜索
   ///
   /// # 返回
   /// - `Ok(())`: 发送成功
   /// - `Err(SearchError::ChannelClosed)`: 接收端已关闭
-  /// 使用 grep crate 对 Gzip 文件进行流式搜索
   fn grep_reader_blocking_gzip(
     path: &str,
     spec: &Query,
