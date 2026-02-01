@@ -287,14 +287,33 @@ impl ResourceIdentifier {
 
 impl fmt::Display for ResourceIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "orl://{}@{}", self.endpoint.id, self.endpoint.endpoint_type)?;
-        if let Some(addr) = &self.endpoint.server_addr {
-            write!(f, ".{}", addr)?;
+        // ORL 格式: orl://[id]@[type][.server_addr]/[path]?entry=[entry_path]
+        // 对于本地资源，省略 id: orl://local/[path]
+        // 对于其他资源: orl://[id]@[type][.server_addr]/[path]
+
+        match self.endpoint.endpoint_type {
+            EndpointType::Local => {
+                // 本地: orl://local/path
+                write!(f, "orl://local{}", self.path)?;
+            }
+            EndpointType::Agent => {
+                // Agent: orl://[id]@agent[.server_addr]/path
+                write!(f, "orl://{}@agent", self.endpoint.id)?;
+                if let Some(addr) = &self.endpoint.server_addr {
+                    write!(f, ".{}", addr)?;
+                }
+                write!(f, "{}", self.path)?;
+            }
+            EndpointType::S3 => {
+                // S3: orl://[id]@s3/path
+                write!(f, "orl://{}@s3{}", self.endpoint.id, self.path)?;
+            }
         }
-        write!(f, "{}", self.path)?;
+
         if let Some(entry) = &self.archive_entry {
             write!(f, "?entry={}", entry.as_str())?;
         }
+
         Ok(())
     }
 }
@@ -509,5 +528,49 @@ mod tests {
 
         let deserialized: ResourceIdentifier = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, id);
+    }
+
+    #[test]
+    fn test_resource_identifier_orl_format() {
+        // 本地资源: orl://local/path
+        let id = ResourceIdentifier::local("/var/log/app.log");
+        assert_eq!(id.to_string(), "orl://local/var/log/app.log");
+
+        // Agent 资源: orl://id@agent.addr/path
+        let id = ResourceIdentifier::agent("web-01", "/app/log", Some("192.168.1.100".to_string()));
+        assert_eq!(id.to_string(), "orl://web-01@agent.192.168.1.100/app/log");
+
+        // Agent 资源无服务器地址: orl://id@agent/path
+        let id = ResourceIdentifier::agent("web-01", "/app/log", None);
+        assert_eq!(id.to_string(), "orl://web-01@agent/app/log");
+
+        // S3 资源: orl://id@s3/path
+        let id = ResourceIdentifier::s3("prod", "/bucket/path");
+        assert_eq!(id.to_string(), "orl://prod@s3/bucket/path");
+
+        // 归档资源: orl://local/path?entry=inner
+        let id = ResourceIdentifier::local("/archive.tar.gz")
+            .archive("inner/file.log");
+        assert_eq!(id.to_string(), "orl://local/archive.tar.gz?entry=inner/file.log");
+    }
+
+    #[test]
+    fn test_resource_identifier_orl_roundtrip() {
+        // 测试序列化/反序列化往返
+        let original = ResourceIdentifier::local("/var/log/app.log");
+        let orl_string = original.to_string();
+        let parsed: ResourceIdentifier = orl_string.parse().unwrap();
+        assert_eq!(parsed, original);
+
+        let original = ResourceIdentifier::agent("web-01", "/app/log", Some("192.168.1.100".to_string()));
+        let orl_string = original.to_string();
+        let parsed: ResourceIdentifier = orl_string.parse().unwrap();
+        assert_eq!(parsed, original);
+
+        let original = ResourceIdentifier::s3("prod", "/bucket/path")
+            .archive("inner/log.txt");
+        let orl_string = original.to_string();
+        let parsed: ResourceIdentifier = orl_string.parse().unwrap();
+        assert_eq!(parsed, original);
     }
 }
