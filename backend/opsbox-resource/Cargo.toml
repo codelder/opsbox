@@ -11,6 +11,12 @@ opsbox-core = { path = "../opsbox-core" }
 # 异步支持
 async-trait = "0.1"
 tokio = { version = "1", features = ["io-util", "fs"] }
+# 归档支持
+async-compression = { version = "0.4", features = ["tokio", "gzip", "zlib"] }
+async-tar = "0.5"
+async_zip = { version = "0.0.18", features = ["tokio"] }
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["compat", "io"] }
 # S3 支持
 aws-sdk-s3 = "1.15"
 # 错误处理

@@ -3332,12 +3332,17 @@ dependencies = [
 name = "opsbox-resource"
 version = "0.1.1"
 dependencies = [
+ "async-compression",
+ "async-tar",
  "async-trait",
+ "async_zip",
  "aws-sdk-s3",
+ "futures",
  "opsbox-core",
  "opsbox-domain",
  "thiserror 2.0.17",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
