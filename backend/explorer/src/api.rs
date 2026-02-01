@@ -7,9 +7,10 @@ use axum::{
   routing::{get, post},
 };
 use opsbox_core::SuccessResponse;
-use opsbox_core::odfs::orl::ORL;
+use opsbox_domain::resource::ResourceIdentifier;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::str::FromStr;
 use tokio_util::io::ReaderStream;
 
 use crate::domain::ResourceItem;
@@ -41,12 +42,13 @@ async fn list_resources(
   State(state): State<Arc<AppState>>,
   Json(payload): Json<ListRequest>,
 ) -> opsbox_core::Result<impl IntoResponse> {
-  // Parse ORL
-  let orl = ORL::parse(payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
+  // 解析为类型安全的 ResourceIdentifier
+  let rid = ResourceIdentifier::from_str(&payload.orl)
+    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   let items = state
     .service
-    .list(&orl)
+    .list(&rid)
     .await
     .map_err(opsbox_core::AppError::internal)?;
 
@@ -61,11 +63,13 @@ async fn download_resource(
   State(state): State<Arc<AppState>>,
   Query(payload): Query<ListRequest>,
 ) -> Result<impl IntoResponse, opsbox_core::AppError> {
-  let orl = ORL::parse(payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
+  // 解析为类型安全的 ResourceIdentifier
+  let rid = ResourceIdentifier::from_str(&payload.orl)
+    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   let (filename, size, reader) = state
     .service
-    .download(&orl)
+    .download(&rid)
     .await
     .map_err(opsbox_core::AppError::internal)?;
 

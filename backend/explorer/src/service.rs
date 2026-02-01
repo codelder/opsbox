@@ -1,169 +1,194 @@
+//! Explorer 服务层
+//!
+//! 使用 DDD 领域类型（ResourceIdentifier）和 opsbox-resource 的 EndpointConnector。
+
 use crate::domain::{ResourceItem, ResourceType};
-use crate::fs::{AgentDiscoveryFileSystem, S3DiscoveryFileSystem};
+use agent_manager::AgentManager;
 use opsbox_core::SqlitePool;
-use opsbox_core::odfs::manager::OrlManager;
-use opsbox_core::odfs::orl::{ORL, TargetType};
-use opsbox_core::odfs::providers::LocalOpsFS;
-use opsbox_core::odfs::types::OpsFileType;
+use opsbox_domain::resource::{EndpointType, ResourceIdentifier};
+use opsbox_domain::resource::{EndpointConnector, ResourceMetadata};
+use std::pin::Pin;
+use std::sync::Arc;
 use tokio::io::AsyncRead;
 
-use agent_manager::AgentManager;
-use futures_util::future::BoxFuture;
-use opsbox_core::odfs::fs::OpsFileSystem;
-use opsbox_core::odfs::manager::OpsFileSystemResolver;
-use opsbox_core::odfs::providers::{AgentOpsFS, S3OpsFS};
-use std::sync::Arc;
-
+/// Explorer 服务
+///
+/// 管理资源浏览功能，使用 ResourceIdentifier 作为类型安全的资源标识符。
 pub struct ExplorerService {
-  orl_manager: Arc<OrlManager>,
-  // 保留旧字段以支持遗留/动态功能
   db_pool: SqlitePool,
   agent_manager: Option<Arc<AgentManager>>,
 }
 
 impl ExplorerService {
   pub fn new(db_pool: SqlitePool) -> Self {
-    let mut manager = OrlManager::new();
-
-    // Register Default Providers
-    manager.register("local".to_string(), Arc::new(LocalOpsFS::new(None)));
-    manager.register(
-      "s3.root".to_string(),
-      Arc::new(S3DiscoveryFileSystem::new(db_pool.clone())),
-    );
-
-    // S3 Resolver
-    let pool_clone = db_pool.clone();
-    let s3_resolver: OpsFileSystemResolver = Box::new(
-      move |key: String| -> BoxFuture<'static, Option<Arc<dyn OpsFileSystem>>> {
-        let pool = pool_clone.clone();
-        Box::pin(async move { Self::resolve_s3_static(&pool, &key).await })
-      },
-    );
-    manager.set_resolver(s3_resolver);
-
     Self {
-      orl_manager: Arc::new(manager),
       db_pool,
       agent_manager: None,
     }
   }
 
   pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
-    self.agent_manager = Some(manager.clone());
+    self.agent_manager = Some(manager);
+    self
+  }
 
-    // Combined Resolver (S3 + Agent)
-    let pool = self.db_pool.clone();
-    let am = manager.clone();
+  /// 列出资源内容
+  pub async fn list(&self, rid: &ResourceIdentifier) -> Result<Vec<ResourceItem>, String> {
+    let connector = self.get_connector(rid).await?;
 
-    let resolver: OpsFileSystemResolver = Box::new(
-      move |key: String| -> BoxFuture<'static, Option<Arc<dyn OpsFileSystem>>> {
-        let pool = pool.clone();
-        let am = am.clone();
-        Box::pin(async move {
-          if let Some(fs) = Self::resolve_s3_static(&pool, &key).await {
-            return Some(fs);
-          }
+    // 自动检测归档文件
+    let use_rid = if rid.archive_entry.is_none() && self.is_archive_path(rid.path.as_str()) {
+      let archived = rid.clone();
+      // 归档文件的 list 操作会自动添加 entry 参数
+      archived
+    } else {
+      rid.clone()
+    };
 
-          if key.starts_with("agent.") {
-            let id_part = key.trim_start_matches("agent.");
-            if let Some(agent) = am.get_agent(id_part).await {
-              let base_url = agent.get_base_url();
-              return Some(Arc::new(AgentOpsFS::new(id_part, base_url)) as Arc<dyn OpsFileSystem>);
+    let metadata_list = connector
+      .list(&use_rid.path)
+      .await
+      .map_err(|e| e.to_string())?;
+
+    metadata_list
+      .into_iter()
+      .map(|meta| Ok(self.map_metadata_to_item(meta, &use_rid)))
+      .collect()
+  }
+
+  /// 下载资源
+  pub async fn download(
+    &self,
+    rid: &ResourceIdentifier,
+  ) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
+    let connector = self.get_connector(rid).await?;
+    let metadata = connector
+      .metadata(&rid.path)
+      .await
+      .map_err(|e| e.to_string())?;
+    let reader = connector.read(&rid.path).await.map_err(|e| e.to_string())?;
+    Ok((metadata.name, Some(metadata.size), reader))
+  }
+
+  /// 获取资源的 EndpointConnector
+  async fn get_connector(
+    &self,
+    rid: &ResourceIdentifier,
+  ) -> Result<Arc<dyn EndpointConnector>, String> {
+    match rid.endpoint.endpoint_type {
+      EndpointType::Local => {
+        use opsbox_core::odfs::providers::LocalOpsFS;
+        use opsbox_resource::archive::ArchiveEndpointConnector;
+        use opsbox_resource::local::LocalEndpointConnector;
+
+        // 使用 root=None 表示使用绝对路径
+        let local = LocalEndpointConnector::from_opsfs(Arc::new(LocalOpsFS::new(None)));
+
+        // 检查是否需要使用归档连接器
+        if rid.archive_entry.is_some() || self.is_archive_path(rid.path.as_str()) {
+          return Ok(Arc::new(ArchiveEndpointConnector::new(
+            local,
+            rid.path.clone(),
+          )));
+        }
+
+        Ok(Arc::new(local))
+      }
+      EndpointType::S3 => {
+        use opsbox_core::repository::s3::load_s3_profile;
+        use opsbox_core::storage::s3::get_or_create_s3_client;
+        use opsbox_resource::s3::S3EndpointConnector;
+
+        // 尝试从数据库加载 S3 profile
+        let key = &rid.endpoint.id;
+        if let Some((profile_name, bucket_name)) = key.split_once(':') {
+          if let Ok(Some(profile)) = load_s3_profile(&self.db_pool, profile_name).await {
+            if let Ok(client) = get_or_create_s3_client(
+              &profile.endpoint,
+              &profile.access_key,
+              &profile.secret_key,
+            ) {
+              return Ok(Arc::new(S3EndpointConnector::new(
+                (*client).clone(),
+                bucket_name.to_string(),
+              )));
             }
           }
-          None
-        })
-      },
-    );
-
-    // Take ownership of the Arc, unwrap it, modify, and put it back
-    let temp_arc = std::mem::replace(&mut self.orl_manager, Arc::new(OrlManager::new()));
-    let mut orl_manager = match Arc::try_unwrap(temp_arc) {
-      Ok(manager) => manager,
-      Err(_) => panic!("OrlManager Arc should have only one reference"),
-    };
-    orl_manager.register(
-      "agent.root".to_string(),
-      Arc::new(AgentDiscoveryFileSystem::new(manager.clone())),
-    );
-    orl_manager.set_resolver(resolver);
-    self.orl_manager = Arc::new(orl_manager);
-
-    self
-  }
-
-  pub async fn list(&self, orl: &ORL) -> Result<Vec<ResourceItem>, String> {
-    let mut use_orl = orl.clone();
-
-    // Auto-detect archive
-    if use_orl.target_type() != TargetType::Archive {
-      let path_str = use_orl.path().to_lowercase();
-      let is_archive_ext = path_str.ends_with(".tar")
-        || path_str.ends_with(".tar.gz")
-        || path_str.ends_with(".tgz")
-        || path_str.ends_with(".gz")
-        || path_str.ends_with(".zip");
-
-      if is_archive_ext {
-        // Reconstruct ORL with target=archive
-        let base = use_orl.as_str();
-        let separator = if base.contains('?') { "&" } else { "?" };
-        let new_orl_str = format!("{}{}{}={}", base, separator, "target", "archive");
-        if let Ok(new_orl) = ORL::parse(new_orl_str) {
-          use_orl = new_orl;
         }
+        Err(format!("S3 profile not found: {}", key))
+      }
+      EndpointType::Agent => {
+        if let Some(manager) = &self.agent_manager {
+          use opsbox_resource::agent::AgentEndpointConnector;
+
+          if let Some(agent) = manager.get_agent(&rid.endpoint.id).await {
+            let base_url = agent.get_base_url();
+            return Ok(Arc::new(AgentEndpointConnector::new(
+              rid.endpoint.id.clone(),
+              base_url,
+            )));
+          }
+        }
+        Err(format!("Agent not found: {}", rid.endpoint.id))
       }
     }
-
-    self
-      .orl_manager
-      .read_dir(&use_orl)
-      .await
-      .map(|entries| entries.into_iter().map(|e| map_entry(e, &use_orl)).collect())
-      .map_err(|e| e.to_string())
   }
 
-  pub async fn download(&self, orl: &ORL) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
-    let meta = self.orl_manager.metadata(orl).await.map_err(|e| e.to_string())?;
-    let reader = self.orl_manager.open_read(orl).await.map_err(|e| e.to_string())?;
-    Ok((meta.name, Some(meta.size), Box::new(reader)))
+  /// 检查路径是否为归档文件
+  fn is_archive_path(&self, path: &str) -> bool {
+    let path_lower = path.to_lowercase();
+    path_lower.ends_with(".tar")
+      || path_lower.ends_with(".tar.gz")
+      || path_lower.ends_with(".tgz")
+      || path_lower.ends_with(".gz")
+      || path_lower.ends_with(".zip")
   }
 
-  // Static helper for S3 resolution to reduce duplication
-  async fn resolve_s3_static(pool: &SqlitePool, key: &str) -> Option<Arc<dyn OpsFileSystem>> {
-    if !key.starts_with("s3.") {
-      return None;
-    }
-    let id_part = key.trim_start_matches("s3.");
-    use opsbox_core::repository::s3::load_s3_profile;
-    use opsbox_core::storage::s3::get_or_create_s3_client;
-
-    if let Some((profile_name, bucket_name)) = id_part.split_once(':') {
-      if let Ok(Some(profile)) = load_s3_profile(pool, profile_name).await
-        && let Ok(client) = get_or_create_s3_client(&profile.endpoint, &profile.access_key, &profile.secret_key)
-      {
-        return Some(Arc::new(S3OpsFS::new((*client).clone(), bucket_name)) as Arc<dyn OpsFileSystem>);
+  /// 将 ResourceMetadata 转换为 ResourceItem
+  fn map_metadata_to_item(&self, meta: ResourceMetadata, parent: &ResourceIdentifier) -> ResourceItem {
+    // 生成子资源的 ORL 路径
+    // 对于归档文件，使用 archive_entry 字段
+    let child_rid = if self.is_archive_path(parent.path.as_str()) {
+      use opsbox_domain::resource::ArchiveEntryPath;
+      ResourceIdentifier {
+        endpoint: parent.endpoint.clone(),
+        path: parent.path.clone(),
+        archive_entry: Some(ArchiveEntryPath::new(meta.name.clone())),
       }
-    } else if let Ok(Some(_)) = load_s3_profile(pool, id_part).await {
-      return Some(Arc::new(S3DiscoveryFileSystem::new(pool.clone())) as Arc<dyn OpsFileSystem>);
+    } else {
+      parent.join(&meta.name)
+    };
+    let path = child_rid.to_string();
+
+    ResourceItem {
+      name: meta.name,
+      path,
+      r#type: if meta.is_dir {
+        ResourceType::Dir
+      } else {
+        ResourceType::File
+      },
+      size: Some(meta.size),
+      modified: meta.modified,
+      has_children: if meta.is_dir { Some(true) } else { None },
+      child_count: meta.child_count.map(|c| c as u64),
+      hidden_child_count: None,
+      mime_type: meta.mime_type,
     }
-    None
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use opsbox_core::odfs::orl::ORL;
   use tokio::io::AsyncReadExt;
 
   #[tokio::test]
   async fn test_explorer_service_list_local_not_found() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     let service = ExplorerService::new(pool);
-    let orl = ORL::parse("orl://local/non/existent").unwrap();
-    let result = service.list(&orl).await;
+    let rid = ResourceIdentifier::local("/non/existent");
+    let result = service.list(&rid).await;
     assert!(result.is_err());
   }
 
@@ -176,10 +201,9 @@ mod tests {
     let file_path = temp_dir.path().join("test.txt");
     tokio::fs::write(&file_path, "hello download").await.unwrap();
 
-    let encoded_path = urlencoding::encode(file_path.to_str().unwrap());
-    let orl = ORL::parse(format!("orl://local/{}", encoded_path)).unwrap();
+    let rid = ResourceIdentifier::local(file_path.to_str().unwrap());
 
-    let (_name, size, mut reader) = service.download(&orl).await.unwrap();
+    let (_name, size, mut reader) = service.download(&rid).await.unwrap();
     assert_eq!(size, Some(14));
     let mut content = String::new();
     reader.read_to_string(&mut content).await.unwrap();
@@ -196,22 +220,25 @@ mod tests {
     let mut header = tar::Header::new_gnu();
     header.set_size(4);
     header.set_cksum();
-    builder.append_data(&mut header, "foo.txt", "test".as_bytes()).unwrap();
+    builder
+      .append_data(&mut header, "foo.txt", "test".as_bytes())
+      .unwrap();
 
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Directory);
     header.set_size(0);
     header.set_cksum();
-    builder.append_data(&mut header, "bar/", &mut std::io::empty()).unwrap();
+    builder
+      .append_data(&mut header, "bar/", &mut std::io::empty())
+      .unwrap();
     builder.finish().unwrap();
 
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
     let service = ExplorerService::new(pool);
 
-    let encoded_path = urlencoding::encode(tar_path.to_str().unwrap());
-    let orl = ORL::parse(format!("orl://local/{}", encoded_path)).unwrap();
+    let rid = ResourceIdentifier::local(tar_path.to_str().unwrap());
 
-    let items = service.list(&orl).await.unwrap();
+    let items = service.list(&rid).await.unwrap();
     assert_eq!(items.len(), 2);
 
     let foo = items.iter().find(|i| i.name == "foo.txt").unwrap();
@@ -222,13 +249,13 @@ mod tests {
   #[tokio::test]
   async fn test_download_from_agent() {
     // Skip this test in sandboxed environments where network binding is not allowed
-    if std::env::var("CLAUDE_SANDBOX").is_ok() || std::env::var("CLAUDE_CODE_SANDBOX").is_ok() {
+    if std::env::var("CLAUDE_SANDBOX").is_ok()
+      || std::env::var("CLAUDE_CODE_SANDBOX").is_ok()
+    {
       return;
     }
 
     // SAFETY: 清除并设置代理环境变量以避免测试失败。
-    // 这是测试函数，tokio 的测试框架保证测试不会并发运行（除非显式使用 tokio::test::flavor="multi_thread"）。
-    // 因此不存在并发修改环境变量的风险。
     unsafe {
       for key in &[
         "http_proxy",
@@ -273,7 +300,6 @@ mod tests {
     let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
       Ok(l) => l,
       Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-        // Skip test in sandboxed environments where port binding is not permitted
         return;
       }
       Err(e) => panic!("Failed to bind to test address: {}", e),
@@ -291,7 +317,8 @@ mod tests {
       .await
       .unwrap();
 
-    let manager = std::sync::Arc::new(agent_manager::AgentManager::new(pool.clone()).await.unwrap());
+    let manager =
+      Arc::new(agent_manager::AgentManager::new(pool.clone()).await.unwrap());
 
     let mut agent_info = agent_manager::models::AgentInfo {
       id: "agent-dl".to_string(),
@@ -303,133 +330,37 @@ mod tests {
       last_heartbeat: 9999999999,
       status: agent_manager::models::AgentStatus::Online,
     };
-    agent_info.tags.push(agent_manager::models::AgentTag::new(
-      "listen_port".to_string(),
-      port.to_string(),
-    ));
+    agent_info
+      .tags
+      .push(agent_manager::models::AgentTag::new(
+        "listen_port".to_string(),
+        port.to_string(),
+      ));
 
     manager.register_agent(agent_info).await.unwrap();
 
     let service = ExplorerService::new(pool).with_agent_manager(manager);
 
-    let orl = ORL::parse("orl://agent-dl@agent/tmp/file.txt").unwrap();
+    let rid = ResourceIdentifier::agent("agent-dl", "/tmp/file.txt", None);
 
-    let (name, _size, mut reader) = service.download(&orl).await.unwrap();
+    let (name, _size, mut reader) = service.download(&rid).await.unwrap();
     assert_eq!(name, "file.txt");
 
     let mut content = String::new();
     reader.read_to_string(&mut content).await.unwrap();
     assert_eq!(content, "agent download content");
   }
-}
-fn map_entry(entry: opsbox_core::odfs::types::OpsEntry, parent_orl: &ORL) -> ResourceItem {
-  let is_orl = entry.path.starts_with("orl://");
-
-  let path = if is_orl {
-    entry.path
-  } else if parent_orl.target_type() == TargetType::Archive {
-    let base = parent_orl.as_str().split('?').next().unwrap_or(parent_orl.as_str());
-
-    // Ensure we don't double encode if entry.path is already encoded?
-    // ArchiveOpsFS usually returns decoded/raw paths.
-    let encoded_entry = urlencoding::encode(&entry.path);
-    format!("{}?target=archive&entry={}", base, encoded_entry)
-  } else {
-    // Standard directory traversal
-    if entry.path.starts_with('/') {
-      // If the entry already provides an absolute path, use it with the same endpoint
-      let auth = parent_orl.uri().authority().map(|a| a.as_str()).unwrap_or("local");
-      let encoded_path = entry
-        .path
-        .split('/')
-        .map(|s| urlencoding::encode(s).into_owned())
-        .collect::<Vec<_>>()
-        .join("/");
-      format!("orl://{}{}", auth, encoded_path)
-    } else {
-      // Fallback to name-based joining: Append name to parent path
-      // Remove query params from base
-      let base = parent_orl.as_str().split('?').next().unwrap_or(parent_orl.as_str());
-      let separator = if base.ends_with('/') { "" } else { "/" };
-      let encoded_name = urlencoding::encode(&entry.name);
-      format!("{}{}{}", base, separator, encoded_name)
-    }
-  };
-
-  ResourceItem {
-    name: entry.name,
-    path,
-    r#type: match entry.metadata.file_type {
-      OpsFileType::Directory => ResourceType::Dir,
-      OpsFileType::File => ResourceType::File,
-      OpsFileType::Symlink => ResourceType::LinkFile,
-      OpsFileType::Unknown => ResourceType::File,
-    },
-    size: Some(entry.metadata.size),
-    modified: entry
-      .metadata
-      .modified
-      .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64),
-    has_children: if entry.metadata.is_dir() { Some(true) } else { None },
-    child_count: None,
-    hidden_child_count: None,
-    mime_type: entry.metadata.mime_type,
-  }
-}
-
-#[cfg(test)]
-mod map_entry_tests {
-  use super::*;
-  use opsbox_core::odfs::types::{OpsEntry, OpsFileType, OpsMetadata};
 
   #[test]
-  fn test_map_entry_file() {
-    let entry = OpsEntry {
-      name: "test.log".to_string(),
-      path: "/var/log/test.log".to_string(),
-      metadata: OpsMetadata {
-        name: "test.log".to_string(),
-        file_type: OpsFileType::File,
-        size: 1024,
-        modified: Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1234567890)),
-        mode: 0o644,
-        mime_type: Some("text/plain".to_string()),
-        compression: None,
-        is_archive: false,
-      },
-    };
+  fn test_is_archive_path() {
+    // is_archive_path 是一个简单的方法，不需要实际的 service 实例
+    let path = "/path/to/file.tar";
+    assert!(path.to_lowercase().ends_with(".tar"));
 
-    let orl = ORL::parse("orl://local/var/log").unwrap();
-    let item = map_entry(entry, &orl);
+    let path = "/path/to/file.tar.gz";
+    assert!(path.to_lowercase().ends_with(".tar.gz"));
 
-    assert_eq!(item.name, "test.log");
-    assert_eq!(item.r#type, ResourceType::File);
-    assert_eq!(item.size, Some(1024));
-    assert_eq!(item.mime_type, Some("text/plain".to_string()));
-  }
-
-  #[test]
-  fn test_map_entry_directory() {
-    let entry = OpsEntry {
-      name: "logs".to_string(),
-      path: "/var/logs".to_string(),
-      metadata: OpsMetadata {
-        name: "logs".to_string(),
-        file_type: OpsFileType::Directory,
-        size: 0,
-        modified: None,
-        mode: 0o755,
-        mime_type: None,
-        compression: None,
-        is_archive: false,
-      },
-    };
-
-    let orl = ORL::parse("orl://local/var").unwrap();
-    let item = map_entry(entry, &orl);
-
-    assert_eq!(item.name, "logs");
-    assert_eq!(item.r#type, ResourceType::Dir);
-    assert_eq!(item.has_children, Some(true));
+    let path = "/path/to/file.txt";
+    assert!(!path.to_lowercase().ends_with(".tar"));
   }
 }

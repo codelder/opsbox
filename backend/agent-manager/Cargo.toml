@@ -8,6 +8,7 @@ authors = { workspace = true }
 [dependencies]
 # OpsBox 核心
 opsbox-core = { path = "../opsbox-core" }
+opsbox-domain = { path = "../opsbox-domain" }
 
 # Web 框架
 axum = "0.8"

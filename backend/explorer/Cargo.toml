@@ -7,6 +7,8 @@ authors = { workspace = true }
 
 [dependencies]
 opsbox-core = { path = "../opsbox-core" }
+opsbox-domain = { path = "../opsbox-domain" }
+opsbox-resource = { path = "../opsbox-resource" }
 agent-manager = { path = "../agent-manager" }
 
 # Web Framework

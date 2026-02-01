@@ -1,9 +1,19 @@
 mod lexer;
 pub mod parser;
+pub mod conversion;
 
 use globset::GlobSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+// 重新导出领域查询类型（用于渐进式迁移）
+pub use opsbox_domain::search::{
+    QueryExpression as DomainQueryExpression,
+    ParsedQuery,
+    PathFilter as DomainPathFilter,
+    DateRange,
+    RegexEngine,
+};
 
 #[derive(Debug, Error)]
 pub enum ParseError {

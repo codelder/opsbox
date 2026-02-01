@@ -325,11 +325,15 @@ impl AgentRegistry {
         false
     }
 
-    /// 清理离线 Agent
+    /// 清理离线 Agent（使用注册表级别的超时设置）
     pub fn cleanup_offline(&mut self) -> usize {
         let before = self.agents.len();
+        let now = chrono::Utc::now().timestamp();
         self.agents.retain(|_, agent| {
-            agent.read().ok().map(|a| a.is_online()).unwrap_or(false)
+            agent.read().ok().map(|a| {
+                // 使用注册表级别的超时检查
+                now - a.connection().last_heartbeat < self.heartbeat_timeout_secs
+            }).unwrap_or(false)
         });
         before - self.agents.len()
     }

@@ -12,6 +12,12 @@ path = "src/lib.rs"
 # Shared core library
 opsbox-core = { path = "../opsbox-core" }
 
+# Domain models (DDD)
+opsbox-domain = { path = "../opsbox-domain" }
+
+# Resource connectors
+opsbox-resource = { path = "../opsbox-resource" }
+
 # Agent Manager (OpsBox 核心模块)
 agent-manager = { path = "../agent-manager" }
 
