@@ -224,7 +224,7 @@ impl DateRange {
 
     /// 判断给定日期是否在范围内
     pub fn contains(&self, date: &str) -> bool {
-        date >= &self.start && date <= &self.end
+        date >= self.start.as_str() && date <= self.end.as_str()
     }
 }
 

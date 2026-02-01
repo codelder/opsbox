@@ -2,13 +2,13 @@
 //!
 //! Resource 聚合根和相关的实体定义。
 
-use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
+use tokio::io::AsyncRead;
 
 use super::value_objects::{ResourceIdentifier, ResourcePath, DomainError};
 
@@ -47,15 +47,6 @@ pub trait EndpointConnector: Send + Sync {
 
     /// 检查资源是否存在
     async fn exists(&self, path: &ResourcePath) -> Result<bool, DomainError>;
-}
-
-/// 异步读取 Trait
-pub trait AsyncRead {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>>;
 }
 
 /// 端点注册表

@@ -1,0 +1,17 @@
+[package]
+name = "opsbox-resource"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# 领域模型
+opsbox-domain = { path = "../opsbox-domain" }
+# 核心库（复用现有的 OpsFileSystem）
+opsbox-core = { path = "../opsbox-core" }
+# 异步支持
+async-trait = "0.1"
+tokio = { version = "1", features = ["io-util", "fs"] }
+# 错误处理
+thiserror = "2.0"
+# 日志
+tracing = "0.1"

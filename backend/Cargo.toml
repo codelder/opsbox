@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
   "opsbox-domain",
+  "opsbox-resource",
   "opsbox-server",
   "opsbox-core",
   "logseek",
