@@ -3333,6 +3333,7 @@ name = "opsbox-resource"
 version = "0.1.1"
 dependencies = [
  "async-trait",
+ "aws-sdk-s3",
  "opsbox-core",
  "opsbox-domain",
  "thiserror 2.0.17",

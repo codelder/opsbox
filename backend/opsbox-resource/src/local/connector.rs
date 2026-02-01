@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::io::AsyncRead;
 
-use opsbox_core::odfs::{providers::local::LocalOpsFS, OpsFileSystem, OpsPath};
+use opsbox_core::odfs::{providers::local::LocalOpsFS, OpsFileSystem};
 use opsbox_domain::resource::{
     EndpointConnector, ResourceMetadata, ResourcePath, DomainError,
 };

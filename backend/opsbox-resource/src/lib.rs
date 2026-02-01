@@ -4,14 +4,14 @@
 //!
 //! ## 架构
 //!
-//! ```
+//! ```text
 //! 应用层
-//!     │
-//!     ▼
+//!     |
+//!     v
 //! opsbox-domain (EndpointConnector trait)
-//!     │
-//!     ▼
-//! opsbox-resource (具体实现) ──► opsbox-core::odfs (OpsFileSystem)
+//!     |
+//!     v
+//! opsbox-resource (具体实现) -> opsbox-core::odfs (OpsFileSystem)
 //! ```
 
 pub mod local;
