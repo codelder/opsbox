@@ -2452,7 +2452,6 @@ SOURCES = [
   }
 
   #[tokio::test]
-  #[ignore = "归档搜索的 Complete 事件发送逻辑需要修复 - 暂时跳过"]
   async fn test_search_with_tar_gz_archive() {
     let pool = create_test_pool().await;
 

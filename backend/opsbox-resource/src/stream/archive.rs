@@ -100,7 +100,11 @@ pub struct ArchiveEntryStream {
 
 enum ArchiveEntryStreamInner {
     /// tar.gz 格式 - 存储具体的entries类型
-    TarGz(async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<PrefixedReader<Box<dyn AsyncRead + Send + Unpin>>>>>>),
+    TarGz {
+        entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<PrefixedReader<Box<dyn AsyncRead + Send + Unpin>>>>>>,
+        consecutive_errors: usize,
+        last_ok_entry_path: Option<String>,
+    },
     /// 普通 tar 格式（无压缩）- 存储预读取的条目列表
     Tar {
         entries: Vec<(String, Vec<u8>)>,
@@ -123,7 +127,11 @@ impl ArchiveEntryStream {
         let entries = archive.entries()?;
 
         Ok(Self {
-            inner: ArchiveEntryStreamInner::TarGz(entries),
+            inner: ArchiveEntryStreamInner::TarGz {
+                entries,
+                consecutive_errors: 0,
+                last_ok_entry_path: None,
+            },
         })
     }
 
@@ -190,17 +198,25 @@ impl ArchiveEntryStream {
 impl EntryStream for ArchiveEntryStream {
     async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
         match &mut self.inner {
-            ArchiveEntryStreamInner::TarGz(entries) => {
+            ArchiveEntryStreamInner::TarGz { entries, consecutive_errors, last_ok_entry_path } => {
                 loop {
+                    if *consecutive_errors > 10 {
+                        return Err(io::Error::other("过多的连续 tar 错误"));
+                    }
+
                     let entry = entries.next().await;
                     match entry {
                         Some(Ok(mut entry)) => {
+                            *consecutive_errors = 0;
+
                             let entry_path = entry
                                 .path()
                                 .map(|p| p.to_string_lossy().to_string())
                                 .unwrap_or_else(|_| "unknown".to_string());
 
                             let entry_size = entry.header().size().unwrap_or(0);
+
+                            *last_ok_entry_path = Some(entry_path.clone());
 
                             let meta = EntryMeta {
                                 path: entry_path.clone(),
@@ -217,7 +233,11 @@ impl EntryStream for ArchiveEntryStream {
                             return Ok(Some((meta, Box::new(std::io::Cursor::new(buf)))));
                         }
                         Some(Err(e)) => {
-                            trace!("[TarGzStream] error: {}", e);
+                            *consecutive_errors += 1;
+                            trace!(
+                                "[TarGzStream] 错误 #{}, last_ok={:?}, error={}",
+                                consecutive_errors, last_ok_entry_path, e
+                            );
                             continue;
                         }
                         None => return Ok(None),
