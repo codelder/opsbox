@@ -1,7 +1,7 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.0
-**日期**: 2026-02-02
+**版本**: 1.1
+**日期**: 2026-02-04
 **状态**: 设计草案
 
 ---
@@ -334,22 +334,22 @@ pub enum Location {
 /// 存储后端类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StorageBackend {
-    /// 文件系统 - 块存储，支持目录层级
-    FileSystem,
+    /// 目录型存储 - 支持真实目录层级的文件系统
+    Directory,
 
-    /// 对象存储 - 键值存储，扁平命名空间
+    /// 对象存储 - 扁平键空间的存储系统
     ObjectStorage,
 }
 ```
 
 **内涵**：
-- **FileSystem**: 操作系统级别的文件系统
-  - 支持目录层级
-  - 支持 POSIX 语义（大部分）
+- **Directory**: 支持真实目录层级的文件系统
+  - 目录是真实存在的实体（可以创建、删除、遍历）
+  - 支持 POSIX 语义（权限、符号链接等）
   - 示例：ext4、NTFS、APFS、NFS
 
 - **ObjectStorage**: 云原生对象存储
-  - 扁平键空间（通过前缀模拟目录）
+  - 键空间扁平，"目录"只是前缀约定
   - 最终一致性（通常）
   - 示例：AWS S3、MinIO、阿里云 OSS
 
@@ -419,7 +419,7 @@ impl Endpoint {
     pub fn local_fs() -> Self {
         Endpoint {
             location: Location::Local,
-            backend: StorageBackend::FileSystem,
+            backend: StorageBackend::Directory,
             access_method: AccessMethod::Direct,
             identity: "localhost".to_string(),
         }
@@ -429,7 +429,7 @@ impl Endpoint {
     pub fn agent(host: String, port: u16, agent_name: String) -> Self {
         Endpoint {
             location: Location::Remote { host, port },
-            backend: StorageBackend::FileSystem,
+            backend: StorageBackend::Directory,
             access_method: AccessMethod::Proxy,
             identity: agent_name,
         }
@@ -448,8 +448,8 @@ impl Endpoint {
 ```
 
 **关键洞察**：
-- Agent = `Remote` + `FileSystem` + `Proxy`
-- 这清晰表达了"远程的文件系统，通过代理访问"
+- Agent = `Remote` + `Directory` + `Proxy`
+- 这清晰表达了"远程的目录型存储，通过代理访问"
 
 ---
 
@@ -629,7 +629,7 @@ pub struct Resource {
 
     Location (位置)         StorageBackend (后端)       AccessMethod (访问)
     ┌─────────────┐         ┌───────────────────┐       ┌──────────────────┐
-    │ Local       │         │ FileSystem        │       │ Direct           │
+    │ Local       │         │ Directory         │       │ Direct           │
     │ Remote      │   X     │ ObjectStorage     │   X   │ Proxy            │
     │ Cloud       │         │                   │       │                  │
     └─────────────┘         └───────────────────┘       └──────────────────┘
@@ -646,7 +646,7 @@ pub struct Resource {
                     ▼               ▼               ▼
             ┌───────────┐  ┌───────────┐  ┌───────────┐
             │   Local   │  │   Agent   │  │    S3     │
-            │   FS      │  │   Proxy   │  │  Storage  │
+            │ Directory │  │   Proxy   │  │  Storage  │
             └───────────┘  └───────────┘  └───────────┘
 ```
 
@@ -740,7 +740,7 @@ enum Location {
 }
 
 enum StorageBackend {
-    FileSystem
+    Directory
     ObjectStorage
 }
 
@@ -901,7 +901,7 @@ ORL -> EndpointBuilder: from_authority(authority)
 activate EndpointBuilder
 EndpointBuilder -> EndpointBuilder: parse host: "agent.192.168.1.100:4001"
 EndpointBuilder -> EndpointBuilder: extract userinfo: "web-01"
-EndpointBuilder --> ORL: Endpoint { Remote, FileSystem, Proxy, "web-01" }
+EndpointBuilder --> ORL: Endpoint { Remote, Directory, Proxy, "web-01" }
 deactivate EndpointBuilder
 
 ORL -> ResourcePathParser: from_path("/data/archive.tar")
@@ -1384,7 +1384,7 @@ Week 12    │████░│ 阶段6: 清理
 | **ORL** | OpsBox Resource Locator，资源定位协议 |
 | **Endpoint** | 存储端点，表示一个具体的存储位置和访问方式 |
 | **Location** | 资源的位置 (Local/Remote/Cloud) |
-| **StorageBackend** | 存储后端类型 (FileSystem/ObjectStorage) |
+| **StorageBackend** | 存储后端类型 (Directory/ObjectStorage) |
 | **AccessMethod** | 访问方式 (Direct/Proxy) |
 | **Resource** | 完整的资源描述 (Endpoint + Path + ArchiveContext?) |
 | **Archive** | 归档容器，虚拟文件系统 |
@@ -1402,6 +1402,7 @@ Week 12    │████░│ 阶段6: 清理
 | 版本 | 日期 | 作者 | 变更说明 |
 |------|------|------|---------|
 | 1.0 | 2026-02-02 | Claude Code | 初始版本 |
+| 1.1 | 2026-02-04 | Claude Code | 将 StorageBackend::FileSystem 重命名为 Directory，避免与 FileSystem trait 混淆 |
 
 ---
 
