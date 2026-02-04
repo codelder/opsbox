@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 2.0
+**版本**: 2.1
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -785,11 +785,9 @@ pub struct DirEntry {
 
 3. **Resource 如何使用 OpbxFileSystem**
    ```rust
-   // 1. 准备配置
-   let config = FsConfig {
-       local_root: PathBuf::from("/var/logs"),
-       s3_configs: HashMap::new(),
-       agent_client_factory: Box::new(|host, port| { /* ... */ }),
+   // 1. 准备配置（按需配置）
+   let config = FsConfig::Local {
+       root: PathBuf::from("/var/logs"),
    };
 
    // 2. Resource 包含 Endpoint
@@ -807,10 +805,10 @@ pub struct DirEntry {
    let reader = fs.open_read(&resource.primary_path).await?;
    ```
 
-4. **为什么 FS 不持有 Endpoint？**
-   - **避免循环依赖**：Endpoint + Config → create_fs → FS (无 endpoint)
-   - **职责分离**：Endpoint 只负责描述，FS 只负责操作
-   - **减少冗余**：FS 只存储运行时需要的最小数据
+4. **为什么使用枚举形式的 FsConfig？**
+   - **按需配置**：只配置需要的字段，避免冗余
+   - **类型安全**：编译时检查配置与 endpoint 类型匹配
+   - **语义清晰**：每种配置类型有明确的含义
        s3_configs,
        Box::new(|host, port| Ok(AgentClient::new(host, port)?)),
    );
@@ -863,36 +861,61 @@ pub struct DirEntry {
 use std::path::PathBuf;
 use std::collections::HashMap;
 
-/// 文件系统配置
+/// 文件系统配置（按需配置）
 #[derive(Debug, Clone)]
-pub struct FsConfig {
-    /// 本地文件系统根路径
-    pub local_root: PathBuf,
+pub enum FsConfig {
+    /// 本地文件系统配置
+    Local {
+        root: PathBuf,
+    },
 
-    /// S3 配置映射 (profile_name -> S3Config)
-    pub s3_configs: HashMap<String, S3Config>,
+    /// S3 对象存储配置
+    S3 {
+        configs: HashMap<String, S3Config>,
+    },
 
-    /// Agent 客户端工厂
-    pub agent_client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
+    /// Agent 代理配置
+    Agent {
+        client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
+    },
 }
+```
 
-/// 根据 Endpoint 创建对应的 OpbxFileSystem 实例
+**create_fs 函数定义**：
+
+```rust
+/// 根据 Endpoint 和 FsConfig 创建对应的 OpbxFileSystem 实例
+///
+/// # 参数
+/// * `endpoint` - 端点描述
+/// * `config` - 文件系统配置（必须与 endpoint 类型匹配）
+///
+/// # 示例
+/// ```rust
+/// let endpoint = Endpoint::local_fs();
+/// let config = FsConfig::Local { root: PathBuf::from("/var/logs") };
+/// let fs = create_fs(&endpoint, &config)?;
+/// ```
 pub fn create_fs(endpoint: &Endpoint, config: &FsConfig) -> Result<Box<dyn OpbxFileSystem>, FsError> {
-    match (&endpoint.location, &endpoint.backend, &endpoint.access_method) {
-        (Location::Local, StorageBackend::Directory, AccessMethod::Direct) => {
-            Ok(Box::new(LocalFileSystem::new(config.local_root.clone())?))
+    match (&endpoint.backend, config) {
+        (StorageBackend::Directory, FsConfig::Local { root }) => {
+            Ok(Box::new(LocalFileSystem::new(root.clone())?))
         }
-        (Location::Remote { host, port }, StorageBackend::Directory, AccessMethod::Proxy) => {
-            let agent_client = (config.agent_client_factory)(host, *port)
-                .map_err(|e| FsError::AgentError(e.to_string()))?;
-            Ok(Box::new(AgentProxyFS::new(agent_client)))
-        }
-        (Location::Cloud, StorageBackend::ObjectStorage, AccessMethod::Direct) => {
-            let s3_config = config.s3_configs.get(&endpoint.identity)
+        (StorageBackend::ObjectStorage, FsConfig::S3 { configs }) => {
+            let s3_config = configs.get(&endpoint.identity)
                 .ok_or_else(|| FsError::MissingConfig(endpoint.identity.clone()))?;
             Ok(Box::new(S3Storage::new(s3_config.clone())))
         }
-        _ => Err(FsError::UnsupportedEndpoint),
+        (_, FsConfig::Agent { client_factory }) => {
+            if let Location::Remote { host, port } = &endpoint.location {
+                let agent_client = client_factory(host, *port)
+                    .map_err(|e| FsError::AgentError(e.to_string()))?;
+                Ok(Box::new(AgentProxyFS::new(agent_client)))
+            } else {
+                Err(FsError::InvalidConfig("Agent config requires Remote location".into()))
+            }
+        }
+        _ => Err(FsError::ConfigMismatch),
     }
 }
 ```
@@ -925,13 +948,14 @@ pub struct AgentClient {
 - `create_fs` 函数负责"创建" FS 实例
 - FS 实现类不持有 `Endpoint`，避免循环依赖
 
-**2. 配置集中管理**
-- 所有外部配置（credentials、paths）集中在 `FsConfig`
-- `Endpoint` 保持轻量级，只包含描述性信息
+**2. 按需配置（枚举设计）**
+- `FsConfig` 是枚举，每种类型只包含需要的配置
+- 类型安全：编译时检查配置与 endpoint 的匹配
+- 避免冗余：不需要提供不会使用的配置
 
 **3. 简洁设计**
-- 使用函数而非工厂类型，避免过度设计
-- 无状态创建逻辑，每次调用独立
+- 使用函数而非工厂类型
+- 使用枚举而非结构体，强制按需配置
 
 #### 3.8.3 与其他组件的关系
 
@@ -950,8 +974,9 @@ pub struct AgentClient {
     │                     ▼                                  │
     │    create_fs 函数                                         │
     │    ┌──────────────────────────────────────────┐        │
-    │    │ 参数: endpoint, config                   │        │
+    │    │ 参数: endpoint, config (enum)           │        │
     │    │ 返回: Box<dyn OpbxFileSystem>           │        │
+    │    │ 类型检查: endpoint 与 config 必须匹配    │        │
     │    └──────────────────────────────────────────┘        │
     │                     │                                  │
     │                     ▼                                  │
@@ -971,8 +996,9 @@ pub struct AgentClient {
     │                     │                                  │
     │                     │ 使用流程                          │
     │                     ▼                                  │
-    │    1. create_fs(&resource.endpoint, &config) → fs      │
-    │    2. fs.metadata(&resource.primary_path)              │
+    │    1. 选择匹配的 FsConfig 变体                         │
+    │    2. create_fs(&endpoint, &config) → fs             │
+    │    3. fs.metadata(&resource.primary_path)              │
     │                                                          │
     └─────────────────────────────────────────────────────────┘
 ```
@@ -980,23 +1006,74 @@ pub struct AgentClient {
 #### 3.8.4 使用示例
 
 ```rust
-// 1. 准备配置
-let config = FsConfig {
-    local_root: PathBuf::from("/var/logs"),
-    s3_configs: HashMap::new(),
-    agent_client_factory: Box::new(|host, port| {
-        Ok(AgentClient::new(host, port)?)
-    }),
+// 场景 1: 本地文件系统
+let endpoint = Endpoint::local_fs();
+let config = FsConfig::Local {
+    root: PathBuf::from("/var/logs")
 };
+let fs = create_fs(&endpoint, &config)?;
 
-// 2. 解析 ORL 字符串得到 Resource
+// 场景 2: S3 对象存储
+let endpoint = Endpoint::s3("backup".into());
+let mut s3_configs = HashMap::new();
+s3_configs.insert("backup".into(), s3_config);
+let config = FsConfig::S3 { configs: s3_configs };
+let fs = create_fs(&endpoint, &config)?;
+
+// 场景 3: Agent 代理
+let endpoint = Endpoint::agent("192.168.1.100".into(), 4001, "web-01".into());
+let config = FsConfig::Agent {
+    client_factory: Box::new(|host, port| Ok(AgentClient::new(host, port)?))
+};
+let fs = create_fs(&endpoint, &config)?;
+
+// 完整使用流程
 let orl_str = "orl://local/var/log/app.log";
 let resource = OrlParser::parse(orl_str)?;
-
-// 3. 使用函数创建 FS 实例
 let fs = create_fs(&resource.endpoint, &config)?;
+let metadata = fs.metadata(&resource.primary_path).await?;
+```
 
-// 4. 使用 FS 操作 ResourcePath
+#### 3.8.5 为什么使用枚举而非结构体
+
+**问题**：结构体形式的 `FsConfig` 包含所有字段，即使不需要
+
+```rust
+// 结构体形式（冗余）
+pub struct FsConfig {
+    pub local_root: PathBuf,           // S3 不需要
+    pub s3_configs: HashMap<...>,      // 本地不需要
+    pub agent_client_factory: Box<...>, // S3 不需要
+}
+
+// 即使用本地文件系统，也必须提供所有字段
+let config = FsConfig {
+    local_root: PathBuf::from("/logs"),
+    s3_configs: HashMap::new(),      // 空的，但必须提供
+    agent_client_factory: Box::new(...), // 空的，但必须提供
+};
+```
+
+**解决方案**：枚举形式（按需配置）
+
+```rust
+// 枚举形式（按需）
+pub enum FsConfig {
+    Local { root: PathBuf },
+    S3 { configs: HashMap<String, S3Config> },
+    Agent { client_factory: Box<...> },
+}
+
+// 只配置需要的字段
+let config = FsConfig::Local {
+    root: PathBuf::from("/logs")
+};
+```
+
+**好处**：
+- ✅ 只配置需要的字段，避免冗余
+- ✅ 类型安全：编译时检查配置与 endpoint 匹配
+- ✅ 语义清晰：每种配置类型有明确的含义
 let metadata = fs.metadata(&resource.primary_path).await?;
 let reader = fs.open_read(&resource.primary_path).await?;
 ```
@@ -1649,29 +1726,33 @@ impl<F: OpbxFileSystem> OpbxFileSystem for ArchiveFileSystem<F> {
 #### 7.2.2 create_fs 函数
 
 ```rust
-// FsConfig 配置结构体
-pub struct FsConfig {
-    pub local_root: PathBuf,
-    pub s3_configs: HashMap<String, S3Config>,
-    pub agent_client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
+// FsConfig 配置枚举（按需配置）
+pub enum FsConfig {
+    Local { root: PathBuf },
+    S3 { configs: HashMap<String, S3Config> },
+    Agent { client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync> },
 }
 
-// create_fs 函数根据 Endpoint 创建对应的 FS 实例
+// create_fs 函数根据 Endpoint 和 FsConfig 创建对应的 FS 实例
 pub fn create_fs(endpoint: &Endpoint, config: &FsConfig) -> Result<Box<dyn OpbxFileSystem>, FsError> {
-    match (&endpoint.location, &endpoint.backend, &endpoint.access_method) {
-        (Location::Local, StorageBackend::Directory, AccessMethod::Direct) => {
-            Ok(Box::new(LocalFileSystem::new(config.local_root.clone())?))
+    match (&endpoint.backend, config) {
+        (StorageBackend::Directory, FsConfig::Local { root }) => {
+            Ok(Box::new(LocalFileSystem::new(root.clone())?))
         }
-        (Location::Remote { host, port }, StorageBackend::Directory, AccessMethod::Proxy) => {
-            let client = (config.agent_client_factory)(host, *port)?;
-            Ok(Box::new(AgentProxyFS::new(client)))
-        }
-        (Location::Cloud, StorageBackend::ObjectStorage, AccessMethod::Direct) => {
-            let s3_config = config.s3_configs.get(&endpoint.identity)
+        (StorageBackend::ObjectStorage, FsConfig::S3 { configs }) => {
+            let s3_config = configs.get(&endpoint.identity)
                 .ok_or(FsError::MissingConfig(endpoint.identity.clone()))?;
             Ok(Box::new(S3Storage::new(s3_config.clone())))
         }
-        _ => Err(FsError::UnsupportedEndpoint),
+        (_, FsConfig::Agent { client_factory }) => {
+            if let Location::Remote { host, port } = &endpoint.location {
+                let client = client_factory(host, *port)?;
+                Ok(Box::new(AgentProxyFS::new(client)))
+            } else {
+                Err(FsError::InvalidConfig("Agent config requires Remote location".into()))
+            }
+        }
+        _ => Err(FsError::ConfigMismatch),
     }
 }
 ```
@@ -1694,16 +1775,6 @@ pub struct S3Storage {
     client: S3Client,  // 不存储 endpoint
 }
 ```
-                Ok(Box::new(AgentProxyFS::new(client)))
-            }
-            (Location::Cloud, StorageBackend::ObjectStorage, AccessMethod::Direct) => {
-                let s3_config = self.s3_configs.get(&endpoint.identity)
-                    .ok_or(FsError::MissingConfig(endpoint.identity.clone()))?;
-                Ok(Box::new(S3Storage::new(s3_config.clone())))
-            }
-            _ => Err(FsError::UnsupportedEndpoint),
-        }
-    }
 }
 ```
 
@@ -1917,6 +1988,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.8 | 2026-02-04 | Claude Code | 移除 ResourceResolver，直接在 Endpoint 上实现 create_fs() 方法，简化架构 |
 | 1.9 | 2026-02-04 | Claude Code | 引入 FsFactory 打破循环依赖，FS 实现类不再持有 endpoint 属性 |
 | 2.0 | 2026-02-04 | Claude Code | 简化为函数形式：FsFactory 类型 → create_fs 函数 + FsConfig，避免过度设计 |
+| 2.1 | 2026-02-04 | Claude Code | 将 FsConfig 从结构体改为枚举，实现按需配置和类型安全 |
 
 ---
 
