@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.6
+**版本**: 1.7
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -812,6 +812,172 @@ pub struct DirEntry {
 
 ---
 
+### 3.8 资源解析器：ResourceResolver
+
+#### 3.8.1 定义
+
+**ResourceResolver** 是一个应用服务，负责将 `Endpoint` 映射到具体的 `OpbxFileSystem` 实例，是连接领域对象和基础设施实现的桥梁。
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// 资源解析器 - Endpoint 到 OpbxFileSystem 的映射
+pub struct ResourceResolver {
+    /// Endpoint 到 OpbxFileSystem 实例的映射
+    providers: HashMap<EndpointKey, Arc<dyn OpbxFileSystem>>,
+
+    /// 归档缓存（可选）
+    archive_cache: Option<Arc<ArchiveCache>>,
+}
+
+/// Endpoint 的唯一标识符（用作 HashMap 的 key）
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EndpointKey {
+    pub location: Location,
+    pub backend: StorageBackend,
+    pub access_method: AccessMethod,
+    // 对于 Remote 类型，还包含 host 信息
+    pub host: Option<String>,
+}
+
+impl From<&Endpoint> for EndpointKey {
+    fn from(endpoint: &Endpoint) -> Self {
+        EndpointKey {
+            location: endpoint.location,
+            backend: endpoint.backend,
+            access_method: endpoint.access_method,
+            host: endpoint.host.clone(),
+        }
+    }
+}
+
+impl ResourceResolver {
+    /// 创建新的 ResourceResolver
+    pub fn new() -> Self {
+        Self {
+            providers: HashMap::new(),
+            archive_cache: None,
+        }
+    }
+
+    /// 注册 Endpoint 对应的 OpbxFileSystem 实例
+    pub fn register(&mut self, endpoint: Endpoint, fs: Arc<dyn OpbxFileSystem>) {
+        let key = EndpointKey::from(&endpoint);
+        self.providers.insert(key, fs);
+    }
+
+    /// 获取 Endpoint 对应的 OpbxFileSystem 实例
+    pub fn get_fs(&self, endpoint: &Endpoint) -> Option<Arc<dyn OpbxFileSystem>> {
+        let key = EndpointKey::from(endpoint);
+        self.providers.get(&key).cloned()
+    }
+
+    /// 解析 Resource，返回对应的 OpbxFileSystem 实例
+    pub fn resolve(&self, resource: &Resource) -> Result<Arc<dyn OpbxFileSystem>, ResolverError> {
+        self.get_fs(&resource.endpoint)
+            .ok_or(ResolverError::NotFound(resource.endpoint.clone()))
+    }
+}
+```
+
+#### 3.8.2 设计原则
+
+**1. 依赖注入**
+- `OpbxFileSystem` 实例通过 `register()` 方法动态注册
+- 支持运行时添加新的存储后端
+- 便于测试时注入 mock 实现
+
+**2. 类型安全的键**
+- 使用 `EndpointKey` 而非字符串作为 HashMap 的 key
+- 编译时保证类型安全
+- 避免拼写错误
+
+**3. 单一职责**
+- 只负责 Endpoint 到 OpbxFileSystem 的映射
+- 不涉及具体的文件操作
+- 不负责 ORL 解析（由 `OrlParser` 负责）
+
+#### 3.8.3 与其他组件的关系
+
+```
+    ┌─────────────────────────────────────────────────────────┐
+    │           ResourceResolver 在架构中的位置                │
+    ├─────────────────────────────────────────────────────────┤
+    │                                                          │
+    │    ORL 字符串                                             │
+    │    "orl://local/var/log/app.log"                        │
+    │            │                                             │
+    │            ▼                                             │
+    │    ┌───────────────┐                                    │
+    │    │  OrlParser    │ 解析 ORL                           │
+    │    └───────────────┘                                    │
+    │            │                                             │
+    │            ▼                                             │
+    │    Resource { endpoint, path, archive_context? }        │
+    │            │                                             │
+    │            ▼                                             │
+    │    ┌───────────────────┐                                │
+    │    │ ResourceResolver  │ 根据 Endpoint 查找 FS          │
+    │    └───────────────────┘                                │
+    │            │                                             │
+    │            ▼                                             │
+    │    Arc<dyn OpbxFileSystem>                              │
+    │    ┌─────────────────────────────────────┐              │
+    │    │ • LocalFileSystem                   │              │
+    │    │ • AgentProxyFS                      │              │
+    │    │ • S3Storage                         │              │
+    │    └─────────────────────────────────────┘              │
+    │            │                                             │
+    │            ▼                                             │
+    │    fs.metadata(&resource.path)                          │
+    │    fs.open_read(&resource.path)                         │
+    │                                                          │
+    └─────────────────────────────────────────────────────────┘
+```
+
+**关键流程**：
+
+1. **ORL 解析**：`OrlParser` 将 ORL 字符串解析为 `Resource`
+2. **FS 解析**：`ResourceResolver` 根据 `Resource.endpoint` 获取对应的 `OpbxFileSystem` 实例
+3. **操作执行**：使用获取的 `OpbxFileSystem` 实例操作 `Resource.primary_path`
+
+#### 3.8.4 使用示例
+
+```rust
+// 1. 创建 ResourceResolver
+let mut resolver = ResourceResolver::new();
+
+// 2. 注册各类型的文件系统
+resolver.register(
+    Endpoint::local_fs(),
+    Arc::new(LocalFileSystem::new("/var/logs")) as Arc<dyn OpbxFileSystem>
+);
+
+resolver.register(
+    Endpoint::s3("backup".into()),
+    Arc::new(S3Storage::new(s3_config)) as Arc<dyn OpbxFileSystem>
+);
+
+resolver.register(
+    Endpoint::agent("192.168.1.100".into(), 4001, "web-01".into()),
+    Arc::new(AgentProxyFS::new(agent_client)) as Arc<dyn OpbxFileSystem>
+);
+
+// 3. 解析 ORL 字符串
+let orl_str = "orl://local/var/log/app.log";
+let resource = OrlParser::parse(orl_str)?;
+
+// 4. 获取对应的文件系统实例
+let fs = resolver.resolve(&resource)?;
+
+// 5. 执行文件操作
+let metadata = fs.metadata(&resource.primary_path).await?;
+let reader = fs.open_read(&resource.primary_path).await?;
+```
+
+---
+
 ## 4. 概念关系模型
 
 ### 4.1 正交维度图
@@ -1602,6 +1768,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.4 | 2026-02-04 | Claude Code | 修复文档中遗漏的 FileSystem 命名，统一使用 OpbxFileSystem |
 | 1.5 | 2026-02-04 | Claude Code | 简化 OpbxFileSystem trait，只保留三个核心方法（metadata, read_dir, open_read） |
 | 1.6 | 2026-02-04 | Claude Code | 重写 3.7.4 节，澄清 OpbxFileSystem 与 Endpoint、Resource 之间的关系 |
+| 1.7 | 2026-02-04 | Claude Code | 在第三章添加 3.8 节，详细介绍 ResourceResolver 服务组件的定义、设计原则和使用方式 |
 
 ---
 
