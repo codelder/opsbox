@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 2.1
+**版本**: 2.2
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -820,8 +820,8 @@ pub struct DirEntry {
        archive_context: None,
    };
 
-   // 3. 通过工厂创建对应的 OpbxFileSystem 实例
-   let fs: Box<dyn OpbxFileSystem> = factory.create_fs(&resource.endpoint)?;
+   // 3. 使用函数创建对应的 OpbxFileSystem 实例
+   let fs: Box<dyn OpbxFileSystem> = create_fs(&resource.endpoint, &config)?;
 
    // 4. 使用 OpbxFileSystem 操作 ResourcePath
    let metadata = fs.metadata(&resource.primary_path).await?;
@@ -829,7 +829,7 @@ pub struct DirEntry {
    ```
 
 4. **为什么 FS 不持有 Endpoint？**
-   - **避免循环依赖**：Endpoint → FsFactory → FS，而不是 Endpoint → FS → Endpoint
+   - **避免循环依赖**：Endpoint + Config → create_fs → FS (无 endpoint)
    - **职责分离**：Endpoint 只负责描述，FS 只负责操作
    - **减少冗余**：FS 只存储运行时需要的最小数据（如 client、root path）
 
@@ -1097,96 +1097,39 @@ create_fs(endpoint, config) → FS
 - ✅ 无状态：函数是无状态的，每次调用独立
 - ✅ 易测试：直接传入参数，无需构造工厂实例
 - ✅ 同样打破循环依赖
-    │                     │ 传递给工厂                        │
-    │                     ▼                                  │
-    │    FsFactory (应用服务)                                 │
-    │    ┌──────────────────────────────────────────┐        │
-    │    │ 持有配置 (local_root, s3_configs, ...)   │        │
-    │    │ 方法: create_fs(endpoint) -> FS         │        │
-    │    └──────────────────────────────────────────┘        │
-    │                     │                                  │
-    │                     ▼                                  │
-    │    Box<dyn OpbxFileSystem>                              │
-    │    ┌─────────────────────────────────────┐              │
-    │    │ • LocalFileSystem (不含 endpoint)     │              │
-    │    │ • AgentProxyFS (不含 endpoint)        │              │
-    │    │ • S3Storage (不含 endpoint)           │              │
-    │    └─────────────────────────────────────┘              │
-    │                                                          │
-    │    Resource (实体)                                       │
-    │    ┌──────────────────────────────────────────┐        │
-    │    │ • endpoint: Endpoint        (端点)       │        │
-    │    │ • primary_path: ResourcePath (路径)      │        │
-    │    │ • archive_context: ArchiveContext?      │        │
-    │    └──────────────────────────────────────────┘        │
-    │                     │                                  │
-    │                     │ 使用流程                          │
-    │                     ▼                                  │
-    │    1. resource.endpoint → factory.create_fs()          │
-    │    2. fs → fs.metadata(&resource.primary_path)         │
-    │                                                          │
-    └─────────────────────────────────────────────────────────┘
-```
 
-#### 3.8.4 使用示例
+#### 3.8.5 为什么使用枚举而非结构体
+
+**问题**：结构体形式的 `FsConfig` 包含所有字段，即使不需要
 
 ```rust
-// 1. 创建 FsFactory
-let factory = FsFactory::new(
-    PathBuf::from("/var/logs"),
-    s3_configs,
-    Box::new(|host, port| Ok(AgentClient::new(host, port)?)),
-);
-
-// 2. 解析 ORL 字符串得到 Resource
-let orl_str = "orl://local/var/log/app.log";
-let resource = OrlParser::parse(orl_str)?;
-
-// 3. 使用工厂创建 FS 实例
-let fs = factory.create_fs(&resource.endpoint)?;
-
-// 4. 使用 FS 操作 ResourcePath
-let metadata = fs.metadata(&resource.primary_path).await?;
-let reader = fs.open_read(&resource.primary_path).await?;
+// 结构体形式（冗余）
+pub struct FsConfig {
+    pub local_root: PathBuf,           // S3 不需要
+    pub s3_configs: HashMap<...>,      // 本地不需要
+    pub agent_client_factory: Box<...>, // S3 不需要
+}
 ```
 
-#### 3.8.5 为什么需要 FsFactory
+**解决方案**：枚举形式（按需配置）
 
-**问题**：如果 `Endpoint` 有 `create_fs()` 方法，FS 实现又持有 `Endpoint`，会形成循环依赖。
-
-**解决方案**：
-```
-错误设计：
-Endpoint → create_fs() → OpbxFileSystem
-                         ↑
-                         └─── 持有 Endpoint ───┘ (循环!)
-
-正确设计：
-Endpoint ──→ FsFactory ──→ OpbxFileSystem
-(只描述)      (创建)         (不持有 Endpoint)
+```rust
+// 枚举形式（按需）
+pub enum FsConfig {
+    Local { root: PathBuf },
+    S3 { configs: HashMap<String, S3Config> },
+    Agent { client_factory: Box<...> },
+}
 ```
 
 **好处**：
-- ✅ 打破循环依赖
-- ✅ 职责清晰：Endpoint 只描述，Factory 负责创建
-- ✅ FS 实现更简洁，只存储必要的运行时数据
+- ✅ 只配置需要的字段，避免冗余
+- ✅ 类型安全：编译时检查配置与 endpoint 匹配
+- ✅ 语义清晰：每种配置类型有明确的含义
 
 ---
 
 ## 4. 概念关系模型
-
-### 4.1 正交维度图
-
-```
-                    ┌─────────────────────────────────────┐
-                    │           DFS 概念空间               │
-                    └─────────────────────────────────────┘
-
-    Location (位置)         StorageBackend (后端)       AccessMethod (访问)
-    ┌─────────────┐         ┌───────────────────┐       ┌──────────────────┐
-    │ Local       │         │ Directory         │       │ Direct           │
-    │ Remote      │   X     │ ObjectStorage     │   X   │ Proxy            │
-    │ Cloud       │         │                   │       │                  │
     └─────────────┘         └───────────────────┘       └──────────────────┘
             │                       │                       │
             └───────────────────────┴───────────────────────┘
@@ -1989,6 +1932,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.9 | 2026-02-04 | Claude Code | 引入 FsFactory 打破循环依赖，FS 实现类不再持有 endpoint 属性 |
 | 2.0 | 2026-02-04 | Claude Code | 简化为函数形式：FsFactory 类型 → create_fs 函数 + FsConfig，避免过度设计 |
 | 2.1 | 2026-02-04 | Claude Code | 将 FsConfig 从结构体改为枚举，实现按需配置和类型安全 |
+| 2.2 | 2026-02-04 | Claude Code | 清理文档中重复的 FsFactory 工厂类型相关内容，统一使用 create_fs 函数 |
 
 ---
 
