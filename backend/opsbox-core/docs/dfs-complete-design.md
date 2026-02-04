@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.3
+**版本**: 1.4
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -285,7 +285,7 @@ DFS 的领域概念分为四个层次：
 │                       │                                 │
 │                       ▼                                 │
 │  ┌────────────────────────────────────────────────┐    │
-│  │           层次4: 文件系统 (FileSystem)          │    │
+│  │           层次4: OpbxFileSystem                  │    │
 │  │  接口: metadata, read_dir, open_read           │    │
 │  └────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────┘
@@ -1192,7 +1192,7 @@ HasProvider --> [*]: complete
 ├─────────────────────────────────────────────────────────────┤
 │                    基础设施层 (Infrastructure)               │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │  FileSystem 实现                                     │   │
+│  │  OpbxFileSystem 实现                                │   │
 │  │  ┌──────────┐  ┌──────────┐  ┌──────────┐          │   │
 │  │  │LocalFS   │  │S3Storage │  │AgentProxy│          │   │
 │  │  └──────────┘  └──────────┘  └──────────┘          │   │
@@ -1307,13 +1307,13 @@ backend/opsbox-core/src/
 
 ```rust
 // ArchiveFileSystem 装饰底层 FS
-pub struct ArchiveFileSystem<F: FileSystem> {
+pub struct ArchiveFileSystem<F: OpbxFileSystem> {
     underlying: F,
     archive_path: ResourcePath,
     cache: Arc<Mutex<LruCache<ResourcePath, Archive>>>,
 }
 
-impl<F: FileSystem> FileSystem for ArchiveFileSystem<F> {
+impl<F: OpbxFileSystem> OpbxFileSystem for ArchiveFileSystem<F> {
     async fn metadata(&self, inner_path: &ResourcePath) -> Result<FileMetadata> {
         let archive = self.get_archive().await?;
         archive.entry_metadata(inner_path).ok_or(FsError::NotFound)
@@ -1328,12 +1328,12 @@ impl<F: FileSystem> FileSystem for ArchiveFileSystem<F> {
 ```rust
 // 使用 trait 对象实现依赖注入
 pub struct ResourceResolver {
-    providers: HashMap<EndpointKey, Arc<dyn FileSystem>>,
+    providers: HashMap<EndpointKey, Arc<dyn OpbxFileSystem>>,
     archive_cache: Arc<ArchiveCache>,
 }
 
 impl ResourceResolver {
-    pub fn register(&mut self, endpoint: Endpoint, fs: Arc<dyn FileSystem>) {
+    pub fn register(&mut self, endpoint: Endpoint, fs: Arc<dyn OpbxFileSystem>) {
         let key = EndpointKey::from(&endpoint);
         self.providers.insert(key, fs);
     }
@@ -1506,7 +1506,7 @@ pub trait Searchable: OpbxFileSystem {
 
 ```
 Week 1-2   │████████░│ 阶段1: 基础概念迁移
-Week 3-4   │████████░│ 阶段2: FileSystem 接口重构
+Week 3-4   │████████░│ 阶段2: OpbxFileSystem 接口重构
 Week 5-7   │████████████░│ 阶段3: 实现迁移
 Week 8-9   │████████░│ 阶段4: 服务层重构
 Week 10-11 │████████░│ 阶段5: 应用层适配
@@ -1557,6 +1557,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.1 | 2026-02-04 | Claude Code | 将 StorageBackend::FileSystem 重命名为 Directory，避免与 FileSystem trait 混淆 |
 | 1.2 | 2026-02-04 | Claude Code | 将 FileSystem trait 重命名为 OpbxFileSystem，使用 Opbx (OpsBox 缩写) 作为项目标识 |
 | 1.3 | 2026-02-04 | Claude Code | 在第三章添加 3.7 节，详细介绍 OpbxFileSystem trait 的定义、设计原则和接口层次 |
+| 1.4 | 2026-02-04 | Claude Code | 修复文档中遗漏的 FileSystem 命名，统一使用 OpbxFileSystem |
 
 ---
 
