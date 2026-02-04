@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.2
+**版本**: 1.3
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -615,6 +615,158 @@ pub struct Resource {
        }),
    }
 ```
+
+---
+
+### 3.7 文件系统抽象：OpbxFileSystem
+
+#### 3.7.1 定义
+
+**OpbxFileSystem** (OpsBox File System) 是 OpsBox DFS 的核心抽象接口，定义了访问不同存储后点的统一操作。
+
+```rust
+// AsyncRead trait
+use async_trait::async_trait;
+use futures::io::{AsyncRead, AsyncSeek};
+
+/// OpbxFileSystem - OpsBox 文件系统核心抽象
+#[async_trait]
+pub trait OpbxFileSystem: Send + Sync {
+    /// 获取文件/目录元数据
+    async fn metadata(&self, path: &ResourcePath) -> Result<FileMetadata, FsError>;
+
+    /// 读取目录内容
+    async fn read_dir(&self, path: &ResourcePath) -> Result<Vec<DirEntry>, FsError>;
+
+    /// 打开文件用于读取
+    async fn open_read(&self, path: &ResourcePath)
+        -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError>;
+
+    /// 创建目录（可选，Directory 类型支持）
+    async fn create_dir(&self, path: &ResourcePath) -> Result<(), FsError> {
+        Err(FsError::Unsupported)
+    }
+
+    /// 删除文件/目录（可选）
+    async fn remove(&self, path: &ResourcePath) -> Result<(), FsError> {
+        Err(FsError::Unsupported)
+    }
+}
+
+/// 文件元数据
+#[derive(Debug, Clone)]
+pub struct FileMetadata {
+    pub is_dir: bool,
+    pub is_file: bool,
+    pub size: u64,
+    pub modified: Option<SystemTime>,
+    pub created: Option<SystemTime>,
+}
+
+/// 目录条目
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub name: String,
+    pub path: ResourcePath,
+    pub metadata: FileMetadata,
+}
+```
+
+#### 3.7.2 设计原则
+
+**1. 最小接口原则 (ISP)**
+- 只定义所有文件系统都必须支持的核心操作
+- 可选操作（如创建目录、删除）提供默认实现返回 `Unsupported`
+- 避免强制实现者不需要的方法
+
+**2. 异步优先**
+- 所有方法都是异步的，支持 I/O 密集型场景
+- 使用 `async_trait` 提供 trait 的异步方法
+- 返回 `AsyncRead` trait 对象，支持流式读取
+
+**3. 路径抽象**
+- 使用 `ResourcePath` 而非 `String` 或 `PathBuf`
+- 与具体端点解耦，支持跨端点操作
+
+**4. 错误统一**
+- 使用统一的 `FsError` 类型
+- 支持错误传播和上下文信息
+
+#### 3.7.3 接口层次
+
+```
+                    OpbxFileSystem
+                         (核心)
+                            │
+        ┌───────────────────┼───────────────────┐
+        │                   │                   │
+        ▼                   ▼                   ▼
+  LocalFileSystem   AgentProxyFS         S3Storage
+  (本地文件系统)      (代理文件系统)        (对象存储)
+        │                   │                   │
+        └───────────────────┴───────────────────┘
+                            │
+                            ▼
+                    Searchable Extension
+                    (搜索能力扩展)
+```
+
+**实现者**：
+- `LocalFileSystem` - 使用 `std::fs` 和 `tokio::fs`
+- `AgentProxyFS` - 通过 HTTP 代理到远程 Agent
+- `S3Storage` - 使用 AWS SDK 或兼容接口
+
+**扩展接口**：
+- `Searchable` - 增加搜索能力（`as_entry_stream`）
+- `ObjectStorage` - 对象存储特有操作（`list_objects`, `presigned_url`）
+
+#### 3.7.4 与领域概念的关系
+
+```
+    ┌─────────────────────────────────────────────────────┐
+    │              OpbxFileSystem 在领域模型中的位置        │
+    ├─────────────────────────────────────────────────────┤
+    │                                                     │
+    │    Endpoint (端点)                                  │
+    │    ┌──────────────────────────────────────┐        │
+    │    │ Location + Backend + AccessMethod    │        │
+    │    └──────────────────────────────────────┘        │
+    │                     │                              │
+    │                     ▼                              │
+    │    OpbxFileSystem (实现)                            │
+    │    ┌──────────────────────────────────────┐        │
+    │    │ • LocalFileSystem                    │        │
+    │    │ • AgentProxyFS                       │        │
+    │    │ • S3Storage                          │        │
+    │    └──────────────────────────────────────┘        │
+    │                     │                              │
+    │                     ▼                              │
+    │    操作：metadata, read_dir, open_read             │
+    │                                                     │
+    └─────────────────────────────────────────────────────┘
+```
+
+**关键洞察**：
+- `OpbxFileSystem` 是 `Endpoint` 的**行为抽象**
+- 每个 `Endpoint` 对应一个 `OpbxFileSystem` 实现
+- `Resource` 通过 `Endpoint` 获取对应的 `OpbxFileSystem` 实例
+- 调用 `OpbxFileSystem` 的方法操作 `ResourcePath`
+
+#### 3.7.5 为什么命名为 OpbxFileSystem
+
+**命名考虑**：
+
+1. **避免命名冲突**：
+   - `FileSystem` 过于通用，可能与 std::fs 或其他库冲突
+   - `Opbx` (OpsBox 缩写) 提供项目上下文，明确这是 OpsBox 的抽象
+
+2. **简洁性**：
+   - `Opbx` 是 4 字符缩写，易于输入
+   - 比 `OpsBoxFileSystem` (15 字符) 更简洁
+
+3. **唯一性**：
+   - `Opbx` 作为 OpsBox 专用缩写，在代码库中具有唯一性
+   - IDE 搜索和自动补全更友好
 
 ---
 
@@ -1404,6 +1556,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.0 | 2026-02-02 | Claude Code | 初始版本 |
 | 1.1 | 2026-02-04 | Claude Code | 将 StorageBackend::FileSystem 重命名为 Directory，避免与 FileSystem trait 混淆 |
 | 1.2 | 2026-02-04 | Claude Code | 将 FileSystem trait 重命名为 OpbxFileSystem，使用 Opbx (OpsBox 缩写) 作为项目标识 |
+| 1.3 | 2026-02-04 | Claude Code | 在第三章添加 3.7 节，详细介绍 OpbxFileSystem trait 的定义、设计原则和接口层次 |
 
 ---
 
