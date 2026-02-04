@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.5
+**版本**: 1.6
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -711,35 +711,88 @@ pub struct DirEntry {
 
 #### 3.7.4 与领域概念的关系
 
+**重要澄清**：
+- `OpbxFileSystem` **不是** `Endpoint` 的实现
+- `OpbxFileSystem` 是一个 **trait 接口**，定义文件系统操作
+- `Endpoint` 是一个 **值对象**，描述存储端点的特征（位置、后端、访问方式）
+- 每个 `Endpoint` 类型有对应的 `OpbxFileSystem` **实现类**
+
+**概念关系图**：
+
 ```
-    ┌─────────────────────────────────────────────────────┐
-    │              OpbxFileSystem 在领域模型中的位置        │
-    ├─────────────────────────────────────────────────────┤
-    │                                                     │
-    │    Endpoint (端点)                                  │
-    │    ┌──────────────────────────────────────┐        │
-    │    │ Location + Backend + AccessMethod    │        │
-    │    └──────────────────────────────────────┘        │
-    │                     │                              │
-    │                     ▼                              │
-    │    OpbxFileSystem (实现)                            │
-    │    ┌──────────────────────────────────────┐        │
-    │    │ • LocalFileSystem                    │        │
-    │    │ • AgentProxyFS                       │        │
-    │    │ • S3Storage                          │        │
-    │    └──────────────────────────────────────┘        │
-    │                     │                              │
-    │                     ▼                              │
-    │    操作：metadata, read_dir, open_read             │
-    │                                                     │
-    └─────────────────────────────────────────────────────┘
+    ┌─────────────────────────────────────────────────────────────┐
+    │                 领域概念之间的关系                            │
+    ├─────────────────────────────────────────────────────────────┤
+    │                                                             │
+    │    Endpoint (值对象)                                        │
+    │    ┌──────────────────────────────────────────┐            │
+    │    │ 描述: Location + Backend + AccessMethod  │            │
+    │    │ 作用: 告诉我们"在哪里"和"如何访问"        │            │
+    │    └──────────────────────────────────────────┘            │
+    │                     │                                      │
+    │                     │ 通过 ResourceResolver 映射            │
+    │                     ▼                                      │
+    │    OpbxFileSystem (trait 接口)                             │
+    │    ┌──────────────────────────────────────────┐            │
+    │    │ 定义: metadata, read_dir, open_read      │            │
+    │    │ 作用: 定义"能做什么操作"                  │            │
+    │    └──────────────────────────────────────────┘            │
+    │                     │                                      │
+    │         ┌───────────┼───────────┐                         │
+    │         ▼           ▼           ▼                         │
+    │   LocalFileSystem  AgentProxyFS  S3Storage                 │
+    │   (具体实现类)    (具体实现类)   (具体实现类)               │
+    │                                                             │
+    │    Resource (实体)                                         │
+    │    ┌──────────────────────────────────────────┐            │
+    │    │ • endpoint: Endpoint        (端点)       │            │
+    │    │ • primary_path: ResourcePath (路径)      │            │
+    │    │ • archive_context: ArchiveContext?      │            │
+    │    └──────────────────────────────────────────┘            │
+    │                     │                                      │
+    │                     │ 使用                                 │
+    │                     ▼                                      │
+    │    调用 fs.metadata(&resource.primary_path)                │
+    │    调用 fs.open_read(&resource.primary_path)               │
+    │                                                             │
+    └─────────────────────────────────────────────────────────────┘
 ```
 
 **关键洞察**：
-- `OpbxFileSystem` 是 `Endpoint` 的**行为抽象**
-- 每个 `Endpoint` 对应一个 `OpbxFileSystem` 实现
-- `Resource` 通过 `Endpoint` 获取对应的 `OpbxFileSystem` 实例
-- 调用 `OpbxFileSystem` 的方法操作 `ResourcePath`
+
+1. **Endpoint vs OpbxFileSystem**
+   - `Endpoint` 描述"在哪里"和"如何访问"（描述性）
+   - `OpbxFileSystem` 定义"能做什么操作"（操作性）
+   - 它们是**正交的概念**，一个描述特征，一个定义行为
+
+2. **Endpoint 与实现类的对应关系**
+   - `Endpoint { location: Local, backend: Directory, method: Direct }`
+     → `LocalFileSystem` 实现 `OpbxFileSystem`
+   - `Endpoint { location: Remote, backend: Directory, method: Proxy }`
+     → `AgentProxyFS` 实现 `OpbxFileSystem`
+   - `Endpoint { location: Cloud, backend: ObjectStorage, method: Direct }`
+     → `S3Storage` 实现 `OpbxFileSystem`
+
+3. **Resource 如何使用 OpbxFileSystem**
+   ```rust
+   // Resource 包含 Endpoint
+   let resource = Resource {
+       endpoint: Endpoint::local_fs(),
+       primary_path: "/var/log/app.log".into(),
+       archive_context: None,
+   };
+
+   // 通过 Endpoint 获取对应的 OpbxFileSystem 实例
+   let fs: Arc<dyn OpbxFileSystem> = resolver.get_fs(&resource.endpoint);
+
+   // 使用 OpbxFileSystem 操作 ResourcePath
+   let metadata = fs.metadata(&resource.primary_path).await?;
+   let reader = fs.open_read(&resource.primary_path).await?;
+   ```
+
+4. **ResourceResolver 的作用**
+   - 维护 `Endpoint` → `OpbxFileSystem 实例` 的映射
+   - 提供依赖注入和类型安全的注册机制
 
 #### 3.7.5 为什么命名为 OpbxFileSystem
 
@@ -1548,6 +1601,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.3 | 2026-02-04 | Claude Code | 在第三章添加 3.7 节，详细介绍 OpbxFileSystem trait 的定义、设计原则和接口层次 |
 | 1.4 | 2026-02-04 | Claude Code | 修复文档中遗漏的 FileSystem 命名，统一使用 OpbxFileSystem |
 | 1.5 | 2026-02-04 | Claude Code | 简化 OpbxFileSystem trait，只保留三个核心方法（metadata, read_dir, open_read） |
+| 1.6 | 2026-02-04 | Claude Code | 重写 3.7.4 节，澄清 OpbxFileSystem 与 Endpoint、Resource 之间的关系 |
 
 ---
 
