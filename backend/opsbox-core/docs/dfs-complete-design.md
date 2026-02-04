@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.1
+**版本**: 1.2
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -803,12 +803,12 @@ ArchiveContext *-- ResourcePath : contains
 @enduml
 ```
 
-### 5.2 FileSystem 接口层次图
+### 5.2 OpbxFileSystem 接口层次图
 
 ```plantuml
-@startuml FileSystem Interface Hierarchy
+@startuml OpbxFileSystem Interface Hierarchy
 
-interface FileSystem {
+interface OpbxFileSystem {
     + metadata(path: ResourcePath) -> Result<FileMetadata>
     + read_dir(path: ResourcePath) -> Result<Vec<DirEntry>>
     + open_read(path: ResourcePath) -> Result<Box<dyn AsyncRead>>
@@ -816,7 +816,7 @@ interface FileSystem {
 }
 
 interface ObjectStorage {
-    ' 继承 FileSystem
+    ' 继承 OpbxFileSystem
     + list_objects(prefix: String, limit: Option<usize>) -> Result<ObjectList>
     + presigned_url(key: String, ttl: Duration) -> Result<String>
 }
@@ -852,7 +852,7 @@ class AgentProxyFS {
     + open_read(path) -> Result
 }
 
-class ArchiveFileSystem<F: FileSystem> {
+class ArchiveFileSystem<F: OpbxFileSystem> {
     - F underlying
     - ResourcePath archive_path
     - ArchiveType archive_type
@@ -865,14 +865,14 @@ class ArchiveFileSystem<F: FileSystem> {
 }
 
 ' 关系
-FileSystem <|.. LocalFileSystem : implements
-FileSystem <|.. AgentProxyFS : implements
-FileSystem <|.. S3Storage : implements
-ObjectStorage --|> FileSystem : extends
+OpbxFileSystem <|.. LocalFileSystem : implements
+OpbxFileSystem <|.. AgentProxyFS : implements
+OpbxFileSystem <|.. S3Storage : implements
+ObjectStorage --|> OpbxFileSystem : extends
 ObjectStorage <|.. S3Storage : implements
 Searchable <|.. LocalFileSystem : implements
 
-ArchiveFileSystem ..|> FileSystem : wraps
+ArchiveFileSystem ..|> OpbxFileSystem : wraps
 ArchiveFileSystem *-- F : underlying
 
 @enduml
@@ -1071,7 +1071,7 @@ backend/opsbox-core/src/
 │   │
 │   ├── fs/                        # 文件系统接口
 │   │   ├── mod.rs
-│   │   ├── filesystem.rs          # FileSystem trait
+│   │   ├── filesystem.rs          # OpbxFileSystem trait
 │   │   ├── object_storage.rs      # ObjectStorage trait
 │   │   └── searchable.rs          # Searchable trait
 │   │
@@ -1107,7 +1107,7 @@ backend/opsbox-core/src/
 │  odfs::domain (ORL, Resource, Endpoint)                 │
 │      │                                                  │
 │      ▼                                                  │
-│  odfs::fs (FileSystem trait)                            │
+│  odfs::fs (OpbxFileSystem trait)                        │
 │      │                                                  │
 │      ▼                                                  │
 │  odfs::implementations (LocalFS, S3Storage, AgentProxy) │
@@ -1130,7 +1130,7 @@ backend/opsbox-core/src/
 | Endpoint | `domain/endpoint.rs` | 端点值对象 |
 | ResourcePath | `domain/path.rs` | 路径值对象 |
 | Resource | `domain/resource.rs` | 资源实体 |
-| FileSystem | `fs/filesystem.rs` | 核心接口 |
+| OpbxFileSystem | `fs/filesystem.rs` | 核心接口 |
 
 #### P1 - 核心实现 (重要)
 
@@ -1283,13 +1283,13 @@ pub use legacy::EndpointType;  // 旧代码
 - [ ] 实现 `Endpoint` 和 `Resource`
 - [ ] 编写单元测试
 
-#### 阶段 2：FileSystem 接口重构 (1-2 周)
+#### 阶段 2：OpbxFileSystem 接口重构 (1-2 周)
 
-**目标**：重构 FileSystem trait，分离接口
+**目标**：重构 OpbxFileSystem trait，分离接口
 
 ```rust
 // 新的接口设计
-pub trait FileSystem: Send + Sync {
+pub trait OpbxFileSystem: Send + Sync {
     async fn metadata(&self, path: &ResourcePath) -> Result<FileMetadata, FsError>;
     async fn read_dir(&self, path: &ResourcePath) -> Result<Vec<DirEntry>, FsError>;
     async fn open_read(&self, path: &ResourcePath) -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError>;
@@ -1297,14 +1297,14 @@ pub trait FileSystem: Send + Sync {
 }
 
 // 独立的搜索接口
-pub trait Searchable: FileSystem {
+pub trait Searchable: OpbxFileSystem {
     async fn as_entry_stream(&self, path: &ResourcePath, recursive: bool)
         -> Result<Box<dyn EntryStream>, FsError>;
 }
 ```
 
 **任务**：
-- [ ] 定义新的 `FileSystem` trait
+- [ ] 定义新的 `OpbxFileSystem` trait
 - [ ] 提取 `Searchable` trait
 - [ ] 定义 `ObjectStorage` trait
 - [ ] 编写接口测试
@@ -1403,6 +1403,7 @@ Week 12    │████░│ 阶段6: 清理
 |------|------|------|---------|
 | 1.0 | 2026-02-02 | Claude Code | 初始版本 |
 | 1.1 | 2026-02-04 | Claude Code | 将 StorageBackend::FileSystem 重命名为 Directory，避免与 FileSystem trait 混淆 |
+| 1.2 | 2026-02-04 | Claude Code | 将 FileSystem trait 重命名为 OpbxFileSystem，使用 Opbx (OpsBox 缩写) 作为项目标识 |
 
 ---
 
