@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.9
+**版本**: 2.0
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -715,7 +715,7 @@ pub struct DirEntry {
 - `OpbxFileSystem` **不是** `Endpoint` 的实现
 - `OpbxFileSystem` 是一个 **trait 接口**，定义文件系统操作
 - `Endpoint` 是一个 **值对象**，描述存储端点的特征（位置、后端、访问方式）
-- `FsFactory` 负责**根据 Endpoint 创建**对应的 `OpbxFileSystem` 实例
+- `create_fs` 函数**根据 Endpoint 和 Config 创建**对应的 `OpbxFileSystem` 实例
 - **FS 实现类不持有 Endpoint**，避免循环依赖
 
 **概念关系图**：
@@ -731,11 +731,12 @@ pub struct DirEntry {
     │    │ 作用: 告诉我们"在哪里"和"如何访问"        │            │
     │    └──────────────────────────────────────────┘            │
     │                     │                                      │
-    │                     │ 传递给工厂                            │
+    │                     │ 传递给函数                            │
     │                     ▼                                      │
-    │    FsFactory (应用服务)                                    │
+    │    create_fs 函数                                          │
     │    ┌──────────────────────────────────────────┐            │
-    │    │ 持有配置，负责创建 FS 实例               │            │
+    │    │ 参数: endpoint, config                   │            │
+    │    │ 返回: Box<dyn OpbxFileSystem>           │            │
     │    └──────────────────────────────────────────┘            │
     │                     │                                      │
     │                     ▼                                      │
@@ -759,7 +760,7 @@ pub struct DirEntry {
     │                     │                                      │
     │                     │ 使用流程                              │
     │                     ▼                                      │
-    │    1. factory.create_fs(&resource.endpoint) → fs         │
+    │    1. create_fs(&resource.endpoint, &config) → fs         │
     │    2. fs.metadata(&resource.primary_path)                 │
     │    3. fs.open_read(&resource.primary_path)                │
     │                                                             │
@@ -772,21 +773,44 @@ pub struct DirEntry {
    - `Endpoint` 描述"在哪里"和"如何访问"（描述性）
    - `OpbxFileSystem` 定义"能做什么操作"（操作性）
    - 它们是**正交的概念**，一个描述特征，一个定义行为
-   - **没有直接依赖**，通过 `FsFactory` 连接
+   - **没有直接依赖**，通过 `create_fs` 函数连接
 
-2. **Endpoint 与实现类的对应关系**（通过 FsFactory）
+2. **Endpoint 与实现类的对应关系**（通过 create_fs 函数）
    - `Endpoint { location: Local, backend: Directory, method: Direct }`
-     → FsFactory 创建 `LocalFileSystem`
+     → `create_fs` 返回 `LocalFileSystem`
    - `Endpoint { location: Remote, backend: Directory, method: Proxy }`
-     → FsFactory 创建 `AgentProxyFS`
+     → `create_fs` 返回 `AgentProxyFS`
    - `Endpoint { location: Cloud, backend: ObjectStorage, method: Direct }`
-     → FsFactory 创建 `S3Storage`
+     → `create_fs` 返回 `S3Storage`
 
 3. **Resource 如何使用 OpbxFileSystem**
    ```rust
-   // 1. 创建 FsFactory（包含所有配置）
-   let factory = FsFactory::new(
-       PathBuf::from("/var/logs"),
+   // 1. 准备配置
+   let config = FsConfig {
+       local_root: PathBuf::from("/var/logs"),
+       s3_configs: HashMap::new(),
+       agent_client_factory: Box::new(|host, port| { /* ... */ }),
+   };
+
+   // 2. Resource 包含 Endpoint
+   let resource = Resource {
+       endpoint: Endpoint::local_fs(),
+       primary_path: "/var/log/app.log".into(),
+       archive_context: None,
+   };
+
+   // 3. 使用函数创建对应的 OpbxFileSystem 实例
+   let fs: Box<dyn OpbxFileSystem> = create_fs(&resource.endpoint, &config)?;
+
+   // 4. 使用 OpbxFileSystem 操作 ResourcePath
+   let metadata = fs.metadata(&resource.primary_path).await?;
+   let reader = fs.open_read(&resource.primary_path).await?;
+   ```
+
+4. **为什么 FS 不持有 Endpoint？**
+   - **避免循环依赖**：Endpoint + Config → create_fs → FS (无 endpoint)
+   - **职责分离**：Endpoint 只负责描述，FS 只负责操作
+   - **减少冗余**：FS 只存储运行时需要的最小数据
        s3_configs,
        Box::new(|host, port| Ok(AgentClient::new(host, port)?)),
    );
@@ -829,61 +853,46 @@ pub struct DirEntry {
 
 ---
 
-### 3.8 文件系统工厂：FsFactory
+### 3.8 文件系统创建：create_fs 函数
 
 #### 3.8.1 定义
 
-**FsFactory** 是一个应用服务，负责根据 `Endpoint` 创建对应的 `OpbxFileSystem` 实例。它将配置管理与端点描述分离，避免循环依赖。
+**create_fs** 是一个函数，根据 `Endpoint` 和 `FsConfig` 创建对应的 `OpbxFileSystem` 实例。它将配置管理与端点描述分离，避免循环依赖。
 
 ```rust
 use std::path::PathBuf;
 use std::collections::HashMap;
-use std::sync::Arc;
 
-/// 文件系统工厂
-pub struct FsFactory {
+/// 文件系统配置
+#[derive(Debug, Clone)]
+pub struct FsConfig {
     /// 本地文件系统根路径
-    local_root: PathBuf,
+    pub local_root: PathBuf,
 
     /// S3 配置映射 (profile_name -> S3Config)
-    s3_configs: HashMap<String, S3Config>,
+    pub s3_configs: HashMap<String, S3Config>,
 
     /// Agent 客户端工厂
-    agent_client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
+    pub agent_client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
 }
 
-impl FsFactory {
-    /// 创建新的 FsFactory
-    pub fn new(
-        local_root: PathBuf,
-        s3_configs: HashMap<String, S3Config>,
-        agent_client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
-    ) -> Self {
-        Self {
-            local_root,
-            s3_configs,
-            agent_client_factory,
+/// 根据 Endpoint 创建对应的 OpbxFileSystem 实例
+pub fn create_fs(endpoint: &Endpoint, config: &FsConfig) -> Result<Box<dyn OpbxFileSystem>, FsError> {
+    match (&endpoint.location, &endpoint.backend, &endpoint.access_method) {
+        (Location::Local, StorageBackend::Directory, AccessMethod::Direct) => {
+            Ok(Box::new(LocalFileSystem::new(config.local_root.clone())?))
         }
-    }
-
-    /// 根据 Endpoint 创建对应的 OpbxFileSystem 实例
-    pub fn create_fs(&self, endpoint: &Endpoint) -> Result<Box<dyn OpbxFileSystem>, FsError> {
-        match (&endpoint.location, &endpoint.backend, &endpoint.access_method) {
-            (Location::Local, StorageBackend::Directory, AccessMethod::Direct) => {
-                Ok(Box::new(LocalFileSystem::new(self.local_root.clone())?))
-            }
-            (Location::Remote { host, port }, StorageBackend::Directory, AccessMethod::Proxy) => {
-                let agent_client = (self.agent_client_factory)(host, *port)
-                    .map_err(|e| FsError::AgentError(e.to_string()))?;
-                Ok(Box::new(AgentProxyFS::new(agent_client)))
-            }
-            (Location::Cloud, StorageBackend::ObjectStorage, AccessMethod::Direct) => {
-                let s3_config = self.s3_configs.get(&endpoint.identity)
-                    .ok_or_else(|| FsError::MissingConfig(endpoint.identity.clone()))?;
-                Ok(Box::new(S3Storage::new(s3_config.clone())))
-            }
-            _ => Err(FsError::UnsupportedEndpoint),
+        (Location::Remote { host, port }, StorageBackend::Directory, AccessMethod::Proxy) => {
+            let agent_client = (config.agent_client_factory)(host, *port)
+                .map_err(|e| FsError::AgentError(e.to_string()))?;
+            Ok(Box::new(AgentProxyFS::new(agent_client)))
         }
+        (Location::Cloud, StorageBackend::ObjectStorage, AccessMethod::Direct) => {
+            let s3_config = config.s3_configs.get(&endpoint.identity)
+                .ok_or_else(|| FsError::MissingConfig(endpoint.identity.clone()))?;
+            Ok(Box::new(S3Storage::new(s3_config.clone())))
+        }
+        _ => Err(FsError::UnsupportedEndpoint),
     }
 }
 ```
@@ -913,22 +922,22 @@ pub struct AgentClient {
 
 **1. 职责分离**
 - `Endpoint` 只负责"描述"端点特征
-- `FsFactory` 负责"创建" FS 实例
+- `create_fs` 函数负责"创建" FS 实例
 - FS 实现类不持有 `Endpoint`，避免循环依赖
 
 **2. 配置集中管理**
-- 所有外部配置（credentials、paths）集中在 `FsFactory`
+- 所有外部配置（credentials、paths）集中在 `FsConfig`
 - `Endpoint` 保持轻量级，只包含描述性信息
 
-**3. 类型安全**
-- 使用 `match` 确保所有 Endpoint 组合都有对应的处理
-- 编译时保证类型安全
+**3. 简洁设计**
+- 使用函数而非工厂类型，避免过度设计
+- 无状态创建逻辑，每次调用独立
 
 #### 3.8.3 与其他组件的关系
 
 ```
     ┌─────────────────────────────────────────────────────────┐
-    │              FsFactory 在架构中的位置                     │
+    │              create_fs 函数在架构中的位置                  │
     ├─────────────────────────────────────────────────────────┤
     │                                                          │
     │    Endpoint (值对象)                                     │
@@ -937,6 +946,80 @@ pub struct AgentClient {
     │    │ 作用: 告诉我们"在哪里"和"如何访问"        │        │
     │    └──────────────────────────────────────────┘        │
     │                     │                                  │
+    │                     │ 传递给函数                        │
+    │                     ▼                                  │
+    │    create_fs 函数                                         │
+    │    ┌──────────────────────────────────────────┐        │
+    │    │ 参数: endpoint, config                   │        │
+    │    │ 返回: Box<dyn OpbxFileSystem>           │        │
+    │    └──────────────────────────────────────────┘        │
+    │                     │                                  │
+    │                     ▼                                  │
+    │    Box<dyn OpbxFileSystem>                              │
+    │    ┌─────────────────────────────────────┐              │
+    │    │ • LocalFileSystem (不含 endpoint)     │              │
+    │    │ • AgentProxyFS (不含 endpoint)        │              │
+    │    │ • S3Storage (不含 endpoint)           │              │
+    │    └─────────────────────────────────────┘              │
+    │                                                          │
+    │    Resource (实体)                                       │
+    │    ┌──────────────────────────────────────────┐        │
+    │    │ • endpoint: Endpoint        (端点)       │        │
+    │    │ • primary_path: ResourcePath (路径)      │        │
+    │    │ • archive_context: ArchiveContext?      │        │
+    │    └──────────────────────────────────────────┘        │
+    │                     │                                  │
+    │                     │ 使用流程                          │
+    │                     ▼                                  │
+    │    1. create_fs(&resource.endpoint, &config) → fs      │
+    │    2. fs.metadata(&resource.primary_path)              │
+    │                                                          │
+    └─────────────────────────────────────────────────────────┘
+```
+
+#### 3.8.4 使用示例
+
+```rust
+// 1. 准备配置
+let config = FsConfig {
+    local_root: PathBuf::from("/var/logs"),
+    s3_configs: HashMap::new(),
+    agent_client_factory: Box::new(|host, port| {
+        Ok(AgentClient::new(host, port)?)
+    }),
+};
+
+// 2. 解析 ORL 字符串得到 Resource
+let orl_str = "orl://local/var/log/app.log";
+let resource = OrlParser::parse(orl_str)?;
+
+// 3. 使用函数创建 FS 实例
+let fs = create_fs(&resource.endpoint, &config)?;
+
+// 4. 使用 FS 操作 ResourcePath
+let metadata = fs.metadata(&resource.primary_path).await?;
+let reader = fs.open_read(&resource.primary_path).await?;
+```
+
+#### 3.8.5 为什么使用函数而非工厂类型
+
+**问题**：使用工厂类型（如 `FsFactory`）是过度设计
+
+**解决方案**：
+```
+工厂类型设计（过度设计）:
+FsFactory { config }
+    └── create_fs(endpoint) → FS
+
+函数设计（简洁）:
+create_fs(endpoint, config) → FS
+```
+
+**好处**：
+- ✅ 更简洁：不需要定义额外的类型
+- ✅ 无状态：函数是无状态的，每次调用独立
+- ✅ 易测试：直接传入参数，无需构造工厂实例
+- ✅ 同样打破循环依赖
     │                     │ 传递给工厂                        │
     │                     ▼                                  │
     │    FsFactory (应用服务)                                 │
@@ -1467,9 +1550,10 @@ backend/opsbox-core/src/
 │   │   ├── object_storage.rs      # ObjectStorage trait
 │   │   └── searchable.rs          # Searchable trait
 │   │
+│   ├── factory.rs                 # create_fs 函数和 FsConfig
+│   │
 │   ├── services/                  # 应用服务
 │   │   ├── mod.rs
-│   │   ├── fs_factory.rs          # 文件系统工厂
 │   │   ├── orl_parser.rs          # ORL 解析服务
 │   │   └── archive_manager.rs     # 归档管理服务
 │   │
@@ -1493,7 +1577,7 @@ backend/opsbox-core/src/
 │  logseek/explorer                                       │
 │      │                                                  │
 │      ▼                                                  │
-│  odfs::services (FsFactory, OrlParser, ArchiveManager)         │
+│  odfs::factory (create_fs) + odfs::services (OrlParser, ArchiveManager)│
 │      │                                                  │
 │      ▼                                                  │
 │  odfs::domain (ORL, Resource, Endpoint)                 │
@@ -1537,7 +1621,6 @@ backend/opsbox-core/src/
 
 | 组件 | 文件 | 描述 |
 |------|------|------|
-| FsFactory | `services/fs_factory.rs` | 文件系统工厂（核心） |
 | OrlParser | `services/orl_parser.rs` | ORL 解析服务 |
 | ArchiveManager | `services/archive_manager.rs` | 归档管理服务 |
 
@@ -1563,24 +1646,54 @@ impl<F: OpbxFileSystem> OpbxFileSystem for ArchiveFileSystem<F> {
 }
 ```
 
-#### 7.2.2 FsFactory 工厂方法
+#### 7.2.2 create_fs 函数
 
 ```rust
-// FsFactory 根据 Endpoint 创建对应的 FS 实例
-pub struct FsFactory {
-    local_root: PathBuf,
-    s3_configs: HashMap<String, S3Config>,
-    agent_client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
+// FsConfig 配置结构体
+pub struct FsConfig {
+    pub local_root: PathBuf,
+    pub s3_configs: HashMap<String, S3Config>,
+    pub agent_client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, AgentError> + Send + Sync>,
 }
 
-impl FsFactory {
-    pub fn create_fs(&self, endpoint: &Endpoint) -> Result<Box<dyn OpbxFileSystem>, FsError> {
-        match (&endpoint.location, &endpoint.backend, &endpoint.access_method) {
-            (Location::Local, StorageBackend::Directory, AccessMethod::Direct) => {
-                Ok(Box::new(LocalFileSystem::new(self.local_root.clone())?))
-            }
-            (Location::Remote { host, port }, StorageBackend::Directory, AccessMethod::Proxy) => {
-                let client = (self.agent_client_factory)(host, *port)?;
+// create_fs 函数根据 Endpoint 创建对应的 FS 实例
+pub fn create_fs(endpoint: &Endpoint, config: &FsConfig) -> Result<Box<dyn OpbxFileSystem>, FsError> {
+    match (&endpoint.location, &endpoint.backend, &endpoint.access_method) {
+        (Location::Local, StorageBackend::Directory, AccessMethod::Direct) => {
+            Ok(Box::new(LocalFileSystem::new(config.local_root.clone())?))
+        }
+        (Location::Remote { host, port }, StorageBackend::Directory, AccessMethod::Proxy) => {
+            let client = (config.agent_client_factory)(host, *port)?;
+            Ok(Box::new(AgentProxyFS::new(client)))
+        }
+        (Location::Cloud, StorageBackend::ObjectStorage, AccessMethod::Direct) => {
+            let s3_config = config.s3_configs.get(&endpoint.identity)
+                .ok_or(FsError::MissingConfig(endpoint.identity.clone()))?;
+            Ok(Box::new(S3Storage::new(s3_config.clone())))
+        }
+        _ => Err(FsError::UnsupportedEndpoint),
+    }
+}
+```
+
+**FS 实现类（不持有 endpoint）**：
+
+```rust
+// LocalFileSystem 只存储必要的数据
+pub struct LocalFileSystem {
+    root: PathBuf,  // 不存储 endpoint
+}
+
+// AgentProxyFS 只存储必要的数据
+pub struct AgentProxyFS {
+    client: AgentClient,  // 不存储 endpoint
+}
+
+// S3Storage 只存储必要的数据
+pub struct S3Storage {
+    client: S3Client,  // 不存储 endpoint
+}
+```
                 Ok(Box::new(AgentProxyFS::new(client)))
             }
             (Location::Cloud, StorageBackend::ObjectStorage, AccessMethod::Direct) => {
@@ -1803,6 +1916,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.7 | 2026-02-04 | Claude Code | （已废弃）在第三章添加 3.8 节，详细介绍 ResourceResolver 服务组件 |
 | 1.8 | 2026-02-04 | Claude Code | 移除 ResourceResolver，直接在 Endpoint 上实现 create_fs() 方法，简化架构 |
 | 1.9 | 2026-02-04 | Claude Code | 引入 FsFactory 打破循环依赖，FS 实现类不再持有 endpoint 属性 |
+| 2.0 | 2026-02-04 | Claude Code | 简化为函数形式：FsFactory 类型 → create_fs 函数 + FsConfig，避免过度设计 |
 
 ---
 
