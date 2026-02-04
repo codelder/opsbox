@@ -1,6 +1,6 @@
 # OpsBox 分布式文件系统 (DFS) 完整设计文档
 
-**版本**: 1.4
+**版本**: 1.5
 **日期**: 2026-02-04
 **状态**: 设计草案
 
@@ -625,9 +625,8 @@ pub struct Resource {
 **OpbxFileSystem** (OpsBox File System) 是 OpsBox DFS 的核心抽象接口，定义了访问不同存储后点的统一操作。
 
 ```rust
-// AsyncRead trait
 use async_trait::async_trait;
-use futures::io::{AsyncRead, AsyncSeek};
+use futures::io::AsyncRead;
 
 /// OpbxFileSystem - OpsBox 文件系统核心抽象
 #[async_trait]
@@ -641,16 +640,6 @@ pub trait OpbxFileSystem: Send + Sync {
     /// 打开文件用于读取
     async fn open_read(&self, path: &ResourcePath)
         -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError>;
-
-    /// 创建目录（可选，Directory 类型支持）
-    async fn create_dir(&self, path: &ResourcePath) -> Result<(), FsError> {
-        Err(FsError::Unsupported)
-    }
-
-    /// 删除文件/目录（可选）
-    async fn remove(&self, path: &ResourcePath) -> Result<(), FsError> {
-        Err(FsError::Unsupported)
-    }
 }
 
 /// 文件元数据
@@ -675,8 +664,8 @@ pub struct DirEntry {
 #### 3.7.2 设计原则
 
 **1. 最小接口原则 (ISP)**
-- 只定义所有文件系统都必须支持的核心操作
-- 可选操作（如创建目录、删除）提供默认实现返回 `Unsupported`
+- 只定义所有文件系统都必须支持的核心操作（metadata, read_dir, open_read）
+- 不包含写操作（如创建目录、删除），保持接口简洁
 - 避免强制实现者不需要的方法
 
 **2. 异步优先**
@@ -1558,6 +1547,7 @@ Week 12    │████░│ 阶段6: 清理
 | 1.2 | 2026-02-04 | Claude Code | 将 FileSystem trait 重命名为 OpbxFileSystem，使用 Opbx (OpsBox 缩写) 作为项目标识 |
 | 1.3 | 2026-02-04 | Claude Code | 在第三章添加 3.7 节，详细介绍 OpbxFileSystem trait 的定义、设计原则和接口层次 |
 | 1.4 | 2026-02-04 | Claude Code | 修复文档中遗漏的 FileSystem 命名，统一使用 OpbxFileSystem |
+| 1.5 | 2026-02-04 | Claude Code | 简化 OpbxFileSystem trait，只保留三个核心方法（metadata, read_dir, open_read） |
 
 ---
 
