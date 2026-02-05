@@ -9,6 +9,7 @@
 
 pub mod agent;
 pub mod database;
+pub mod dfs;
 pub mod error;
 pub mod fs;
 pub mod odfs;

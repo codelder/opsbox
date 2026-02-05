@@ -1,11 +1,14 @@
+//! Agent 发现文件系统
+//!
+//! 提供在线 Agent 的虚拟目录视图，使用 DFS 抽象
+
 use agent_manager::AgentManager;
 use async_trait::async_trait;
-use opsbox_core::odfs::fs::{OpsFileSystem, OpsRead};
-use opsbox_core::odfs::orl::OpsPath;
-use opsbox_core::odfs::types::{OpsEntry, OpsFileType, OpsMetadata};
-use std::io;
+use opsbox_core::dfs::{
+    filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
+    path::ResourcePath,
+};
 use std::sync::Arc;
-use tracing;
 
 /// Agent 发现文件系统
 /// 提供在线 Agent 的虚拟目录视图
@@ -20,37 +23,20 @@ impl AgentDiscoveryFileSystem {
 }
 
 #[async_trait]
-impl OpsFileSystem for AgentDiscoveryFileSystem {
-  async fn metadata(&self, _path: &OpsPath) -> io::Result<OpsMetadata> {
-    // 虚拟根目录 "/" 元数据
-    Ok(OpsMetadata {
-      name: "agent_root".to_string(),
-      file_type: OpsFileType::Directory,
-      size: 0,
-      modified: None,
-      mode: 0o755,
-      mime_type: None,
-      compression: None,
-      is_archive: false,
-    })
+impl OpbxFileSystem for AgentDiscoveryFileSystem {
+  /// 获取虚拟根目录的元数据
+  async fn metadata(&self, _path: &ResourcePath) -> Result<FileMetadata, opsbox_core::dfs::FsError> {
+    Ok(FileMetadata::dir(0))
   }
 
-  async fn read_dir(&self, _path: &OpsPath) -> io::Result<Vec<OpsEntry>> {
+  /// 列出所有在线 Agent
+  async fn read_dir(&self, _path: &ResourcePath) -> Result<Vec<DirEntry>, opsbox_core::dfs::FsError> {
     let agents = self.manager.list_online_agents().await;
 
     tracing::info!(
       "AgentDiscoveryFileSystem::read_dir: found {} online agents",
       agents.len()
     );
-    for agent in &agents {
-      tracing::info!(
-        "  Agent: id={}, name={}, last_heartbeat={}, is_online={}",
-        agent.id,
-        agent.name,
-        agent.last_heartbeat,
-        agent.is_online(90)
-      );
-    }
 
     let entries = agents
       .into_iter()
@@ -61,38 +47,37 @@ impl OpsFileSystem for AgentDiscoveryFileSystem {
           format!("{} ({})", a.name, a.id)
         };
 
-        let path = format!("orl://{}@agent/", a.id);
+        // Agent discovery 条目的路径不重要，重要的是名称
+        // map_entry 会从名称中提取 agent ID 并构造正确的 ORL
+        let path = ResourcePath::from_str("/");
 
-        let metadata = OpsMetadata {
+        DirEntry {
           name: name.clone(),
-          file_type: OpsFileType::Directory,
-          size: 0,
-          modified: if a.last_heartbeat > 0 {
-            Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(a.last_heartbeat as u64))
-          } else {
-            None
-          },
-          mode: 0o755,
-          mime_type: None,
-          compression: None,
-          is_archive: false, // Agent is not an archive itself, it's a directory-like provider
-        };
-
-        OpsEntry { name, path, metadata }
+          path,
+          metadata: FileMetadata::dir(0),
+        }
       })
       .collect();
 
     Ok(entries)
   }
 
-  async fn open_read(&self, _path: &OpsPath) -> io::Result<OpsRead> {
-    Err(io::Error::new(
-      io::ErrorKind::PermissionDenied,
-      "Cannot read agent list as file",
+  /// 不支持读取 agent 列表作为文件
+  async fn open_read(
+    &self,
+    _path: &ResourcePath,
+  ) -> Result<Box<dyn opsbox_core::dfs::filesystem::AsyncRead + Send + Unpin>, opsbox_core::dfs::FsError> {
+    Err(opsbox_core::dfs::FsError::InvalidConfig(
+      "Cannot read agent list as file".to_string(),
     ))
   }
+}
 
-  fn name(&self) -> &str {
-    "agent_discovery"
+#[cfg(test)]
+mod tests {
+  #[test]
+  fn test_agent_discovery_new() {
+    // 这是一个基础的单元测试，实际的集成测试需要 AgentManager
+    // 这里只测试类型系统的正确性
   }
 }

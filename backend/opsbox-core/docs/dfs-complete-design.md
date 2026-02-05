@@ -769,13 +769,7 @@ pub struct DirEntry {
 
 **关键洞察**：
 
-1. **Endpoint vs OpbxFileSystem**
-   - `Endpoint` 描述"在哪里"和"如何访问"（描述性）
-   - `OpbxFileSystem` 定义"能做什么操作"（操作性）
-   - 它们是**正交的概念**，一个描述特征，一个定义行为
-   - **没有直接依赖**，通过 `create_fs` 函数连接
-
-2. **Endpoint 与实现类的对应关系**（通过 create_fs 函数）
+1. **Endpoint 与实现类的对应关系**
    - `Endpoint { location: Local, backend: Directory, method: Direct }`
      → `create_fs` 返回 `LocalFileSystem`
    - `Endpoint { location: Remote, backend: Directory, method: Proxy }`
@@ -783,7 +777,7 @@ pub struct DirEntry {
    - `Endpoint { location: Cloud, backend: ObjectStorage, method: Direct }`
      → `create_fs` 返回 `S3Storage`
 
-3. **Resource 如何使用 OpbxFileSystem**
+2. **Resource 如何使用 OpbxFileSystem**
    ```rust
    // 1. 准备配置（按需配置）
    let config = FsConfig::Local {
@@ -804,50 +798,6 @@ pub struct DirEntry {
    let metadata = fs.metadata(&resource.primary_path).await?;
    let reader = fs.open_read(&resource.primary_path).await?;
    ```
-
-4. **为什么使用枚举形式的 FsConfig？**
-   - **按需配置**：只配置需要的字段，避免冗余
-   - **类型安全**：编译时检查配置与 endpoint 类型匹配
-   - **语义清晰**：每种配置类型有明确的含义
-       s3_configs,
-       Box::new(|host, port| Ok(AgentClient::new(host, port)?)),
-   );
-
-   // 2. Resource 包含 Endpoint
-   let resource = Resource {
-       endpoint: Endpoint::local_fs(),
-       primary_path: "/var/log/app.log".into(),
-       archive_context: None,
-   };
-
-   // 3. 使用函数创建对应的 OpbxFileSystem 实例
-   let fs: Box<dyn OpbxFileSystem> = create_fs(&resource.endpoint, &config)?;
-
-   // 4. 使用 OpbxFileSystem 操作 ResourcePath
-   let metadata = fs.metadata(&resource.primary_path).await?;
-   let reader = fs.open_read(&resource.primary_path).await?;
-   ```
-
-4. **为什么 FS 不持有 Endpoint？**
-   - **避免循环依赖**：Endpoint + Config → create_fs → FS (无 endpoint)
-   - **职责分离**：Endpoint 只负责描述，FS 只负责操作
-   - **减少冗余**：FS 只存储运行时需要的最小数据（如 client、root path）
-
-#### 3.7.5 为什么命名为 OpbxFileSystem
-
-**命名考虑**：
-
-1. **避免命名冲突**：
-   - `FileSystem` 过于通用，可能与 std::fs 或其他库冲突
-   - `Opbx` (OpsBox 缩写) 提供项目上下文，明确这是 OpsBox 的抽象
-
-2. **简洁性**：
-   - `Opbx` 是 4 字符缩写，易于输入
-   - 比 `OpsBoxFileSystem` (15 字符) 更简洁
-
-3. **唯一性**：
-   - `Opbx` 作为 OpsBox 专用缩写，在代码库中具有唯一性
-   - IDE 搜索和自动补全更友好
 
 ---
 
@@ -1034,102 +984,16 @@ let fs = create_fs(&resource.endpoint, &config)?;
 let metadata = fs.metadata(&resource.primary_path).await?;
 ```
 
-#### 3.8.5 为什么使用枚举而非结构体
-
-**问题**：结构体形式的 `FsConfig` 包含所有字段，即使不需要
-
-```rust
-// 结构体形式（冗余）
-pub struct FsConfig {
-    pub local_root: PathBuf,           // S3 不需要
-    pub s3_configs: HashMap<...>,      // 本地不需要
-    pub agent_client_factory: Box<...>, // S3 不需要
-}
-
-// 即使用本地文件系统，也必须提供所有字段
-let config = FsConfig {
-    local_root: PathBuf::from("/logs"),
-    s3_configs: HashMap::new(),      // 空的，但必须提供
-    agent_client_factory: Box::new(...), // 空的，但必须提供
-};
-```
-
-**解决方案**：枚举形式（按需配置）
-
-```rust
-// 枚举形式（按需）
-pub enum FsConfig {
-    Local { root: PathBuf },
-    S3 { configs: HashMap<String, S3Config> },
-    Agent { client_factory: Box<...> },
-}
-
-// 只配置需要的字段
-let config = FsConfig::Local {
-    root: PathBuf::from("/logs")
-};
-```
-
-**好处**：
-- ✅ 只配置需要的字段，避免冗余
-- ✅ 类型安全：编译时检查配置与 endpoint 匹配
-- ✅ 语义清晰：每种配置类型有明确的含义
-let metadata = fs.metadata(&resource.primary_path).await?;
-let reader = fs.open_read(&resource.primary_path).await?;
-```
-
-#### 3.8.5 为什么使用函数而非工厂类型
-
-**问题**：使用工厂类型（如 `FsFactory`）是过度设计
-
-**解决方案**：
-```
-工厂类型设计（过度设计）:
-FsFactory { config }
-    └── create_fs(endpoint) → FS
-
-函数设计（简洁）:
-create_fs(endpoint, config) → FS
-```
-
-**好处**：
-- ✅ 更简洁：不需要定义额外的类型
-- ✅ 无状态：函数是无状态的，每次调用独立
-- ✅ 易测试：直接传入参数，无需构造工厂实例
-- ✅ 同样打破循环依赖
-
-#### 3.8.5 为什么使用枚举而非结构体
-
-**问题**：结构体形式的 `FsConfig` 包含所有字段，即使不需要
-
-```rust
-// 结构体形式（冗余）
-pub struct FsConfig {
-    pub local_root: PathBuf,           // S3 不需要
-    pub s3_configs: HashMap<...>,      // 本地不需要
-    pub agent_client_factory: Box<...>, // S3 不需要
-}
-```
-
-**解决方案**：枚举形式（按需配置）
-
-```rust
-// 枚举形式（按需）
-pub enum FsConfig {
-    Local { root: PathBuf },
-    S3 { configs: HashMap<String, S3Config> },
-    Agent { client_factory: Box<...> },
-}
-```
-
-**好处**：
-- ✅ 只配置需要的字段，避免冗余
-- ✅ 类型安全：编译时检查配置与 endpoint 匹配
-- ✅ 语义清晰：每种配置类型有明确的含义
-
 ---
 
 ## 4. 概念关系模型
+
+### 4.1 正交维度图
+
+```
+    ┌─────────────┐         ┌───────────────────┐       ┌──────────────────┐
+    │  Location   │         │ StorageBackend    │       │ AccessMethod     │
+    │  (位置)     │         │  (存储后端)       │       │   (访问方式)     │
     └─────────────┘         └───────────────────┘       └──────────────────┘
             │                       │                       │
             └───────────────────────┴───────────────────────┘
@@ -1716,8 +1580,6 @@ pub struct AgentProxyFS {
 // S3Storage 只存储必要的数据
 pub struct S3Storage {
     client: S3Client,  // 不存储 endpoint
-}
-```
 }
 ```
 

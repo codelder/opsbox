@@ -1,3 +1,7 @@
+//! Explorer API 路由
+//!
+//! 提供文件资源列表和下载的 HTTP API
+
 use axum::{
   Router,
   body::Body,
@@ -7,7 +11,6 @@ use axum::{
   routing::{get, post},
 };
 use opsbox_core::SuccessResponse;
-use opsbox_core::odfs::orl::ORL;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
@@ -41,12 +44,9 @@ async fn list_resources(
   State(state): State<Arc<AppState>>,
   Json(payload): Json<ListRequest>,
 ) -> opsbox_core::Result<impl IntoResponse> {
-  // Parse ORL
-  let orl = ORL::parse(payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
-
   let items = state
     .service
-    .list(&orl)
+    .list(&payload.orl)
     .await
     .map_err(opsbox_core::AppError::internal)?;
 
@@ -61,11 +61,9 @@ async fn download_resource(
   State(state): State<Arc<AppState>>,
   Query(payload): Query<ListRequest>,
 ) -> Result<impl IntoResponse, opsbox_core::AppError> {
-  let orl = ORL::parse(payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
-
   let (filename, size, reader) = state
     .service
-    .download(&orl)
+    .download(&payload.orl)
     .await
     .map_err(opsbox_core::AppError::internal)?;
 
