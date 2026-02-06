@@ -4,6 +4,7 @@
 
 use crate::api::LogSeekApiError;
 use crate::api::models::NL2QOut;
+use crate::service::nl2q::{call_llm, NLBody};
 use crate::service::ServiceError;
 use axum::extract::{Json, State};
 use opsbox_core::SqlitePool;
@@ -11,12 +12,12 @@ use opsbox_core::SqlitePool;
 // NL → Q 端点，实现将自然语言转换为查询字符串
 pub async fn nl2q(
   State(pool): State<SqlitePool>,
-  Json(body): Json<crate::service::nl2q::NLBody>,
+  Json(body): Json<NLBody>,
 ) -> Result<Json<NL2QOut>, LogSeekApiError> {
   tracing::info!("NL2Q API请求: {}", body.nl);
 
   let start = std::time::Instant::now();
-  let q = crate::service::nl2q::call_llm(&pool, &body.nl).await.map_err(|e| {
+  let q = call_llm(&pool, &body.nl).await.map_err(|e| {
     tracing::error!("NL2Q API失败: {}", e);
     LogSeekApiError::Service(ServiceError::ProcessingError(format!("LLM 调用失败: {}", e)))
   })?;
@@ -56,7 +57,7 @@ mod tests {
   #[test]
   fn test_nlbody_deserialization() {
     let json = r#"{"nl":"查找错误日志"}"#;
-    let body: crate::service::nl2q::NLBody = serde_json::from_str(json).unwrap();
+    let body: NLBody = serde_json::from_str(json).unwrap();
     assert_eq!(body.nl, "查找错误日志");
   }
 

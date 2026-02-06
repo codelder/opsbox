@@ -3,9 +3,11 @@
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
 use crate::api::{LogSeekApiError, models::SearchBody};
+use crate::query::{KeywordHighlight, Query};
 use crate::repository::cache::{cache as simple_cache, new_sid};
-use crate::service::search::SearchEvent;
+use crate::service::{ServiceError, search::SearchEvent};
 use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
+use crate::utils::renderer::{render_json_chunks, SearchJsonResult};
 use axum::{
   body::Body,
   extract::{Json, State},
@@ -26,7 +28,7 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 #[serde(tag = "type", rename_all = "lowercase")]
 enum SearchResponse<'a> {
   Result {
-    data: crate::utils::renderer::SearchJsonResult<'a>,
+    data: SearchJsonResult<'a>,
   },
   Error {
     source: String,
@@ -43,7 +45,7 @@ enum SearchResponse<'a> {
 /// 将 SearchEvent 流转换为 NDJSON 字节流
 fn convert_to_ndjson_stream(
   mut rx: mpsc::Receiver<SearchEvent>,
-  highlights: Vec<crate::query::KeywordHighlight>,
+  highlights: Vec<KeywordHighlight>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
   async_stream::stream! {
     let mut event_count = 0;
@@ -60,7 +62,7 @@ fn convert_to_ndjson_stream(
 
       let json_vec = match event {
         SearchEvent::Success(res) => {
-          let json_obj = crate::utils::renderer::render_json_chunks(
+          let json_obj = render_json_chunks(
             &res.path,
             res.merged.clone(),
             &res.lines, // Pass ref
@@ -106,7 +108,7 @@ fn build_ndjson_response(
     .header("X-Logseek-SID", sid_header)
     .body(Body::from_stream(stream))
     .map_err(|e| {
-      LogSeekApiError::Service(crate::service::ServiceError::ProcessingError(format!(
+      LogSeekApiError::Service(ServiceError::ProcessingError(format!(
         "构建 HTTP 响应失败: {}",
         e
       )))
@@ -133,7 +135,7 @@ pub async fn stream_search(
   let sid = new_sid();
 
   // 解析查询以获取 highlights（用于前端高亮显示）
-  let highlights = crate::query::Query::parse_github_like(&body.q)
+  let highlights = Query::parse_github_like(&body.q)
     .map(|spec| spec.highlights.clone())
     .unwrap_or_default();
 
@@ -160,10 +162,10 @@ pub async fn delete_search_session(
   axum::extract::Path(sid): axum::extract::Path<String>,
 ) -> Result<HttpResponse<Body>, LogSeekApiError> {
   tracing::info!("[Search] 清理会话缓存: sid={}", sid);
-  crate::repository::cache::cache().remove_sid(&sid).await;
+  simple_cache().remove_sid(&sid).await;
 
   HttpResponse::builder().status(200).body(Body::empty()).map_err(|e| {
-    LogSeekApiError::Service(crate::service::ServiceError::ProcessingError(format!(
+    LogSeekApiError::Service(ServiceError::ProcessingError(format!(
       "构建响应失败: {}",
       e
     )))
@@ -174,6 +176,7 @@ pub async fn delete_search_session(
 mod tests {
   use super::*;
   use axum::http::StatusCode;
+  use crate::service::search::SearchResult;
   use futures::StreamExt;
   use tokio::sync::mpsc;
 
@@ -237,7 +240,7 @@ mod tests {
     // 注意：SearchResult 的 new 是私有的或在当前 crate 可见，
     // 这里我们直接构造结构体（如果字段是 pub 的话）或者检查可见性。
     // 根据之前的查看，SearchResult 字段是 pub 的。
-    let result = crate::service::search::SearchResult {
+    let result = SearchResult {
       path: "test.log".into(),
       lines: vec!["match line".into()],
       merged: vec![(0, 0)],

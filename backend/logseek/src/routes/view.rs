@@ -4,8 +4,10 @@
 
 use crate::agent::SearchService;
 use crate::api::{LogSeekApiError, models::ViewParams};
+use crate::domain::config::Target;
 use crate::repository::{RepositoryError, cache::cache as simple_cache};
 use crate::service::ServiceError;
+use crate::service::encoding::read_text_file;
 use crate::service::entry_stream::create_entry_stream;
 use axum::{
   body::Body,
@@ -111,7 +113,7 @@ pub async fn view_cache_json(
                 }
               }
 
-              let result = crate::service::encoding::read_text_file(&mut reader, None)
+              let result = read_text_file(&mut reader, None)
                 .await
                 .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
 
@@ -147,7 +149,7 @@ pub async fn view_cache_json(
 
             // Reconstruct exact target options for Agent Search
             let target = match orl.target_type() {
-              TargetType::Dir => crate::domain::config::Target::Dir {
+              TargetType::Dir => Target::Dir {
                 path: orl.path().to_string(),
                 recursive: true,
               },
@@ -156,7 +158,7 @@ pub async fn view_cache_json(
               // Agent SearchOptions needs a target.
               // If it's a file, we want to read it.
               // Using Files target.
-              _ => crate::domain::config::Target::Files {
+              _ => Target::Files {
                 paths: vec![orl.path().to_string()],
               },
             };
@@ -225,7 +227,7 @@ pub async fn view_cache_json(
             }
 
             // 读取匹配条目的内容
-            let result = crate::service::encoding::read_text_file(&mut reader, None)
+            let result = read_text_file(&mut reader, None)
               .await
               .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
 

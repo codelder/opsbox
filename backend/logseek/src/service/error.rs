@@ -1,5 +1,8 @@
 use thiserror::Error;
 
+// 导入 RepositoryError 以简化路径引用
+use crate::repository::RepositoryError;
+
 /// Service 层错误
 ///
 /// 负责业务逻辑层的错误统一，包括搜索、处理等操作
@@ -22,7 +25,7 @@ pub enum ServiceError {
 
   /// Repository 层错误（自动转换）
   #[error(transparent)]
-  Repository(#[from] crate::repository::RepositoryError),
+  Repository(#[from] RepositoryError),
 }
 
 /// Service 层 Result 类型别名
@@ -95,7 +98,7 @@ mod tests {
 
   #[test]
   fn test_service_error_from_repository_error() {
-    let repo_err = crate::repository::RepositoryError::NotFound("资源不存在".to_string());
+    let repo_err = RepositoryError::NotFound("资源不存在".to_string());
     let service_err: ServiceError = repo_err.into();
 
     match service_err {

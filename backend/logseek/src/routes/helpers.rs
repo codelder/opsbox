@@ -2,6 +2,8 @@
 //!
 //! 提供路由共享的配置和工具函数
 
+use crate::utils::tuning;
+
 /// 获取流式响应通道容量
 ///
 /// 简化策略：固定容量，避免不必要的调参与链路复杂度
@@ -11,7 +13,7 @@ pub fn stream_channel_capacity() -> usize {
 
 /// 读取 IO 并发上限（限制同时打开/读取的对象数，适用于所有数据源）
 pub fn s3_max_concurrency() -> usize {
-  if let Some(t) = crate::utils::tuning::get() {
+  if let Some(t) = tuning::get() {
     return t.io_max_concurrency.clamp(1, 128);
   }
   std::env::var("LOGSEEK_IO_MAX_CONCURRENCY")

@@ -3,6 +3,14 @@ use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use thiserror::Error;
 
+// 导入错误类型以简化路径引用
+use crate::query::ParseError;
+use crate::repository::RepositoryError;
+use crate::service::ServiceError;
+use crate::utils::storage::S3Error;
+use opsbox_core::AppError;
+use opsbox_core::odfs::orl::OrlError;
+
 /// API 层错误类型（LogSeek 模块专用）
 ///
 /// 聚合来自各层的错误，并转换为标准的 HTTP 响应
@@ -10,15 +18,15 @@ use thiserror::Error;
 pub enum LogSeekApiError {
   /// Service 层错误
   #[error(transparent)]
-  Service(#[from] crate::service::ServiceError),
+  Service(#[from] ServiceError),
 
   /// Repository 层错误
   #[error(transparent)]
-  Repository(#[from] crate::repository::RepositoryError),
+  Repository(#[from] RepositoryError),
 
   /// Domain 层错误
   #[error(transparent)]
-  Domain(#[from] opsbox_core::odfs::orl::OrlError),
+  Domain(#[from] OrlError),
 
   /// JSON 解析失败
   #[error("JSON 解析失败: {0}")]
@@ -26,15 +34,15 @@ pub enum LogSeekApiError {
 
   /// 查询语法错误
   #[error("查询语法错误: {0}")]
-  QueryParse(#[from] crate::query::ParseError),
+  QueryParse(#[from] ParseError),
 
   /// 存储层错误
   #[error("存储错误: {0}")]
-  StorageError(#[from] crate::utils::storage::S3Error),
+  StorageError(#[from] S3Error),
 
   /// 核心服务错误
   #[error(transparent)]
-  Internal(#[from] opsbox_core::AppError),
+  Internal(#[from] AppError),
 }
 
 impl IntoResponse for LogSeekApiError {
@@ -42,22 +50,22 @@ impl IntoResponse for LogSeekApiError {
     let (status, title, detail) = match &self {
       // Service 层错误映射
       LogSeekApiError::Service(e) => match e {
-        crate::service::ServiceError::SearchFailed { .. } => {
+        ServiceError::SearchFailed { .. } => {
           (StatusCode::INTERNAL_SERVER_ERROR, "搜索失败", e.to_string())
         }
-        crate::service::ServiceError::ConfigError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "配置错误", e.to_string()),
-        crate::service::ServiceError::ProcessingError(_) => {
+        ServiceError::ConfigError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "配置错误", e.to_string()),
+        ServiceError::ProcessingError(_) => {
           (StatusCode::INTERNAL_SERVER_ERROR, "数据处理失败", e.to_string())
         }
-        crate::service::ServiceError::IoError { .. } => {
+        ServiceError::IoError { .. } => {
           (StatusCode::INTERNAL_SERVER_ERROR, "IO 操作失败", e.to_string())
         }
-        crate::service::ServiceError::ChannelClosed => (
+        ServiceError::ChannelClosed => (
           StatusCode::INTERNAL_SERVER_ERROR,
           "通信中断",
           "数据通道已关闭".to_string(),
         ),
-        crate::service::ServiceError::Repository(repo_err) => {
+        ServiceError::Repository(repo_err) => {
           // 递归处理 Repository 错误
           let repo_api_err: LogSeekApiError = repo_err.clone().into();
           return repo_api_err.into_response();
@@ -66,15 +74,15 @@ impl IntoResponse for LogSeekApiError {
 
       // Repository 层错误映射
       LogSeekApiError::Repository(e) => match e {
-        crate::repository::RepositoryError::NotFound(_) => (StatusCode::NOT_FOUND, "资源不存在", e.to_string()),
-        crate::repository::RepositoryError::StorageError(_) => (StatusCode::BAD_GATEWAY, "存储服务错误", e.to_string()),
-        crate::repository::RepositoryError::Database(_) => {
+        RepositoryError::NotFound(_) => (StatusCode::NOT_FOUND, "资源不存在", e.to_string()),
+        RepositoryError::StorageError(_) => (StatusCode::BAD_GATEWAY, "存储服务错误", e.to_string()),
+        RepositoryError::Database(_) => {
           (StatusCode::INTERNAL_SERVER_ERROR, "数据库错误", e.to_string())
         }
-        crate::repository::RepositoryError::QueryFailed(_) => {
+        RepositoryError::QueryFailed(_) => {
           (StatusCode::INTERNAL_SERVER_ERROR, "查询失败", e.to_string())
         }
-        crate::repository::RepositoryError::CacheFailed(_) => {
+        RepositoryError::CacheFailed(_) => {
           (StatusCode::INTERNAL_SERVER_ERROR, "缓存操作失败", e.to_string())
         }
       },
@@ -92,12 +100,12 @@ impl IntoResponse for LogSeekApiError {
       // 核心服务错误
       LogSeekApiError::Internal(core_err) => {
         let status = match core_err {
-          opsbox_core::AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
-          opsbox_core::AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
-          opsbox_core::AppError::NotFound(_) => StatusCode::NOT_FOUND,
-          opsbox_core::AppError::ExternalService(_) => StatusCode::BAD_GATEWAY,
+          AppError::Database(_) => StatusCode::INTERNAL_SERVER_ERROR,
+          AppError::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
+          AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+          AppError::BadRequest(_) => StatusCode::BAD_REQUEST,
+          AppError::NotFound(_) => StatusCode::NOT_FOUND,
+          AppError::ExternalService(_) => StatusCode::BAD_GATEWAY,
         };
         (status, "内部错误", core_err.to_string())
       }
@@ -143,7 +151,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_service_error_config_error_conversion() {
-    let service_err = crate::service::ServiceError::ConfigError("配置文件缺失".to_string());
+    let service_err = ServiceError::ConfigError("配置文件缺失".to_string());
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 
@@ -157,7 +165,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_service_error_processing_error_conversion() {
-    let service_err = crate::service::ServiceError::ProcessingError("数据解析失败".to_string());
+    let service_err = ServiceError::ProcessingError("数据解析失败".to_string());
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 
@@ -171,7 +179,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_service_error_search_failed_conversion() {
-    let service_err = crate::service::ServiceError::SearchFailed {
+    let service_err = ServiceError::SearchFailed {
       path: "/test/path".to_string(),
       error: "连接超时".to_string(),
     };
@@ -190,7 +198,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_service_error_io_error_conversion() {
-    let service_err = crate::service::ServiceError::IoError {
+    let service_err = ServiceError::IoError {
       path: "/test/file.log".to_string(),
       error: "文件不存在".to_string(),
     };
@@ -206,7 +214,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_service_error_channel_closed_conversion() {
-    let service_err = crate::service::ServiceError::ChannelClosed;
+    let service_err = ServiceError::ChannelClosed;
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 
@@ -220,7 +228,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_repository_error_not_found_conversion() {
-    let repo_err = crate::repository::RepositoryError::NotFound("资源ID: 123".to_string());
+    let repo_err = RepositoryError::NotFound("资源ID: 123".to_string());
     let api_err: LogSeekApiError = repo_err.into();
     let response = api_err.into_response();
 
@@ -234,7 +242,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_repository_error_storage_error_conversion() {
-    let repo_err = crate::repository::RepositoryError::StorageError("S3 连接失败".to_string());
+    let repo_err = RepositoryError::StorageError("S3 连接失败".to_string());
     let api_err: LogSeekApiError = repo_err.into();
     let response = api_err.into_response();
 
@@ -248,7 +256,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_repository_error_database_conversion() {
-    let repo_err = crate::repository::RepositoryError::Database("查询失败".to_string());
+    let repo_err = RepositoryError::Database("查询失败".to_string());
     let api_err: LogSeekApiError = repo_err.into();
     let response = api_err.into_response();
 
@@ -261,7 +269,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_query_parse_error_conversion() {
-    let parse_err = crate::query::ParseError::InvalidRegex {
+    let parse_err = ParseError::InvalidRegex {
       message: "无效的正则表达式".to_string(),
       span: (0, 10),
     };
@@ -277,7 +285,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_domain_error_conversion() {
-    let domain_err = opsbox_core::odfs::orl::OrlError::InvalidFormat("无效的 URL 格式".to_string());
+    let domain_err = OrlError::InvalidFormat("无效的 URL 格式".to_string());
     let api_err: LogSeekApiError = domain_err.into();
     let response = api_err.into_response();
 
@@ -290,7 +298,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_response_content_type_header() {
-    let service_err = crate::service::ServiceError::ConfigError("测试错误".to_string());
+    let service_err = ServiceError::ConfigError("测试错误".to_string());
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 
@@ -305,7 +313,7 @@ mod tests {
   async fn test_error_context_preserved() {
     // 测试错误上下文信息是否完整保留
     let service_err =
-      crate::service::ServiceError::ProcessingError("处理文件 /path/to/file.log 时发生错误: 编码不支持".to_string());
+      ServiceError::ProcessingError("处理文件 /path/to/file.log 时发生错误: 编码不支持".to_string());
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 
@@ -318,8 +326,8 @@ mod tests {
   #[tokio::test]
   async fn test_nested_repository_error_in_service_error() {
     // 测试嵌套的 Repository 错误（通过 ServiceError::Repository）
-    let repo_err = crate::repository::RepositoryError::NotFound("嵌套资源".to_string());
-    let service_err = crate::service::ServiceError::Repository(repo_err);
+    let repo_err = RepositoryError::NotFound("嵌套资源".to_string());
+    let service_err = ServiceError::Repository(repo_err);
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 
@@ -334,7 +342,7 @@ mod tests {
   #[tokio::test]
   async fn test_problem_details_format() {
     // 验证 Problem Details RFC 7807 格式
-    let service_err = crate::service::ServiceError::ConfigError("测试".to_string());
+    let service_err = ServiceError::ConfigError("测试".to_string());
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 

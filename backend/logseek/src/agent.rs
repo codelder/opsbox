@@ -1,6 +1,7 @@
 // Agent 别名模块：对外暴露与远程 Agent 搜索相关的类型
 // 便于在仅保留 Agent 能力的场景下使用更贴切的命名空间
 
+use crate::service::search::{SearchEvent, SearchResult};
 use crate::utils::strings::truncate_utf8;
 use async_trait::async_trait;
 use futures::Stream;
@@ -62,7 +63,7 @@ impl Default for SearchOptions {
 
 /// 搜索结果流
 pub type SearchResultStream =
-  Box<dyn Stream<Item = Result<crate::service::search::SearchResult, AgentClientError>> + Send + Unpin>;
+  Box<dyn Stream<Item = Result<SearchResult, AgentClientError>> + Send + Unpin>;
 
 /// 搜索服务 trait（远程执行搜索，直接返回结果）
 #[async_trait]
@@ -364,8 +365,8 @@ impl SearchService for AgentClient {
             let agent_id = agent_id_for_parse.clone();
             async move {
               debug!("🔍 Server尝试解析SearchEvent: {}", line);
-              match serde_json::from_str::<crate::service::search::SearchEvent>(&line) {
-                Ok(crate::service::search::SearchEvent::Success(result)) => {
+              match serde_json::from_str::<SearchEvent>(&line) {
+                Ok(SearchEvent::Success(result)) => {
                   debug!(
                     "✅ Server接收到Success消息: path={}, lines_count={}",
                     result.path,
@@ -373,11 +374,11 @@ impl SearchService for AgentClient {
                   );
                   Some(Ok(result))
                 }
-                Ok(crate::service::search::SearchEvent::Error { source, message, .. }) => {
+                Ok(SearchEvent::Error { source, message, .. }) => {
                   trace!("[Wire] ← Error: source={}, message={}", source, message);
                   Some(Err(AgentClientError::Other(format!("Agent 错误: {}", message))))
                 }
-                Ok(crate::service::search::SearchEvent::Complete { source, elapsed_ms }) => {
+                Ok(SearchEvent::Complete { source, elapsed_ms }) => {
                   debug!(
                     "Agent {} 搜索完成 (source={}, elapsed={}ms)",
                     agent_id, source, elapsed_ms

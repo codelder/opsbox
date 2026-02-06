@@ -10,7 +10,10 @@ use opsbox_core::dfs::{
 };
 use opsbox_core::SqlitePool;
 use opsbox_core::repository::s3::{load_s3_profile};
-use tokio::io::{AsyncRead, AsyncWriteExt};
+
+// Discovery filesystems
+use crate::fs::agent_discovery::AgentDiscoveryFileSystem;
+use crate::fs::s3_discovery::S3DiscoveryFileSystem;
 
 use agent_manager::AgentManager;
 use std::collections::HashMap;
@@ -19,6 +22,7 @@ use std::sync::Arc;
 
 // 用于归档文件系统的临时文件处理
 use tempfile;
+use tokio::io::{AsyncRead, AsyncWriteExt};
 
 /// Explorer Service - 使用 DFS 模块进行文件系统操作
 pub struct ExplorerService {
@@ -43,8 +47,6 @@ impl ExplorerService {
 
   /// 列出指定路径下的资源
   pub async fn list(&self, orl: &str) -> Result<Vec<ResourceItem>, String> {
-    use opsbox_core::dfs::impls::LocalFileSystem;
-
     // 解析 ORL 字符串为 Resource
     let resource = OrlParser::parse(orl)
       .map_err(|e| format!("Failed to parse ORL: {}", e))?;
@@ -282,11 +284,11 @@ impl ExplorerService {
       "agent.root" => {
         let manager = self.agent_manager.as_ref()
           .ok_or_else(|| "AgentManager not configured".to_string())?;
-        let fs = crate::fs::agent_discovery::AgentDiscoveryFileSystem::new(manager.clone());
+        let fs = AgentDiscoveryFileSystem::new(manager.clone());
         return Ok(Box::new(fs));
       }
       "s3.root" => {
-        let fs = crate::fs::s3_discovery::S3DiscoveryFileSystem::new(self.db_pool.clone());
+        let fs = S3DiscoveryFileSystem::new(self.db_pool.clone());
         return Ok(Box::new(fs));
       }
       _ => {}

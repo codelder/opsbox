@@ -11,6 +11,7 @@ use opsbox_core::odfs::OrlManager;
 use opsbox_core::odfs::orl::EndpointType;
 use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
 
+use crate::query::PathFilter;
 use crate::utils::storage;
 
 use super::search::{SearchEvent, SearchProcessor};
@@ -77,7 +78,7 @@ pub struct EntryStreamProcessor {
   processor: Arc<SearchProcessor>,
   content_timeout: Duration,
   // 额外路径过滤器列表，所有过滤器必须同时满足（AND 逻辑）
-  extra_path_filters: Vec<crate::query::PathFilter>,
+  extra_path_filters: Vec<PathFilter>,
   cancel_token: Option<std::sync::Arc<tokio_util::sync::CancellationToken>>,
   // 基础路径（可选）：如果设置，过滤时将先去除该前缀（用于支持相对路径 glob）
   base_path: Option<PathBuf>,
@@ -107,7 +108,7 @@ impl EntryStreamProcessor {
   }
 
   /// 添加额外路径过滤器（多个过滤器之间是 AND 关系）
-  pub fn with_extra_path_filter(mut self, filter: crate::query::PathFilter) -> Self {
+  pub fn with_extra_path_filter(mut self, filter: PathFilter) -> Self {
     self.extra_path_filters.push(filter);
     self
   }
@@ -450,13 +451,13 @@ pub async fn create_entry_stream(
 /// 事件通过回调函数返回，调用方可灵活处理（发送到 channel、生成消息等）。
 pub async fn process_entry_stream_with_callback<F>(
   stream: Box<dyn EntryStream>,
-  processor: Arc<crate::service::search::SearchProcessor>,
-  extra_path_filter: Option<crate::query::PathFilter>,
+  processor: Arc<SearchProcessor>,
+  extra_path_filter: Option<PathFilter>,
   cancel_token: Option<std::sync::Arc<tokio_util::sync::CancellationToken>>,
   mut result_callback: F,
 ) -> Result<(usize, usize), String>
 where
-  F: FnMut(crate::service::search::SearchEvent) -> bool + Send,
+  F: FnMut(SearchEvent) -> bool + Send,
 {
   // 创建条目流处理器
   let mut stream_processor = EntryStreamProcessor::new(processor);

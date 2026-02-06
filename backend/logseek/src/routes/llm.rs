@@ -295,7 +295,9 @@ mod tests {
 
   #[test]
   fn test_llm_backend_list_item_from_public() {
-    let public = crate::repository::llm::LlmBackendPublic {
+    use crate::repository::llm::LlmBackendPublic;
+
+    let public = LlmBackendPublic {
       name: "test".to_string(),
       provider: ProviderKind::Ollama,
       base_url: "http://localhost:11434".to_string(),
