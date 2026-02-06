@@ -70,19 +70,22 @@ pub struct S3Storage {
 }
 
 impl S3Storage {
-    /// 创建新的 S3 存储
+    /// 创建新的 S3 存储（同步版本）
     pub fn new(config: S3Config) -> Result<Self, FsError> {
-        // 使用 tokio runtime 来执行异步初始化
-        let rt = tokio::runtime::Runtime::new()
-            .map_err(|e| FsError::InvalidConfig(format!("Failed to create runtime: {}", e)))?;
+        // 在单独的线程中创建运行时并执行异步初始化
+        // 这样可以避免在异步运行时中嵌套创建运行时的问题
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| FsError::InvalidConfig(format!("Failed to create runtime: {}", e)))?;
 
-        rt.block_on(async {
-            Self::new_async(config).await
-        })
+            rt.block_on(async {
+                Self::new_async(config).await
+            })
+        }).join().map_err(|_| FsError::InvalidConfig("Thread join failed".to_string()))?
     }
 
     /// 异步创建 S3 存储
-    async fn new_async(config: S3Config) -> Result<Self, FsError> {
+    pub async fn new_async(config: S3Config) -> Result<Self, FsError> {
         // 解析 region
         let region = if let Some(region_str) = config.region {
             Some(Region::new(region_str))

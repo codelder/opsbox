@@ -368,7 +368,7 @@ impl ExplorerService {
       StorageBackend::ObjectStorage => {
         // S3 对象存储
         let s3_config = self.get_s3_config(&resource.endpoint.identity).await?;
-        let fs = S3Storage::new(s3_config)
+        let fs = S3Storage::new_async(s3_config).await
           .map_err(|e| format!("Failed to create S3 FS: {}", e))?;
         Ok(Box::new(fs))
       }
