@@ -59,6 +59,21 @@ impl ExplorerService {
       return self.list_archive(&resource, ctx).await;
     }
 
+    // 特殊处理：S3 profile 根路径（列出 buckets）
+    let path_str = resource.primary_path.to_string();
+    let is_s3_root = resource.endpoint.backend == StorageBackend::ObjectStorage
+      && (path_str == "/" || path_str.is_empty());
+
+    if is_s3_root {
+      // 使用 S3DiscoveryFileSystem 列出该 profile 的 buckets
+      let profile_name = &resource.endpoint.identity;
+      let discovery_path = ResourcePath::from_str(&format!("/{}", profile_name));
+      let fs = S3DiscoveryFileSystem::new(self.db_pool.clone());
+      let entries = fs.read_dir(&discovery_path).await
+        .map_err(|e| format!("Failed to list S3 buckets: {}", e))?;
+      return Ok(entries.into_iter().map(|e| self.map_entry(e, &resource)).collect());
+    }
+
     // 创建适当的文件系统
     let fs = self.create_fs_for_resource(&resource).await?;
 
@@ -394,6 +409,8 @@ impl ExplorerService {
 
   /// 将 DirEntry 映射为 ResourceItem
   fn map_entry(&self, entry: DirEntry, parent_resource: &Resource) -> ResourceItem {
+    let entry_path_str = entry.path.to_string();
+
     // 特殊处理：agent discovery 返回的 agent 条目
     // 从条目名称中提取 agent ID（格式为 "agent-name (agent-id)" 或 "agent-id"）
     let path = if parent_resource.endpoint.identity == "agent.root" {
@@ -411,6 +428,22 @@ impl ExplorerService {
         entry.name.clone()
       };
       format!("orl://{}@agent/", agent_id)
+    } else if parent_resource.endpoint.identity == "s3.root" {
+      // S3 discovery: 返回 S3 profile 条目
+      // 路径格式: orl://{profile_name}@s3/
+      let profile_name = entry.name.clone();
+      format!("orl://{}@s3/", profile_name)
+    } else if entry_path_str.contains(':') && entry_path_str.starts_with('/') {
+      // S3 bucket entry from discovery: /{profile}:{bucket}
+      // 转换为: orl://{profile}@s3/{bucket}/
+      let without_slash = entry_path_str.trim_start_matches('/');
+      if let Some((profile, bucket)) = without_slash.split_once(':') {
+        let encoded_bucket = urlencoding::encode(bucket);
+        format!("orl://{}@s3/{}/", profile, encoded_bucket)
+      } else {
+        // Fallback to standard handling
+        entry_path_str
+      }
     } else if entry.path.to_string().starts_with("orl://") {
       // 已经是 ORL 格式，直接使用
       entry.path.to_string()
