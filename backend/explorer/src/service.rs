@@ -630,25 +630,6 @@ impl ExplorerService {
         // 如果条目已经提供绝对路径
         let auth = self.resource_endpoint_orl(parent_resource);
 
-        // S3 特殊处理：保留 bucket 上下文
-        // 当父资源是 S3 时，需要在 endpoint 中包含 bucket 信息
-        let auth = if parent_resource.endpoint.backend == opsbox_core::dfs::endpoint::StorageBackend::ObjectStorage {
-          // 从父资源的路径中提取 bucket（第一段）
-          let parent_path_segments = parent_resource.primary_path.segments();
-          let bucket = parent_path_segments.first()
-            .map(|s| s.as_str())
-            .unwrap_or("");
-
-          // 构造带有 bucket 的 endpoint: profile:bucket@s3
-          if !bucket.is_empty() {
-            format!("{}:{}@s3", parent_resource.endpoint.identity, bucket)
-          } else {
-            auth
-          }
-        } else {
-          auth
-        };
-
         // 构建路径部分，确保以 / 开头
         let path_suffix = entry.path.segments()
           .into_iter()

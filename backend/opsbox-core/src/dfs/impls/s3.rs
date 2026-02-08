@@ -139,9 +139,21 @@ impl S3Storage {
     fn parse_bucket_and_key(&self, path: &ResourcePath) -> Result<(String, String), FsError> {
         let segments = path.segments();
 
-        // 如果有默认 bucket，第一段是 key 的一部分
+        // 如果有默认 bucket，从路径中跳过 bucket 名称（如果存在）
         if let Some(ref default_bucket) = self.default_bucket {
-            return Ok((default_bucket.clone(), segments.join("/")));
+            // 检查第一段是否是 bucket 名称
+            let key = if !segments.is_empty() && segments[0] == *default_bucket {
+                // 第一段是 bucket，跳过它
+                if segments.len() > 1 {
+                    segments[1..].join("/")
+                } else {
+                    String::new()
+                }
+            } else {
+                // 第一段不是 bucket，直接使用
+                segments.join("/")
+            };
+            return Ok((default_bucket.clone(), key));
         }
 
         // 否则，第一段是 bucket
@@ -311,14 +323,8 @@ impl OpbxFileSystem for S3Storage {
                     continue;
                 }
 
-                // 创建路径（相对路径）
-                // 如果有默认 bucket，使用相对于当前路径的路径（不包含 bucket 名称）
-                let entry_path = if self.default_bucket.is_some() {
-                    let relative_key = key.trim_start_matches(&prefix).trim_start_matches('/');
-                    ResourcePath::from_str(&format!("/{}", relative_key))
-                } else {
-                    ResourcePath::from_str(&format!("/{}", key))
-                };
+                // 创建路径（包含 bucket，确保 create_fs_for_resource 能正确提取 bucket）
+                let entry_path = ResourcePath::from_str(&format!("/{}/{}", bucket, key));
 
                 entries.push(DirEntry {
                     name,
@@ -343,17 +349,8 @@ impl OpbxFileSystem for S3Storage {
                     continue;
                 }
 
-                // 创建路径（相对路径）
-                // 如果有默认 bucket，使用相对于当前路径的路径（不包含 bucket 名称）
-                let entry_path = if self.default_bucket.is_some() {
-                    let relative_prefix = prefix_str
-                        .trim_start_matches(&prefix)
-                        .trim_start_matches('/')
-                        .trim_end_matches('/');
-                    ResourcePath::from_str(&format!("/{}", relative_prefix))
-                } else {
-                    ResourcePath::from_str(&format!("/{}", prefix_str.trim_end_matches('/')))
-                };
+                // 创建路径（包含 bucket，去除末尾斜杠）
+                let entry_path = ResourcePath::from_str(&format!("/{}/{}", bucket, prefix_str.trim_end_matches('/')));
 
                 entries.push(DirEntry {
                     name,
