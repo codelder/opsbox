@@ -126,4 +126,53 @@ describe('orl', () => {
       ).toBe('orl://local/var/log/my%20log.txt');
     });
   });
+
+  describe('archive URL encoding', () => {
+    it('handles archive entry paths without double encoding', () => {
+      // 模拟后端返回的 ORL（entry 值未编码）
+      const backendOrl = 'orl://local/tmp/test.gz?entry=/home/bbipadm/logs';
+
+      // 前端使用 encodeURIComponent 编码整个 ORL
+      const encoded = encodeURIComponent(backendOrl);
+
+      // 验证：不应该有双重编码
+      expect(encoded).not.toContain('%252F');
+
+      // 验证：应该有正确的单次编码
+      expect(encoded).toContain('%3Fentry%3D%2F');
+
+      // 测试往返：解码后应该等于原始值
+      const decoded = decodeURIComponent(encoded);
+      expect(decoded).toBe(backendOrl);
+    });
+
+    it('detects double encoding in backend response', () => {
+      // 错误的后端返回（entry 值已编码）
+      const wrongBackendOrl = 'orl://local/tmp/test.gz?entry=%2Fhome';
+
+      // 前端编码后会产生双重编码
+      const encoded = encodeURIComponent(wrongBackendOrl);
+
+      // 验证：存在双重编码
+      expect(encoded).toContain('%252F');
+
+      // 这会导致后端无法正确解析
+      expect(decodeURIComponent(encoded)).toBe(wrongBackendOrl);
+      // 但后端收到的是 ?entry=%2Fhome 而不是 ?entry=/home
+    });
+
+    it('correctly parses URL query parameter', () => {
+      // 模拟浏览器 URL 中的查询参数
+      const url = new URL('http://localhost:5173/explorer?orl=orl%3A%2F%2Flocal%2Ftmp%2Ftest.gz%3Fentry%3D%2Fhome');
+
+      // 获取并验证解码后的 ORL
+      const orl = url.searchParams.get('orl');
+      expect(orl).toBe('orl://local/tmp/test.gz?entry=/home');
+
+      // 验证可以正确解析
+      const parsed = parseOrl(orl);
+      expect(parsed?.path).toBe('tmp/test.gz');
+      expect(parsed?.entryPath).toBe('/home');
+    });
+  });
 });

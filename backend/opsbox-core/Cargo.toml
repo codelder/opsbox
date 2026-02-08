@@ -51,6 +51,7 @@ percent-encoding = "2.3"
 
 # File System & Compression
 async-compression = { version = "0.4", features = ["tokio", "gzip"] }
+flate2 = "1.0"
 jwalk = "0.8"
 async-tar = "0.5"
 tokio-util = { version = "0.7", features = ["compat", "io"] }
@@ -63,6 +64,7 @@ regex = "1"
 once_cell = "1.20"
 async_zip = { version = "0.0.18", features = ["tokio"] }
 tokio-tar = "0.3.1"
+tar = { version = "0.4", features = ["default"] }
 tempfile = "3.24.0"
 lru = "0.16.2"
 futures-lite = "2.6.1"
@@ -70,7 +72,6 @@ tokio-stream = "0.1.17"
 fluent-uri = "0.4.1"
 
 [dev-dependencies]
-tar = "0.4"
 test-log = "0.2"
 opsbox-test-common = { path = "../test-common" }
 

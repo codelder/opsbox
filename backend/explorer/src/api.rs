@@ -44,6 +44,14 @@ async fn list_resources(
   State(state): State<Arc<AppState>>,
   Json(payload): Json<ListRequest>,
 ) -> opsbox_core::Result<impl IntoResponse> {
+  // 记录收到的 ORL 请求（截断过长的 ORL 以便于阅读）
+  let orl_display = if payload.orl.len() > 100 {
+    format!("{}... (total {} chars)", &payload.orl[..100], payload.orl.len())
+  } else {
+    payload.orl.clone()
+  };
+  tracing::info!("收到 explorer/list 请求，ORL: {}", orl_display);
+
   let items = state
     .service
     .list(&payload.orl)

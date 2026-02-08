@@ -646,12 +646,18 @@ test.describe('Explorer E2E', () => {
     // 3. Double click the archive file to enter it
     await page.getByText('test_archive.tar').dblclick();
 
+    // Wait for page to load after navigation
+    await page.waitForLoadState('networkidle');
+
     // 4. Verify we are "inside" the archive (URL params handling check) and see 'archive_content' folder
     // Note: tar command usually preserves the top level folder if we tarred 'archive_content'
     await expect(page.getByText('archive_content')).toBeVisible();
 
     // Enter 'archive_content' folder
     await page.getByText('archive_content').dblclick();
+
+    // Wait for page to load after entering subdirectory
+    await page.waitForLoadState('networkidle');
 
     // Verify we see files
     await expect(page.getByText('root_file.txt')).toBeVisible();
@@ -663,11 +669,15 @@ test.describe('Explorer E2E', () => {
     // Up from archive_content -> archive root (virtual root listing contents of tar)
     // Note: We are currently at archive.tar?target=archive&entry=archive_content
     await upButton.click();
+    // Wait for navigation to complete
+    await page.waitForLoadState('networkidle');
     // Now we are at root of tar. Should see 'archive_content' folder again.
     await expect(page.getByText('archive_content')).toBeVisible();
 
     // 6. Up from archive root -> parent directory (TEST_FILES_DIR)
     await upButton.click();
+    // Wait for navigation to complete
+    await page.waitForLoadState('networkidle');
 
     // Now we should be back at TEST_FILES_DIR
     // We should see 'test_archive.tar' as a FILE

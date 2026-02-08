@@ -36,6 +36,8 @@
 
 use std::collections::HashMap;
 
+use percent_encoding::percent_decode_str;
+
 use super::{
     archive::{ArchiveContext, ArchiveType},
     endpoint::Endpoint,
@@ -215,17 +217,30 @@ impl OrlParser {
         let mut params = HashMap::new();
         for pair in query.split('&') {
             if let Some((key, value)) = pair.split_once('=') {
-                params.insert(key.to_string(), value.to_string());
+                // 解码 URL 编码的值
+                let decoded_value = percent_decode_str(value)
+                    .decode_utf8_lossy()
+                    .to_string();
+                params.insert(key.to_string(), decoded_value);
             }
         }
         params
     }
 
     /// 从路径推断归档类型
+    ///
+    /// 检查顺序：先检查复合扩展名（如 .tar.gz），再检查简单扩展名（如 .gz）
     fn infer_archive_type_from_path(path: &str) -> Option<ArchiveType> {
-        // 检查路径中的归档扩展名
-        if let Some(pos) = path.rfind('.') {
-            let ext = &path[pos..];
+        let path_lower = path.to_lowercase();
+
+        // 先检查复合扩展名（必须先检查，否则会被简单扩展名匹配）
+        if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
+            return Some(ArchiveType::TarGz);
+        }
+
+        // 再检查简单扩展名 - 使用 rfind 查找最后一个点
+        if let Some(pos) = path_lower.rfind('.') {
+            let ext = &path_lower[pos..];
             ArchiveType::from_extension(ext)
         } else {
             None
@@ -325,5 +340,48 @@ mod tests {
         assert!(resource.is_archive());
         let ctx = resource.archive_context.as_ref().unwrap();
         assert_eq!(ctx.inner_path.to_string(), "");
+    }
+
+    #[test]
+    fn test_parse_tar_gz_archive() {
+        // 测试 .tar.gz 文件被正确识别为 TarGz 类型
+        let resource = OrlParser::parse("orl://local/data/logs.tar.gz?entry=inner/file.txt").unwrap();
+        assert!(resource.is_archive());
+        let ctx = resource.archive_context.as_ref().unwrap();
+        assert_eq!(ctx.inner_path.to_string(), "inner/file.txt");
+        assert_eq!(ctx.archive_type, Some(ArchiveType::TarGz));
+    }
+
+    #[test]
+    fn test_parse_tgz_archive() {
+        // 测试 .tgz 文件被正确识别为 TarGz 类型
+        // 注意：.tgz 是 .tar.gz 的简写，功能上完全相同，因此统一返回 TarGz
+        let resource = OrlParser::parse("orl://local/data/logs.tgz?entry=app.log").unwrap();
+        assert!(resource.is_archive());
+        let ctx = resource.archive_context.as_ref().unwrap();
+        assert_eq!(ctx.inner_path.to_string(), "app.log");
+        // .tgz 和 .tar.gz 都映射到 TarGz
+        assert_eq!(ctx.archive_type, Some(ArchiveType::TarGz));
+    }
+
+    #[test]
+    fn test_parse_gz_file_not_tar() {
+        // 测试纯 .gz 文件（不是 tar.gz）被正确识别为 Gz 类型
+        let resource = OrlParser::parse("orl://local/data/app.log.gz?entry=").unwrap();
+        assert!(resource.is_archive());
+        let ctx = resource.archive_context.as_ref().unwrap();
+        assert_eq!(ctx.archive_type, Some(ArchiveType::Gz));
+    }
+
+    #[test]
+    fn test_parse_complex_tar_gz_path() {
+        // 测试复杂路径中的 .tar.gz 文件
+        let resource = OrlParser::parse(
+            "orl://local/Users/wangyue/Downloads/home/BBIP_20_APPLOG_2025-08-18.tar.gz?entry=/home/bbipadm/logs/app.log"
+        ).unwrap();
+        assert!(resource.is_archive());
+        let ctx = resource.archive_context.as_ref().unwrap();
+        assert_eq!(ctx.inner_path.to_string(), "/home/bbipadm/logs/app.log");
+        assert_eq!(ctx.archive_type, Some(ArchiveType::TarGz));
     }
 }

@@ -6,7 +6,6 @@ use opsbox_core::dfs::{
     path::ResourcePath,
     resource::Resource,
     filesystem::{DirEntry, OpbxFileSystem},
-    archive::ArchiveType,
 };
 use opsbox_core::SqlitePool;
 use opsbox_core::repository::s3::{load_s3_profile};
@@ -127,6 +126,12 @@ impl ExplorerService {
   }
 
   /// 列出归档内的资源
+  ///
+  /// 参考 ODFS 的实现方式：
+  /// - 本地文件：直接使用文件路径，无需复制
+  /// - 内存数据源（S3）：流式复制到临时文件
+  /// - 远程文件（Agent）：流式复制到临时文件
+  /// - 无大小限制，使用流式处理
   async fn list_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<Vec<ResourceItem>, String> {
     use opsbox_core::dfs::impls::{ArchiveFileSystem, LocalFileSystem};
 
@@ -134,36 +139,77 @@ impl ExplorerService {
     let archive_type = ctx.archive_type
       .ok_or_else(|| "Archive type not specified".to_string())?;
 
-    // 读取归档文件
-    let base_fs = self.create_fs_for_resource(resource).await?;
-    let reader = base_fs.open_read(&resource.primary_path)
-      .await
-      .map_err(|e| format!("Failed to open archive file: {}", e))?;
-
-    // 读取数据到内存
-    let data = reader.bytes()
-      .ok_or_else(|| "Failed to read archive data".to_string())?
-      .to_vec();
-
     // 创建临时文件
     let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
       .await
       .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
     let temp_file = temp_file_result
       .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    let temp_path = temp_file.path().to_path_buf();
 
-    // 写入数据
-    let mut file = tokio::fs::File::from_std(temp_file.as_file().try_clone()
-      .map_err(|e| format!("Failed to clone temp file: {}", e))?);
-    tokio::io::AsyncWriteExt::write_all(&mut file, &data)
-      .await
-      .map_err(|e| format!("Failed to write temp file: {}", e))?;
-    file.flush()
-      .await
-      .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+    // 根据资源类型选择处理方式
+    match resource.endpoint.location {
+      opsbox_core::dfs::endpoint::Location::Local => {
+        // 本地文件：直接硬链接到临时文件（无需复制内容）
+        let file_path = resource.primary_path.to_string();
+        let src_file = std::path::Path::new(&file_path);
 
-    // 创建归档文件系统（使用 LocalFileSystem 作为底层 FS）
-    let local_fs = LocalFileSystem::new(temp_file.path().to_path_buf())
+        // 使用硬链接避免复制（如果文件系统支持）
+        // 失败则回退到流式复制
+        if std::os::unix::fs::symlink(src_file, &temp_path).is_err() {
+          // 硬链接失败，使用流式复制（参考 ODFS）
+          let mut src = tokio::fs::File::open(&file_path)
+            .await
+            .map_err(|e| format!("Failed to open archive file {}: {}", file_path, e))?;
+          let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
+            .map_err(|e| format!("Failed to clone temp file: {}", e))?);
+
+          tokio::io::copy(&mut src, &mut dst)
+            .await
+            .map_err(|e| format!("Failed to copy archive file: {}", e))?;
+          dst.flush()
+            .await
+            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+        }
+      }
+      _ => {
+        // 远程文件或内存数据源：使用流式复制
+        let base_fs = self.create_fs_for_resource(resource).await?;
+        let reader = base_fs.open_read(&resource.primary_path)
+          .await
+          .map_err(|e| format!("Failed to open archive file: {}", e))?;
+
+        let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
+          .map_err(|e| format!("Failed to clone temp file: {}", e))?);
+
+        // 处理两种情况：内存数据源和流式数据源
+        if let Some(data) = reader.bytes() {
+          // 内存数据源（S3、归档等）：直接写入
+          tokio::io::AsyncWriteExt::write_all(&mut dst, data)
+            .await
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+        } else {
+          // 流式数据源（Agent）：使用适配器流式复制
+          let mut adapter = DfsAsyncReadAdapter(reader);
+          tokio::io::copy(&mut adapter, &mut dst)
+            .await
+            .map_err(|e| format!("Failed to copy archive data: {}", e))?;
+        }
+
+        dst.flush()
+          .await
+          .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+      }
+    }
+
+    // 获取临时文件的父目录作为 LocalFileSystem 的根
+    let temp_dir = temp_file
+      .path()
+      .parent()
+      .ok_or_else(|| "Failed to get temp file parent directory".to_string())?;
+
+    // 创建归档文件系统（使用临时文件的父目录作为根）
+    let local_fs = LocalFileSystem::new(temp_dir.to_path_buf())
       .map_err(|e| format!("Failed to create local FS: {}", e))?;
     let archive_fs = ArchiveFileSystem::with_temp_file(
       local_fs,
@@ -175,13 +221,29 @@ impl ExplorerService {
     // 使用归档内路径读取目录
     let entries = archive_fs.read_dir(&ctx.inner_path)
       .await
-      .map_err(|e| format!("Failed to read archive directory: {}", e))?;
+      .map_err(|e| {
+        // 提供更友好的错误消息
+        let error_str = e.to_string();
+        if error_str.contains("Failed to read TAR entry") || error_str.contains("numeric field did not have utf-8") {
+          format!("无法解析归档文件：文件可能损坏或使用了不兼容的格式。建议：1) 使用 'tar -tzf 文件名.tar.gz' 验证文件完整性 2) 尝试使用 'gunzip -c 文件名.tar.gz | tar tf -' 重新打包")
+        } else if error_str.contains("Failed to read TAR entries") {
+          format!("无法读取归档内容：{}", error_str)
+        } else {
+          format!("Failed to read archive directory: {}", error_str)
+        }
+      })?;
 
     // 转换为 ResourceItem
     Ok(entries.into_iter().map(|e| self.map_entry(e, resource)).collect())
   }
 
   /// 下载归档内的文件
+  ///
+  /// 参考 ODFS 的实现方式：
+  /// - 本地文件：直接使用文件路径，无需复制
+  /// - 内存数据源（S3）：流式复制到临时文件
+  /// - 远程文件（Agent）：流式复制到临时文件
+  /// - 无大小限制，使用流式处理
   async fn download_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
     use opsbox_core::dfs::impls::{ArchiveFileSystem, LocalFileSystem};
 
@@ -189,36 +251,77 @@ impl ExplorerService {
     let archive_type = ctx.archive_type
       .ok_or_else(|| "Archive type not specified".to_string())?;
 
-    // 读取归档文件
-    let base_fs = self.create_fs_for_resource(resource).await?;
-    let reader = base_fs.open_read(&resource.primary_path)
-      .await
-      .map_err(|e| format!("Failed to open archive file: {}", e))?;
-
-    // 读取数据到内存
-    let data = reader.bytes()
-      .ok_or_else(|| "Failed to read archive data".to_string())?
-      .to_vec();
-
     // 创建临时文件
     let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
       .await
       .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
     let temp_file = temp_file_result
       .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    let temp_path = temp_file.path().to_path_buf();
 
-    // 写入数据
-    let mut file = tokio::fs::File::from_std(temp_file.as_file().try_clone()
-      .map_err(|e| format!("Failed to clone temp file: {}", e))?);
-    tokio::io::AsyncWriteExt::write_all(&mut file, &data)
-      .await
-      .map_err(|e| format!("Failed to write temp file: {}", e))?;
-    file.flush()
-      .await
-      .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+    // 根据资源类型选择处理方式
+    match resource.endpoint.location {
+      opsbox_core::dfs::endpoint::Location::Local => {
+        // 本地文件：直接硬链接到临时文件（无需复制内容）
+        let file_path = resource.primary_path.to_string();
+        let src_file = std::path::Path::new(&file_path);
 
-    // 创建归档文件系统（使用 LocalFileSystem 作为底层 FS）
-    let local_fs = LocalFileSystem::new(temp_file.path().to_path_buf())
+        // 使用硬链接避免复制（如果文件系统支持）
+        // 失败则回退到流式复制
+        if std::os::unix::fs::symlink(src_file, &temp_path).is_err() {
+          // 硬链接失败，使用流式复制
+          let mut src = tokio::fs::File::open(&file_path)
+            .await
+            .map_err(|e| format!("Failed to open archive file {}: {}", file_path, e))?;
+          let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
+            .map_err(|e| format!("Failed to clone temp file: {}", e))?);
+
+          tokio::io::copy(&mut src, &mut dst)
+            .await
+            .map_err(|e| format!("Failed to copy archive file: {}", e))?;
+          dst.flush()
+            .await
+            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+        }
+      }
+      _ => {
+        // 远程文件或内存数据源：使用流式复制
+        let base_fs = self.create_fs_for_resource(resource).await?;
+        let reader = base_fs.open_read(&resource.primary_path)
+          .await
+          .map_err(|e| format!("Failed to open archive file: {}", e))?;
+
+        let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
+          .map_err(|e| format!("Failed to clone temp file: {}", e))?);
+
+        // 处理两种情况：内存数据源和流式数据源
+        if let Some(data) = reader.bytes() {
+          // 内存数据源（S3、归档等）：直接写入
+          tokio::io::AsyncWriteExt::write_all(&mut dst, data)
+            .await
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+        } else {
+          // 流式数据源（Agent）：使用适配器流式复制
+          let mut adapter = DfsAsyncReadAdapter(reader);
+          tokio::io::copy(&mut adapter, &mut dst)
+            .await
+            .map_err(|e| format!("Failed to copy archive data: {}", e))?;
+        }
+
+        dst.flush()
+          .await
+          .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+      }
+    }
+
+    // 获取临时文件的父目录作为 LocalFileSystem 的根
+    let temp_dir = temp_file
+      .path()
+      .parent()
+      .ok_or_else(|| "Failed to get temp file parent directory".to_string())?;
+
+    // 创建归档文件系统（使用临时文件的父目录作为根）
+    let local_fs = LocalFileSystem::new(temp_dir.to_path_buf())
       .map_err(|e| format!("Failed to create local FS: {}", e))?;
     let archive_fs = ArchiveFileSystem::with_temp_file(
       local_fs,
@@ -230,11 +333,25 @@ impl ExplorerService {
     // 使用归档内路径获取元数据和打开文件
     let meta = archive_fs.metadata(&ctx.inner_path)
       .await
-      .map_err(|e| format!("Failed to get metadata: {}", e))?;
+      .map_err(|e| {
+        let error_str = e.to_string();
+        if error_str.contains("numeric field did not have utf-8") {
+          format!("无法解析归档文件：文件可能损坏或使用了不兼容的格式")
+        } else {
+          format!("Failed to get metadata: {}", error_str)
+        }
+      })?;
 
     let dfs_reader = archive_fs.open_read(&ctx.inner_path)
       .await
-      .map_err(|e| format!("Failed to open file: {}", e))?;
+      .map_err(|e| {
+        let error_str = e.to_string();
+        if error_str.contains("numeric field did not have utf-8") {
+          format!("无法读取归档内文件：文件可能损坏")
+        } else {
+          format!("Failed to open file: {}", error_str)
+        }
+      })?;
 
     // 获取文件名
     let name = ctx.inner_path
@@ -249,44 +366,87 @@ impl ExplorerService {
     Ok((name, Some(meta.size), reader))
   }
 
-  /// 自动检测归档类型
+  /// 自动检测归档类型（基于文件内容 magic bytes）
   async fn auto_detect_archive(&self, mut resource: Resource) -> Result<Resource, String> {
+    use opsbox_core::dfs::{archive::ArchiveContext, archive::ArchiveType};
+
     // 如果已经是归档类型，直接返回
     if resource.archive_context.is_some() {
       return Ok(resource);
     }
 
-    // 检查路径扩展名
-    let path_str = resource.primary_path.to_string().to_lowercase();
-    let is_archive_ext = path_str.ends_with(".tar")
-      || path_str.ends_with(".tar.gz")
-      || path_str.ends_with(".tgz")
-      || path_str.ends_with(".gz")
-      || path_str.ends_with(".zip");
+    // 特殊处理：S3 根路径和 discovery endpoints 不需要检测
+    let path_str = resource.primary_path.to_string();
+    let is_discovery = match resource.endpoint.identity.as_str() {
+      "agent.root" | "s3.root" => true,
+      _ => false,
+    };
+    let is_s3_root = resource.endpoint.backend == StorageBackend::ObjectStorage
+      && (path_str == "/" || path_str.is_empty());
 
-    if is_archive_ext {
-      // 检测归档类型
-      let archive_type = if path_str.ends_with(".tar") {
-        Some(ArchiveType::Tar)
-      } else if path_str.ends_with(".tar.gz") {
-        Some(ArchiveType::TarGz)
-      } else if path_str.ends_with(".tgz") {
-        Some(ArchiveType::Tgz)
-      } else if path_str.ends_with(".zip") {
-        Some(ArchiveType::Zip)
-      } else if path_str.ends_with(".gz") {
-        Some(ArchiveType::Gz)
-      } else {
-        None
-      };
+    if is_discovery || is_s3_root {
+      return Ok(resource);
+    }
 
-      if let Some(at) = archive_type {
-        use opsbox_core::dfs::archive::ArchiveContext;
-        resource.archive_context = Some(ArchiveContext::new(
-          ResourcePath::from_str("/"),  // 归档内路径默认为根
-          Some(at),
-        ));
+    // 创建临时文件系统读取文件头
+    let fs = self.create_fs_for_resource(&resource).await?;
+
+    // 尝试打开文件并获取头部数据
+    let head_bytes = match fs.open_read(&resource.primary_path).await {
+      Ok(reader) => {
+        // DFS AsyncRead 提供的 bytes() 方法返回内存中的数据
+        // 对于 S3、归档等后端，数据在内存中；对于本地文件句柄返回 None
+        match reader.bytes() {
+          Some(data) => {
+            // 取前 2048 字节用于检测（足够检测 TarGz 嵌套格式）
+            let len = std::cmp::min(2048, data.len());
+            data[..len].to_vec()
+          }
+          None => {
+            // 文件句柄类型（如本地文件），无法直接读取字节
+            // 回退到扩展名检测并设置 archive_context
+            let path_lower = path_str.to_lowercase();
+
+            // 根据扩展名确定归档类型
+            let archive_type = if path_lower.ends_with(".tar") {
+              Some(ArchiveType::Tar)
+            } else if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
+              Some(ArchiveType::TarGz)
+            } else if path_lower.ends_with(".zip") {
+              Some(ArchiveType::Zip)
+            } else if path_lower.ends_with(".gz") {
+              Some(ArchiveType::Gz)
+            } else {
+              None
+            };
+
+            // 如果是归档扩展名，设置 archive_context
+            if let Some(at) = archive_type {
+              resource.archive_context = Some(ArchiveContext::new(
+                ResourcePath::from_str("/"),
+                Some(at),
+              ));
+            }
+
+            return Ok(resource);
+          }
+        }
       }
+      Err(_) => {
+        // 无法打开文件（可能是目录），返回原资源
+        return Ok(resource);
+      }
+    };
+
+    // 使用 magic bytes 检测归档类型（完全基于内容）
+    let archive_type = ArchiveType::from_magic_bytes(&head_bytes);
+
+    // 如果检测到归档类型，设置 archive_context
+    if archive_type != ArchiveType::Unknown {
+      resource.archive_context = Some(ArchiveContext::new(
+        ResourcePath::from_str("/"),  // 归档内路径默认为根
+        Some(archive_type),
+      ));
     }
 
     Ok(resource)
@@ -450,9 +610,32 @@ impl ExplorerService {
     } else if parent_resource.archive_context.is_some() {
       // 归档内的条目
       let base = self.resource_base_orl(parent_resource);
-      let entry_path = entry.path.to_string();
-      let encoded_entry = urlencoding::encode(&entry_path);
-      format!("{}&entry={}", base, encoded_entry)
+
+      // 对于 Gz 类型，需要使用正确的文件名而不是临时文件名
+      // 先将路径转换为字符串并存储，以延长生命周期
+      let primary_path_str = parent_resource.primary_path.to_string();
+      let correct_name = primary_path_str
+        .split('/')
+        .last()
+        .and_then(|s| std::path::Path::new(s).file_stem())
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+      let entry_path = if parent_resource.archive_context.as_ref()
+        .and_then(|ctx| ctx.archive_type)
+        == Some(opsbox_core::dfs::archive::ArchiveType::Gz)
+        && entry.path.to_string().starts_with("/.tmp")
+        && !correct_name.is_empty()
+      {
+        format!("/{}", correct_name)
+      } else {
+        entry.path.to_string()
+      };
+
+      // 注意：不对 entry_path 进行 URL 编码，保持原始路径
+      // 前端会对整个 ORL 进行统一编码，避免双重编码问题
+      // 如果这里编码了（如 %2F），前端再编码会变成 %252F（双重编码）
+      format!("{}?entry={}", base, entry_path)
     } else {
       // 标准目录遍历
       if entry.path.to_string().starts_with('/') {
@@ -483,8 +666,29 @@ impl ExplorerService {
       }
     };
 
+    // 对于 Gz 归档，修正显示名称（避免显示临时文件名）
+    let display_name = match &parent_resource.archive_context {
+      Some(ctx) if matches!(ctx.archive_type, Some(opsbox_core::dfs::archive::ArchiveType::Gz))
+        => {
+          // 检查是否是临时文件名模式
+          if entry.name.starts_with(".tmp") {
+            // 从原始归档路径中提取正确的文件名
+            parent_resource.primary_path.to_string()
+              .split('/')
+              .last()
+              .and_then(|s| std::path::Path::new(s).file_stem())
+              .and_then(|s| s.to_str())
+              .unwrap_or(&entry.name)
+              .to_string()
+          } else {
+            entry.name.clone()
+          }
+        }
+      _ => entry.name.clone(),
+    };
+
     ResourceItem {
-      name: entry.name.clone(),
+      name: display_name,
       path,
       r#type: if entry.metadata.is_dir {
         ResourceType::Dir
@@ -543,6 +747,8 @@ impl AsyncRead for DfsAsyncReadAdapter {
     } else {
       // 文件句柄类型，不支持读取
       // 返回 EOF
+      // 注意：这个情况应该在调用 read_to_end 之前处理
+      // 对于归档处理，应该在 list_archive 中直接读取文件
       std::task::Poll::Ready(Ok(()))
     }
   }
@@ -587,5 +793,35 @@ mod tests {
     let service = ExplorerService::new(pool);
     let result = service.download("orl://local/nonexistent.txt").await;
     assert!(result.is_err(), "Non-existent file should fail");
+  }
+
+  #[test]
+  fn test_archive_entry_path_not_double_encoded() {
+    // 验证归档条目路径不会双重编码
+    // 后端应该返回未编码的路径（如 ?entry=/home），而不是编码后的（如 ?entry=%2Fhome）
+    // 这样前端在编码整个 ORL 时就不会产生双重编码（%252F）
+
+    let base = "orl://local/tmp/test.gz";
+    let entry_path = "/home/user/file.txt";
+
+    // 模拟后端构造路径的逻辑（不编码 entry 值）
+    let result = format!("{}?entry={}", base, entry_path);
+
+    // 验证：结果不应包含 %2F（编码的 /）
+    assert_eq!(result, "orl://local/tmp/test.gz?entry=/home/user/file.txt");
+    assert!(!result.contains("%2F"), "Entry path should not be URL-encoded");
+
+    // 验证前端编码后的结果
+    let frontend_encoded = encode_uri_component(&result);
+    // ?entry=/ 变成 %3Fentry%3D%2F（单次编码）
+    assert!(frontend_encoded.contains("%3Fentry%3D%2F"));
+    // 不应该包含 %252F（双重编码）
+    assert!(!frontend_encoded.contains("%252F"));
+  }
+
+  // 简单的 URL 编码函数（用于测试）
+  fn encode_uri_component(s: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
   }
 }

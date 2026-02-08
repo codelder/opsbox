@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/state';
-  import { goto } from '$app/navigation';
+  import { goto, replaceState } from '$app/navigation';
   import { Button } from '$lib/components/ui/button';
   import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
@@ -148,6 +148,7 @@
   async function loadResources(orl: string): Promise<boolean> {
     loading = true;
     error = null;
+    console.log('[Explorer] Loading resources for ORL:', orl);
     try {
       items = await listResources(orl);
       return true;
@@ -179,11 +180,18 @@
 
   async function handleNavigate(newOrl: string): Promise<boolean> {
     currentOrlStr = newOrl;
-    // Update URL without reload
-    const url = new URL(window.location.href);
-    url.searchParams.set('orl', newOrl);
-    // Remove title query if present to clean up
-    goto(url.toString(), { keepFocus: true, noScroll: true });
+    // Update URL without triggering SvelteKit navigation
+    const baseUrl = window.location.origin + window.location.pathname;
+
+    // 统一对 ORL 进行编码
+    // 后端现在返回未编码的路径（如 ?entry=/home），前端负责统一编码
+    // 这样可以避免双重编码问题（%2F → %252F）
+    const encodedOrl = encodeURIComponent(newOrl);
+
+    const newUrl = `${baseUrl}?orl=${encodedOrl}`;
+    // 使用 goto 替代 replaceState，确保页面正确更新
+    // { noScroll: true } 避免滚动影响用户体验
+    await goto(newUrl, { noScroll: true, keepFocus: true });
     return await loadResources(newOrl);
   }
 
@@ -193,21 +201,39 @@
     selectedItem = item;
   }
 
+  // 辅助函数：为 URL 查询参数编码 ORL
+  // 后端现在返回未编码的 ORL（如 ?entry=/home），前端负责统一编码
+  function encodeOrlForQueryParam(orl: string): string {
+    return encodeURIComponent(orl);
+  }
+
   function handleRowDoubleClick(item: ResourceItem) {
+    console.log('[Explorer] Double-clicked item:', {
+      name: item.name,
+      type: item.type,
+      path: item.path.substring(0, 100) + (item.path.length > 100 ? '...' : '')
+    });
+    console.log('[Explorer] Current ORL:', currentOrlStr);
+
     if (item.type === 'dir' || item.type === 'linkdir') {
+      console.log('[Explorer] Processing as directory');
+      console.log('[Explorer] Will navigate to:', item.path);
       handleNavigate(item.path);
     } else if (isArchiveFile(item)) {
+      console.log('[Explorer] Processing as archive');
       // For archives, we navigate directly - backend auto-detects archive files
       // and lists their contents when path points to an archive file
       handleNavigate(item.path);
     } else if (isTextFile(item)) {
-      const url = `/view?sid=explorer&file=${encodeURIComponent(item.path)}`;
+      console.log('[Explorer] Opening text file in /view');
+      const url = `/view?sid=explorer&file=${encodeOrlForQueryParam(item.path)}`;
       window.open(url, '_blank');
     } else if (isImageFile(item)) {
-      const url = `/image-view?sid=explorer&file=${encodeURIComponent(item.path)}`;
+      console.log('[Explorer] Opening image file in /image-view');
+      const url = `/image-view?sid=explorer&file=${encodeOrlForQueryParam(item.path)}`;
       window.open(url, '_blank');
     } else {
-      console.log('File double-clicked:', item.path);
+      console.log('[Explorer] Unhandled file type:', item.type, 'for file:', item.name);
     }
   }
 
@@ -235,7 +261,7 @@
       let urlStr = currentOrlStr;
       const url = new URL(urlStr);
 
-      // Check if we are inside an archive
+      // Check if we are inside an archive (using ?entry= query parameter)
       const entry = url.searchParams.get('entry');
       if (entry) {
         const entryParts = entry.split('/').filter((p) => p);

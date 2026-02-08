@@ -3279,6 +3279,7 @@ dependencies = [
  "aws-sdk-s3",
  "axum",
  "chrono",
+ "flate2",
  "fluent-uri",
  "futures",
  "futures-lite",
