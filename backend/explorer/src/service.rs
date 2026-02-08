@@ -139,41 +139,22 @@ impl ExplorerService {
     let archive_type = ctx.archive_type
       .ok_or_else(|| "Archive type not specified".to_string())?;
 
-    // 创建临时文件
-    let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
-      .await
-      .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
-    let temp_file = temp_file_result
-      .map_err(|e| format!("Failed to create temp file: {}", e))?;
-    let temp_path = temp_file.path().to_path_buf();
-
     // 根据资源类型选择处理方式
-    match resource.endpoint.location {
+    let (archive_path, temp_file) = match resource.endpoint.location {
       opsbox_core::dfs::endpoint::Location::Local => {
-        // 本地文件：直接硬链接到临时文件（无需复制内容）
+        // 本地文件：直接使用原始文件路径，无需复制
         let file_path = resource.primary_path.to_string();
-        let src_file = std::path::Path::new(&file_path);
-
-        // 使用硬链接避免复制（如果文件系统支持）
-        // 失败则回退到流式复制
-        if std::os::unix::fs::symlink(src_file, &temp_path).is_err() {
-          // 硬链接失败，使用流式复制（参考 ODFS）
-          let mut src = tokio::fs::File::open(&file_path)
-            .await
-            .map_err(|e| format!("Failed to open archive file {}: {}", file_path, e))?;
-          let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
-            .map_err(|e| format!("Failed to clone temp file: {}", e))?);
-
-          tokio::io::copy(&mut src, &mut dst)
-            .await
-            .map_err(|e| format!("Failed to copy archive file: {}", e))?;
-          dst.flush()
-            .await
-            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
-        }
+        (std::path::PathBuf::from(file_path), None)
       }
       _ => {
-        // 远程文件或内存数据源：使用流式复制
+        // 远程文件或内存数据源：需要流式复制到临时文件
+        let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
+          .await
+          .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
+        let temp_file = temp_file_result
+          .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let temp_path = temp_file.path().to_path_buf();
+
         let base_fs = self.create_fs_for_resource(resource).await?;
         let reader = base_fs.open_read(&resource.primary_path)
           .await
@@ -199,24 +180,30 @@ impl ExplorerService {
         dst.flush()
           .await
           .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+
+        (temp_path, Some(temp_file))
       }
-    }
+    };
 
-    // 获取临时文件的父目录作为 LocalFileSystem 的根
-    let temp_dir = temp_file
-      .path()
+    // 获取归档文件的父目录作为 LocalFileSystem 的根
+    let archive_dir = archive_path
       .parent()
-      .ok_or_else(|| "Failed to get temp file parent directory".to_string())?;
+      .ok_or_else(|| "Failed to get archive parent directory".to_string())?;
 
-    // 创建归档文件系统（使用临时文件的父目录作为根）
-    let local_fs = LocalFileSystem::new(temp_dir.to_path_buf())
+    // 创建归档文件系统
+    let local_fs = LocalFileSystem::new(archive_dir.to_path_buf())
       .map_err(|e| format!("Failed to create local FS: {}", e))?;
-    let archive_fs = ArchiveFileSystem::with_temp_file(
-      local_fs,
-      archive_type,
-      temp_file.path().to_path_buf(),
-      temp_file,
-    );
+
+    let archive_fs = if let Some(tf) = temp_file {
+      ArchiveFileSystem::with_temp_file(
+        local_fs,
+        archive_type,
+        archive_path,
+        tf,
+      )
+    } else {
+      ArchiveFileSystem::with_path(local_fs, archive_type, archive_path)
+    };
 
     // 使用归档内路径读取目录
     let entries = archive_fs.read_dir(&ctx.inner_path)
@@ -251,41 +238,22 @@ impl ExplorerService {
     let archive_type = ctx.archive_type
       .ok_or_else(|| "Archive type not specified".to_string())?;
 
-    // 创建临时文件
-    let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
-      .await
-      .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
-    let temp_file = temp_file_result
-      .map_err(|e| format!("Failed to create temp file: {}", e))?;
-    let temp_path = temp_file.path().to_path_buf();
-
     // 根据资源类型选择处理方式
-    match resource.endpoint.location {
+    let (archive_path, temp_file) = match resource.endpoint.location {
       opsbox_core::dfs::endpoint::Location::Local => {
-        // 本地文件：直接硬链接到临时文件（无需复制内容）
+        // 本地文件：直接使用原始文件路径，无需复制
         let file_path = resource.primary_path.to_string();
-        let src_file = std::path::Path::new(&file_path);
-
-        // 使用硬链接避免复制（如果文件系统支持）
-        // 失败则回退到流式复制
-        if std::os::unix::fs::symlink(src_file, &temp_path).is_err() {
-          // 硬链接失败，使用流式复制
-          let mut src = tokio::fs::File::open(&file_path)
-            .await
-            .map_err(|e| format!("Failed to open archive file {}: {}", file_path, e))?;
-          let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
-            .map_err(|e| format!("Failed to clone temp file: {}", e))?);
-
-          tokio::io::copy(&mut src, &mut dst)
-            .await
-            .map_err(|e| format!("Failed to copy archive file: {}", e))?;
-          dst.flush()
-            .await
-            .map_err(|e| format!("Failed to flush temp file: {}", e))?;
-        }
+        (std::path::PathBuf::from(file_path), None)
       }
       _ => {
-        // 远程文件或内存数据源：使用流式复制
+        // 远程文件或内存数据源：需要流式复制到临时文件
+        let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
+          .await
+          .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
+        let temp_file = temp_file_result
+          .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let temp_path = temp_file.path().to_path_buf();
+
         let base_fs = self.create_fs_for_resource(resource).await?;
         let reader = base_fs.open_read(&resource.primary_path)
           .await
@@ -311,24 +279,30 @@ impl ExplorerService {
         dst.flush()
           .await
           .map_err(|e| format!("Failed to flush temp file: {}", e))?;
+
+        (temp_path, Some(temp_file))
       }
-    }
+    };
 
-    // 获取临时文件的父目录作为 LocalFileSystem 的根
-    let temp_dir = temp_file
-      .path()
+    // 获取归档文件的父目录作为 LocalFileSystem 的根
+    let archive_dir = archive_path
       .parent()
-      .ok_or_else(|| "Failed to get temp file parent directory".to_string())?;
+      .ok_or_else(|| "Failed to get archive parent directory".to_string())?;
 
-    // 创建归档文件系统（使用临时文件的父目录作为根）
-    let local_fs = LocalFileSystem::new(temp_dir.to_path_buf())
+    // 创建归档文件系统
+    let local_fs = LocalFileSystem::new(archive_dir.to_path_buf())
       .map_err(|e| format!("Failed to create local FS: {}", e))?;
-    let archive_fs = ArchiveFileSystem::with_temp_file(
-      local_fs,
-      archive_type,
-      temp_file.path().to_path_buf(),
-      temp_file,
-    );
+
+    let archive_fs = if let Some(tf) = temp_file {
+      ArchiveFileSystem::with_temp_file(
+        local_fs,
+        archive_type,
+        archive_path,
+        tf,
+      )
+    } else {
+      ArchiveFileSystem::with_path(local_fs, archive_type, archive_path)
+    };
 
     // 使用归档内路径获取元数据和打开文件
     let meta = archive_fs.metadata(&ctx.inner_path)
@@ -527,7 +501,21 @@ impl ExplorerService {
       }
       StorageBackend::ObjectStorage => {
         // S3 对象存储
-        let s3_config = self.get_s3_config(&resource.endpoint.identity).await?;
+        let mut s3_config = self.get_s3_config(&resource.endpoint.identity).await?;
+
+        // 优先使用 endpoint 中的 bucket 信息
+        // 如果 endpoint.bucket 存在，说明 ORL 包含了 bucket (profile:bucket@s3)
+        // 否则，从路径中提取 bucket 名称（兼容旧格式）
+        if let Some(ref bucket) = resource.endpoint.bucket {
+            s3_config.bucket = Some(bucket.clone());
+        } else {
+            // 从路径中提取 bucket 名称作为默认 bucket（兼容旧格式）
+            let path_segments = resource.primary_path.segments();
+            if !path_segments.is_empty() && !path_segments[0].is_empty() {
+                s3_config.bucket = Some(path_segments[0].clone());
+            }
+        }
+
         let fs = S3Storage::new_async(s3_config).await
           .map_err(|e| format!("Failed to create S3 FS: {}", e))?;
         Ok(Box::new(fs))
@@ -604,9 +592,9 @@ impl ExplorerService {
         // Fallback to standard handling
         entry_path_str
       }
-    } else if entry.path.to_string().starts_with("orl://") {
+    } else if entry_path_str.starts_with("orl://") {
       // 已经是 ORL 格式，直接使用
-      entry.path.to_string()
+      entry_path_str
     } else if parent_resource.archive_context.is_some() {
       // 归档内的条目
       let base = self.resource_base_orl(parent_resource);
@@ -624,12 +612,12 @@ impl ExplorerService {
       let entry_path = if parent_resource.archive_context.as_ref()
         .and_then(|ctx| ctx.archive_type)
         == Some(opsbox_core::dfs::archive::ArchiveType::Gz)
-        && entry.path.to_string().starts_with("/.tmp")
+        && entry_path_str.starts_with("/.tmp")
         && !correct_name.is_empty()
       {
         format!("/{}", correct_name)
       } else {
-        entry.path.to_string()
+        entry_path_str.clone()
       };
 
       // 注意：不对 entry_path 进行 URL 编码，保持原始路径
@@ -638,9 +626,28 @@ impl ExplorerService {
       format!("{}?entry={}", base, entry_path)
     } else {
       // 标准目录遍历
-      if entry.path.to_string().starts_with('/') {
+      if entry_path_str.starts_with('/') {
         // 如果条目已经提供绝对路径
         let auth = self.resource_endpoint_orl(parent_resource);
+
+        // S3 特殊处理：保留 bucket 上下文
+        // 当父资源是 S3 时，需要在 endpoint 中包含 bucket 信息
+        let auth = if parent_resource.endpoint.backend == opsbox_core::dfs::endpoint::StorageBackend::ObjectStorage {
+          // 从父资源的路径中提取 bucket（第一段）
+          let parent_path_segments = parent_resource.primary_path.segments();
+          let bucket = parent_path_segments.first()
+            .map(|s| s.as_str())
+            .unwrap_or("");
+
+          // 构造带有 bucket 的 endpoint: profile:bucket@s3
+          if !bucket.is_empty() {
+            format!("{}:{}@s3", parent_resource.endpoint.identity, bucket)
+          } else {
+            auth
+          }
+        } else {
+          auth
+        };
 
         // 构建路径部分，确保以 / 开头
         let path_suffix = entry.path.segments()

@@ -7,7 +7,7 @@ use async_compression::tokio::bufread::GzipDecoder;
 use futures_lite::io::AsyncReadExt as FuturesAsyncReadExt;
 use std::io;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, BufReader};
@@ -31,11 +31,9 @@ pub struct ArchiveFileSystem<F> {
     temp_path: Option<PathBuf>,
     // 临时文件句柄（用于 RAII）
     _temp_file: Option<Arc<NamedTempFile>>,
-    // 条目缓存：首次扫描后缓存所有条目，避免重复解析
-    entries_cache: Arc<Mutex<Option<Vec<ArchiveEntry>>>>,
 }
 
-/// 归档内的条目信息（用于缓存）
+/// 归档内的条目信息
 #[derive(Debug, Clone)]
 struct ArchiveEntry {
     /// 归档内的完整路径
@@ -51,7 +49,6 @@ impl<F> std::fmt::Debug for ArchiveFileSystem<F> {
         f.debug_struct("ArchiveFileSystem")
             .field("archive_type", &self.archive_type)
             .field("temp_path", &self.temp_path)
-            .field("entries_cached", &self.entries_cache.lock().unwrap().is_some())
             .finish()
     }
 }
@@ -67,7 +64,16 @@ where
             archive_type,
             temp_path: None,
             _temp_file: None,
-            entries_cache: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// 使用指定路径创建归档文件系统（不拥有文件，用于本地文件）
+    pub fn with_path(inner: F, archive_type: ArchiveType, temp_path: PathBuf) -> Self {
+        Self {
+            inner,
+            archive_type,
+            temp_path: Some(temp_path),
+            _temp_file: None,
         }
     }
 
@@ -78,35 +84,10 @@ where
             archive_type,
             temp_path: Some(temp_path),
             _temp_file: Some(Arc::new(temp_file)),
-            entries_cache: Arc::new(Mutex::new(None)),
         }
-    }
-
-    /// 确保条目缓存已加载
-    ///
-    /// 首次调用时会扫描整个归档并缓存所有条目，后续调用直接返回
-    async fn ensure_entries_cached(&self) -> Result<(), FsError> {
-        // 检查缓存是否已存在
-        {
-            let cache = self.entries_cache.lock().unwrap();
-            if cache.is_some() {
-                return Ok(());
-            }
-        }
-
-        // 缓存不存在，需要扫描归档
-        let entries = self.scan_all_entries().await?;
-
-        // 写入缓存
-        let mut cache = self.entries_cache.lock().unwrap();
-        *cache = Some(entries);
-
-        Ok(())
     }
 
     /// 扫描归档中的所有条目
-    ///
-    /// 这是一个内部方法，会被 ensure_entries_cached 调用
     async fn scan_all_entries(&self) -> Result<Vec<ArchiveEntry>, FsError> {
         match self.archive_type {
             ArchiveType::Unknown => {
@@ -163,12 +144,9 @@ where
 
         while let Some(entry) = entries.next().await {
             let entry = entry.map_err(|e| FsError::InvalidConfig(format!("Failed to read TAR entry: {}", e)))?;
-            let entry_path = entry
-                .path()
-                .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?
-                .to_string_lossy()
-                .to_string();
-            let entry_path = Self::normalize_path(&entry_path);
+            let entry_path_ref = entry.path()
+                .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?;
+            let entry_path = Self::normalize_path(entry_path_ref.as_ref())?;
 
             let size = entry.header().size().unwrap_or(0);
             let is_dir = entry.header().entry_type().is_dir();
@@ -219,12 +197,9 @@ where
 
             for entry in archive.entries().map_err(|e| FsError::InvalidConfig(format!("Failed to read TAR entries: {}", e)))? {
                 let entry = entry.map_err(|e| FsError::InvalidConfig(format!("Failed to read TAR entry: {}", e)))?;
-                let entry_path = entry
-                    .path()
-                    .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?
-                    .to_string_lossy()
-                    .to_string();
-                let entry_path = Self::normalize_path(&entry_path);
+                let entry_path_ref = entry.path()
+                    .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?;
+                let entry_path = Self::normalize_path(entry_path_ref.as_ref())?;
 
                 let size = entry.header().size().unwrap_or(0);
                 let is_dir = entry.header().entry_type().is_dir();
@@ -260,8 +235,9 @@ where
             let name = entry
                 .filename()
                 .as_str()
-                .map(|s| Self::normalize_path(s))
-                .map_err(|_| FsError::InvalidConfig("Invalid ZIP filename".to_string()))?;
+                .map_err(|_| FsError::InvalidConfig("Invalid ZIP filename".to_string()))?
+                .to_string();
+            let name = Self::normalize_path(std::path::Path::new(&name))?;
 
             result.push(ArchiveEntry {
                 path: name,
@@ -332,17 +308,13 @@ where
     }
 
     /// 规范化路径（移除前导斜杠和 ./）
-    fn normalize_path(path: &str) -> String {
-        let mut result = path;
-        // 移除前导 ./
-        while result.starts_with("./") {
-            result = &result[2..];
-        }
-        // 移除前导 /
-        while result.starts_with('/') {
-            result = &result[1..];
-        }
-        result.to_string()
+    ///
+    /// 优化版本：在一次分配中完成所有字符串操作，避免多次分配
+    fn normalize_path(path: &std::path::Path) -> Result<String, FsError> {
+        Ok(path.to_string_lossy()
+            .trim_start_matches("./")
+            .trim_start_matches('/')
+            .to_string())
     }
 }
 
@@ -353,7 +325,7 @@ where
 {
     /// 获取归档内文件的元数据
     async fn metadata(&self, path: &ResourcePath) -> Result<FileMetadata, FsError> {
-        let target = Self::normalize_path(&path.to_string());
+        let target = Self::normalize_path(std::path::Path::new(path.to_string().as_str()))?;
 
         match self.archive_type {
             ArchiveType::Unknown => {
@@ -367,12 +339,10 @@ where
 
                 while let Some(entry) = entries.next().await {
                     let entry = entry.map_err(|e| FsError::InvalidConfig(format!("Failed to read TAR entry: {}", e)))?;
-                    let entry_path = entry
+                    let entry_path_ref = entry
                         .path()
-                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?
-                        .to_string_lossy()
-                        .to_string();
-                    let entry_path = Self::normalize_path(&entry_path);
+                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?;
+                    let entry_path = Self::normalize_path(entry_path_ref.as_ref())?;
 
                     if entry_path == target {
                         let size = entry.header().size().unwrap_or(0);
@@ -399,11 +369,10 @@ where
 
                 while let Some(entry) = entries.next().await {
                     let entry = entry.map_err(|e| FsError::InvalidConfig(format!("Failed to read TAR entry: {}", e)))?;
-                    let entry_path = entry
+                    let entry_path_ref = entry
                         .path()
-                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?
-                        .to_string_lossy()
-                        .to_string();
+                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?;
+                    let entry_path = Self::normalize_path(entry_path_ref.as_ref())?;
 
                     if entry_path == target {
                         let size = entry.header().size().unwrap_or(0);
@@ -450,8 +419,8 @@ where
                     .find(|e| {
                         e.filename()
                             .as_str()
-                            .map(|s| Self::normalize_path(s))
                             .ok()
+                            .and_then(|s| Self::normalize_path(std::path::Path::new(s)).ok())
                             .as_deref() == Some(target.as_str())
                     })
                 {
@@ -471,8 +440,8 @@ where
                     .any(|e| {
                         e.filename()
                             .as_str()
-                            .map(|s| Self::normalize_path(s))
                             .ok()
+                            .and_then(|s| Self::normalize_path(std::path::Path::new(s)).ok())
                             .as_deref()
                             .unwrap_or("")
                             .starts_with(&prefix)
@@ -487,10 +456,8 @@ where
     }
 
     /// 读取归档内的目录
-    ///
-    /// 使用缓存机制：首次调用时扫描整个归档并缓存所有条目，后续调用直接从缓存读取
     async fn read_dir(&self, path: &ResourcePath) -> Result<Vec<DirEntry>, FsError> {
-        let dir_path = Self::normalize_path(&path.to_string());
+        let dir_path = Self::normalize_path(std::path::Path::new(path.to_string().as_str()))?;
         let prefix = if dir_path.is_empty() {
             String::new()
         } else {
@@ -502,12 +469,8 @@ where
                 Err(FsError::InvalidConfig("Unknown archive type".to_string()))
             }
             ArchiveType::Tar | ArchiveType::TarGz | ArchiveType::Tgz | ArchiveType::Zip => {
-                // 确保条目缓存已加载
-                self.ensure_entries_cached().await?;
-
-                // 从缓存中筛选匹配的条目
-                let cache = self.entries_cache.lock().unwrap();
-                let entries = cache.as_ref().unwrap();
+                // 扫描归档中的所有条目
+                let entries = self.scan_all_entries().await?;
 
                 let mut result = Vec::new();
                 let mut seen = std::collections::HashSet::new();
@@ -585,7 +548,7 @@ where
         &self,
         path: &ResourcePath,
     ) -> Result<Box<dyn super::super::filesystem::AsyncRead + Send + Unpin>, FsError> {
-        let target = Self::normalize_path(&path.to_string());
+        let target = Self::normalize_path(std::path::Path::new(path.to_string().as_str()))?;
 
         match self.archive_type {
             ArchiveType::Unknown => {
@@ -599,12 +562,10 @@ where
 
                 while let Some(entry) = entries.next().await {
                     let mut entry = entry.map_err(|e| FsError::InvalidConfig(format!("Failed to read TAR entry: {}", e)))?;
-                    let entry_path = entry
+                    let entry_path_ref = entry
                         .path()
-                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?
-                        .to_string_lossy()
-                        .to_string();
-                    let entry_path = Self::normalize_path(&entry_path);
+                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?;
+                    let entry_path = Self::normalize_path(entry_path_ref.as_ref())?;
 
                     if entry_path == target {
                         let mut buf = Vec::new();
@@ -628,12 +589,10 @@ where
 
                 while let Some(entry) = entries.next().await {
                     let mut entry = entry.map_err(|e| FsError::InvalidConfig(format!("Failed to read TAR entry: {}", e)))?;
-                    let entry_path = entry
+                    let entry_path_ref = entry
                         .path()
-                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?
-                        .to_string_lossy()
-                        .to_string();
-                    let entry_path = Self::normalize_path(&entry_path);
+                        .map_err(|e| FsError::InvalidConfig(format!("Invalid TAR entry path: {}", e)))?;
+                    let entry_path = Self::normalize_path(entry_path_ref.as_ref())?;
 
                     if entry_path == target {
                         let mut buf = Vec::new();
@@ -658,8 +617,8 @@ where
                     .position(|e| {
                         e.filename()
                             .as_str()
-                            .map(|s| Self::normalize_path(s))
                             .ok()
+                            .and_then(|s| Self::normalize_path(std::path::Path::new(s)).ok())
                             .as_deref() == Some(target.as_str())
                     })
                 {
@@ -922,11 +881,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_normalize_path() {
-        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path("./test.txt"), "test.txt");
-        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path("/test.txt"), "test.txt");
-        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path("./dir/test.txt"), "dir/test.txt");
-        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path("/dir/test.txt"), "dir/test.txt");
-        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path("test.txt"), "test.txt");
+        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path(std::path::Path::new("./test.txt")).unwrap(), "test.txt");
+        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path(std::path::Path::new("/test.txt")).unwrap(), "test.txt");
+        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path(std::path::Path::new("./dir/test.txt")).unwrap(), "dir/test.txt");
+        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path(std::path::Path::new("/dir/test.txt")).unwrap(), "dir/test.txt");
+        assert_eq!(ArchiveFileSystem::<LocalFileSystem>::normalize_path(std::path::Path::new("test.txt")).unwrap(), "test.txt");
     }
 
     /// 创建测试用的 tar.gz 文件
@@ -1034,40 +993,6 @@ mod tests {
         let bytes = reader.bytes().unwrap();
         // 检查数据开头是否正确（可能有末尾的 null 填充）
         assert!(bytes.starts_with(b"hello tar.gz"));
-    }
-
-    #[tokio::test]
-    async fn test_tar_gz_caching_performance() {
-        // 验证缓存功能：首次调用会扫描归档，后续调用直接从缓存读取
-        let temp_dir = TempDir::new().unwrap();
-        let tar_gz_path = create_test_tar_gz(&temp_dir).await;
-
-        let local_fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-        let archive_fs = std::sync::Arc::new(ArchiveFileSystem::with_temp_file(
-            local_fs,
-            ArchiveType::TarGz,
-            tar_gz_path,
-            NamedTempFile::new().unwrap(),
-        ));
-
-        // 第一次调用 read_dir - 会扫描归档并缓存
-        let entries1 = archive_fs.read_dir(&ResourcePath::from_str("/")).await.unwrap();
-        assert!(entries1.iter().any(|e| e.name == "test.txt"));
-
-        // 验证缓存已存在
-        {
-            let cache = archive_fs.entries_cache.lock().unwrap();
-            assert!(cache.is_some(), "缓存应该在首次 read_dir 后建立");
-        }
-
-        // 第二次调用 read_dir - 应该从缓存读取，非常快
-        let entries2 = archive_fs.read_dir(&ResourcePath::from_str("/")).await.unwrap();
-        assert_eq!(entries1.len(), entries2.len());
-
-        // 也可以克隆 ArchiveFileSystem，缓存会共享（因为使用 Arc<Mutex<>>）
-        let archive_fs_clone = Arc::clone(&archive_fs);
-        let entries3 = archive_fs_clone.read_dir(&ResourcePath::from_str("/logs")).await.unwrap();
-        assert!(entries3.iter().any(|e| e.name == "app.log"));
     }
 
     /// 创建包含深层嵌套目录的测试 tar.gz 文件

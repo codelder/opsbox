@@ -44,6 +44,8 @@ pub struct Endpoint {
     pub access_method: AccessMethod,
     /// 端点标识符
     pub identity: String,
+    /// S3 bucket 名称（仅用于 S3 端点）
+    pub bucket: Option<String>,
 }
 
 impl Endpoint {
@@ -54,6 +56,7 @@ impl Endpoint {
             backend: StorageBackend::Directory,
             access_method: AccessMethod::Direct,
             identity: "localhost".to_string(),
+            bucket: None,
         }
     }
 
@@ -64,6 +67,7 @@ impl Endpoint {
             backend: StorageBackend::Directory,
             access_method: AccessMethod::Proxy,
             identity: agent_name,
+            bucket: None,
         }
     }
 
@@ -74,6 +78,18 @@ impl Endpoint {
             backend: StorageBackend::ObjectStorage,
             access_method: AccessMethod::Direct,
             identity: profile,
+            bucket: None,
+        }
+    }
+
+    /// S3 对象存储（带 bucket）
+    pub fn s3_with_bucket(profile: String, bucket: String) -> Self {
+        Endpoint {
+            location: Location::Cloud,
+            backend: StorageBackend::ObjectStorage,
+            access_method: AccessMethod::Direct,
+            identity: profile,
+            bucket: Some(bucket),
         }
     }
 
@@ -84,6 +100,7 @@ impl Endpoint {
             backend: StorageBackend::Directory,
             access_method: AccessMethod::Direct,
             identity: "agent.root".to_string(),
+            bucket: None,
         }
     }
 
@@ -94,6 +111,7 @@ impl Endpoint {
             backend: StorageBackend::Directory,
             access_method: AccessMethod::Direct,
             identity: "s3.root".to_string(),
+            bucket: None,
         }
     }
 }
@@ -127,5 +145,16 @@ mod tests {
         assert_eq!(endpoint.backend, StorageBackend::ObjectStorage);
         assert_eq!(endpoint.access_method, AccessMethod::Direct);
         assert_eq!(endpoint.identity, "backup");
+        assert!(endpoint.bucket.is_none());
+    }
+
+    #[test]
+    fn test_s3_endpoint_with_bucket() {
+        let endpoint = Endpoint::s3_with_bucket("backup".to_string(), "my-bucket".to_string());
+        assert_eq!(endpoint.location, Location::Cloud);
+        assert_eq!(endpoint.backend, StorageBackend::ObjectStorage);
+        assert_eq!(endpoint.access_method, AccessMethod::Direct);
+        assert_eq!(endpoint.identity, "backup");
+        assert_eq!(endpoint.bucket, Some("my-bucket".to_string()));
     }
 }

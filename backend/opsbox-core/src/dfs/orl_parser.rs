@@ -178,17 +178,15 @@ impl OrlParser {
     /// 解析 S3 endpoint
     ///
     /// 支持格式:
-    /// - profile@s3
-    /// - profile:bucket@s3
+    /// - profile (无 bucket)
+    /// - profile:bucket (带 bucket)
     fn parse_s3_endpoint(s: &str) -> Result<Endpoint, OrlParseError> {
-        // 如果有 bucket，我们仍然使用 profile 作为 identity
-        // bucket 信息需要在实际访问时处理
-        let identity = if let Some((profile, _bucket)) = s.split_once(':') {
-            profile.to_string()
+        // 检查是否包含 bucket 信息 (profile:bucket)
+        if let Some((profile, bucket)) = s.split_once(':') {
+            Ok(Endpoint::s3_with_bucket(profile.to_string(), bucket.to_string()))
         } else {
-            s.to_string()
-        };
-        Ok(Endpoint::s3(identity))
+            Ok(Endpoint::s3(s.to_string()))
+        }
     }
 
     /// 解析归档上下文
@@ -383,5 +381,23 @@ mod tests {
         let ctx = resource.archive_context.as_ref().unwrap();
         assert_eq!(ctx.inner_path.to_string(), "/home/bbipadm/logs/app.log");
         assert_eq!(ctx.archive_type, Some(ArchiveType::TarGz));
+    }
+
+    #[test]
+    fn test_parse_s3_with_bucket_in_endpoint() {
+        // 测试 profile:bucket@s3 格式正确解析 bucket
+        let resource = OrlParser::parse("orl://default:backupdr@s3/bbos").unwrap();
+        assert_eq!(resource.endpoint.identity, "default");
+        assert_eq!(resource.endpoint.bucket, Some("backupdr".to_string()));
+        assert_eq!(resource.primary_path.to_string(), "/bbos");
+    }
+
+    #[test]
+    fn test_parse_s3_without_bucket_in_endpoint() {
+        // 测试 profile@s3 格式（兼容旧格式）
+        let resource = OrlParser::parse("orl://default@s3/backupdr/path").unwrap();
+        assert_eq!(resource.endpoint.identity, "default");
+        assert!(resource.endpoint.bucket.is_none());
+        assert_eq!(resource.primary_path.to_string(), "/backupdr/path");
     }
 }

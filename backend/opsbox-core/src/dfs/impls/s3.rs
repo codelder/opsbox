@@ -249,19 +249,35 @@ impl OpbxFileSystem for S3Storage {
 
     /// 读取目录内容
     async fn read_dir(&self, path: &ResourcePath) -> Result<Vec<DirEntry>, FsError> {
-        let (bucket, _key) = self.parse_bucket_and_key(path)?;
+        let (bucket, key) = self.parse_bucket_and_key(path)?;
 
-        // 转换 key 为前缀（确保以 / 结尾）
-        let prefix = if path.segments().is_empty() {
-            String::new()
-        } else {
-            let path_str = path.to_string();
-            let path_str = path_str.trim_start_matches('/');
-            if path_str.is_empty() || path_str.ends_with('/') {
-                path_str.to_string()
+        // 计算 prefix
+        // 如果有默认 bucket，path 是相对于 bucket 的
+        // 如果没有默认 bucket，path 的第一段是 bucket，剩余部分是 key
+        let prefix = if self.default_bucket.is_some() {
+            // 有默认 bucket：path 是相对路径
+            if key.is_empty() {
+                String::new()
+            } else if key.ends_with('/') {
+                key.to_string()
             } else {
-                format!("{}/", path_str)
+                format!("{}/", key)
             }
+        } else {
+            // 没有默认 bucket：path 包含 bucket
+            let segments = path.segments();
+            if segments.len() <= 1 {
+                String::new()
+            } else {
+                segments[1..].join("/")
+            }
+        };
+
+        // 如果 prefix 不为空且不以 / 结尾，添加 /
+        let prefix = if !prefix.is_empty() && !prefix.ends_with('/') {
+            format!("{}/", prefix)
+        } else {
+            prefix
         };
 
         let output = self
@@ -285,7 +301,7 @@ impl OpbxFileSystem for S3Storage {
                     continue;
                 }
 
-                // 提取名称
+                // 提取名称（相对于 prefix 的名称）
                 let name = key
                     .trim_start_matches(&prefix)
                     .trim_start_matches('/')
@@ -295,8 +311,14 @@ impl OpbxFileSystem for S3Storage {
                     continue;
                 }
 
-                // 创建路径
-                let entry_path = ResourcePath::from_str(&format!("/{}", key));
+                // 创建路径（相对路径）
+                // 如果有默认 bucket，使用相对于当前路径的路径（不包含 bucket 名称）
+                let entry_path = if self.default_bucket.is_some() {
+                    let relative_key = key.trim_start_matches(&prefix).trim_start_matches('/');
+                    ResourcePath::from_str(&format!("/{}", relative_key))
+                } else {
+                    ResourcePath::from_str(&format!("/{}", key))
+                };
 
                 entries.push(DirEntry {
                     name,
@@ -310,7 +332,7 @@ impl OpbxFileSystem for S3Storage {
         if let Some(prefixes) = output.common_prefixes {
             for cp in prefixes {
                 let prefix_str = cp.prefix().unwrap_or("");
-                // 提取目录名称
+                // 提取目录名称（相对于 prefix 的名称）
                 let name = prefix_str
                     .trim_start_matches(&prefix)
                     .trim_start_matches('/')
@@ -321,8 +343,17 @@ impl OpbxFileSystem for S3Storage {
                     continue;
                 }
 
-                // 创建路径
-                let entry_path = ResourcePath::from_str(&format!("/{}", prefix_str.trim_end_matches('/')));
+                // 创建路径（相对路径）
+                // 如果有默认 bucket，使用相对于当前路径的路径（不包含 bucket 名称）
+                let entry_path = if self.default_bucket.is_some() {
+                    let relative_prefix = prefix_str
+                        .trim_start_matches(&prefix)
+                        .trim_start_matches('/')
+                        .trim_end_matches('/');
+                    ResourcePath::from_str(&format!("/{}", relative_prefix))
+                } else {
+                    ResourcePath::from_str(&format!("/{}", prefix_str.trim_end_matches('/')))
+                };
 
                 entries.push(DirEntry {
                     name,
