@@ -675,19 +675,36 @@ impl ExplorerService {
       _ => entry.name.clone(),
     };
 
-    ResourceItem {
-      name: display_name,
-      path,
-      r#type: if entry.metadata.is_dir {
+    // 检测是否是归档文件（仅在不在归档内时）
+    // 归档文件应该显示为可展开的目录（LinkDir）
+    let is_archive_file = parent_resource.archive_context.is_none()
+      && !entry.metadata.is_dir
+      && opsbox_core::dfs::archive::ArchiveType::from_extension(&entry.name.to_lowercase()).is_some();
+
+    let (resource_type, resource_path, has_children) = if is_archive_file {
+      // 归档文件：返回带 entry 参数的 ORL，类型为 LinkDir
+      let archive_orl = format!("{}?entry=/", path);
+      (ResourceType::LinkDir, archive_orl, Some(true))
+    } else {
+      // 普通文件或目录
+      let rtype = if entry.metadata.is_dir {
         ResourceType::Dir
       } else {
         ResourceType::File
-      },
+      };
+      let children = if entry.metadata.is_dir { Some(true) } else { None };
+      (rtype, path, children)
+    };
+
+    ResourceItem {
+      name: display_name,
+      path: resource_path,
+      r#type: resource_type,
       size: Some(entry.metadata.size),
       modified: entry.metadata.modified
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64),
-      has_children: if entry.metadata.is_dir { Some(true) } else { None },
+      has_children,
       child_count: None,
       hidden_child_count: None,
       mime_type: None, // TODO: 从 DFS 获取 mime 类型
