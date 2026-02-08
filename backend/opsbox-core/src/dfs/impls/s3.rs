@@ -8,8 +8,6 @@ use aws_sdk_s3::{
     types::Object,
     Client as S3Client,
 };
-use std::pin::Pin;
-use tokio::io::{AsyncRead, ReadBuf};
 
 use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
@@ -365,7 +363,7 @@ impl OpbxFileSystem for S3Storage {
         Ok(entries)
     }
 
-    /// 打开对象用于读取（流式，边下载边处理）
+    /// 打开对象用于读取
     async fn open_read(
         &self,
         path: &ResourcePath,
@@ -381,75 +379,37 @@ impl OpbxFileSystem for S3Storage {
             .await
             .map_err(|e| FsError::S3(format!("GetObject failed: {}", e)))?;
 
-        // 使用 into_async_read() 获取流式读取器
-        // 这样可以边下载边处理，不需要等待整个文件下载完成
-        let async_read = output.body.into_async_read();
+        let bytes = output
+            .body
+            .collect()
+            .await
+            .map_err(|e| FsError::S3(format!("Failed to read S3 object body: {}", e)))?
+            .to_vec();
 
-        Ok(Box::new(S3StreamAdapter::new(async_read)))
+        Ok(Box::new(S3FileReader(bytes)))
     }
 }
 
-/// S3 流式读取适配器
-///
-/// 将 tokio::io::AsyncRead（来自 AWS SDK 的流式响应）
-/// 适配到 DFS 的 AsyncRead trait
-pub struct S3StreamAdapter {
-    inner: Pin<Box<dyn tokio::io::AsyncRead + Send>>,
-}
-
-impl S3StreamAdapter {
-    pub fn new<R>(reader: R) -> Self
-    where
-        R: tokio::io::AsyncRead + Send + 'static,
-    {
-        Self {
-            inner: Box::pin(reader),
-        }
-    }
-}
-
-impl super::super::filesystem::AsyncRead for S3StreamAdapter {
-    fn bytes(&self) -> Option<&[u8]> {
-        // 流式读取器没有数据在内存中，返回 None
-        None
-    }
-}
-
-impl tokio::io::AsyncRead for S3StreamAdapter {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        Pin::new(&mut self.inner).poll_read(cx, buf)
-    }
-}
-
-/// S3 文件读取器（内存版本，已弃用，保留用于兼容）
-#[deprecated(note = "Use S3StreamAdapter for streaming reads")]
+/// S3 文件读取器（内存版本）
 pub struct S3FileReader(Vec<u8>);
 
 impl S3FileReader {
     /// 获取文件内容的字节数组
-    #[allow(deprecated)]
     pub fn bytes(&self) -> &[u8] {
         &self.0
     }
 
     /// 获取文件内容长度
-    #[allow(deprecated)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
     /// 检查文件是否为空
-    #[allow(deprecated)]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 }
 
-#[allow(deprecated)]
 impl super::super::filesystem::AsyncRead for S3FileReader {
     fn bytes(&self) -> Option<&[u8]> {
         Some(&self.0)

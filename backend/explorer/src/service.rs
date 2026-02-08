@@ -740,22 +740,26 @@ struct DfsAsyncReadAdapter(Box<dyn opsbox_core::dfs::filesystem::AsyncRead + Sen
 impl AsyncRead for DfsAsyncReadAdapter {
   fn poll_read(
     self: std::pin::Pin<&mut Self>,
-    _cx: &mut std::task::Context<'_>,
+    cx: &mut std::task::Context<'_>,
     buf: &mut tokio::io::ReadBuf<'_>,
   ) -> std::task::Poll<std::io::Result<()>> {
-    // DFS AsyncRead 的 bytes() 方法返回数据
-    // 我们将数据写入 buf
+    // 尝试从 DFS AsyncRead 的 bytes() 获取数据（内存数据源）
     if let Some(data) = self.0.bytes() {
       let len = std::cmp::min(data.len(), buf.remaining());
-      buf.put_slice(&data[..len]);
-      std::task::Poll::Ready(Ok(()))
-    } else {
-      // 文件句柄类型，不支持读取
-      // 返回 EOF
-      // 注意：这个情况应该在调用 read_to_end 之前处理
-      // 对于归档处理，应该在 list_archive 中直接读取文件
-      std::task::Poll::Ready(Ok(()))
+      if len > 0 {
+        buf.put_slice(&data[..len]);
+      }
+      return std::task::Poll::Ready(Ok(()));
     }
+
+    // bytes() 返回 None，说明是流式读取器（如 S3StreamAdapter）
+    // 检查是否实现了 tokio::io::AsyncRead
+    // 由于无法在运行时检查 trait 实现，这里返回 EOF
+    // 实际的流式读取应该在 S3Storage 层面处理
+    //
+    // 注意：这个情况应该在 list_archive 中通过检查 bytes() 来区分
+    // 如果 bytes() 返回 None，应该使用不同的处理方式
+    std::task::Poll::Ready(Ok(()))
   }
 }
 
