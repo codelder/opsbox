@@ -8,6 +8,7 @@ use opsbox_core::dfs::{
     filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
     path::ResourcePath,
 };
+use std::pin::Pin;
 use std::sync::Arc;
 
 /// Agent 发现文件系统
@@ -66,7 +67,7 @@ impl OpbxFileSystem for AgentDiscoveryFileSystem {
   async fn open_read(
     &self,
     _path: &ResourcePath,
-  ) -> Result<Box<dyn opsbox_core::dfs::filesystem::AsyncRead + Send + Unpin>, opsbox_core::dfs::FsError> {
+  ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, opsbox_core::dfs::FsError> {
     Err(opsbox_core::dfs::FsError::InvalidConfig(
       "Cannot read agent list as file".to_string(),
     ))

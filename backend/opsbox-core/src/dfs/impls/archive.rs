@@ -3,6 +3,7 @@
 //! 将归档文件视为虚拟文件系统，支持访问归档内的文件
 
 use async_trait::async_trait;
+use std::pin::Pin;
 use async_compression::tokio::bufread::GzipDecoder;
 use futures_lite::io::AsyncReadExt as FuturesAsyncReadExt;
 use std::io;
@@ -16,7 +17,7 @@ use tokio_tar::Archive;
 
 use super::super::{
     archive::ArchiveType,
-    filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
+    filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
 };
 
@@ -547,7 +548,7 @@ where
     async fn open_read(
         &self,
         path: &ResourcePath,
-    ) -> Result<Box<dyn super::super::filesystem::AsyncRead + Send + Unpin>, FsError> {
+    ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, FsError> {
         let target = Self::normalize_path(std::path::Path::new(path.to_string().as_str()))?;
 
         match self.archive_type {
@@ -574,7 +575,7 @@ where
                             .await
                             .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
-                        return Ok(Box::new(ArchiveFileReader::new(buf)));
+                        return Ok(Box::pin(MemoryReader::new(buf)));
                     }
                 }
 
@@ -601,7 +602,7 @@ where
                             .await
                             .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
-                        return Ok(Box::new(ArchiveFileReader::new(buf)));
+                        return Ok(Box::pin(MemoryReader::new(buf)));
                     }
                 }
 
@@ -632,7 +633,7 @@ where
                         .await
                         .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
-                    return Ok(Box::new(ArchiveFileReader::new(buf)));
+                    return Ok(Box::pin(MemoryReader::new(buf)));
                 }
 
                 Err(FsError::NotFound(format!("Entry not found in archive: {}", target)))
@@ -650,44 +651,9 @@ where
                     .await
                     .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
 
-                Ok(Box::new(ArchiveFileReader::new(buf)))
+                Ok(Box::pin(MemoryReader::new(buf)))
             }
         }
-    }
-}
-
-/// 归档文件读取器
-///
-/// 将归档内文件的内容读入内存
-pub struct ArchiveFileReader {
-    data: Vec<u8>,
-}
-
-impl ArchiveFileReader {
-    /// 创建新的归档文件读取器
-    pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-
-    /// 获取文件内容的字节数组
-    pub fn bytes(&self) -> &[u8] {
-        &self.data
-    }
-
-    /// 获取文件内容长度
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    /// 检查文件是否为空
-    pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-}
-
-impl super::super::filesystem::AsyncRead for ArchiveFileReader {
-    fn bytes(&self) -> Option<&[u8]> {
-        Some(&self.data)
     }
 }
 
@@ -759,18 +725,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_archive_file_reader() {
-        let reader = ArchiveFileReader::new(vec![1, 2, 3, 4, 5]);
-        assert_eq!(reader.len(), 5);
-        assert!(!reader.is_empty());
-        assert_eq!(reader.bytes(), &[1, 2, 3, 4, 5]);
+    async fn test_memory_reader() {
+        let reader = MemoryReader::new(vec![1, 2, 3, 4, 5]);
+        assert_eq!(reader.as_bytes().len(), 5);
+        assert!(!reader.as_bytes().is_empty());
+        assert_eq!(reader.as_bytes(), &[1, 2, 3, 4, 5]);
     }
 
     #[tokio::test]
-    async fn test_archive_file_reader_empty() {
-        let reader = ArchiveFileReader::new(vec![]);
-        assert_eq!(reader.len(), 0);
-        assert!(reader.is_empty());
+    async fn test_memory_reader_empty() {
+        let reader = MemoryReader::new(vec![]);
+        assert_eq!(reader.as_bytes().len(), 0);
+        assert!(reader.as_bytes().is_empty());
     }
 
     #[tokio::test]
@@ -822,8 +788,11 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
-        assert_eq!(reader.bytes().unwrap(), b"hello content");
+        let mut reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        use tokio::io::AsyncReadExt;
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, b"hello content");
     }
 
     #[tokio::test]
@@ -875,8 +844,11 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
-        assert_eq!(reader.bytes().unwrap(), b"hello zip content");
+        let mut reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        use tokio::io::AsyncReadExt;
+        let mut buffer = Vec::new();
+        reader.read_to_end(&mut buffer).await.unwrap();
+        assert_eq!(buffer, b"hello zip content");
     }
 
     #[tokio::test]
@@ -989,8 +961,11 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
-        let bytes = reader.bytes().unwrap();
+        let mut reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        let mut bytes = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut bytes)
+            .await
+            .unwrap();
         // 检查数据开头是否正确（可能有末尾的 null 填充）
         assert!(bytes.starts_with(b"hello tar.gz"));
     }

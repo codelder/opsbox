@@ -3,11 +3,10 @@
 //! 使用 tokio::fs 实现本地文件系统操作
 
 use std::path::PathBuf;
+use std::pin::Pin;
 
 use async_trait::async_trait;
 use tokio::fs;
-
-use crate::dfs::filesystem;
 
 use super::super::{
   filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
@@ -105,27 +104,15 @@ impl OpbxFileSystem for LocalFileSystem {
   }
 
   /// 打开文件用于读取
-  async fn open_read(&self, path: &ResourcePath) -> Result<Box<dyn filesystem::AsyncRead + Send + Unpin>, FsError> {
+  async fn open_read(&self, path: &ResourcePath) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, FsError> {
     let full_path = self.resolve_path(path);
     let file = fs::File::open(&full_path)
       .await
       .map_err(|e| FsError::NotFound(format!("{}: {}", full_path.display(), e)))?;
 
-    Ok(Box::new(LocalFileReader(file)))
+    Ok(Box::pin(file))
   }
 }
-
-/// 本地文件读取器
-pub struct LocalFileReader(tokio::fs::File);
-
-impl LocalFileReader {
-  /// 获取内部的 File 引用
-  pub fn inner(&self) -> &tokio::fs::File {
-    &self.0
-  }
-}
-
-impl filesystem::AsyncRead for LocalFileReader {}
 
 #[cfg(test)]
 mod tests {

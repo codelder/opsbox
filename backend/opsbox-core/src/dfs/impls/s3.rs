@@ -3,6 +3,7 @@
 //! 使用 AWS SDK for Rust 实现 S3 对象存储访问
 
 use async_trait::async_trait;
+use std::pin::Pin;
 use aws_sdk_s3::{
     config::{Region, Credentials, SharedCredentialsProvider},
     types::Object,
@@ -367,7 +368,7 @@ impl OpbxFileSystem for S3Storage {
     async fn open_read(
         &self,
         path: &ResourcePath,
-    ) -> Result<Box<dyn super::super::filesystem::AsyncRead + Send + Unpin>, FsError> {
+    ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, FsError> {
         let (bucket, key) = self.parse_bucket_and_key(path)?;
 
         let output = self
@@ -379,46 +380,16 @@ impl OpbxFileSystem for S3Storage {
             .await
             .map_err(|e| FsError::S3(format!("GetObject failed: {}", e)))?;
 
-        let bytes = output
-            .body
-            .collect()
-            .await
-            .map_err(|e| FsError::S3(format!("Failed to read S3 object body: {}", e)))?
-            .to_vec();
-
-        Ok(Box::new(S3FileReader(bytes)))
-    }
-}
-
-/// S3 文件读取器（内存版本）
-pub struct S3FileReader(Vec<u8>);
-
-impl S3FileReader {
-    /// 获取文件内容的字节数组
-    pub fn bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    /// 获取文件内容长度
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// 检查文件是否为空
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl super::super::filesystem::AsyncRead for S3FileReader {
-    fn bytes(&self) -> Option<&[u8]> {
-        Some(&self.0)
+        // 使用流式读取：边下载边处理
+        let stream = output.body.into_async_read();
+        Ok(Box::pin(stream))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dfs::filesystem::MemoryReader;
 
     #[test]
     fn test_s3_config_new() {
@@ -469,17 +440,17 @@ mod tests {
 
     #[test]
     fn test_s3_file_reader() {
-        let reader = S3FileReader(vec![1, 2, 3, 4, 5]);
-        assert_eq!(reader.len(), 5);
-        assert!(!reader.is_empty());
-        assert_eq!(reader.bytes(), &[1, 2, 3, 4, 5]);
+        let reader = MemoryReader::new(vec![1, 2, 3, 4, 5]);
+        assert_eq!(reader.as_bytes().len(), 5);
+        assert!(!reader.as_bytes().is_empty());
+        assert_eq!(reader.as_bytes(), &[1, 2, 3, 4, 5]);
     }
 
     #[test]
     fn test_s3_file_reader_empty() {
-        let reader = S3FileReader(vec![]);
-        assert_eq!(reader.len(), 0);
-        assert!(reader.is_empty());
+        let reader = MemoryReader::new(vec![]);
+        assert_eq!(reader.as_bytes().len(), 0);
+        assert!(reader.as_bytes().is_empty());
     }
 
     #[test]

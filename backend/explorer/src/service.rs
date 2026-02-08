@@ -17,6 +17,7 @@ use crate::fs::s3_discovery::S3DiscoveryFileSystem;
 use agent_manager::AgentManager;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 // 用于归档文件系统的临时文件处理
@@ -86,7 +87,7 @@ impl ExplorerService {
   }
 
   /// 下载资源
-  pub async fn download(&self, orl: &str) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
+  pub async fn download(&self, orl: &str) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
     // 解析 ORL 字符串为 Resource
     let resource = OrlParser::parse(orl)
       .map_err(|e| format!("Failed to parse ORL: {}", e))?;
@@ -119,10 +120,8 @@ impl ExplorerService {
       .map(|s| s.clone())
       .unwrap_or_else(|| "download".to_string());
 
-    // 转换 DFS AsyncRead 到 tokio AsyncRead
-    let reader = Box::new(DfsAsyncReadAdapter(dfs_reader));
-
-    Ok((name, Some(meta.size), reader))
+    // DFS 现在直接返回 tokio::io::AsyncRead，无需适配器
+    Ok((name, Some(meta.size), dfs_reader))
   }
 
   /// 列出归档内的资源
@@ -156,26 +155,17 @@ impl ExplorerService {
         let temp_path = temp_file.path().to_path_buf();
 
         let base_fs = self.create_fs_for_resource(resource).await?;
-        let reader = base_fs.open_read(&resource.primary_path)
+        let mut reader = base_fs.open_read(&resource.primary_path)
           .await
           .map_err(|e| format!("Failed to open archive file: {}", e))?;
 
         let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
           .map_err(|e| format!("Failed to clone temp file: {}", e))?);
 
-        // 处理两种情况：内存数据源和流式数据源
-        if let Some(data) = reader.bytes() {
-          // 内存数据源（S3、归档等）：直接写入
-          tokio::io::AsyncWriteExt::write_all(&mut dst, data)
-            .await
-            .map_err(|e| format!("Failed to write temp file: {}", e))?;
-        } else {
-          // 流式数据源（Agent）：使用适配器流式复制
-          let mut adapter = DfsAsyncReadAdapter(reader);
-          tokio::io::copy(&mut adapter, &mut dst)
-            .await
-            .map_err(|e| format!("Failed to copy archive data: {}", e))?;
-        }
+        // DFS 现在统一使用 tokio::io::AsyncRead，直接使用 tokio::io::copy
+        tokio::io::copy(&mut reader, &mut dst)
+          .await
+          .map_err(|e| format!("Failed to copy archive data: {}", e))?;
 
         dst.flush()
           .await
@@ -231,7 +221,7 @@ impl ExplorerService {
   /// - 内存数据源（S3）：流式复制到临时文件
   /// - 远程文件（Agent）：流式复制到临时文件
   /// - 无大小限制，使用流式处理
-  async fn download_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<(String, Option<u64>, Box<dyn AsyncRead + Send + Unpin>), String> {
+  async fn download_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
     use opsbox_core::dfs::impls::{ArchiveFileSystem, LocalFileSystem};
 
     // 获取归档类型
@@ -255,26 +245,17 @@ impl ExplorerService {
         let temp_path = temp_file.path().to_path_buf();
 
         let base_fs = self.create_fs_for_resource(resource).await?;
-        let reader = base_fs.open_read(&resource.primary_path)
+        let mut reader = base_fs.open_read(&resource.primary_path)
           .await
           .map_err(|e| format!("Failed to open archive file: {}", e))?;
 
         let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
           .map_err(|e| format!("Failed to clone temp file: {}", e))?);
 
-        // 处理两种情况：内存数据源和流式数据源
-        if let Some(data) = reader.bytes() {
-          // 内存数据源（S3、归档等）：直接写入
-          tokio::io::AsyncWriteExt::write_all(&mut dst, data)
-            .await
-            .map_err(|e| format!("Failed to write temp file: {}", e))?;
-        } else {
-          // 流式数据源（Agent）：使用适配器流式复制
-          let mut adapter = DfsAsyncReadAdapter(reader);
-          tokio::io::copy(&mut adapter, &mut dst)
-            .await
-            .map_err(|e| format!("Failed to copy archive data: {}", e))?;
-        }
+        // DFS 现在统一使用 tokio::io::AsyncRead，直接使用 tokio::io::copy
+        tokio::io::copy(&mut reader, &mut dst)
+          .await
+          .map_err(|e| format!("Failed to copy archive data: {}", e))?;
 
         dst.flush()
           .await
@@ -334,10 +315,8 @@ impl ExplorerService {
       .map(|s| s.clone())
       .unwrap_or_else(|| "download".to_string());
 
-    // 转换 DFS AsyncRead 到 tokio AsyncRead
-    let reader = Box::new(DfsAsyncReadAdapter(dfs_reader));
-
-    Ok((name, Some(meta.size), reader))
+    // DFS 现在直接返回 tokio::io::AsyncRead，无需适配器
+    Ok((name, Some(meta.size), dfs_reader))
   }
 
   /// 自动检测归档类型（基于文件内容 magic bytes）
@@ -367,44 +346,43 @@ impl ExplorerService {
 
     // 尝试打开文件并获取头部数据
     let head_bytes = match fs.open_read(&resource.primary_path).await {
-      Ok(reader) => {
-        // DFS AsyncRead 提供的 bytes() 方法返回内存中的数据
-        // 对于 S3、归档等后端，数据在内存中；对于本地文件句柄返回 None
-        match reader.bytes() {
-          Some(data) => {
-            // 取前 2048 字节用于检测（足够检测 TarGz 嵌套格式）
-            let len = std::cmp::min(2048, data.len());
-            data[..len].to_vec()
+      Ok(mut reader) => {
+        // DFS 现在使用标准 tokio::io::AsyncRead
+        // 读取前 2048 字节用于归档类型检测
+        use tokio::io::AsyncReadExt;
+        let mut buffer = vec![0u8; 2048];
+        let n = reader.read(&mut buffer).await.unwrap_or(0);
+        buffer.truncate(n);
+
+        if buffer.is_empty() {
+          // 无法读取数据，回退到扩展名检测
+          let path_lower = path_str.to_lowercase();
+
+          // 根据扩展名确定归档类型
+          let archive_type = if path_lower.ends_with(".tar") {
+            Some(ArchiveType::Tar)
+          } else if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
+            Some(ArchiveType::TarGz)
+          } else if path_lower.ends_with(".zip") {
+            Some(ArchiveType::Zip)
+          } else if path_lower.ends_with(".gz") {
+            Some(ArchiveType::Gz)
+          } else {
+            None
+          };
+
+          // 如果是归档扩展名，设置 archive_context
+          if let Some(at) = archive_type {
+            resource.archive_context = Some(ArchiveContext::new(
+              ResourcePath::from_str("/"),
+              Some(at),
+            ));
           }
-          None => {
-            // 文件句柄类型（如本地文件），无法直接读取字节
-            // 回退到扩展名检测并设置 archive_context
-            let path_lower = path_str.to_lowercase();
 
-            // 根据扩展名确定归档类型
-            let archive_type = if path_lower.ends_with(".tar") {
-              Some(ArchiveType::Tar)
-            } else if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
-              Some(ArchiveType::TarGz)
-            } else if path_lower.ends_with(".zip") {
-              Some(ArchiveType::Zip)
-            } else if path_lower.ends_with(".gz") {
-              Some(ArchiveType::Gz)
-            } else {
-              None
-            };
-
-            // 如果是归档扩展名，设置 archive_context
-            if let Some(at) = archive_type {
-              resource.archive_context = Some(ArchiveContext::new(
-                ResourcePath::from_str("/"),
-                Some(at),
-              ));
-            }
-
-            return Ok(resource);
-          }
+          return Ok(resource);
         }
+
+        buffer
       }
       Err(_) => {
         // 无法打开文件（可能是目录），返回原资源
@@ -731,35 +709,6 @@ impl ExplorerService {
     let endpoint = self.resource_endpoint_orl(resource);
     let path = resource.primary_path.to_string();
     format!("orl://{}{}", endpoint, path)
-  }
-}
-
-/// DFS AsyncRead 到 tokio AsyncRead 的适配器
-struct DfsAsyncReadAdapter(Box<dyn opsbox_core::dfs::filesystem::AsyncRead + Send + Unpin>);
-
-impl AsyncRead for DfsAsyncReadAdapter {
-  fn poll_read(
-    self: std::pin::Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-    buf: &mut tokio::io::ReadBuf<'_>,
-  ) -> std::task::Poll<std::io::Result<()>> {
-    // 尝试从 DFS AsyncRead 的 bytes() 获取数据（内存数据源）
-    if let Some(data) = self.0.bytes() {
-      let len = std::cmp::min(data.len(), buf.remaining());
-      if len > 0 {
-        buf.put_slice(&data[..len]);
-      }
-      return std::task::Poll::Ready(Ok(()));
-    }
-
-    // bytes() 返回 None，说明是流式读取器（如 S3StreamAdapter）
-    // 检查是否实现了 tokio::io::AsyncRead
-    // 由于无法在运行时检查 trait 实现，这里返回 EOF
-    // 实际的流式读取应该在 S3Storage 层面处理
-    //
-    // 注意：这个情况应该在 list_archive 中通过检查 bytes() 来区分
-    // 如果 bytes() 返回 None，应该使用不同的处理方式
-    std::task::Poll::Ready(Ok(()))
   }
 }
 

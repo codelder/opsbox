@@ -13,6 +13,7 @@ use opsbox_core::dfs::{
 };
 use opsbox_core::repository::s3::{list_s3_profiles, load_s3_profile};
 use opsbox_core::SqlitePool;
+use std::pin::Pin;
 
 /// S3 发现文件系统
 /// 提供 S3 Profile 和 Bucket 的虚拟目录视图
@@ -130,7 +131,7 @@ impl OpbxFileSystem for S3DiscoveryFileSystem {
   async fn open_read(
     &self,
     _path: &ResourcePath,
-  ) -> Result<Box<dyn opsbox_core::dfs::filesystem::AsyncRead + Send + Unpin>, opsbox_core::dfs::FsError> {
+  ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, opsbox_core::dfs::FsError> {
     Err(opsbox_core::dfs::FsError::InvalidConfig(
       "Cannot read S3 root as file".to_string(),
     ))

@@ -28,5 +28,5 @@ pub use path::ResourcePath;
 pub use resource::Resource;
 pub use filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem};
 pub use factory::{create_fs, FsConfig};
-pub use impls::{AgentClient, AgentProxyFS, ArchiveFileSystem, LocalFileSystem, S3Config, S3Storage, S3FileReader};
+pub use impls::{AgentClient, AgentProxyFS, ArchiveFileSystem, LocalFileSystem, S3Config, S3Storage};
 pub use orl_parser::{OrlParser, OrlParseError};

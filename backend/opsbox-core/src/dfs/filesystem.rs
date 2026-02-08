@@ -5,6 +5,7 @@
 use crate::error::AppError;
 use async_trait::async_trait;
 use std::io;
+use std::pin::Pin;
 use std::time::SystemTime;
 
 use super::path::ResourcePath;
@@ -108,22 +109,63 @@ pub trait OpbxFileSystem: Send + Sync {
     async fn read_dir(&self, path: &ResourcePath) -> Result<Vec<DirEntry>, FsError>;
 
     /// 打开文件用于读取
-    async fn open_read(&self, path: &ResourcePath) -> Result<Box<dyn AsyncRead + Send + Unpin>, FsError>;
+    async fn open_read(&self, path: &ResourcePath) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, FsError>;
 }
 
 /// 异步读取 trait
 ///
 /// 用于文件读取的抽象
 ///
-/// 对于内存中的读取器（如归档、S3），`bytes()` 返回 `Some(&[u8])`
-/// 对于文件句柄类型的读取器（如本地文件），`bytes()` 返回 `None`
-pub trait AsyncRead {
-    /// 获取文件内容的字节数组（如果数据在内存中）
-    ///
-    /// 对于内存中的读取器（如归档、S3），返回 `Some(&[u8])`
-    /// 对于文件句柄类型的读取器（如本地文件），返回 `None`
-    fn bytes(&self) -> Option<&[u8]> {
-        None
+/// 统一使用 tokio::io::AsyncRead trait
+/// 支持真正的流式读取，同时可以通过 downcasting 检查数据是否在内存中
+pub trait AsyncRead: tokio::io::AsyncRead + Send {}
+
+// 为常见的类型自动实现 AsyncRead
+impl<T> AsyncRead for T where T: tokio::io::AsyncRead + Send {}
+
+/// 内存数据读取器
+///
+/// 对于已经在内存中的数据（如 S3 下载、归档解压）
+/// 提供零拷贝的字节访问
+pub struct MemoryReader {
+    data: Vec<u8>,
+    pos: usize,
+}
+
+impl MemoryReader {
+    pub fn new(data: Vec<u8>) -> Self {
+        Self { data, pos: 0 }
+    }
+
+    /// 获取字节数组（零拷贝）
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.data
+    }
+
+    /// 检查是否已读取完毕
+    pub fn is_empty(&self) -> bool {
+        self.pos >= self.data.len()
+    }
+}
+
+impl tokio::io::AsyncRead for MemoryReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.pos >= self.data.len() {
+            // 已读完所有数据，返回 EOF
+            return std::task::Poll::Ready(Ok(()));
+        }
+
+        let remaining = &self.data[self.pos..];
+        let to_copy = std::cmp::min(remaining.len(), buf.remaining());
+
+        buf.put_slice(&remaining[..to_copy]);
+        self.pos += to_copy;
+
+        std::task::Poll::Ready(Ok(()))
     }
 }
 

@@ -3,11 +3,12 @@
 //! 通过 HTTP 代理与远程 Agent 通信，访问远程文件系统
 
 use async_trait::async_trait;
+use std::pin::Pin;
 use serde::Deserialize;
 use serde_json;
 
 use super::super::{
-    filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
+    filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
 };
 
@@ -220,7 +221,7 @@ impl OpbxFileSystem for AgentProxyFS {
     async fn open_read(
         &self,
         path: &ResourcePath,
-    ) -> Result<Box<dyn super::super::filesystem::AsyncRead + Send + Unpin>, FsError> {
+    ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, FsError> {
         let api_path = self.resource_path_to_api_path(path);
         let url = self.client.build_url("/api/v1/file_raw");
 
@@ -245,41 +246,14 @@ impl OpbxFileSystem for AgentProxyFS {
             .await
             .map_err(|e| FsError::Agent(format!("Failed to read response body: {}", e)))?;
 
-        Ok(Box::new(AgentFileReader(bytes.to_vec())))
-    }
-}
-
-/// Agent 文件读取器
-///
-/// 将整个文件读入内存
-pub struct AgentFileReader(Vec<u8>);
-
-impl AgentFileReader {
-    /// 获取文件内容的字节数组
-    pub fn bytes(&self) -> &[u8] {
-        &self.0
-    }
-
-    /// 获取文件内容长度
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// 检查文件是否为空
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl super::super::filesystem::AsyncRead for AgentFileReader {
-    fn bytes(&self) -> Option<&[u8]> {
-        Some(&self.0)
+        Ok(Box::pin(MemoryReader::new(bytes.to_vec())))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dfs::filesystem::MemoryReader;
 
     #[test]
     fn test_agent_client_new() {
@@ -327,17 +301,17 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_file_reader() {
-        let reader = AgentFileReader(vec![1, 2, 3, 4, 5]);
-        assert_eq!(reader.len(), 5);
-        assert!(!reader.is_empty());
-        assert_eq!(reader.bytes(), &[1, 2, 3, 4, 5]);
+    fn test_memory_reader() {
+        let reader = MemoryReader::new(vec![1, 2, 3, 4, 5]);
+        assert_eq!(reader.as_bytes().len(), 5);
+        assert!(!reader.as_bytes().is_empty());
+        assert_eq!(reader.as_bytes(), &[1, 2, 3, 4, 5]);
     }
 
     #[test]
-    fn test_agent_file_reader_empty() {
-        let reader = AgentFileReader(vec![]);
-        assert_eq!(reader.len(), 0);
-        assert!(reader.is_empty());
+    fn test_memory_reader_empty() {
+        let reader = MemoryReader::new(vec![]);
+        assert_eq!(reader.as_bytes().len(), 0);
+        assert!(reader.as_bytes().is_empty());
     }
 }
