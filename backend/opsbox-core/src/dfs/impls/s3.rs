@@ -368,14 +368,13 @@ impl OpbxFileSystem for S3Storage {
         &self,
         path: &ResourcePath,
     ) -> Result<Box<dyn super::super::filesystem::AsyncRead + Send + Unpin>, FsError> {
-        let (bucket, _key) = self.parse_bucket_and_key(path)?;
-        let key_str = path.to_string().trim_start_matches('/').to_string();
+        let (bucket, key) = self.parse_bucket_and_key(path)?;
 
         let output = self
             .client
             .get_object()
             .bucket(&bucket)
-            .key(&key_str)
+            .key(&key)
             .send()
             .await
             .map_err(|e| FsError::S3(format!("GetObject failed: {}", e)))?;
