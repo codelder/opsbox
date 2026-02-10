@@ -216,7 +216,7 @@ pub async fn plan_with_starlark_with_script(
     crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("SOURCES 不是列表类型".to_string()))
   })?;
 
-  let mut sources: Vec<opsbox_core::odfs::orl::ORL> = Vec::with_capacity(list.len());
+  let mut sources: Vec<String> = Vec::with_capacity(list.len());
   for (i, v) in list.iter().enumerate() {
     let orl_str = v.unpack_str().ok_or_else(|| {
       crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
@@ -225,15 +225,16 @@ pub async fn plan_with_starlark_with_script(
       )))
     })?;
 
-    let orl = opsbox_core::odfs::orl::ORL::parse(orl_str).map_err(|e| {
-      crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
-        "解析 ORL 失败: {}; URL={}",
-        e, orl_str
-      )))
-    })?;
+    // 验证 ORL 格式（但不解析为对象）
+    if !orl_str.starts_with("orl://") {
+      return Err(crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
+        "SOURCES[{}] 不是有效的 ORL 格式: {}",
+        i, orl_str
+      ))));
+    }
 
-    tracing::debug!("[Planner] 来源[{}]: {}", i, orl);
-    sources.push(orl);
+    tracing::debug!("[Planner] 来源[{}]: {}", i, orl_str);
+    sources.push(orl_str.to_string());
   }
 
   tracing::info!("[Planner] 脚本生成来源总数: {}", sources.len());
@@ -399,7 +400,7 @@ print("hello world")
       .await
       .unwrap();
     assert_eq!(res.sources.len(), 1);
-    assert_eq!(res.sources[0].to_string(), "orl://local/tmp/log");
+    assert_eq!(res.sources[0], "orl://local/tmp/log");
     assert!(res.debug_logs.contains(&"hello world".to_string()));
   }
 
@@ -434,6 +435,6 @@ else:
       .await
       .unwrap();
     assert_eq!(res.sources.len(), 1);
-    assert_eq!(res.sources[0].path(), "/20240101");
+    assert_eq!(res.sources[0], "orl://local/20240101");
   }
 }

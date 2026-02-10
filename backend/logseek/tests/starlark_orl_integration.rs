@@ -1,10 +1,11 @@
 //! 测试 Starlark Planner 对 ORL 字符串格式的解析能力
 //!
-//! 这个测试文件用于调试 E2E 测试失败的问题，通过单元测试验证
-//! Starlark 脚本能够正确输出 ORL 格式的来源列表。
+//! 这个测试文件用于验证 Starlark 脚本能够正确输出 ORL 格式的来源列表。
+//! 由于 DFS 迁移，plan_with_starlark_with_script 现在返回 Vec<String>，
+//! 测试中使用 OrlParser::parse() 解析字符串。
 
 use logseek::domain::source_planner::plan_with_starlark_with_script;
-use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
+use opsbox_core::dfs::{OrlParser, Location};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
 
@@ -29,57 +30,52 @@ async fn create_test_pool() -> opsbox_core::SqlitePool {
 #[tokio::test]
 async fn test_orl_parse_local_path() {
   // 测试基本 ORL 解析
-  let orl = ORL::parse("orl://local/var/log/syslog").expect("Should parse local ORL");
+  let resource = OrlParser::parse("orl://local/var/log/syslog").expect("Should parse local ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log/syslog");
-  assert!(orl.filter_glob().is_none());
-  assert!(orl.entry_path().is_none());
-  assert_eq!(orl.target_type(), TargetType::Dir);
+  assert!(matches!(resource.endpoint.location, Location::Local));
+  assert_eq!(resource.primary_path.to_string(), "/var/log/syslog");
 }
 
 #[tokio::test]
 async fn test_orl_parse_local_with_glob() {
-  // 测试带 glob 的 ORL
-  let orl = ORL::parse("orl://local/var/log?glob=*.log").expect("Should parse local ORL with glob");
+  // 测试带 glob 的 ORL（glob 参数在 query string 中，由 OrlParser 内部处理）
+  let resource = OrlParser::parse("orl://local/var/log?glob=*.log").expect("Should parse local ORL with glob");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
-  assert_eq!(orl.target_type(), TargetType::Dir);
+  assert!(matches!(resource.endpoint.location, Location::Local));
+  assert_eq!(resource.primary_path.to_string(), "/var/log");
+  // 注意：glob 参数被 OrlParser 解析但 Resource 结构体不直接存储它
+  // glob 信息在搜索时通过 SearchRequest.path_includes 使用
 }
 
 #[tokio::test]
 async fn test_orl_parse_local_archive() {
   // 测试归档路径（通过扩展名自动识别）
-  let orl = ORL::parse("orl://local/var/log/app.tar.gz").expect("Should parse archive ORL");
+  let resource = OrlParser::parse("orl://local/var/log/app.tar.gz").expect("Should parse archive ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log/app.tar.gz");
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  assert!(matches!(resource.endpoint.location, Location::Local));
+  assert_eq!(resource.primary_path.to_string(), "/var/log/app.tar.gz");
+  assert!(resource.archive_context.is_some());
 }
 
 #[tokio::test]
 async fn test_orl_parse_agent_with_id() {
   // 测试 Agent ORL (新格式: id@agent)
-  let orl = ORL::parse("orl://agent-123@agent/data/logs").expect("Should parse agent ORL");
+  let resource = OrlParser::parse("orl://agent-123@agent/data/logs").expect("Should parse agent ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(orl.endpoint_id(), Some("agent-123"));
-  assert_eq!(orl.effective_id().as_ref(), "agent-123");
-  assert_eq!(orl.path(), "/data/logs");
+  assert!(matches!(resource.endpoint.location, Location::Remote { .. }));
+  assert_eq!(resource.endpoint.identity, "agent-123");
+  assert_eq!(resource.primary_path.to_string(), "/data/logs");
 }
 
 #[tokio::test]
 async fn test_orl_parse_s3_with_profile() {
   // 测试 S3 ORL (新格式: profile@s3)
-  let orl = ORL::parse("orl://myprofile@s3/mybucket/path/to/file.tar.gz").expect("Should parse S3 ORL");
+  let resource = OrlParser::parse("orl://myprofile@s3/mybucket/path/to/file.tar.gz").expect("Should parse S3 ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::S3);
-  assert_eq!(orl.endpoint_id(), Some("myprofile"));
-  assert_eq!(orl.effective_id().as_ref(), "myprofile");
-  assert_eq!(orl.path(), "/mybucket/path/to/file.tar.gz");
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  assert!(matches!(resource.endpoint.location, Location::Cloud));
+  assert_eq!(resource.endpoint.identity, "myprofile");
+  assert_eq!(resource.primary_path.to_string(), "/mybucket/path/to/file.tar.gz");
+  assert!(resource.archive_context.is_some());
 }
 
 #[tokio::test]
@@ -102,12 +98,15 @@ SOURCES = ["orl://local/var/log?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
+  // 解析返回的 ORL 字符串
+  let orl_str = &result.sources[0];
+  let resource = OrlParser::parse(orl_str).expect("Should parse ORL string");
 
-  println!("✓ Local ORL parsed: {}", orl);
+  assert!(matches!(resource.endpoint.location, Location::Local));
+  assert_eq!(resource.primary_path.to_string(), "/var/log");
+  // glob 参数在 ORL 字符串中，用于搜索时过滤
+
+  println!("✓ Local ORL parsed: {}", orl_str);
 }
 
 #[tokio::test]
@@ -129,13 +128,16 @@ SOURCES = ["orl://my-agent-id@agent/data/logs?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(orl.effective_id().as_ref(), "my-agent-id");
-  assert_eq!(orl.path(), "/data/logs");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
+  // 解析返回的 ORL 字符串
+  let orl_str = &result.sources[0];
+  let resource = OrlParser::parse(orl_str).expect("Should parse ORL string");
 
-  println!("✓ Agent ORL parsed: {}", orl);
+  assert!(matches!(resource.endpoint.location, Location::Remote { .. }));
+  assert_eq!(resource.endpoint.identity, "my-agent-id");
+  assert_eq!(resource.primary_path.to_string(), "/data/logs");
+  // glob 参数在 ORL 字符串中
+
+  println!("✓ Agent ORL parsed: {}", orl_str);
 }
 
 #[tokio::test]
@@ -157,14 +159,16 @@ SOURCES = ["orl://myprofile@s3/mybucket/logs/app.tar.gz?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::S3);
-  assert_eq!(orl.effective_id().as_ref(), "myprofile");
-  assert_eq!(orl.path(), "/mybucket/logs/app.tar.gz");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  // 解析返回的 ORL 字符串
+  let orl_str = &result.sources[0];
+  let resource = OrlParser::parse(orl_str).expect("Should parse ORL string");
 
-  println!("✓ S3 ORL parsed: {}", orl);
+  assert!(matches!(resource.endpoint.location, Location::Cloud));
+  assert_eq!(resource.endpoint.identity, "myprofile");
+  assert_eq!(resource.primary_path.to_string(), "/mybucket/logs/app.tar.gz");
+  assert!(resource.archive_context.is_some());
+
+  println!("✓ S3 ORL parsed: {}", orl_str);
 }
 
 #[tokio::test]
@@ -191,13 +195,18 @@ SOURCES = [
   assert_eq!(result.sources.len(), 3, "Should return 3 sources");
 
   // 验证每个来源类型
-  assert_eq!(result.sources[0].endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(result.sources[1].endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(result.sources[2].endpoint_type().unwrap(), EndpointType::S3);
+  let r0 = OrlParser::parse(&result.sources[0]).expect("Should parse ORL");
+  let r1 = OrlParser::parse(&result.sources[1]).expect("Should parse ORL");
+  let r2 = OrlParser::parse(&result.sources[2]).expect("Should parse ORL");
+
+  assert!(matches!(r0.endpoint.location, Location::Local));
+  assert!(matches!(r1.endpoint.location, Location::Remote { .. }));
+  assert!(matches!(r2.endpoint.location, Location::Cloud));
 
   println!("✓ Mixed sources parsed successfully");
-  for (i, orl) in result.sources.iter().enumerate() {
-    println!("  Source[{}]: {} (type={:?})", i, orl, orl.endpoint_type());
+  for (i, orl_str) in result.sources.iter().enumerate() {
+    let r = OrlParser::parse(orl_str).expect("Should parse");
+    println!("  Source[{}]: {} (type={:?})", i, orl_str, r.endpoint.location);
   }
 }
 
@@ -223,11 +232,13 @@ SOURCES = [f"orl://local{base_path}?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.path(), "/tmp/test/logs");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
+  let orl_str = &result.sources[0];
+  let resource = OrlParser::parse(orl_str).expect("Should parse ORL string");
 
-  println!("✓ f-string interpolation works: {}", orl);
+  assert_eq!(resource.primary_path.to_string(), "/tmp/test/logs");
+  // glob 参数在 ORL 字符串中
+
+  println!("✓ f-string interpolation works: {}", orl_str);
 }
 
 #[tokio::test]
@@ -247,24 +258,17 @@ SOURCES = ["orl://local{}?glob=*.log"]
     .await
     .expect("Should save script");
 
-  let result = plan_with_starlark_with_script(&pool, Some("e2e_local"), "testquery", None)
+  let result = plan_with_starlark_with_script(&pool, Some("e2e_local"), "test query", None)
     .await
     .expect("Should plan successfully");
 
-  assert_eq!(result.sources.len(), 1, "Should return 1 source");
+  assert_eq!(result.sources.len(), 1);
 
-  let orl = &result.sources[0];
-  println!("Parsed ORL: {}", orl);
-  println!("  endpoint_type: {:?}", orl.endpoint_type());
-  println!("  path: {}", orl.path());
-  println!("  glob: {:?}", orl.filter_glob());
-  println!("  target_type: {:?}", orl.target_type());
+  let resource = OrlParser::parse(&result.sources[0]).expect("Should parse ORL");
+  assert!(matches!(resource.endpoint.location, Location::Local));
+  assert_eq!(resource.primary_path.to_string(), abs_root);
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), abs_root);
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
-
-  println!("✓ E2E local script format works correctly");
+  println!("✓ E2E local script format works");
 }
 
 #[tokio::test]
@@ -272,37 +276,32 @@ async fn test_e2e_agent_script_format() {
   let pool = create_test_pool().await;
 
   // 精确复制 E2E 测试中的 Agent 脚本格式
-  let agent_id = "e2e-test-agent";
-  let test_logs_dir = "/tmp/agent_logs";
+  let agent_id = "test-agent-001";
+  let test_logs_dir = "/data/test_logs";
   let script = format!(
     r#"
-SOURCES = ["orl://{}@agent{}?glob=*.log"]
+SOURCES = ["orl://{agent_id}@agent{test_logs_dir}?glob=*.log"]
 "#,
-    agent_id, test_logs_dir
+    agent_id = agent_id,
+    test_logs_dir = test_logs_dir
   );
 
   logseek::repository::planners::upsert_script(&pool, "e2e_agent", &script)
     .await
     .expect("Should save script");
 
-  let result = plan_with_starlark_with_script(&pool, Some("e2e_agent"), "testquery", None)
+  let result = plan_with_starlark_with_script(&pool, Some("e2e_agent"), "test query", None)
     .await
     .expect("Should plan successfully");
 
-  assert_eq!(result.sources.len(), 1, "Should return 1 source");
+  assert_eq!(result.sources.len(), 1);
 
-  let orl = &result.sources[0];
-  println!("Parsed ORL: {}", orl);
-  println!("  endpoint_type: {:?}", orl.endpoint_type());
-  println!("  effective_id: {}", orl.effective_id());
-  println!("  path: {}", orl.path());
-  println!("  glob: {:?}", orl.filter_glob());
+  let resource = OrlParser::parse(&result.sources[0]).expect("Should parse ORL");
+  assert!(matches!(resource.endpoint.location, Location::Remote { .. }));
+  assert_eq!(resource.endpoint.identity, agent_id);
+  assert_eq!(resource.primary_path.to_string(), test_logs_dir);
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(orl.effective_id().as_ref(), agent_id);
-  assert_eq!(orl.path(), test_logs_dir);
-
-  println!("✓ E2E agent script format works correctly");
+  println!("✓ E2E agent script format works");
 }
 
 #[tokio::test]
@@ -310,39 +309,96 @@ async fn test_e2e_s3_script_format() {
   let pool = create_test_pool().await;
 
   // 精确复制 E2E 测试中的 S3 脚本格式
-  let profile = "e2e_s3_profile";
-  let bucket = "logs-bucket";
-  let key = "2025/01/app.tar.gz";
+  let profile = "test-profile";
+  let bucket = "test-bucket";
+  let key = "logs/archive.tar.gz";
   let script = format!(
     r#"
-SOURCES = ["orl://{}@s3/{}/{}?glob=*.log"]
+SOURCES = ["orl://{profile}@s3/{bucket}/{key}?glob=*.log"]
 "#,
-    profile, bucket, key
+    profile = profile,
+    bucket = bucket,
+    key = key
   );
 
   logseek::repository::planners::upsert_script(&pool, "e2e_s3", &script)
     .await
     .expect("Should save script");
 
-  let result = plan_with_starlark_with_script(&pool, Some("e2e_s3"), "testquery", None)
+  let result = plan_with_starlark_with_script(&pool, Some("e2e_s3"), "test query", None)
     .await
     .expect("Should plan successfully");
 
-  assert_eq!(result.sources.len(), 1, "Should return 1 source");
+  assert_eq!(result.sources.len(), 1);
 
-  let orl = &result.sources[0];
-  println!("Parsed ORL: {}", orl);
-  println!("  endpoint_type: {:?}", orl.endpoint_type());
-  println!("  effective_id: {}", orl.effective_id());
-  println!("  path: {}", orl.path());
-  println!("  glob: {:?}", orl.filter_glob());
-  println!("  target_type: {:?}", orl.target_type());
+  let resource = OrlParser::parse(&result.sources[0]).expect("Should parse ORL");
+  assert!(matches!(resource.endpoint.location, Location::Cloud));
+  assert_eq!(resource.endpoint.identity, profile);
+  assert_eq!(resource.primary_path.to_string(), format!("/{}/{}", bucket, key));
+  assert!(resource.archive_context.is_some());
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::S3);
-  assert_eq!(orl.effective_id().as_ref(), profile);
-  // 路径应该是 /bucket/key
-  assert_eq!(orl.path(), format!("/{}/{}", bucket, key));
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  println!("✓ E2E S3 script format works");
+}
 
-  println!("✓ E2E S3 script format works correctly");
+#[tokio::test]
+async fn test_starlark_with_entry_path() {
+  let pool = create_test_pool().await;
+
+  // 测试带 entry 参数的归档 ORL
+  let script = r#"
+SOURCES = ["orl://local/tmp/archive.tar.gz?entry=internal/service.log"]
+"#;
+
+  logseek::repository::planners::upsert_script(&pool, "test_entry", script)
+    .await
+    .expect("Should save script");
+
+  let result = plan_with_starlark_with_script(&pool, Some("test_entry"), "test query", None)
+    .await
+    .expect("Should plan successfully");
+
+  assert_eq!(result.sources.len(), 1);
+
+  let resource = OrlParser::parse(&result.sources[0]).expect("Should parse ORL");
+  assert!(resource.archive_context.is_some());
+  let archive_ctx = resource.archive_context.as_ref().unwrap();
+  assert_eq!(archive_ctx.inner_path.to_string(), "internal/service.log");
+
+  println!("✓ ORL with entry path works");
+}
+
+#[tokio::test]
+async fn test_starlark_with_context_variables() {
+  let pool = create_test_pool().await;
+
+  // 测试使用上下文变量构建 ORL
+  let script = r#"
+# 使用注入的 DATES 变量
+if len(DATES) > 0:
+    date_str = DATES[0]["yyyymmdd"]
+    SOURCES = [f"orl://local/var/log/app.{date_str}.log"]
+else:
+    SOURCES = []
+"#;
+
+  logseek::repository::planners::upsert_script(&pool, "test_context", script)
+    .await
+    .expect("Should save script");
+
+  let result = plan_with_starlark_with_script(&pool, Some("test_context"), "test query", None)
+    .await
+    .expect("Should plan successfully");
+
+  assert_eq!(result.sources.len(), 1);
+
+  let resource = OrlParser::parse(&result.sources[0]).expect("Should parse ORL");
+  let path = resource.primary_path.to_string();
+  assert!(path.starts_with("/var/log/app."));
+  assert!(path.ends_with(".log"));
+  // 日期格式应该是 YYYYMMDD（8位数字）
+  let date_part = path.strip_prefix("/var/log/app.").unwrap().strip_suffix(".log").unwrap();
+  assert_eq!(date_part.len(), 8);
+  assert!(date_part.chars().all(|c| c.is_ascii_digit()));
+
+  println!("✓ Context variables work: path={}", path);
 }

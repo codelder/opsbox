@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use crate::api::LogSeekApiError;
 use crate::repository::{RepositoryError, planners};
 use crate::service::ServiceError;
-use opsbox_core::odfs::orl::ORL;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannerUpsertPayload {
@@ -58,8 +57,8 @@ pub struct PlannerTestPayload {
 pub struct PlannerTestResponse {
   /// 清理后的查询（移除了 app:/dt:/fdt:/tdt: 等）
   pub cleaned_query: String,
-  /// 规划出的来源列表（ORL）
-  pub sources: Vec<ORL>,
+  /// 规划出的来源列表（ORL 字符串）
+  pub sources: Vec<String>,
   /// 调试日志（print 函数的输出）
   pub debug_logs: Vec<String>,
 }

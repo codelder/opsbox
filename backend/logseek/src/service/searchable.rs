@@ -1,7 +1,7 @@
 //! SearchableFileSystem trait - 统一的搜索接口
 //!
 //! 为不同的文件系统 provider 提供统一的搜索能力抽象。
-//! 在 logseek 中定义，为 opsbox-core 的 provider 类型实现。
+//! 使用 DFS (Distributed File System) 抽象。
 
 use std::sync::Arc;
 
@@ -9,8 +9,10 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use opsbox_core::SqlitePool;
-use opsbox_core::odfs::orl::ORL;
-use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
+use opsbox_core::dfs::{
+    Resource, Location, OpbxFileSystem,
+    LocalFileSystem, S3Storage, S3Config, AgentProxyFS, AgentClient,
+};
 
 use super::ServiceError;
 use super::entry_stream::EntryStreamProcessor;
@@ -100,11 +102,15 @@ mod tests {
 
   #[test]
   fn test_search_context_is_cancelled() {
+    use opsbox_core::dfs::{OrlParser, Endpoint};
+
     let (tx, _rx) = mpsc::channel(10);
     let cancel_token = tokio_util::sync::CancellationToken::new();
 
+    let resource = OrlParser::parse("orl://local/tmp").unwrap();
     let ctx = SearchContext {
-      orl: ORL::parse("orl://local/tmp").unwrap(),
+      resource,
+      orl_str: "orl://local/tmp".to_string(),
       sid: Arc::new("test-sid".to_string()),
       tx,
       cancel_token: Some(Arc::new(cancel_token)),
@@ -118,10 +124,14 @@ mod tests {
 
   #[test]
   fn test_search_context_not_cancelled_without_token() {
+    use opsbox_core::dfs::OrlParser;
+
     let (tx, _rx) = mpsc::channel(10);
 
+    let resource = OrlParser::parse("orl://local/tmp").unwrap();
     let ctx = SearchContext {
-      orl: ORL::parse("orl://local/tmp").unwrap(),
+      resource,
+      orl_str: "orl://local/tmp".to_string(),
       sid: Arc::new("test-sid".to_string()),
       tx,
       cancel_token: None,
@@ -185,7 +195,10 @@ impl SearchRequest {
 /// 搜索上下文
 #[derive(Clone)]
 pub struct SearchContext {
-  pub orl: ORL,
+  /// 资源标识（DFS Resource）
+  pub resource: Resource,
+  /// 原始 ORL 字符串（用于显示和缓存）
+  pub orl_str: String,
   pub sid: Arc<String>,
   pub tx: mpsc::Sender<SearchEvent>,
   pub cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
@@ -194,6 +207,16 @@ pub struct SearchContext {
 impl SearchContext {
   pub fn is_cancelled(&self) -> bool {
     self.cancel_token.as_ref().map(|t| t.is_cancelled()).unwrap_or(false)
+  }
+
+  /// 获取显示名称
+  pub fn display_name(&self) -> String {
+    self.orl_str.clone()
+  }
+
+  /// 获取路径
+  pub fn path_str(&self) -> String {
+    self.resource.primary_path.to_string()
   }
 }
 
@@ -215,178 +238,65 @@ pub trait SearchableFileSystem: Send + Sync {
 // 工厂函数
 // ============================================================================
 
-/// 创建搜索提供者
-pub async fn create_search_provider(
+/// 创建搜索文件系统
+pub async fn create_search_fs(
   pool: &SqlitePool,
-  orl: &ORL,
-) -> Result<Box<dyn SearchableFileSystem>, ServiceError> {
-  use crate::utils::storage;
-  use opsbox_core::odfs::orl::EndpointType;
-
-  match orl
-    .endpoint_type()
-    .map_err(|e| ServiceError::ProcessingError(e.to_string()))?
-  {
-    EndpointType::Local => Ok(Box::new(LocalOpsFS::new(None)) as Box<dyn SearchableFileSystem>),
-    EndpointType::S3 => {
-      let profile = orl.effective_id();
-      // 加载 Profile
-      let profile_row = crate::repository::s3::load_s3_profile(pool, &profile)
+  resource: &Resource,
+) -> Result<Box<dyn OpbxFileSystem>, ServiceError> {
+  match &resource.endpoint.location {
+    Location::Local => {
+      // 本地文件系统：root 为 "/"
+      let fs = LocalFileSystem::new(std::path::PathBuf::from("/"))
+        .map_err(|e| ServiceError::ProcessingError(format!("创建 LocalFileSystem 失败: {}", e)))?;
+      Ok(Box::new(fs))
+    }
+    Location::Cloud => {
+      // S3 存储
+      let profile = &resource.endpoint.identity;
+      let profile_row = crate::repository::s3::load_s3_profile(pool, profile)
         .await
         .map_err(|e| ServiceError::ProcessingError(format!("加载 S3 Profile 失败: {:?}", e)))?
         .ok_or_else(|| ServiceError::ProcessingError(format!("S3 Profile 不存在: {}", profile)))?;
 
-      // 构造 S3 客户端
-      let client =
-        storage::get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
-          .map_err(|e| ServiceError::ProcessingError(format!("创建 S3 客户端失败: {:?}", e)))?;
+      let config = S3Config::new(
+        profile.clone(),
+        profile_row.endpoint,
+        profile_row.access_key,
+        profile_row.secret_key,
+      );
 
-      let (bucket_name, _) = orl
-        .path()
-        .trim_start_matches('/')
-        .split_once('/')
-        .unwrap_or((orl.path().trim_start_matches('/'), ""));
+      // 从路径中提取 bucket
+      let segments = resource.primary_path.segments();
+      let bucket = segments.first().cloned().unwrap_or_default();
 
-      Ok(Box::new(S3OpsFS::new(client.as_ref().clone(), bucket_name)) as Box<dyn SearchableFileSystem>)
+      let fs = S3Storage::new(config.with_bucket(bucket))
+        .map_err(|e| ServiceError::ProcessingError(format!("创建 S3Storage 失败: {}", e)))?;
+
+      Ok(Box::new(fs))
     }
-    EndpointType::Agent => {
-      // 使用内部定义的专用 search provider
-      Ok(Box::new(AgentSearchProvider) as Box<dyn SearchableFileSystem>)
+    Location::Remote { host, port } => {
+      // Agent 远程
+      let client = AgentClient::new(host.clone(), *port)
+        .map_err(|e| ServiceError::ProcessingError(format!("创建 AgentClient 失败: {}", e)))?;
+      let fs = AgentProxyFS::new(client);
+      Ok(Box::new(fs))
     }
   }
 }
 
 // ============================================================================
-// LocalOpsFS 实现
+// 搜索执行函数
 // ============================================================================
 
-#[async_trait]
-impl SearchableFileSystem for LocalOpsFS {
-  async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
-    // 显式转换为 Arc<dyn OpsFileSystem>
-    let fs: Arc<dyn opsbox_core::odfs::fs::OpsFileSystem + Send + Sync> = Arc::new(self.clone());
-    search_with_entry_stream(fs, ctx, req, true).await
-  }
-}
-
-// ============================================================================
-// S3OpsFS 实现
-// ============================================================================
-
-#[async_trait]
-impl SearchableFileSystem for S3OpsFS {
-  async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
-    let fs: Arc<dyn opsbox_core::odfs::fs::OpsFileSystem + Send + Sync> = Arc::new(self.clone());
-    search_with_entry_stream(fs, ctx, req, false).await
-  }
-}
-
-// ============================================================================
-// AgentSearchProvider (内部使用, 替代 AgentOpsFS)
-// ============================================================================
-
-struct AgentSearchProvider;
-
-#[async_trait]
-impl SearchableFileSystem for AgentSearchProvider {
-  async fn search(&self, ctx: &SearchContext, req: &SearchRequest, pool: &SqlitePool) -> Result<(), ServiceError> {
-    use crate::agent::{SearchOptions, SearchService, Target as AgentTarget, create_agent_client_by_id};
-    use futures::StreamExt;
-    use opsbox_core::odfs::orl::TargetType;
-    use tracing::{debug, info};
-
-    let agent_id = ctx.orl.effective_id().to_string();
-
-    info!(
-      "[SearchableFileSystem] 开始 Agent 搜索: agent_id={} ctx={}",
-      agent_id, req.context_lines
-    );
-
-    // 创建 AgentClient
-    let client = create_agent_client_by_id(pool, agent_id.clone())
-      .await
-      .map_err(|e| ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))?;
-
-    // 健康检查
-    if !client.health_check().await {
-      return Err(ServiceError::ProcessingError("Agent 健康检查失败".to_string()));
-    }
-
-    // 构造 SearchOptions
-    let target = match ctx.orl.target_type() {
-      TargetType::Dir => AgentTarget::Dir {
-        path: ctx.orl.path().to_string(),
-        recursive: true,
-      },
-      TargetType::Archive => AgentTarget::Archive {
-        path: ctx.orl.path().to_string(),
-        entry: ctx.orl.entry_path().map(|c| c.into_owned()),
-      },
-    };
-
-    let search_options = SearchOptions {
-      target,
-      path_filter: ctx.orl.filter_glob().map(|c| c.into_owned()),
-      path_includes: req.path_includes.clone(),
-      path_excludes: req.path_excludes.clone(),
-      encoding: req.encoding.clone(),
-      timeout_secs: None,
-      max_results: None,
-    };
-
-    // 调用 Agent 搜索
-    let mut stream = client
-      .search(&req.query, req.context_lines, search_options)
-      .await
-      .map_err(|e| ServiceError::ProcessingError(format!("调用 Agent 搜索失败: {}", e)))?;
-
-    // 转发结果
-    let mut result_count = 0;
-    while let Some(item) = stream.next().await {
-      if ctx.is_cancelled() {
-        break;
-      }
-
-      match item {
-        Ok(res) => {
-          result_count += 1;
-          if ctx.tx.send(SearchEvent::Success(res)).await.is_err() {
-            debug!("[SearchableFileSystem] 发送失败，通道已关闭");
-            break;
-          }
-        }
-        Err(e) => {
-          tracing::error!("[SearchableFileSystem] Agent 结果流读取错误: {}", e);
-          break;
-        }
-      }
-    }
-
-    debug!(
-      "[SearchableFileSystem] Agent 搜索完成: agent_id={} results={}",
-      agent_id, result_count
-    );
-
-    Ok(())
-  }
-}
-
-// ============================================================================
-// 共享辅助函数
-// ============================================================================
-
-/// Local 和 S3 共享的搜索逻辑
-async fn search_with_entry_stream(
-  fs: Arc<dyn opsbox_core::odfs::fs::OpsFileSystem + Send + Sync>,
+/// 执行搜索（Local 和 S3 共用）
+pub async fn execute_search(
+  fs: &dyn OpbxFileSystem,
   ctx: &SearchContext,
   req: &SearchRequest,
-  use_base_path: bool,
 ) -> Result<(), ServiceError> {
-  use super::entry_stream::get_entry_stream_from_fs;
-  use opsbox_core::odfs::orl::{EndpointType, TargetType};
   use tracing::info;
 
-  let source_name = ctx.orl.display_name();
+  let source_name = ctx.display_name();
   info!(
     "[SearchableFileSystem] 开始搜索: source={} ctx={}",
     source_name, req.context_lines
@@ -396,8 +306,8 @@ async fn search_with_entry_stream(
   let spec = Query::parse_github_like(&req.query)
     .map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
 
-  // 2. 创建 entry stream (复用 Manager)
-  let mut estream = get_entry_stream_from_fs(fs, &ctx.orl, true)
+  // 2. 创建 entry stream
+  let mut estream = fs.as_entry_stream(&ctx.resource.primary_path, true)
     .await
     .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?;
 
@@ -413,32 +323,47 @@ async fn search_with_entry_stream(
     processor = processor.with_cancel_token(token);
   }
 
-  // 4. 路径过滤：base_path（仅 Local + Dir）
-  if use_base_path
-    && ctx.orl.endpoint_type().unwrap_or(EndpointType::Local) == EndpointType::Local
-    && ctx.orl.target_type() == TargetType::Dir
-  {
-    processor = processor.with_base_path(ctx.orl.path());
+  // 4. 路径过滤：base_path（仅 Local）
+  if matches!(ctx.resource.endpoint.location, Location::Local) {
+    processor = processor.with_base_path(ctx.path_str());
   }
 
-  // 5. 路径过滤：ORL 携带的内置过滤
-  if let Some(glob) = ctx.orl.filter_glob()
-    && let Ok(filter) = crate::query::path_glob_to_filter(&glob)
-  {
-    processor = processor.with_extra_path_filter(filter);
-  }
-
-  // 6. 路径过滤：用户输入的额外过滤
+  // 5. 路径过滤：用户输入的额外过滤
   let extra_filter = req.to_path_filter();
   if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
     processor = processor.with_extra_path_filter(extra_filter);
   }
 
-  // 7. 处理并发送结果
+  // 6. 处理并发送结果
   processor
     .process_stream(&mut *estream, ctx.tx.clone())
     .await
     .map_err(ServiceError::ProcessingError)?;
 
   Ok(())
+}
+
+// ============================================================================
+// Agent 搜索（使用 AgentProxyFS 的 as_entry_stream）
+// ============================================================================
+
+/// 执行 Agent 搜索
+pub async fn execute_agent_search(
+  pool: &SqlitePool,
+  ctx: &SearchContext,
+  req: &SearchRequest,
+) -> Result<(), ServiceError> {
+  use tracing::info;
+
+  let agent_id = &ctx.resource.endpoint.identity;
+  info!(
+    "[SearchableFileSystem] 开始 Agent 搜索: agent_id={} ctx={}",
+    agent_id, req.context_lines
+  );
+
+  // 创建文件系统
+  let fs = create_search_fs(pool, &ctx.resource).await?;
+
+  // 使用 DFS 的 as_entry_stream
+  execute_search(fs.as_ref(), ctx, req).await
 }
