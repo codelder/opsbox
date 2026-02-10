@@ -20,6 +20,7 @@ use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
 };
+use crate::fs::{create_archive_stream_from_reader, EntryStream};
 
 /// 归档文件系统
 ///
@@ -654,6 +655,25 @@ where
                 Ok(Box::pin(MemoryReader::new(buf)))
             }
         }
+    }
+
+    /// 获取条目流（用于批量处理/搜索）
+    ///
+    /// 对于归档文件，返回归档内所有文件的流
+    async fn as_entry_stream(&self, _path: &ResourcePath, _recursive: bool)
+        -> Result<Box<dyn EntryStream>, FsError>
+    {
+        let path = self.archive_path()?;
+        let file = File::open(&path)
+            .await
+            .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::NotFound, e.to_string())))?;
+
+        let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(file);
+
+        // 使用现有的 create_archive_stream_from_reader 创建归档流
+        create_archive_stream_from_reader(reader, path.to_str())
+            .await
+            .map_err(|e| FsError::Io(io::Error::other(e.to_string())))
     }
 }
 

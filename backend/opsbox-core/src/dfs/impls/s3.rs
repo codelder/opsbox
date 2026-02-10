@@ -14,6 +14,7 @@ use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
     path::ResourcePath,
 };
+use crate::fs::{EntryMeta, EntrySource, EntryStream};
 
 /// S3 配置
 #[derive(Debug, Clone)]
@@ -383,6 +384,210 @@ impl OpbxFileSystem for S3Storage {
         // 使用流式读取：边下载边处理
         let stream = output.body.into_async_read();
         Ok(Box::pin(stream))
+    }
+
+    /// 获取条目流（用于批量处理/搜索）
+    ///
+    /// 对于 S3：
+    /// - 单文件：返回单文件流
+    /// - 目录：列出所有对象并逐个返回
+    async fn as_entry_stream(&self, path: &ResourcePath, recursive: bool)
+        -> Result<Box<dyn EntryStream>, FsError>
+    {
+        let (bucket, key) = self.parse_bucket_and_key(path)?;
+
+        // 检查是否是文件（有 key 且不是目录）
+        if !key.is_empty() && !key.ends_with('/') {
+            // 单文件：检查是否存在
+            let meta = self.metadata(path).await?;
+            if meta.is_file {
+                return Ok(Box::new(S3SingleFileEntryStream::new(
+                    self.client.clone(),
+                    bucket,
+                    key,
+                )));
+            }
+        }
+
+        // 目录：创建 S3 目录遍历流
+        Ok(Box::new(S3DirectoryEntryStream::new(
+            self.client.clone(),
+            bucket,
+            key,
+            recursive,
+        )))
+    }
+}
+
+/// S3 单文件条目流
+pub struct S3SingleFileEntryStream {
+    client: S3Client,
+    bucket: String,
+    key: String,
+    consumed: bool,
+}
+
+impl S3SingleFileEntryStream {
+    fn new(client: S3Client, bucket: String, key: String) -> Self {
+        Self {
+            client,
+            bucket,
+            key,
+            consumed: false,
+        }
+    }
+}
+
+#[async_trait]
+impl EntryStream for S3SingleFileEntryStream {
+    async fn next_entry(&mut self) -> std::io::Result<Option<(EntryMeta, Box<dyn tokio::io::AsyncRead + Send + Unpin>)>> {
+        if self.consumed {
+            return Ok(None);
+        }
+        self.consumed = true;
+
+        let output = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(&self.key)
+            .send()
+            .await
+            .map_err(|e| std::io::Error::other(format!("GetObject failed: {}", e)))?;
+
+        let size = output.content_length().unwrap_or(0) as u64;
+        let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(output.body.into_async_read());
+
+        let meta = EntryMeta {
+            path: self.key.clone(),
+            container_path: None,
+            size: Some(size),
+            is_compressed: false,
+            source: EntrySource::File,
+        };
+
+        Ok(Some((meta, reader)))
+    }
+}
+
+/// S3 目录遍历条目流
+pub struct S3DirectoryEntryStream {
+    client: S3Client,
+    bucket: String,
+    prefix: String,
+    recursive: bool,
+    continuation_token: Option<String>,
+    buffer: Vec<(String, u64)>,  // (key, size) 缓冲
+    buffer_idx: usize,
+    exhausted: bool,
+}
+
+impl S3DirectoryEntryStream {
+    fn new(client: S3Client, bucket: String, prefix: String, recursive: bool) -> Self {
+        let prefix = if prefix.is_empty() || prefix.ends_with('/') {
+            prefix
+        } else {
+            format!("{}/", prefix)
+        };
+        Self {
+            client,
+            bucket,
+            prefix,
+            recursive,
+            continuation_token: None,
+            buffer: Vec::new(),
+            buffer_idx: 0,
+            exhausted: false,
+        }
+    }
+
+    async fn fetch_next_batch(&mut self) -> std::io::Result<bool> {
+        if self.exhausted {
+            return Ok(false);
+        }
+
+        let mut request = self
+            .client
+            .list_objects_v2()
+            .bucket(&self.bucket)
+            .prefix(&self.prefix);
+
+        if !self.recursive {
+            request = request.delimiter("/");
+        }
+
+        if let Some(token) = &self.continuation_token {
+            request = request.continuation_token(token);
+        }
+
+        let output = request
+            .send()
+            .await
+            .map_err(|e| std::io::Error::other(format!("ListObjectsV2 failed: {}", e)))?;
+
+        // 更新 continuation token
+        self.continuation_token = output.next_continuation_token().map(|s| s.to_string());
+        self.exhausted = self.continuation_token.is_none();
+
+        // 收集对象
+        if let Some(objects) = output.contents {
+            for obj in objects {
+                if let Some(key) = obj.key() {
+                    // 跳过目录标记
+                    if key.ends_with('/') || key == &self.prefix {
+                        continue;
+                    }
+                    let size = obj.size().unwrap_or(0) as u64;
+                    self.buffer.push((key.to_string(), size));
+                }
+            }
+        }
+
+        Ok(!self.buffer.is_empty())
+    }
+}
+
+#[async_trait]
+impl EntryStream for S3DirectoryEntryStream {
+    async fn next_entry(&mut self) -> std::io::Result<Option<(EntryMeta, Box<dyn tokio::io::AsyncRead + Send + Unpin>)>> {
+        loop {
+            // 如果缓冲区还有数据
+            if self.buffer_idx < self.buffer.len() {
+                let (key, size) = self.buffer[self.buffer_idx].clone();
+                self.buffer_idx += 1;
+
+                // 下载对象
+                let output = self
+                    .client
+                    .get_object()
+                    .bucket(&self.bucket)
+                    .key(&key)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!("Failed to get S3 object {}: {}", key, e);
+                        std::io::Error::other(format!("GetObject failed: {}", e))
+                    })?;
+
+                let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(output.body.into_async_read());
+
+                let meta = EntryMeta {
+                    path: key,
+                    container_path: None,
+                    size: Some(size),
+                    is_compressed: false,
+                    source: EntrySource::File,
+                };
+
+                return Ok(Some((meta, reader)));
+            }
+
+            // 缓冲区空了，尝试获取下一批
+            if !self.fetch_next_batch().await? {
+                return Ok(None);
+            }
+            self.buffer_idx = 0;
+        }
     }
 }
 

@@ -3,6 +3,7 @@
 //! 定义了 OpbxFileSystem trait 和相关类型
 
 use crate::error::AppError;
+use crate::fs::EntryStream;
 use async_trait::async_trait;
 use std::io;
 use std::pin::Pin;
@@ -110,6 +111,16 @@ pub trait OpbxFileSystem: Send + Sync {
 
     /// 打开文件用于读取
     async fn open_read(&self, path: &ResourcePath) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, FsError>;
+
+    /// 获取条目流（用于批量处理/搜索）
+    ///
+    /// 对于目录：递归或非递归遍历目录中的所有文件
+    /// 对于文件：返回单文件流
+    /// 对于归档：返回归档内的所有条目
+    ///
+    /// 默认实现基于 read_dir + open_read，具体实现可覆盖以提高效率
+    async fn as_entry_stream(&self, path: &ResourcePath, recursive: bool)
+        -> Result<Box<dyn EntryStream>, FsError>;
 }
 
 /// 异步读取 trait

@@ -11,6 +11,7 @@ use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
 };
+use crate::fs::{EntryMeta, EntrySource, EntryStream};
 
 /// Agent HTTP 客户端
 #[derive(Debug, Clone)]
@@ -247,6 +248,137 @@ impl OpbxFileSystem for AgentProxyFS {
             .map_err(|e| FsError::Agent(format!("Failed to read response body: {}", e)))?;
 
         Ok(Box::pin(MemoryReader::new(bytes.to_vec())))
+    }
+
+    /// 获取条目流（用于批量处理/搜索）
+    ///
+    /// 对于 Agent，需要通过递归调用 list_files 获取所有文件
+    async fn as_entry_stream(&self, path: &ResourcePath, recursive: bool)
+        -> Result<Box<dyn EntryStream>, FsError>
+    {
+        let api_path = self.resource_path_to_api_path(path);
+
+        // 收集所有文件路径
+        let files = self.collect_files_recursive(&api_path, recursive).await?;
+
+        Ok(Box::new(AgentEntryStream::new(
+            self.client.clone(),
+            files,
+        )))
+    }
+}
+
+impl AgentProxyFS {
+    /// 递归收集所有文件
+    async fn collect_files_recursive(&self, path: &str, recursive: bool) -> Result<Vec<(String, u64)>, FsError> {
+        let mut result = Vec::new();
+        self.collect_files_recursive_inner(path, recursive, &mut result).await?;
+        Ok(result)
+    }
+
+    async fn collect_files_recursive_inner(
+        &self,
+        path: &str,
+        recursive: bool,
+        result: &mut Vec<(String, u64)>,
+    ) -> Result<(), FsError> {
+        let url = self.client.build_url("/api/v1/list_files");
+
+        let response = self
+            .client
+            .client
+            .get(&url)
+            .query(&[("path", path)])
+            .send()
+            .await
+            .map_err(|e| FsError::Agent(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        let response_text = response.text().await
+            .map_err(|e| FsError::Agent(format!("Failed to read response: {}", e)))?;
+
+        if !status.is_success() {
+            return Err(FsError::NotFound(format!("Agent returned error: {}", status)));
+        }
+
+        let list_response: AgentListResponse = serde_json::from_str(&response_text)
+            .map_err(|e| FsError::Agent(format!("Failed to parse response: {}", e)))?;
+
+        for item in list_response.items {
+            if item.is_dir {
+                if recursive {
+                    Box::pin(self.collect_files_recursive_inner(&item.path, recursive, result)).await?;
+                }
+            } else {
+                result.push((item.path, item.size.unwrap_or(0)));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Agent 条目流
+pub struct AgentEntryStream {
+    client: AgentClient,
+    files: Vec<(String, u64)>,
+    index: usize,
+}
+
+impl AgentEntryStream {
+    fn new(client: AgentClient, files: Vec<(String, u64)>) -> Self {
+        Self {
+            client,
+            files,
+            index: 0,
+        }
+    }
+}
+
+#[async_trait]
+impl EntryStream for AgentEntryStream {
+    async fn next_entry(&mut self) -> std::io::Result<Option<(EntryMeta, Box<dyn tokio::io::AsyncRead + Send + Unpin>)>> {
+        if self.index >= self.files.len() {
+            return Ok(None);
+        }
+
+        let (path, size) = self.files[self.index].clone();
+        self.index += 1;
+
+        // 下载文件
+        let url = self.client.build_url("/api/v1/file_raw");
+        let response = self
+            .client
+            .client
+            .get(&url)
+            .query(&[("path", &path)])
+            .send()
+            .await
+            .map_err(|e| std::io::Error::other(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(std::io::Error::other(format!(
+                "Agent returned error: {}",
+                response.status()
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| std::io::Error::other(format!("Failed to read response body: {}", e)))?;
+
+        let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(MemoryReader::new(bytes.to_vec()));
+
+        let meta = EntryMeta {
+            path,
+            container_path: None,
+            size: Some(size),
+            is_compressed: false,
+            source: EntrySource::File,
+        };
+
+        Ok(Some((meta, reader)))
     }
 }
 

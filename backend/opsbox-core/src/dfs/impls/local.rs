@@ -12,6 +12,7 @@ use super::super::{
   filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
   path::ResourcePath,
 };
+use crate::fs::{EntryStream, FsEntryStream};
 
 /// 本地文件系统实现
 ///
@@ -111,6 +112,17 @@ impl OpbxFileSystem for LocalFileSystem {
       .map_err(|e| FsError::NotFound(format!("{}: {}", full_path.display(), e)))?;
 
     Ok(Box::pin(file))
+  }
+
+  /// 获取条目流（用于批量处理/搜索）
+  async fn as_entry_stream(&self, path: &ResourcePath, recursive: bool)
+    -> Result<Box<dyn EntryStream>, FsError>
+  {
+    let full_path = self.resolve_path(path);
+    let stream = FsEntryStream::new(full_path, recursive)
+      .await
+      .map_err(FsError::Io)?;
+    Ok(Box::new(stream))
   }
 }
 

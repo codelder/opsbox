@@ -11,8 +11,10 @@
 //! - **文件系统创建**: create_fs 函数
 //! - **文件系统实现**: LocalFileSystem
 //! - **ORL 解析**: OrlParser
+//! - **归档缓存**: ArchiveCacheKey
 
 pub mod archive;
+pub mod archive_cache;
 pub mod endpoint;
 pub mod factory;
 pub mod filesystem;
@@ -24,6 +26,7 @@ pub mod resource;
 // 重新导出核心类型
 pub use endpoint::{AccessMethod, Endpoint, Location, StorageBackend};
 pub use archive::{ArchiveContext, ArchiveType};
+pub use archive_cache::{ArchiveCacheKey, get_cached_archive, cache_archive, cleanup_expired_cache, start_cleanup_task, download_and_cache_archive};
 pub use path::ResourcePath;
 pub use resource::Resource;
 pub use filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem};
