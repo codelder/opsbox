@@ -8,9 +8,10 @@
 
 use async_trait::async_trait;
 use opsbox_core::dfs::{
-    filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
+    filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
     path::ResourcePath,
 };
+use opsbox_core::fs::EntryStream;
 use opsbox_core::repository::s3::{list_s3_profiles, load_s3_profile};
 use opsbox_core::SqlitePool;
 use std::pin::Pin;
@@ -134,6 +135,17 @@ impl OpbxFileSystem for S3DiscoveryFileSystem {
   ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, opsbox_core::dfs::FsError> {
     Err(opsbox_core::dfs::FsError::InvalidConfig(
       "Cannot read S3 root as file".to_string(),
+    ))
+  }
+
+  /// 不支持条目流（虚拟目录）
+  async fn as_entry_stream(
+    &self,
+    _path: &ResourcePath,
+    _recursive: bool,
+  ) -> Result<Box<dyn EntryStream>, FsError> {
+    Err(FsError::InvalidConfig(
+      "S3DiscoveryFileSystem does not support entry streaming".to_string(),
     ))
   }
 }

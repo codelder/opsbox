@@ -5,9 +5,10 @@
 use agent_manager::AgentManager;
 use async_trait::async_trait;
 use opsbox_core::dfs::{
-    filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
+    filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
     path::ResourcePath,
 };
+use opsbox_core::fs::EntryStream;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -70,6 +71,17 @@ impl OpbxFileSystem for AgentDiscoveryFileSystem {
   ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, opsbox_core::dfs::FsError> {
     Err(opsbox_core::dfs::FsError::InvalidConfig(
       "Cannot read agent list as file".to_string(),
+    ))
+  }
+
+  /// 不支持条目流（虚拟目录）
+  async fn as_entry_stream(
+    &self,
+    _path: &ResourcePath,
+    _recursive: bool,
+  ) -> Result<Box<dyn EntryStream>, FsError> {
+    Err(FsError::InvalidConfig(
+      "AgentDiscoveryFileSystem does not support entry streaming".to_string(),
     ))
   }
 }
