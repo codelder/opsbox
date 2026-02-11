@@ -70,6 +70,8 @@ lru = "0.16.2"
 futures-lite = "2.6.1"
 tokio-stream = "0.1.17"
 fluent-uri = "0.4.1"
+num_cpus = "1.16"
+globset = "0.4"
 
 [dev-dependencies]
 test-log = "0.2"

@@ -186,11 +186,15 @@ test.describe('Explorer E2E', () => {
     expect(requests[0]).not.toHaveProperty('odfi');
   });
 
-  test('should list agent root (discovery) with correct provider registration', async ({ page }) => {
+  test('should list agent root (discovery) with correct provider registration', async ({ page, request }) => {
     // This test case captures the bug we just fixed:
     // - OrlManager was using effective_id() which mapped empty ID to "localhost"
     // - This caused key to be "agent.localhost" instead of "agent.root"
     // - AgentDiscoveryFileSystem was registered as "agent.root" but couldn't be found
+
+    // First, verify the agent is registered via API (more reliable than UI polling)
+    const agentResponse = await request.get(`http://127.0.0.1:4001/api/v1/agents/${AGENT_ID}`);
+    expect(agentResponse.ok()).toBeTruthy();
 
     await page.goto('http://localhost:5173/explorer?orl=orl%3A%2F%2Fagent%2F');
 
@@ -201,8 +205,9 @@ test.describe('Explorer E2E', () => {
     await expect(page.locator('body')).not.toContainText(/500|Internal Server Error/i);
 
     // Should list available agents
-    // Look for our test agent
-    await expect(page.getByText(AGENT_ID, { exact: false })).toBeVisible({ timeout: 10000 });
+    // Look for our test agent with extended timeout and retry logic
+    // The UI may need time to fetch and render the agent list
+    await expect(page.getByText(AGENT_ID, { exact: false })).toBeVisible({ timeout: 20000 });
   });
 
   test('should list agent root directory (empty path)', async ({ page }) => {

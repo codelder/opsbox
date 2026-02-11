@@ -22,7 +22,7 @@ pub enum EntrySource {
 }
 
 /// 条目元数据（目录相对路径或归档内路径）
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct EntryMeta {
   pub path: String,
   /// 当条目来自归档内部时，归档文件路径（绝对路径，供上层构造唯一 ID）

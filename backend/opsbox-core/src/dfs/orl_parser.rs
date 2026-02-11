@@ -246,6 +246,86 @@ impl OrlParser {
     }
 }
 
+/// 构建 ORL 字符串
+///
+/// 从 Endpoint 和路径构建 ORL 字符串，用于 API 响应序列化
+///
+/// # 示例
+/// ```rust
+/// use opsbox_core::dfs::{Endpoint, build_orl, ResourcePath};
+///
+/// // 本地文件
+/// let endpoint = Endpoint::local_fs();
+/// let path = ResourcePath::from_str("/var/log/app.log");
+/// let orl = build_orl(&endpoint, &path, None);
+/// assert_eq!(orl, "orl://local/var/log/app.log");
+///
+/// // Agent 代理
+/// let endpoint = Endpoint::agent("192.168.1.100".to_string(), 4001, "web-01".to_string());
+/// let path = ResourcePath::from_str("/var/log/app.log");
+/// let orl = build_orl(&endpoint, &path, None);
+/// assert_eq!(orl, "orl://web-01@192.168.1.100:4001@agent/var/log/app.log");
+///
+/// // 归档内文件
+/// let endpoint = Endpoint::local_fs();
+/// let path = ResourcePath::from_str("/data/archive.tar");
+/// let orl = build_orl(&endpoint, &path, Some("inner/file.txt"));
+/// assert_eq!(orl, "orl://local/data/archive.tar?entry=inner/file.txt");
+/// ```
+pub fn build_orl(
+    endpoint: &Endpoint,
+    path: &crate::dfs::ResourcePath,
+    entry: Option<&str>,
+) -> String {
+    let endpoint_str = build_endpoint_string(endpoint);
+    let path_str = path.to_string();
+
+    // 移除路径前导斜杠（ORL 格式中路径紧跟 endpoint 后）
+    let path_without_leading_slash = path_str.trim_start_matches('/');
+
+    if let Some(entry_path) = entry {
+        format!("orl://{endpoint_str}/{path_without_leading_slash}?entry={entry_path}")
+    } else {
+        format!("orl://{endpoint_str}/{path_without_leading_slash}")
+    }
+}
+
+/// 构建 endpoint 字符串
+fn build_endpoint_string(endpoint: &Endpoint) -> String {
+    use crate::dfs::Location;
+
+    match &endpoint.location {
+        Location::Local => "local".to_string(),
+        Location::Remote { host, port } => {
+            // Agent endpoint: identity@host:port@agent
+            format!("{}@{}:{}@agent", endpoint.identity, host, port)
+        }
+        Location::Cloud => {
+            // S3 endpoint: profile[:bucket]@s3
+            if let Some(bucket) = &endpoint.bucket {
+                format!("{}:{}@s3", endpoint.identity, bucket)
+            } else {
+                format!("{}@s3", endpoint.identity)
+            }
+        }
+    }
+}
+
+/// 从 Resource 构建 ORL 字符串
+///
+/// # 示例
+/// ```rust
+/// use opsbox_core::dfs::{OrlParser, build_orl_from_resource};
+///
+/// let resource = OrlParser::parse("orl://local/var/log/app.log").unwrap();
+/// let orl = build_orl_from_resource(&resource);
+/// assert_eq!(orl, "orl://local/var/log/app.log");
+/// ```
+pub fn build_orl_from_resource(resource: &Resource) -> String {
+    let entry = resource.archive_context.as_ref().map(|ctx| ctx.inner_path.to_string());
+    build_orl(&resource.endpoint, &resource.primary_path, entry.as_deref())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

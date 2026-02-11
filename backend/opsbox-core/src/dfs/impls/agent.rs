@@ -10,7 +10,9 @@ use serde_json;
 use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
+    searchable::{SearchConfig, Searchable},
 };
+use crate::fs::EntryStream;
 
 /// Agent HTTP 客户端
 #[derive(Debug, Clone)]
@@ -47,6 +49,7 @@ struct AgentListResponse {
 
 /// Agent 文件项
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct AgentFileItem {
     name: String,
     path: String,
@@ -247,6 +250,156 @@ impl OpbxFileSystem for AgentProxyFS {
             .map_err(|e| FsError::Agent(format!("Failed to read response body: {}", e)))?;
 
         Ok(Box::pin(MemoryReader::new(bytes.to_vec())))
+    }
+}
+
+/// Agent 条目流
+///
+/// 通过 HTTP API 从远程 Agent 获取文件列表
+pub struct AgentEntryStream {
+    client: AgentClient,
+    api_path: String,
+    files: Vec<String>,
+    idx: usize,
+    loaded: bool,
+}
+
+impl AgentEntryStream {
+    /// 创建新的 Agent 条目流
+    pub fn new(client: AgentClient, api_path: String) -> Self {
+        Self {
+            client,
+            api_path,
+            files: Vec::new(),
+            idx: 0,
+            loaded: false,
+        }
+    }
+
+    /// 从 Agent 加载文件列表
+    async fn load_files(&mut self) -> std::io::Result<()> {
+        #[derive(Debug, Deserialize)]
+        struct AgentListResponse {
+            items: Vec<AgentFileItem>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct AgentFileItem {
+            path: String,
+            #[serde(alias = "is_dir")]
+            is_dir: bool,
+        }
+
+        let url = self.client.build_url("/api/v1/list_files");
+
+        let response = self
+            .client
+            .client
+            .get(&url)
+            .query(&[("path", &self.api_path)])
+            .query(&[("recursive", "true")])
+            .send()
+            .await
+            .map_err(|e| std::io::Error::other(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(std::io::Error::other(format!(
+                "Agent returned error: {}",
+                response.status()
+            )));
+        }
+
+        let list_response: AgentListResponse = response
+            .json()
+            .await
+            .map_err(|e| std::io::Error::other(format!("Failed to parse response: {}", e)))?;
+
+        self.files = list_response
+            .items
+            .into_iter()
+            .filter(|item| !item.is_dir)
+            .map(|item| item.path)
+            .collect();
+        self.loaded = true;
+
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl EntryStream for AgentEntryStream {
+    async fn next_entry(
+        &mut self,
+    ) -> std::io::Result<Option<(crate::fs::EntryMeta, Box<dyn tokio::io::AsyncRead + Send + Unpin>)>> {
+        // 首次调用时加载文件列表
+        if !self.loaded {
+            self.load_files().await?;
+        }
+
+        // 返回下一个文件
+        if self.idx >= self.files.len() {
+            return Ok(None);
+        }
+
+        let path = std::mem::take(&mut self.files[self.idx]);
+        self.idx += 1;
+
+        // 下载文件内容
+        let url = self.client.build_url("/api/v1/file_raw");
+        let response = self
+            .client
+            .client
+            .get(&url)
+            .query(&[("path", &path)])
+            .send()
+            .await
+            .map_err(|e| std::io::Error::other(format!("HTTP request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(std::io::Error::other(format!(
+                "Agent returned error: {}",
+                response.status()
+            )));
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| std::io::Error::other(format!("Failed to read response body: {}", e)))?;
+
+        let meta = crate::fs::EntryMeta {
+            path,
+            container_path: None,
+            size: Some(bytes.len() as u64),
+            is_compressed: false,
+            source: crate::fs::EntrySource::File,
+        };
+
+        let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(MemoryReader::new(bytes.to_vec()));
+
+        Ok(Some((meta, reader)))
+    }
+}
+
+#[async_trait]
+impl Searchable for AgentProxyFS {
+    /// 获取条目流用于搜索
+    async fn as_entry_stream(
+        &self,
+        path: &ResourcePath,
+        _recursive: bool,
+        _config: &SearchConfig,
+    ) -> Result<Box<dyn EntryStream>, FsError> {
+        let api_path = self.resource_path_to_api_path(path);
+
+        // 创建 Agent 条目流
+        let stream = AgentEntryStream::new(self.client.clone(), api_path);
+        Ok(Box::new(stream))
+    }
+
+    /// Agent 支持流式搜索（通过 list_files + file_raw API）
+    fn supports_streaming_search(&self) -> bool {
+        true
     }
 }
 

@@ -19,7 +19,9 @@ use super::super::{
     archive::ArchiveType,
     filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
+    searchable::{SearchConfig, Searchable},
 };
+use crate::fs::EntryStream;
 
 /// 归档文件系统
 ///
@@ -654,6 +656,65 @@ where
                 Ok(Box::pin(MemoryReader::new(buf)))
             }
         }
+    }
+}
+
+#[async_trait]
+impl<F> Searchable for ArchiveFileSystem<F>
+where
+    F: OpbxFileSystem + Send + Sync,
+{
+    /// 获取条目流用于搜索
+    async fn as_entry_stream(
+        &self,
+        _path: &ResourcePath,
+        _recursive: bool,
+        _config: &SearchConfig,
+    ) -> Result<Box<dyn EntryStream>, FsError> {
+        let archive_path = self.archive_path()?.clone();
+
+        match self.archive_type {
+            ArchiveType::Tar => {
+                let stream = crate::fs::TarEntryStream::new(
+                    tokio::fs::File::open(&archive_path).await.map_err(FsError::Io)?,
+                    Some(archive_path.to_string_lossy().to_string()),
+                )
+                .await
+                .map_err(|e| FsError::Io(io::Error::other(e)))?;
+                Ok(Box::new(stream))
+            }
+            ArchiveType::TarGz | ArchiveType::Tgz => {
+                let stream = crate::fs::TarGzEntryStream::new(
+                    tokio::fs::File::open(&archive_path).await.map_err(FsError::Io)?,
+                    Some(archive_path.to_string_lossy().to_string()),
+                )
+                .await
+                .map_err(|e| FsError::Io(io::Error::other(e)))?;
+                Ok(Box::new(stream))
+            }
+            ArchiveType::Gz => {
+                let stream = crate::fs::GzipEntryStream::new(
+                    tokio::fs::File::open(&archive_path).await.map_err(FsError::Io)?,
+                    archive_path.to_string_lossy().to_string(),
+                    true,
+                );
+                Ok(Box::new(stream))
+            }
+            ArchiveType::Zip => {
+                // ZIP 暂不支持流式搜索
+                Err(FsError::InvalidConfig(
+                    "ZIP archive search is not yet supported".to_string(),
+                ))
+            }
+            ArchiveType::Unknown => Err(FsError::InvalidConfig(
+                "Unknown archive type for search".to_string(),
+            )),
+        }
+    }
+
+    /// 归档文件系统支持流式搜索
+    fn supports_streaming_search(&self) -> bool {
+        matches!(self.archive_type, ArchiveType::Tar | ArchiveType::TarGz | ArchiveType::Tgz | ArchiveType::Gz)
     }
 }
 

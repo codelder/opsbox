@@ -11,7 +11,9 @@ use tokio::fs;
 use super::super::{
   filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
   path::ResourcePath,
+  searchable::{SearchConfig, Searchable},
 };
+use crate::fs::EntryStream;
 
 /// 本地文件系统实现
 ///
@@ -111,6 +113,39 @@ impl OpbxFileSystem for LocalFileSystem {
       .map_err(|e| FsError::NotFound(format!("{}: {}", full_path.display(), e)))?;
 
     Ok(Box::pin(file))
+  }
+}
+
+#[async_trait]
+impl Searchable for LocalFileSystem {
+  /// 获取条目流用于搜索
+  async fn as_entry_stream(
+    &self,
+    path: &ResourcePath,
+    recursive: bool,
+    _config: &SearchConfig,
+  ) -> Result<Box<dyn EntryStream>, FsError> {
+    let full_path = self.resolve_path(path);
+
+    // 检测是否为文件
+    if full_path.is_file() {
+      // 单文件流
+      let stream = crate::fs::FsEntryStream::new(full_path, recursive)
+        .await
+        .map_err(|e| FsError::Io(e))?;
+      Ok(Box::new(stream))
+    } else {
+      // 目录流
+      let stream = crate::fs::FsEntryStream::new(full_path, recursive)
+        .await
+        .map_err(|e| FsError::Io(e))?;
+      Ok(Box::new(stream))
+    }
+  }
+
+  /// 本地文件系统支持流式搜索
+  fn supports_streaming_search(&self) -> bool {
+    true
   }
 }
 

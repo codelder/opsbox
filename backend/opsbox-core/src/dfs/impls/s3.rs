@@ -13,7 +13,9 @@ use aws_sdk_s3::{
 use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
     path::ResourcePath,
+    searchable::{SearchConfig, Searchable},
 };
+use crate::fs::EntryStream;
 
 /// S3 配置
 #[derive(Debug, Clone)]
@@ -383,6 +385,140 @@ impl OpbxFileSystem for S3Storage {
         // 使用流式读取：边下载边处理
         let stream = output.body.into_async_read();
         Ok(Box::pin(stream))
+    }
+}
+
+/// S3 条目流
+///
+/// 遍历 S3 存储桶中的对象
+pub struct S3EntryStream {
+    client: S3Client,
+    bucket: String,
+    prefix: String,
+    continuation_token: Option<String>,
+    buffer: Vec<crate::fs::EntryMeta>,
+    buffer_idx: usize,
+    done: bool,
+}
+
+impl S3EntryStream {
+    /// 创建新的 S3 条目流
+    pub fn new(client: S3Client, bucket: String, prefix: String) -> Self {
+        Self {
+            client,
+            bucket,
+            prefix,
+            continuation_token: None,
+            buffer: Vec::new(),
+            buffer_idx: 0,
+            done: false,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EntryStream for S3EntryStream {
+    async fn next_entry(
+        &mut self,
+    ) -> std::io::Result<Option<(crate::fs::EntryMeta, Box<dyn tokio::io::AsyncRead + Send + Unpin>)>> {
+        loop {
+            // 如果缓冲区还有数据，返回下一个条目
+            if self.buffer_idx < self.buffer.len() {
+                let meta = std::mem::take(&mut self.buffer[self.buffer_idx]);
+                self.buffer_idx += 1;
+
+                // 下载对象
+                let output = self
+                    .client
+                    .get_object()
+                    .bucket(&self.bucket)
+                    .key(&meta.path)
+                    .send()
+                    .await
+                    .map_err(|e| std::io::Error::other(format!("S3 GetObject failed: {}", e)))?;
+
+                let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
+                    Box::new(output.body.into_async_read());
+
+                return Ok(Some((meta, reader)));
+            }
+
+            // 缓冲区为空，检查是否已完成
+            if self.done {
+                return Ok(None);
+            }
+
+            // 从 S3 加载更多对象
+            let mut request = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.bucket)
+                .prefix(&self.prefix);
+
+            if let Some(ref token) = self.continuation_token {
+                request = request.continuation_token(token);
+            }
+
+            let output = request
+                .send()
+                .await
+                .map_err(|e| std::io::Error::other(format!("S3 ListObjects failed: {}", e)))?;
+
+            // 检查是否还有更多数据
+            self.continuation_token = output.next_continuation_token().map(|s| s.to_string());
+            self.done = self.continuation_token.is_none();
+
+            // 重置缓冲区
+            self.buffer.clear();
+            self.buffer_idx = 0;
+
+            if let Some(contents) = output.contents {
+                for obj in contents {
+                    if let Some(key) = obj.key() {
+                        // 跳过目录标记
+                        if key.ends_with('/') {
+                            continue;
+                        }
+
+                        let meta = crate::fs::EntryMeta {
+                            path: key.to_string(),
+                            container_path: None,
+                            size: Some(obj.size().unwrap_or(0) as u64),
+                            is_compressed: false,
+                            source: crate::fs::EntrySource::File,
+                        };
+                        self.buffer.push(meta);
+                    }
+                }
+            }
+
+            // 如果没有数据且已完成，返回 None
+            if self.buffer.is_empty() && self.done {
+                return Ok(None);
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl Searchable for S3Storage {
+    /// 获取条目流用于搜索
+    async fn as_entry_stream(
+        &self,
+        path: &ResourcePath,
+        _recursive: bool,
+        _config: &SearchConfig,
+    ) -> Result<Box<dyn EntryStream>, FsError> {
+        let (bucket, key) = self.parse_bucket_and_key(path)?;
+
+        // 创建 S3 条目流
+        let stream = S3EntryStream::new(self.client.clone(), bucket, key);
+        Ok(Box::new(stream))
+    }
+
+    /// S3 支持流式搜索（通过 ListObjects + GetObject）
+    fn supports_streaming_search(&self) -> bool {
+        true
     }
 }
 
