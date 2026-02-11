@@ -211,12 +211,12 @@ pub async fn plan_with_starlark_with_script(
     crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("Starlark 未导出 SOURCES".to_string()))
   })?;
 
-  // 转为 List，遍历解析为 ORL
+  // 转为 List，遍历解析为 Resource (使用 DFS OrlParser)
   let list = starlark::values::list::ListRef::from_value(sources_val).ok_or_else(|| {
     crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("SOURCES 不是列表类型".to_string()))
   })?;
 
-  let mut sources: Vec<opsbox_core::odfs::orl::ORL> = Vec::with_capacity(list.len());
+  let mut sources: Vec<opsbox_core::dfs::Resource> = Vec::with_capacity(list.len());
   for (i, v) in list.iter().enumerate() {
     let orl_str = v.unpack_str().ok_or_else(|| {
       crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
@@ -225,15 +225,15 @@ pub async fn plan_with_starlark_with_script(
       )))
     })?;
 
-    let orl = opsbox_core::odfs::orl::ORL::parse(orl_str).map_err(|e| {
+    let resource = opsbox_core::dfs::OrlParser::parse(orl_str).map_err(|e| {
       crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
         "解析 ORL 失败: {}; URL={}",
         e, orl_str
       )))
     })?;
 
-    tracing::debug!("[Planner] 来源[{}]: {}", i, orl);
-    sources.push(orl);
+    tracing::debug!("[Planner] 来源[{}]: {:?}", i, resource);
+    sources.push(resource);
   }
 
   tracing::info!("[Planner] 脚本生成来源总数: {}", sources.len());
@@ -399,7 +399,7 @@ print("hello world")
       .await
       .unwrap();
     assert_eq!(res.sources.len(), 1);
-    assert_eq!(res.sources[0].to_string(), "orl://local/tmp/log");
+    assert_eq!(res.sources[0].primary_path.to_string(), "/tmp/log");
     assert!(res.debug_logs.contains(&"hello world".to_string()));
   }
 
@@ -434,6 +434,6 @@ else:
       .await
       .unwrap();
     assert_eq!(res.sources.len(), 1);
-    assert_eq!(res.sources[0].path(), "/20240101");
+    assert_eq!(res.sources[0].primary_path.to_string(), "/20240101");
   }
 }

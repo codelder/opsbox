@@ -16,7 +16,7 @@ use axum::{
 };
 use futures::StreamExt;
 use opsbox_core::SqlitePool;
-use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
+use opsbox_core::dfs::{Location, OrlParser};
 use serde::Deserialize;
 use tracing::debug;
 
@@ -33,8 +33,11 @@ pub async fn view_cache_json(
     params.end
   );
 
-  // 解析 ORL
-  let orl = ORL::parse(&params.file).map_err(LogSeekApiError::Domain)?;
+  // 解析 ORL 字符串
+  let resource = OrlParser::parse(&params.file)?;
+
+  // 获取 agent_id（用于后续使用）
+  let agent_id = resource.endpoint.identity.clone();
 
   // 读取 keywords
   let keywords = simple_cache().get_keywords(&params.sid).await.unwrap_or_default();
@@ -73,25 +76,24 @@ pub async fn view_cache_json(
       let mut all_lines: Vec<String> = Vec::new();
       let mut encoding_name = "UTF-8".to_string();
 
-      match orl.endpoint_type().map_err(LogSeekApiError::Domain)? {
-        EndpointType::Agent => {
-          let agent_id = orl.effective_id();
+      match resource.endpoint.location {
+        Location::Remote { .. } => {
           // 检查是否是归档条目
-          let is_archive_target = orl.target_type() == TargetType::Archive;
+          let is_archive_target = resource.archive_context.is_some();
           // 归档条目：使用 create_entry_stream 下载归档并读取条目
           if is_archive_target {
             debug!(
               "🚀 Agent 归档条目：使用 create_entry_stream 读取: agent_id={}, path={}",
               agent_id,
-              orl.path()
+              resource.primary_path.to_string()
             );
 
-            let mut stream = create_entry_stream(&pool, &orl)
+            let mut stream = create_entry_stream(&pool, &params.file)
               .await
               .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
             // 获取要查找的 entry 路径
-            let target_entry = orl.entry_path().map(|c| c.into_owned());
+            let target_entry = resource.archive_context.as_ref().map(|c| c.inner_path.to_string());
 
             // 读取条目
             let mut found = false;
@@ -139,7 +141,7 @@ pub async fn view_cache_json(
             // 普通文件：使用 Agent search API 读取 (or should we use file_raw API?)
             // Legacy uses search API for text files?
             // "普通文件：使用 search API 读取"
-            debug!("🚀 准备调用 Agent 读取文件: agent_id={}, path={}", agent_id, orl.path());
+            debug!("🚀 准备调用 Agent 读取文件: agent_id={}, path={}", agent_id, resource.primary_path.to_string());
 
             let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
               .await
@@ -148,19 +150,16 @@ pub async fn view_cache_json(
               })?;
 
             // Reconstruct exact target options for Agent Search
-            let target = match orl.target_type() {
-              TargetType::Dir => Target::Dir {
-                path: orl.path().to_string(),
+            let path_str = resource.primary_path.to_string();
+            let target = if resource.archive_context.is_some() {
+              Target::Dir {
+                path: path_str.clone(),
                 recursive: true,
-              },
-              // ORL for single file usually mapped to Dir/Files target in legacy logic if not archive entry
-              // But usually we just want to search *this file*.
-              // Agent SearchOptions needs a target.
-              // If it's a file, we want to read it.
-              // Using Files target.
-              _ => Target::Files {
-                paths: vec![orl.path().to_string()],
-              },
+              }
+            } else {
+              Target::Files {
+                paths: vec![path_str.clone()],
+              }
             };
 
             let options = crate::agent::SearchOptions {
@@ -198,12 +197,12 @@ pub async fn view_cache_json(
         }
         _ => {
           // Local/S3 来源：使用 create_entry_stream
-          let mut stream = create_entry_stream(&pool, &orl)
+          let mut stream = create_entry_stream(&pool, &params.file)
             .await
             .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
           // 获取要查找的 entry 路径（如果有）
-          let target_entry = orl.entry_path().map(|c| c.into_owned());
+          let target_entry = resource.archive_context.as_ref().map(|c| c.inner_path.to_string());
 
           // 读取条目
           let mut found = false;
@@ -358,7 +357,7 @@ pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpRespo
   tracing::debug!("download-request: sid={} file={}", params.sid, params.file);
 
   // 验证 ORL
-  let _orl = ORL::parse(&params.file).map_err(LogSeekApiError::Domain)?;
+  let _resource = OrlParser::parse(&params.file)?;
 
   // 从缓存获取完整文件内容
   let (total, lines, _) = match simple_cache()
@@ -420,12 +419,12 @@ pub async fn view_raw_file(
   tracing::debug!("view-raw-request: sid={} file={}", params.sid, params.file);
 
   // 1. 解析 ORL
-  let orl = ORL::parse(&params.file).map_err(LogSeekApiError::Domain)?;
+  let resource = OrlParser::parse(&params.file)?;
 
   // 2. 检查来源类型
-  match orl.endpoint_type().map_err(LogSeekApiError::Domain)? {
-    EndpointType::Agent => {
-      let agent_id = orl.effective_id();
+  match resource.endpoint.location {
+    Location::Remote { .. } => {
+      let agent_id = resource.endpoint.identity.clone();
       // 创建 Agent 客户端
       let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
         .await
@@ -435,9 +434,8 @@ pub async fn view_raw_file(
 
       // 构造请求路径
       // Agent /api/v1/file_raw needs path param.
-      // orl.path() should be adequate.
-      let target_path = orl.path();
-      let query_path = format!("/api/v1/file_raw?path={}", urlencoding::encode(target_path));
+      let target_path = resource.primary_path.to_string();
+      let query_path = format!("/api/v1/file_raw?path={}", urlencoding::encode(&target_path));
 
       tracing::debug!("Agent 原始文件请求: agent_id={}, query={}", agent_id, query_path);
 
@@ -466,7 +464,7 @@ pub async fn view_raw_file(
     }
     _ => {
       // Local / S3
-      let mut stream = create_entry_stream(&pool, &orl)
+      let mut stream = create_entry_stream(&pool, &params.file)
         .await
         .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 

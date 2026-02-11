@@ -7,12 +7,9 @@ use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
 use opsbox_core::fs::{EntrySource, EntryStream, PrefixedReader};
-use opsbox_core::odfs::OrlManager;
-use opsbox_core::odfs::orl::EndpointType;
-use opsbox_core::odfs::providers::{LocalOpsFS, S3OpsFS};
+use opsbox_core::dfs::{Resource, Location, Searchable, SearchConfig, ResourcePath, OrlParser};
 
 use crate::query::PathFilter;
-use crate::utils::storage;
 
 use super::search::{SearchEvent, SearchProcessor};
 
@@ -34,10 +31,6 @@ fn entry_concurrency() -> usize {
 
   default.clamp(1, 128)
 }
-
-// 已删除 try_resolve_minio_local_path 函数
-// 原因：MinIO 使用 Erasure Coding，数据被分片存储，无法直接通过 bucket/key 映射到文件系统路径
-// 即使在同一台机器上，也必须通过 S3 API 访问，以确保数据一致性和安全性
 
 /// 预读结果：小文件完整内容，或大文件的已读取部分
 enum PreloadResult {
@@ -370,81 +363,6 @@ impl EntryStreamProcessor {
   }
 }
 
-use opsbox_core::odfs::fs::OpsFileSystem;
-
-/// 核心：从已有的 OpsFileSystem 实例创建 Stream
-/// 这将重用 OrlManager 的所有智能路由逻辑（归档探测、路径处理等）
-pub async fn get_entry_stream_from_fs(
-  fs: Arc<dyn OpsFileSystem + Send + Sync>,
-  orl: &opsbox_core::odfs::orl::ORL,
-  recursive: bool,
-) -> Result<Box<dyn EntryStream>, String> {
-  // 根据 OrlManager 的内部约定生成注册 Key，以匹配其查找逻辑
-  let id = match orl.endpoint_type() {
-    Ok(EndpointType::Local) => "local".to_string(),
-    Ok(EndpointType::S3) => match orl.endpoint_id() {
-      Some(id) if !id.is_empty() => format!("s3.{}", id),
-      _ => "s3.root".to_string(),
-    },
-    Ok(EndpointType::Agent) => match orl.endpoint_id() {
-      Some(id) if !id.is_empty() => format!("agent.{}", id),
-      _ => "agent.root".to_string(),
-    },
-    _ => orl.effective_id().to_string(),
-  };
-
-  let mut manager = OrlManager::new();
-  // 关键：注册实例，让 Manager 可以 resolve 它
-  manager.register(id, fs);
-  manager
-    .get_entry_stream(orl, recursive)
-    .await
-    .map_err(|e| format!("获取流失败: {}", e))
-}
-
-/// 创建条目流（不含 Agent）
-///
-/// 根据 ORL 配置创建对应的条目流：
-/// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
-/// - S3: Archive（自动探测；zip 暂不支持）
-pub async fn create_entry_stream(
-  db_pool: &SqlitePool,
-  orl: &opsbox_core::odfs::orl::ORL,
-) -> Result<Box<dyn EntryStream>, String> {
-  let fs: Arc<dyn OpsFileSystem + Send + Sync> = match orl.endpoint_type() {
-    Ok(EndpointType::Local) => {
-      // 注册 Local Provider
-      Arc::new(LocalOpsFS::new(None))
-    }
-    Ok(EndpointType::S3) => {
-      let profile = orl.effective_id();
-      // 加载 Profile
-      let profile_row = crate::repository::s3::load_s3_profile(db_pool, &profile)
-        .await
-        .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
-        .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
-
-      // 构造 S3 客户端
-      let client =
-        storage::get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
-          .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
-
-      // 注册 S3 Provider
-      let (bucket_name, _) = orl
-        .path()
-        .trim_start_matches('/')
-        .split_once('/')
-        .unwrap_or((orl.path().trim_start_matches('/'), ""));
-
-      Arc::new(S3OpsFS::new(client.as_ref().clone(), bucket_name))
-    }
-    // Agent 类型由 search_agent_source 处理，不应到达这里
-    _ => return Err("create_entry_stream 仅处理 Local/S3 类型，Agent 应由 search_agent_source 处理".to_string()),
-  };
-
-  get_entry_stream_from_fs(fs, orl, true).await
-}
-
 /// 通用条目流处理函数（支持基于回调的结果处理）
 ///
 /// 提供统一的条目流处理方式，可被 Server 和 Agent 复用，避免重复实现核心处理逻辑。
@@ -494,6 +412,99 @@ where
 
   let _ = handle.await;
   Ok((processed_count, matched_count))
+}
+
+/// 从 Resource 创建条目流（DFS 版本）
+///
+/// 根据 Resource 的 endpoint 类型创建对应的条目流：
+/// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz）
+/// - S3: Archive（自动探测）
+/// - Agent: 不支持，应由调用方处理
+pub async fn create_entry_stream_from_resource(
+  db_pool: &SqlitePool,
+  resource: &Resource,
+) -> Result<Box<dyn EntryStream>, String> {
+  let path = resource.primary_path.to_string();
+  let search_config = SearchConfig::default();
+
+  match &resource.endpoint.location {
+    Location::Local => {
+      use opsbox_core::dfs::LocalFileSystem;
+      use std::path::PathBuf;
+
+      // 确定根目录
+      let path_buf = PathBuf::from(&path);
+      let (root, relative_path) = if path_buf.is_dir() {
+        (path_buf.clone(), ResourcePath::from_str(""))
+      } else if path_buf.exists() {
+        let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
+        let file_name = path_buf.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        (parent, ResourcePath::from_str(&file_name))
+      } else {
+        let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
+        (parent, ResourcePath::from_str(""))
+      };
+
+      let fs = LocalFileSystem::new(root)
+        .map_err(|e| format!("创建本地文件系统失败: {}", e))?;
+
+      fs.as_entry_stream(&relative_path, true, &search_config)
+        .await
+        .map_err(|e| format!("创建条目流失败: {}", e))
+    }
+    Location::Cloud => {
+      use opsbox_core::dfs::{S3Storage, S3Config};
+
+      let profile = &resource.endpoint.identity;
+
+      // 加载 Profile
+      let profile_row = crate::repository::s3::load_s3_profile(db_pool, profile)
+        .await
+        .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+        .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
+
+      // 创建 S3Config
+      let s3_config = S3Config::new(
+        profile.clone(),
+        profile_row.endpoint.clone(),
+        profile_row.access_key.clone(),
+        profile_row.secret_key.clone(),
+      );
+
+      // 提取 bucket 名称
+      let (bucket_name, object_key) = path
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or((path.trim_start_matches('/'), ""));
+
+      let s3_config = s3_config.with_bucket(bucket_name.to_string());
+
+      let s3_storage = S3Storage::new(s3_config)
+        .map_err(|e| format!("创建 S3 存储失败: {}", e))?;
+
+      let resource_path = ResourcePath::from_str(object_key);
+      s3_storage
+        .as_entry_stream(&resource_path, true, &search_config)
+        .await
+        .map_err(|e| format!("创建条目流失败: {}", e))
+    }
+    Location::Remote { .. } => {
+      Err("Agent 类型应由调用方处理，不支持 create_entry_stream_from_resource".to_string())
+    }
+  }
+}
+
+/// 从 ORL 字符串创建条目流（兼容旧接口）
+///
+/// 解析 ORL 字符串并创建对应的条目流
+pub async fn create_entry_stream(
+  db_pool: &SqlitePool,
+  orl_str: &str,
+) -> Result<Box<dyn EntryStream>, String> {
+  let resource = OrlParser::parse(orl_str)
+    .map_err(|e| format!("解析 ORL 失败: {}", e))?;
+
+  create_entry_stream_from_resource(db_pool, &resource).await
 }
 
 #[cfg(test)]

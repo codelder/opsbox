@@ -1,10 +1,11 @@
 //! 测试 SearchExecutor 端到端流程
 //!
-//! 验证 SearchExecutor 能够正确处理 ORL 来源并返回搜索结果
+//! 验证 SearchExecutor 能够正确处理 Resource 来源并返回搜索结果
 
 use logseek::repository::planners;
 use logseek::service::search::SearchEvent;
 use logseek::service::search_executor::{SearchExecutor, SearchExecutorConfig};
+use opsbox_core::dfs::OrlParser;
 use opsbox_core::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::fs::File;
@@ -221,7 +222,6 @@ SOURCES = ["orl://local{}?glob=*/*.log"]
 #[tokio::test]
 async fn test_create_entry_stream_with_orl() {
   use logseek::service::entry_stream::create_entry_stream;
-  use opsbox_core::odfs::orl::ORL;
 
   let pool = create_test_pool().await;
 
@@ -234,17 +234,16 @@ async fn test_create_entry_stream_with_orl() {
 
   let abs_path = temp_dir.path().to_string_lossy().to_string();
 
-  // 创建 ORL
+  // 创建 Resource
   let orl_str = format!("orl://local{}?glob=*.log", abs_path);
-  let orl = ORL::parse(&orl_str).expect("Should parse ORL");
+  let resource = OrlParser::parse(&orl_str).expect("Should parse Resource");
 
-  println!("Testing create_entry_stream with ORL: {}", orl);
-  println!("  endpoint_type: {:?}", orl.endpoint_type());
-  println!("  path: {}", orl.path());
-  println!("  target_type: {:?}", orl.target_type());
+  println!("Testing create_entry_stream with Resource: {:?}", resource);
+  println!("  location: {:?}", resource.endpoint.location);
+  println!("  primary_path: {}", resource.primary_path);
 
-  // 使用 create_entry_stream 创建流
-  let stream_result = create_entry_stream(&pool, &orl).await;
+  // 使用 create_entry_stream 创建流（现在接受 ORL 字符串）
+  let stream_result = create_entry_stream(&pool, &orl_str).await;
 
   match &stream_result {
     Ok(_) => println!("EntryStream created successfully"),

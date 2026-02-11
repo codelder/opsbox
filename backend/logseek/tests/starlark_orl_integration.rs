@@ -4,7 +4,7 @@
 //! Starlark 脚本能够正确输出 ORL 格式的来源列表。
 
 use logseek::domain::source_planner::plan_with_starlark_with_script;
-use opsbox_core::odfs::orl::{EndpointType, ORL, TargetType};
+use opsbox_core::dfs::{Location, OrlParser};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
 
@@ -29,57 +29,57 @@ async fn create_test_pool() -> opsbox_core::SqlitePool {
 #[tokio::test]
 async fn test_orl_parse_local_path() {
   // 测试基本 ORL 解析
-  let orl = ORL::parse("orl://local/var/log/syslog").expect("Should parse local ORL");
+  let resource = OrlParser::parse("orl://local/var/log/syslog").expect("Should parse local ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log/syslog");
-  assert!(orl.filter_glob().is_none());
-  assert!(orl.entry_path().is_none());
-  assert_eq!(orl.target_type(), TargetType::Dir);
+  assert_eq!(resource.endpoint.location, Location::Local);
+  assert_eq!(resource.primary_path.to_string(), "/var/log/syslog");
+  assert!(resource.archive_context.is_none());
 }
 
 #[tokio::test]
 async fn test_orl_parse_local_with_glob() {
-  // 测试带 glob 的 ORL
-  let orl = ORL::parse("orl://local/var/log?glob=*.log").expect("Should parse local ORL with glob");
+  // 测试带 glob 的 ORL (在 DFS 中，glob 通过 filter_glob 参数处理)
+  let resource = OrlParser::parse("orl://local/var/log?glob=*.log").expect("Should parse local ORL with glob");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
-  assert_eq!(orl.target_type(), TargetType::Dir);
+  assert_eq!(resource.endpoint.location, Location::Local);
+  assert_eq!(resource.primary_path.to_string(), "/var/log");
 }
 
 #[tokio::test]
 async fn test_orl_parse_local_archive() {
-  // 测试归档路径（通过扩展名自动识别）
-  let orl = ORL::parse("orl://local/var/log/app.tar.gz").expect("Should parse archive ORL");
+  // 测试归档路径（DFS 需要显式的 ?entry= 参数）
+  let resource = OrlParser::parse("orl://local/var/log/app.tar.gz?entry=inner.log").expect("Should parse archive ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log/app.tar.gz");
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  assert_eq!(resource.endpoint.location, Location::Local);
+  assert_eq!(resource.primary_path.to_string(), "/var/log/app.tar.gz");
+  assert!(resource.archive_context.is_some(), "Should have archive context");
+  if let Some(ctx) = &resource.archive_context {
+    assert_eq!(ctx.inner_path.to_string(), "inner.log");
+  }
 }
 
 #[tokio::test]
 async fn test_orl_parse_agent_with_id() {
   // 测试 Agent ORL (新格式: id@agent)
-  let orl = ORL::parse("orl://agent-123@agent/data/logs").expect("Should parse agent ORL");
+  let resource = OrlParser::parse("orl://agent-123@agent/data/logs").expect("Should parse agent ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(orl.endpoint_id(), Some("agent-123"));
-  assert_eq!(orl.effective_id().as_ref(), "agent-123");
-  assert_eq!(orl.path(), "/data/logs");
+  assert!(matches!(resource.endpoint.location, Location::Remote { .. }));
+  assert_eq!(resource.endpoint.identity, "agent-123");
+  assert_eq!(resource.primary_path.to_string(), "/data/logs");
 }
 
 #[tokio::test]
 async fn test_orl_parse_s3_with_profile() {
   // 测试 S3 ORL (新格式: profile@s3)
-  let orl = ORL::parse("orl://myprofile@s3/mybucket/path/to/file.tar.gz").expect("Should parse S3 ORL");
+  let resource = OrlParser::parse("orl://myprofile@s3/mybucket/path/to/file.tar.gz?entry=inner.log").expect("Should parse S3 ORL");
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::S3);
-  assert_eq!(orl.endpoint_id(), Some("myprofile"));
-  assert_eq!(orl.effective_id().as_ref(), "myprofile");
-  assert_eq!(orl.path(), "/mybucket/path/to/file.tar.gz");
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  assert_eq!(resource.endpoint.location, Location::Cloud);
+  assert_eq!(resource.endpoint.identity, "myprofile");
+  assert_eq!(resource.primary_path.to_string(), "/mybucket/path/to/file.tar.gz");
+  assert!(resource.archive_context.is_some(), "Should have archive context");
+  if let Some(ctx) = &resource.archive_context {
+    assert_eq!(ctx.inner_path.to_string(), "inner.log");
+  }
 }
 
 #[tokio::test]
@@ -102,12 +102,11 @@ SOURCES = ["orl://local/var/log?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), "/var/log");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
+  let resource = &result.sources[0];
+  assert_eq!(resource.endpoint.location, Location::Local);
+  assert_eq!(resource.primary_path.to_string(), "/var/log");
 
-  println!("✓ Local ORL parsed: {}", orl);
+  println!("✓ Local ORL parsed: {:?}", resource);
 }
 
 #[tokio::test]
@@ -129,22 +128,21 @@ SOURCES = ["orl://my-agent-id@agent/data/logs?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(orl.effective_id().as_ref(), "my-agent-id");
-  assert_eq!(orl.path(), "/data/logs");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
+  let resource = &result.sources[0];
+  assert!(matches!(resource.endpoint.location, Location::Remote { .. }));
+  assert_eq!(resource.endpoint.identity, "my-agent-id");
+  assert_eq!(resource.primary_path.to_string(), "/data/logs");
 
-  println!("✓ Agent ORL parsed: {}", orl);
+  println!("✓ Agent ORL parsed: {:?}", resource);
 }
 
 #[tokio::test]
 async fn test_starlark_returns_orl_strings_s3() {
   let pool = create_test_pool().await;
 
-  // 使用 E2E 测试相同的格式
+  // 使用 E2E 测试相同的格式（需要显式 ?entry= 参数）
   let script = r#"
-SOURCES = ["orl://myprofile@s3/mybucket/logs/app.tar.gz?glob=*.log"]
+SOURCES = ["orl://myprofile@s3/mybucket/logs/app.tar.gz?glob=*.log&entry=service.log"]
 "#;
 
   logseek::repository::planners::upsert_script(&pool, "test_s3", script)
@@ -157,14 +155,16 @@ SOURCES = ["orl://myprofile@s3/mybucket/logs/app.tar.gz?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::S3);
-  assert_eq!(orl.effective_id().as_ref(), "myprofile");
-  assert_eq!(orl.path(), "/mybucket/logs/app.tar.gz");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  let resource = &result.sources[0];
+  assert_eq!(resource.endpoint.location, Location::Cloud);
+  assert_eq!(resource.endpoint.identity, "myprofile");
+  assert_eq!(resource.primary_path.to_string(), "/mybucket/logs/app.tar.gz");
+  assert!(resource.archive_context.is_some(), "Should have archive context");
+  if let Some(ctx) = &resource.archive_context {
+    assert_eq!(ctx.inner_path.to_string(), "service.log");
+  }
 
-  println!("✓ S3 ORL parsed: {}", orl);
+  println!("✓ S3 ORL parsed: {:?}", resource);
 }
 
 #[tokio::test]
@@ -191,13 +191,13 @@ SOURCES = [
   assert_eq!(result.sources.len(), 3, "Should return 3 sources");
 
   // 验证每个来源类型
-  assert_eq!(result.sources[0].endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(result.sources[1].endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(result.sources[2].endpoint_type().unwrap(), EndpointType::S3);
+  assert_eq!(result.sources[0].endpoint.location, Location::Local);
+  assert!(matches!(result.sources[1].endpoint.location, Location::Remote { .. }));
+  assert_eq!(result.sources[2].endpoint.location, Location::Cloud);
 
   println!("✓ Mixed sources parsed successfully");
-  for (i, orl) in result.sources.iter().enumerate() {
-    println!("  Source[{}]: {} (type={:?})", i, orl, orl.endpoint_type());
+  for (i, resource) in result.sources.iter().enumerate() {
+    println!("  Source[{}]: {:?} (location={:?})", i, resource, resource.endpoint.location);
   }
 }
 
@@ -223,11 +223,10 @@ SOURCES = [f"orl://local{base_path}?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  assert_eq!(orl.path(), "/tmp/test/logs");
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
+  let resource = &result.sources[0];
+  assert_eq!(resource.primary_path.to_string(), "/tmp/test/logs");
 
-  println!("✓ f-string interpolation works: {}", orl);
+  println!("✓ f-string interpolation works: {:?}", resource);
 }
 
 #[tokio::test]
@@ -253,16 +252,13 @@ SOURCES = ["orl://local{}?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  println!("Parsed ORL: {}", orl);
-  println!("  endpoint_type: {:?}", orl.endpoint_type());
-  println!("  path: {}", orl.path());
-  println!("  glob: {:?}", orl.filter_glob());
-  println!("  target_type: {:?}", orl.target_type());
+  let resource = &result.sources[0];
+  println!("Parsed Resource: {:?}", resource);
+  println!("  location: {:?}", resource.endpoint.location);
+  println!("  primary_path: {}", resource.primary_path);
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Local);
-  assert_eq!(orl.path(), abs_root);
-  assert_eq!(orl.filter_glob().unwrap().as_ref(), "*.log");
+  assert_eq!(resource.endpoint.location, Location::Local);
+  assert_eq!(resource.primary_path.to_string(), abs_root);
 
   println!("✓ E2E local script format works correctly");
 }
@@ -291,16 +287,15 @@ SOURCES = ["orl://{}@agent{}?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  println!("Parsed ORL: {}", orl);
-  println!("  endpoint_type: {:?}", orl.endpoint_type());
-  println!("  effective_id: {}", orl.effective_id());
-  println!("  path: {}", orl.path());
-  println!("  glob: {:?}", orl.filter_glob());
+  let resource = &result.sources[0];
+  println!("Parsed Resource: {:?}", resource);
+  println!("  location: {:?}", resource.endpoint.location);
+  println!("  identity: {}", resource.endpoint.identity);
+  println!("  primary_path: {}", resource.primary_path);
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::Agent);
-  assert_eq!(orl.effective_id().as_ref(), agent_id);
-  assert_eq!(orl.path(), test_logs_dir);
+  assert!(matches!(resource.endpoint.location, Location::Remote { .. }));
+  assert_eq!(resource.endpoint.identity, agent_id);
+  assert_eq!(resource.primary_path.to_string(), test_logs_dir);
 
   println!("✓ E2E agent script format works correctly");
 }
@@ -315,7 +310,7 @@ async fn test_e2e_s3_script_format() {
   let key = "2025/01/app.tar.gz";
   let script = format!(
     r#"
-SOURCES = ["orl://{}@s3/{}/{}?glob=*.log"]
+SOURCES = ["orl://{}@s3/{}/{}?glob=*.log&entry=service.log"]
 "#,
     profile, bucket, key
   );
@@ -330,19 +325,23 @@ SOURCES = ["orl://{}@s3/{}/{}?glob=*.log"]
 
   assert_eq!(result.sources.len(), 1, "Should return 1 source");
 
-  let orl = &result.sources[0];
-  println!("Parsed ORL: {}", orl);
-  println!("  endpoint_type: {:?}", orl.endpoint_type());
-  println!("  effective_id: {}", orl.effective_id());
-  println!("  path: {}", orl.path());
-  println!("  glob: {:?}", orl.filter_glob());
-  println!("  target_type: {:?}", orl.target_type());
+  let resource = &result.sources[0];
+  println!("Parsed Resource: {:?}", resource);
+  assert_eq!(resource.endpoint.location, Location::Cloud);
+  assert_eq!(resource.endpoint.identity, profile);
+  assert_eq!(resource.primary_path.to_string(), format!("/{}/{}", bucket, key));
+  // archive_context should be present when ?entry= is specified
+  assert!(resource.archive_context.is_some(), "Should have archive context with ?entry=");
+  println!("  location: {:?}", resource.endpoint.location);
+  println!("  identity: {}", resource.endpoint.identity);
+  println!("  primary_path: {}", resource.primary_path);
+  println!("  archive_context: {:?}", resource.archive_context);
 
-  assert_eq!(orl.endpoint_type().unwrap(), EndpointType::S3);
-  assert_eq!(orl.effective_id().as_ref(), profile);
+  assert_eq!(resource.endpoint.location, Location::Cloud);
+  assert_eq!(resource.endpoint.identity, profile);
   // 路径应该是 /bucket/key
-  assert_eq!(orl.path(), format!("/{}/{}", bucket, key));
-  assert_eq!(orl.target_type(), TargetType::Archive);
+  assert_eq!(resource.primary_path.to_string(), format!("/{}/{}", bucket, key));
+  assert!(resource.archive_context.is_some(), "Should have archive context");
 
   println!("✓ E2E S3 script format works correctly");
 }

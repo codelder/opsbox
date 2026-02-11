@@ -39,6 +39,8 @@ pub struct ProcessedContent {
     pub archive_path: Option<String>,
     /// 额外元数据（用于扩展）
     pub metadata: Vec<(String, String)>,
+    /// 搜索结果（JSON 序列化，用于 LogSeek SearchResult 等）
+    pub result: Option<serde_json::Value>,
 }
 
 impl ProcessedContent {
@@ -48,12 +50,25 @@ impl ProcessedContent {
             path,
             archive_path: None,
             metadata: Vec::new(),
+            result: None,
         }
     }
 
     /// 设置归档路径
     pub fn with_archive_path(mut self, archive_path: Option<String>) -> Self {
         self.archive_path = archive_path;
+        self
+    }
+
+    /// 设置搜索结果
+    pub fn with_result(mut self, result: serde_json::Value) -> Self {
+        self.result = Some(result);
+        self
+    }
+
+    /// 添加元数据
+    pub fn with_metadata(mut self, key: String, value: String) -> Self {
+        self.metadata.push((key, value));
         self
     }
 }
@@ -148,8 +163,12 @@ mod tests {
         assert_eq!(content.path, "test.log");
         assert!(content.archive_path.is_none());
         assert!(content.metadata.is_empty());
+        assert!(content.result.is_none());
 
         let content = content.with_archive_path(Some("archive.tar.gz".to_string()));
         assert_eq!(content.archive_path, Some("archive.tar.gz".to_string()));
+
+        let content = content.with_result(serde_json::json!({"lines": ["test"]}));
+        assert!(content.result.is_some());
     }
 }

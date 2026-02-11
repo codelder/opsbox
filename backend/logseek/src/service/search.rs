@@ -3,6 +3,7 @@ use std::{
   sync::Arc,
 };
 
+use async_trait::async_trait;
 use chardetng::EncodingDetector;
 use encoding_rs::{BIG5, EUC_KR, Encoding, GBK, SHIFT_JIS, UTF_8, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use grep_regex::RegexMatcherBuilder;
@@ -10,6 +11,8 @@ use grep_searcher::{BinaryDetection, Encoding as GrepEncoding, MmapChoice, Searc
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tracing::{debug, trace, warn};
+
+use opsbox_core::dfs::search::{ContentProcessor, ProcessedContent};
 
 pub mod sink;
 use sink::BooleanContextSink;
@@ -552,6 +555,43 @@ impl SearchProcessor {
   ) -> Result<(), SearchError> {
     tx.send(result).await.map_err(|_| SearchError::ChannelClosed)?;
     Ok(())
+  }
+}
+
+// ============================================================================
+// DFS ContentProcessor 实现
+// ============================================================================
+
+#[async_trait]
+impl ContentProcessor for SearchProcessor {
+  /// 处理文件内容并返回 ProcessedContent
+  ///
+  /// 实现 DFS ContentProcessor trait，将 SearchResult 序列化到 ProcessedContent.result 中
+  async fn process_content(
+    &self,
+    path: String,
+    reader: &mut Box<dyn AsyncRead + Send + Unpin>,
+  ) -> io::Result<Option<ProcessedContent>> {
+    // 调用现有的 process_content 方法
+    let result = self
+      .process_content(path.clone(), reader)
+      .await
+      .map_err(|e| io::Error::other(e.to_string()))?;
+
+    // 将 SearchResult 转换为 ProcessedContent
+    match result {
+      Some(search_result) => {
+        // 序列化 SearchResult 到 JSON
+        let json_value = serde_json::to_value(&search_result).map_err(|e| io::Error::other(e.to_string()))?;
+
+        let content = ProcessedContent::new(path)
+          .with_archive_path(search_result.archive_path.clone())
+          .with_result(json_value);
+
+        Ok(Some(content))
+      }
+      None => Ok(None),
+    }
   }
 }
 

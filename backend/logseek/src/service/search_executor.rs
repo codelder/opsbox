@@ -4,7 +4,7 @@ use crate::service::ServiceError;
 use crate::service::search::{SearchEvent, SearchResult};
 use crate::service::searchable::{SearchContext, SearchRequest, create_search_provider};
 use opsbox_core::SqlitePool;
-use opsbox_core::odfs::orl::ORL;
+use opsbox_core::dfs::{Resource, build_orl_from_resource, Location};
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 
@@ -26,7 +26,7 @@ impl Default for SearchExecutorConfig {
 
 /// 搜索结果处理器：负责缓存结果、统计耗时并转发到下游通道
 struct SearchResultHandler {
-  orl: ORL,
+  resource: Resource,
   sid: Arc<String>,
   tx: mpsc::Sender<SearchEvent>,
   cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
@@ -35,13 +35,13 @@ struct SearchResultHandler {
 
 impl SearchResultHandler {
   fn new(
-    orl: ORL,
+    resource: Resource,
     sid: Arc<String>,
     tx: mpsc::Sender<SearchEvent>,
     cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
   ) -> Self {
     Self {
-      orl,
+      resource,
       sid,
       tx,
       cancel_token,
@@ -51,21 +51,32 @@ impl SearchResultHandler {
 
   /// 根据结果路径构造完整的 ORL 字符串
   fn build_result_orl(&self, res_path: &str) -> String {
-    use opsbox_core::odfs::orl::TargetType;
-    let scheme = self.orl.uri().scheme().as_str();
-    let authority = self.orl.uri().authority().map(|a| a.as_str()).unwrap_or("local");
+    use opsbox_core::dfs::Resource;
 
-    if self.orl.target_type() == TargetType::Archive {
-      let entry_encoded = urlencoding::encode(res_path);
-      format!("{}://{}{}?entry={}", scheme, authority, self.orl.path(), entry_encoded)
+    // 判断是否为归档资源
+    if self.resource.archive_context.is_some() {
+      // 归档内文件：保持原始归档路径，更新 entry 参数
+      let mut result_resource = self.resource.clone();
+      // 更新 archive_context 的 inner_path
+      if let Some(ref mut ctx) = result_resource.archive_context {
+        ctx.inner_path = opsbox_core::dfs::ResourcePath::from_str(res_path);
+      }
+      build_orl_from_resource(&result_resource)
     } else {
+      // 普通文件：构造新路径
       let full_path = if res_path.starts_with('/') {
         res_path.to_string()
       } else {
-        let base = self.orl.path().trim_end_matches('/');
+        let base = self.resource.primary_path.to_string();
+        let base = base.trim_end_matches('/');
         format!("{}/{}", base, res_path.trim_start_matches('/'))
       };
-      format!("{}://{}{}", scheme, authority, full_path)
+      let result_resource = Resource::new(
+        self.resource.endpoint.clone(),
+        opsbox_core::dfs::ResourcePath::from_str(&full_path),
+        None,
+      );
+      build_orl_from_resource(&result_resource)
     }
   }
 
@@ -120,16 +131,25 @@ impl SearchResultHandler {
   }
 
   fn event_source(&self) -> String {
-    use opsbox_core::odfs::orl::EndpointType;
-    match self.orl.endpoint_type() {
-      Ok(EndpointType::Agent) => format!("agent:{}", self.orl.effective_id()),
-      _ => self.orl.display_name(),
+    match &self.resource.endpoint.location {
+      Location::Remote { .. } => format!("agent:{}", self.resource.endpoint.identity),
+      _ => self.display_name(),
+    }
+  }
+
+  /// 显示名称（用于日志和事件）
+  fn display_name(&self) -> String {
+    // 简化显示：提取关键部分
+    match &self.resource.endpoint.location {
+      Location::Local => format!("local:{}", self.resource.primary_path.to_string()),
+      Location::Remote { .. } => format!("agent:{}:{}", self.resource.endpoint.identity, self.resource.primary_path.to_string()),
+      Location::Cloud => format!("s3:{}:{}", self.resource.endpoint.identity, self.resource.primary_path.to_string()),
     }
   }
 
   async fn send_complete(&self, count: usize) {
     let elapsed = self.start_time.elapsed();
-    let source_display = self.orl.display_name();
+    let source_display = self.display_name();
     let status = if self.is_cancelled() { "已取消" } else { "完成" };
 
     tracing::info!(
@@ -172,7 +192,7 @@ impl SearchExecutor {
   }
 
   /// 规划搜索
-  pub async fn plan(&self, query: &str, context_lines: usize) -> Result<(Vec<ORL>, SearchRequest), ServiceError> {
+  pub async fn plan(&self, query: &str, context_lines: usize) -> Result<(Vec<Resource>, SearchRequest), ServiceError> {
     let mut app: Option<String> = None;
     let mut encoding: Option<String> = None;
     let mut path_includes: Vec<String> = Vec::new();
@@ -251,7 +271,7 @@ impl SearchExecutor {
 
     for source in sources {
       let io_sem = self.io_semaphore.clone();
-      let orl = source;
+      let resource = source;
       let tx = tx.clone(); // 下游通道
       let pool = self.pool.clone();
 
@@ -271,7 +291,7 @@ impl SearchExecutor {
 
         // 2. 启动结果处理任务 (使用 Arc 克隆，成本低)
         let handler = SearchResultHandler::new(
-          orl.clone(),
+          resource.clone(),
           Arc::clone(&sid),
           tx.clone(),
           token.as_ref().map(Arc::clone),
@@ -282,20 +302,26 @@ impl SearchExecutor {
 
         // 3. 构造 Provider 上下文 (使用 Arc 克隆，成本低)
         let ctx = SearchContext {
-          orl: orl.clone(), // ORL doesn't impl Copy, so we need to clone
+          resource: resource.clone(),
           sid: Arc::clone(&sid),
           tx: tx_internal.clone(), // 克隆以保留使用权
           cancel_token: token.as_ref().map(Arc::clone),
         };
 
         // 4. 获取 Provider 并执行
-        let provider_res = create_search_provider(&pool, &orl).await;
+        let provider_res = create_search_provider(&pool, &resource).await;
         match provider_res {
           Ok(provider) => {
+            // 获取显示名称用于错误报告
+            let display_name = match &resource.endpoint.location {
+              Location::Local => format!("local:{}", resource.primary_path.to_string()),
+              Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
+              Location::Cloud => format!("s3:{}", resource.endpoint.identity),
+            };
             if let Err(e) = provider.search(&ctx, &request, &pool).await {
               let _ = tx_internal
                 .send(SearchEvent::Error {
-                  source: orl.display_name(), // 简单名称即可，handler会统一重写source? 不，handler只转发Error
+                  source: display_name,
                   message: e.to_string(),
                   recoverable: true,
                 })
@@ -304,9 +330,14 @@ impl SearchExecutor {
           }
           Err(e) => {
             tracing::error!("Invalid Endpoint Type: {}", e);
+            let display_name = match &resource.endpoint.location {
+              Location::Local => format!("local:{}", resource.primary_path.to_string()),
+              Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
+              Location::Cloud => format!("s3:{}", resource.endpoint.identity),
+            };
             let _ = tx_internal
               .send(SearchEvent::Error {
-                source: orl.display_name(),
+                source: display_name,
                 message: format!("无法创建搜索提供者: {}", e),
                 recoverable: true,
               })

@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 use crate::api::LogSeekApiError;
 use crate::repository::{RepositoryError, planners};
 use crate::service::ServiceError;
-use opsbox_core::odfs::orl::ORL;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannerUpsertPayload {
@@ -58,8 +57,8 @@ pub struct PlannerTestPayload {
 pub struct PlannerTestResponse {
   /// 清理后的查询（移除了 app:/dt:/fdt:/tdt: 等）
   pub cleaned_query: String,
-  /// 规划出的来源列表（ORL）
-  pub sources: Vec<ORL>,
+  /// 规划出的来源列表（ORL 字符串）
+  pub sources: Vec<String>,
   /// 调试日志（print 函数的输出）
   pub debug_logs: Vec<String>,
 }
@@ -147,9 +146,17 @@ pub async fn test_script(
     // 使用已保存的脚本
     crate::domain::source_planner::plan_with_starlark(&pool, Some(&body.app), &body.q).await?
   };
+
+  // 将 Resource 转换为 ORL 字符串
+  let sources: Vec<String> = plan
+    .sources
+    .iter()
+    .map(|r| opsbox_core::dfs::build_orl_from_resource(r))
+    .collect();
+
   Ok(Json(PlannerTestResponse {
     cleaned_query: plan.cleaned_query,
-    sources: plan.sources,
+    sources,
     debug_logs: plan.debug_logs,
   }))
 }

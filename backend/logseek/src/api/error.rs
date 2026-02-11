@@ -9,7 +9,7 @@ use crate::repository::RepositoryError;
 use crate::service::ServiceError;
 use crate::utils::storage::S3Error;
 use opsbox_core::AppError;
-use opsbox_core::odfs::orl::OrlError;
+use opsbox_core::dfs::OrlParseError;
 
 /// API 层错误类型（LogSeek 模块专用）
 ///
@@ -25,8 +25,8 @@ pub enum LogSeekApiError {
   Repository(#[from] RepositoryError),
 
   /// Domain 层错误
-  #[error(transparent)]
-  Domain(#[from] OrlError),
+  #[error("{0}")]
+  Domain(String),
 
   /// JSON 解析失败
   #[error("JSON 解析失败: {0}")]
@@ -43,6 +43,26 @@ pub enum LogSeekApiError {
   /// 核心服务错误
   #[error(transparent)]
   Internal(#[from] AppError),
+}
+
+/// 从 OrlParseError 自动转换为 Domain 错误
+impl From<OrlParseError> for LogSeekApiError {
+  fn from(err: OrlParseError) -> Self {
+    LogSeekApiError::Domain(match err {
+      OrlParseError::InvalidFormat(msg) => msg,
+      OrlParseError::UnknownEndpointType(msg) => {
+        format!("未知的端点类型: {}", msg)
+      }
+      OrlParseError::MissingIdentity => "缺少端点标识".to_string(),
+      OrlParseError::MissingPath => "缺少路径".to_string(),
+      OrlParseError::InvalidAgentFormat(msg) => {
+        format!("无效的 Agent 端点格式: {}", msg)
+      }
+      OrlParseError::InvalidS3Format(msg) => {
+        format!("无效的 S3 端点格式: {}", msg)
+      }
+    })
+  }
 }
 
 impl IntoResponse for LogSeekApiError {
@@ -285,7 +305,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_domain_error_conversion() {
-    let domain_err = OrlError::InvalidFormat("无效的 URL 格式".to_string());
+    let domain_err = OrlParseError::InvalidFormat("无效的 URL 格式".to_string());
     let api_err: LogSeekApiError = domain_err.into();
     let response = api_err.into_response();
 
