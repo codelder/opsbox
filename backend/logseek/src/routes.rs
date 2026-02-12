@@ -102,9 +102,9 @@ mod tests {
     assert_eq!(capacity, 256);
 
     let s3_concurrency = s3_max_concurrency();
-    assert!(s3_concurrency >= 1 && s3_concurrency <= 128);
+    assert!((1..=128).contains(&s3_concurrency));
 
     let cpu_concurrency = cpu_max_concurrency();
-    assert!(cpu_concurrency >= 1 && cpu_concurrency <= 16);
+    assert!((1..=16).contains(&cpu_concurrency));
   }
 }

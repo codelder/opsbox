@@ -60,9 +60,18 @@ impl OpbxFileSystem for LocalFileSystem {
       .await
       .map_err(|e| FsError::NotFound(format!("{}: {}", full_path.display(), e)))?;
 
+    let symlink_meta = fs::symlink_metadata(&full_path)
+      .await
+      .ok();
+    let is_symlink = symlink_meta
+      .as_ref()
+      .map(|m| m.file_type().is_symlink())
+      .unwrap_or(false);
+
     Ok(FileMetadata {
       is_dir: meta.is_dir(),
       is_file: meta.is_file(),
+      is_symlink,
       size: meta.len(),
       modified: meta.modified().ok(),
       created: meta.created().ok(),
@@ -78,13 +87,17 @@ impl OpbxFileSystem for LocalFileSystem {
       .await
       .map_err(|e| FsError::NotFound(format!("{}: {}", full_path.display(), e)))?;
 
-    while let Some(entry) = dir_entry.next_entry().await.map_err(|e| FsError::Io(e))? {
+    while let Some(entry) = dir_entry.next_entry().await.map_err(FsError::Io)? {
       let name = entry.file_name().to_string_lossy().to_string();
       let metadata = entry.metadata().await.map_err(FsError::Io)?;
+
+      let file_type = entry.file_type().await.map_err(FsError::Io)?;
+      let is_symlink = file_type.is_symlink();
 
       let file_meta = FileMetadata {
         is_dir: metadata.is_dir(),
         is_file: metadata.is_file(),
+        is_symlink,
         size: metadata.len(),
         modified: metadata.modified().ok(),
         created: metadata.created().ok(),
@@ -132,13 +145,13 @@ impl Searchable for LocalFileSystem {
       // 单文件流
       let stream = crate::fs::FsEntryStream::new(full_path, recursive)
         .await
-        .map_err(|e| FsError::Io(e))?;
+        .map_err(FsError::Io)?;
       Ok(Box::new(stream))
     } else {
       // 目录流
       let stream = crate::fs::FsEntryStream::new(full_path, recursive)
         .await
-        .map_err(|e| FsError::Io(e))?;
+        .map_err(FsError::Io)?;
       Ok(Box::new(stream))
     }
   }
@@ -185,7 +198,7 @@ mod tests {
     std_fs::write(&file_path, "hello world").unwrap();
 
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-    let path = ResourcePath::from_str("test.txt");
+    let path = ResourcePath::parse("test.txt");
     let metadata = fs.metadata(&path).await.unwrap();
 
     assert!(metadata.is_file);
@@ -200,7 +213,7 @@ mod tests {
     std_fs::create_dir(&dir_path).unwrap();
 
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-    let path = ResourcePath::from_str("subdir");
+    let path = ResourcePath::parse("subdir");
     let metadata = fs.metadata(&path).await.unwrap();
 
     assert!(metadata.is_dir);
@@ -211,7 +224,7 @@ mod tests {
   async fn test_local_fs_metadata_not_found() {
     let temp_dir = TempDir::new().unwrap();
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-    let path = ResourcePath::from_str("nonexistent.txt");
+    let path = ResourcePath::parse("nonexistent.txt");
     let result = fs.metadata(&path).await;
     assert!(result.is_err());
   }
@@ -224,7 +237,7 @@ mod tests {
     std_fs::create_dir(temp_dir.path().join("subdir")).unwrap();
 
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-    let path = ResourcePath::from_str("");
+    let path = ResourcePath::parse("");
     let entries = fs.read_dir(&path).await.unwrap();
 
     assert_eq!(entries.len(), 3);
@@ -242,7 +255,7 @@ mod tests {
     std_fs::write(subdir.join("nested.txt"), "content").unwrap();
 
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-    let path = ResourcePath::from_str("subdir");
+    let path = ResourcePath::parse("subdir");
     let entries = fs.read_dir(&path).await.unwrap();
 
     assert_eq!(entries.len(), 1);
@@ -256,7 +269,7 @@ mod tests {
     std_fs::write(&file_path, "hello world").unwrap();
 
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-    let path = ResourcePath::from_str("test.txt");
+    let path = ResourcePath::parse("test.txt");
     let reader = fs.open_read(&path).await.unwrap();
 
     // Verify we got a reader
@@ -267,7 +280,7 @@ mod tests {
   async fn test_local_fs_open_read_not_found() {
     let temp_dir = TempDir::new().unwrap();
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
-    let path = ResourcePath::from_str("nonexistent.txt");
+    let path = ResourcePath::parse("nonexistent.txt");
     let result = fs.open_read(&path).await;
     assert!(result.is_err());
   }
@@ -277,7 +290,7 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
 
-    let path = ResourcePath::from_str("subdir/file.txt");
+    let path = ResourcePath::parse("subdir/file.txt");
     let resolved = fs.resolve_path(&path);
     assert_eq!(resolved, temp_dir.path().join("subdir/file.txt"));
   }
@@ -287,7 +300,7 @@ mod tests {
     let temp_dir = TempDir::new().unwrap();
     let fs = LocalFileSystem::new(temp_dir.path().to_path_buf()).unwrap();
 
-    let path = ResourcePath::from_str("/subdir/file.txt");
+    let path = ResourcePath::parse("/subdir/file.txt");
     let resolved = fs.resolve_path(&path);
     assert_eq!(resolved, temp_dir.path().join("subdir/file.txt"));
   }

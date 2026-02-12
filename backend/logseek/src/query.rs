@@ -137,7 +137,6 @@ impl Query {
     if let Some(p) = pattern {
       if let Some(stripped) = p.strip_prefix('!') {
         let glob = globset::GlobBuilder::new(stripped)
-          .literal_separator(true)
           .build()
           .map_err(|e| e.to_string())?;
         let mut builder = globset::GlobSetBuilder::new();
@@ -146,7 +145,6 @@ impl Query {
         self.path_filter.exclude = Some(set);
       } else {
         let glob = globset::GlobBuilder::new(&p)
-          .literal_separator(true)
           .build()
           .map_err(|e| e.to_string())?;
         let mut builder = globset::GlobSetBuilder::new();

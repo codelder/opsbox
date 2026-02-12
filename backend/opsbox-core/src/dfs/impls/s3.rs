@@ -192,6 +192,7 @@ impl S3Storage {
         FileMetadata {
             is_dir,
             is_file,
+            is_symlink: false,
             size,
             modified: last_modified,
             created: None, // S3 不提供创建时间
@@ -252,6 +253,7 @@ impl OpbxFileSystem for S3Storage {
             Ok(FileMetadata {
                 is_dir: false,
                 is_file: true,
+                is_symlink: false,
                 size: output.content_length().unwrap_or(0) as u64,
                 modified: output.last_modified().and_then(|dt| {
                     std::time::SystemTime::UNIX_EPOCH
@@ -312,7 +314,7 @@ impl OpbxFileSystem for S3Storage {
             for obj in objects {
                 let key = obj.key().unwrap_or("");
                 // 跳过目录标记本身
-                if key == &prefix || key.ends_with('/') {
+                if key == prefix || key.ends_with('/') {
                     continue;
                 }
 
@@ -327,7 +329,7 @@ impl OpbxFileSystem for S3Storage {
                 }
 
                 // 创建路径（包含 bucket，确保 create_fs_for_resource 能正确提取 bucket）
-                let entry_path = ResourcePath::from_str(&format!("/{}/{}", bucket, key));
+                let entry_path = ResourcePath::parse(&format!("/{}/{}", bucket, key));
 
                 entries.push(DirEntry {
                     name,
@@ -353,7 +355,7 @@ impl OpbxFileSystem for S3Storage {
                 }
 
                 // 创建路径（包含 bucket，去除末尾斜杠）
-                let entry_path = ResourcePath::from_str(&format!("/{}/{}", bucket, prefix_str.trim_end_matches('/')));
+                let entry_path = ResourcePath::parse(&format!("/{}/{}", bucket, prefix_str.trim_end_matches('/')));
 
                 entries.push(DirEntry {
                     name,

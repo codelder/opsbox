@@ -533,11 +533,11 @@ mod tests {
 
     // Try to bind to a port to check if network operations are permitted
     let test_bind = tokio::net::TcpListener::bind("127.0.0.1:0").await;
-    if let Err(e) = test_bind {
-      if e.kind() == std::io::ErrorKind::PermissionDenied {
-        println!("Skipping health check integration test due to network permission restrictions");
-        return;
-      }
+    if let Err(e) = test_bind
+      && e.kind() == std::io::ErrorKind::PermissionDenied
+    {
+      println!("Skipping health check integration test due to network permission restrictions");
+      return;
     }
 
     // Note: This test requires a running agent server

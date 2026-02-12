@@ -302,7 +302,7 @@ mod tests {
 
     // 检查状态
     match agent_info.status {
-      AgentStatus::Online => assert!(true),
+      AgentStatus::Online => {}
       _ => panic!("Expected Online status"),
     }
 
@@ -317,7 +317,7 @@ mod tests {
     // 测试MockAgentServer方法（不实际启动服务器）
     // 注意：我们不能在不启动服务器的情况下测试这些方法
     // 这个测试主要验证代码编译
-    assert!(true); // 占位测试
+    // 占位测试
   }
 
   #[test]
@@ -340,12 +340,12 @@ mod tests {
 
     // 确保变体都存在
     match online {
-      AgentStatus::Online => assert!(true),
+      AgentStatus::Online => {}
       _ => panic!("Expected Online"),
     }
 
     match offline {
-      AgentStatus::Offline => assert!(true),
+      AgentStatus::Offline => {}
       _ => panic!("Expected Offline"),
     }
   }
@@ -405,6 +405,6 @@ mod tests {
     // 我们不知道这个端口是否可用，所以只检查函数是否执行
     let _ = find_available_port(test_port, test_port);
     // 如果没有panic，测试通过
-    assert!(true);
+    {}
   }
 }

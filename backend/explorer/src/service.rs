@@ -67,7 +67,7 @@ impl ExplorerService {
     if is_s3_root {
       // 使用 S3DiscoveryFileSystem 列出该 profile 的 buckets
       let profile_name = &resource.endpoint.identity;
-      let discovery_path = ResourcePath::from_str(&format!("/{}", profile_name));
+      let discovery_path = ResourcePath::parse(&format!("/{}", profile_name));
       let fs = S3DiscoveryFileSystem::new(self.db_pool.clone());
       let entries = fs.read_dir(&discovery_path).await
         .map_err(|e| format!("Failed to list S3 buckets: {}", e))?;
@@ -116,8 +116,7 @@ impl ExplorerService {
     // 获取文件名
     let name = resource.primary_path
       .segments()
-      .last()
-      .map(|s| s.clone())
+      .last().cloned()
       .unwrap_or_else(|| "download".to_string());
 
     // DFS 现在直接返回 tokio::io::AsyncRead，无需适配器
@@ -147,7 +146,7 @@ impl ExplorerService {
       }
       _ => {
         // 远程文件或内存数据源：需要流式复制到临时文件
-        let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
+        let temp_file_result = tokio::task::spawn_blocking(tempfile::NamedTempFile::new)
           .await
           .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
         let temp_file = temp_file_result
@@ -202,7 +201,7 @@ impl ExplorerService {
         // 提供更友好的错误消息
         let error_str = e.to_string();
         if error_str.contains("Failed to read TAR entry") || error_str.contains("numeric field did not have utf-8") {
-          format!("无法解析归档文件：文件可能损坏或使用了不兼容的格式。建议：1) 使用 'tar -tzf 文件名.tar.gz' 验证文件完整性 2) 尝试使用 'gunzip -c 文件名.tar.gz | tar tf -' 重新打包")
+          "无法解析归档文件：文件可能损坏或使用了不兼容的格式。建议：1) 使用 'tar -tzf 文件名.tar.gz' 验证文件完整性 2) 尝试使用 'gunzip -c 文件名.tar.gz | tar tf -' 重新打包".to_string()
         } else if error_str.contains("Failed to read TAR entries") {
           format!("无法读取归档内容：{}", error_str)
         } else {
@@ -237,7 +236,7 @@ impl ExplorerService {
       }
       _ => {
         // 远程文件或内存数据源：需要流式复制到临时文件
-        let temp_file_result = tokio::task::spawn_blocking(|| tempfile::NamedTempFile::new())
+        let temp_file_result = tokio::task::spawn_blocking(tempfile::NamedTempFile::new)
           .await
           .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
         let temp_file = temp_file_result
@@ -291,7 +290,7 @@ impl ExplorerService {
       .map_err(|e| {
         let error_str = e.to_string();
         if error_str.contains("numeric field did not have utf-8") {
-          format!("无法解析归档文件：文件可能损坏或使用了不兼容的格式")
+          "无法解析归档文件：文件可能损坏或使用了不兼容的格式".to_string()
         } else {
           format!("Failed to get metadata: {}", error_str)
         }
@@ -302,7 +301,7 @@ impl ExplorerService {
       .map_err(|e| {
         let error_str = e.to_string();
         if error_str.contains("numeric field did not have utf-8") {
-          format!("无法读取归档内文件：文件可能损坏")
+          "无法读取归档内文件：文件可能损坏".to_string()
         } else {
           format!("Failed to open file: {}", error_str)
         }
@@ -311,8 +310,7 @@ impl ExplorerService {
     // 获取文件名
     let name = ctx.inner_path
       .segments()
-      .last()
-      .map(|s| s.clone())
+      .last().cloned()
       .unwrap_or_else(|| "download".to_string());
 
     // DFS 现在直接返回 tokio::io::AsyncRead，无需适配器
@@ -330,10 +328,7 @@ impl ExplorerService {
 
     // 特殊处理：S3 根路径和 discovery endpoints 不需要检测
     let path_str = resource.primary_path.to_string();
-    let is_discovery = match resource.endpoint.identity.as_str() {
-      "agent.root" | "s3.root" => true,
-      _ => false,
-    };
+    let is_discovery = matches!(resource.endpoint.identity.as_str(), "agent.root" | "s3.root");
     let is_s3_root = resource.endpoint.backend == StorageBackend::ObjectStorage
       && (path_str == "/" || path_str.is_empty());
 
@@ -374,7 +369,7 @@ impl ExplorerService {
           // 如果是归档扩展名，设置 archive_context
           if let Some(at) = archive_type {
             resource.archive_context = Some(ArchiveContext::new(
-              ResourcePath::from_str("/"),
+              ResourcePath::parse("/"),
               Some(at),
             ));
           }
@@ -396,7 +391,7 @@ impl ExplorerService {
     // 如果检测到归档类型，设置 archive_context
     if archive_type != ArchiveType::Unknown {
       resource.archive_context = Some(ArchiveContext::new(
-        ResourcePath::from_str("/"),  // 归档内路径默认为根
+        ResourcePath::parse("/"),  // 归档内路径默认为根
         Some(archive_type),
       ));
     }
@@ -412,11 +407,11 @@ impl ExplorerService {
         let manager = self.agent_manager.as_ref()
           .ok_or_else(|| "AgentManager not configured".to_string())?;
         let fs = AgentDiscoveryFileSystem::new(manager.clone());
-        return Ok(Box::new(fs));
+        return Ok(Box::new(fs) as Box<dyn OpbxFileSystem>);
       }
       "s3.root" => {
         let fs = S3DiscoveryFileSystem::new(self.db_pool.clone());
-        return Ok(Box::new(fs));
+        return Ok(Box::new(fs) as Box<dyn OpbxFileSystem>);
       }
       _ => {}
     }
@@ -440,7 +435,7 @@ impl ExplorerService {
 
             let fs = LocalFileSystem::new(root)
               .map_err(|e| format!("Failed to create local FS: {}", e))?;
-            Ok(Box::new(fs))
+            Ok(Box::new(fs) as Box<dyn OpbxFileSystem>)
           }
           Location::Remote { host, port } => {
             // 对于 Agent endpoint，需要从 AgentManager 查询实际的 host 和 port
@@ -470,7 +465,7 @@ impl ExplorerService {
             let client = AgentClient::new(actual_host, actual_port)
               .map_err(|e| format!("Failed to create Agent client: {}", e))?;
             let fs = AgentProxyFS::new(client);
-            Ok(Box::new(fs))
+            Ok(Box::new(fs) as Box<dyn OpbxFileSystem>)
           }
           Location::Cloud => {
             Err("Cloud location not supported for Directory backend".to_string())
@@ -496,7 +491,7 @@ impl ExplorerService {
 
         let fs = S3Storage::new_async(s3_config).await
           .map_err(|e| format!("Failed to create S3 FS: {}", e))?;
-        Ok(Box::new(fs))
+        Ok(Box::new(fs) as Box<dyn OpbxFileSystem>)
       }
     }
   }
@@ -582,7 +577,7 @@ impl ExplorerService {
       let primary_path_str = parent_resource.primary_path.to_string();
       let correct_name = primary_path_str
         .split('/')
-        .last()
+        .next_back()
         .and_then(|s| std::path::Path::new(s).file_stem())
         .and_then(|s| s.to_str())
         .unwrap_or("");
@@ -610,7 +605,7 @@ impl ExplorerService {
 
         // 构建路径部分，确保以 / 开头
         let path_suffix = entry.path.segments()
-          .into_iter()
+          .iter()
           .map(|s| urlencoding::encode(s).into_owned())
           .collect::<Vec<_>>()
           .join("/");
@@ -641,7 +636,7 @@ impl ExplorerService {
             // 从原始归档路径中提取正确的文件名
             parent_resource.primary_path.to_string()
               .split('/')
-              .last()
+              .next_back()
               .and_then(|s| std::path::Path::new(s).file_stem())
               .and_then(|s| s.to_str())
               .unwrap_or(&entry.name)
@@ -665,13 +660,21 @@ impl ExplorerService {
       (ResourceType::LinkDir, archive_orl, Some(true))
     } else {
       // 普通文件或目录
-      let rtype = if entry.metadata.is_dir {
+      let rtype = if entry.metadata.is_symlink {
+        if entry.metadata.is_dir { ResourceType::LinkDir } else { ResourceType::LinkFile }
+      } else if entry.metadata.is_dir {
         ResourceType::Dir
       } else {
         ResourceType::File
       };
       let children = if entry.metadata.is_dir { Some(true) } else { None };
       (rtype, path, children)
+    };
+
+    let mime_type = if !entry.metadata.is_dir {
+      Self::guess_mime_type(&display_name)
+    } else {
+      None
     };
 
     ResourceItem {
@@ -685,7 +688,7 @@ impl ExplorerService {
       has_children,
       child_count: None,
       hidden_child_count: None,
-      mime_type: None, // TODO: 从 DFS 获取 mime 类型
+      mime_type,
     }
   }
 
@@ -709,6 +712,60 @@ impl ExplorerService {
     let endpoint = self.resource_endpoint_orl(resource);
     let path = resource.primary_path.to_string();
     format!("orl://{}{}", endpoint, path)
+  }
+
+  /// 根据文件扩展名推断 MIME 类型
+  fn guess_mime_type(name: &str) -> Option<String> {
+    let ext = name.rsplit('.').next()?.to_lowercase();
+    let mime = match ext.as_str() {
+      // 文本 / 日志 / 配置
+      "txt" | "log" | "out" | "err" => "text/plain",
+      "csv" => "text/csv",
+      "json" => "application/json",
+      "xml" => "application/xml",
+      "yaml" | "yml" => "text/yaml",
+      "toml" => "text/toml",
+      "ini" | "cfg" | "conf" | "properties" => "text/plain",
+      "md" | "markdown" => "text/markdown",
+      "html" | "htm" => "text/html",
+      "css" => "text/css",
+      // 代码
+      "js" | "mjs" | "cjs" => "text/javascript",
+      "ts" | "tsx" | "jsx" => "text/typescript",
+      "rs" => "text/x-rust",
+      "py" => "text/x-python",
+      "go" => "text/x-go",
+      "java" => "text/x-java",
+      "c" | "h" => "text/x-c",
+      "cpp" | "cc" | "cxx" | "hpp" => "text/x-c++",
+      "sh" | "bash" | "zsh" => "text/x-shellscript",
+      "sql" => "application/sql",
+      // 归档
+      "gz" | "gzip" => "application/gzip",
+      "tar" => "application/x-tar",
+      "zip" => "application/zip",
+      "tgz" => "application/gzip",
+      "bz2" => "application/x-bzip2",
+      "xz" => "application/x-xz",
+      "7z" => "application/x-7z-compressed",
+      "rar" => "application/x-rar-compressed",
+      // 图片
+      "png" => "image/png",
+      "jpg" | "jpeg" => "image/jpeg",
+      "gif" => "image/gif",
+      "webp" => "image/webp",
+      "svg" => "image/svg+xml",
+      "ico" => "image/x-icon",
+      // 音视频
+      "mp3" => "audio/mpeg",
+      "mp4" => "video/mp4",
+      "wav" => "audio/wav",
+      // 其他
+      "pdf" => "application/pdf",
+      "wasm" => "application/wasm",
+      _ => return None,
+    };
+    Some(mime.to_string())
   }
 }
 

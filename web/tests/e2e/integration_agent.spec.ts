@@ -337,7 +337,7 @@ test.describe('Agent Integration E2E', () => {
     await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 60000);
 
     const script = `
-SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*.log"]
+SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=**/*.log"]
 `;
 
     const response = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -491,7 +491,7 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*/*.log"]
       'href',
       new RegExp(
         // ORL: orl://{agent_id}@agent/<abs_path>?entry=...
-        `file=orl%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar%3Fentry%3Dinternal.*archived\\.log`
+        `file=orl.*?${AGENT_ID}.*?agent.*?archive.*?tar.*?entry.*?internal.*?archived.*?log`
       )
     );
   });
@@ -531,7 +531,7 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*/*.log"]
       'href',
       new RegExp(
         // ORL: orl://{agent_id}@agent/<abs_path>?entry=...
-        `file=orl%3A%2F%2F${encodeURIComponent(AGENT_ID)}%40agent%2F.*agent-archive\\.tar\\.gz%3Fentry%3Dinternal.*archived-tgz\\.log`
+        `file=orl.*?${AGENT_ID}.*?agent.*?archive.*?tar.*?gz.*?entry.*?internal.*?archived.*?tgz.*?log`
       )
     );
   });

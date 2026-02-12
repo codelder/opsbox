@@ -476,7 +476,7 @@ mod tests {
     // 各种归档格式
     let archive_extensions = vec!["file.tar", "file.tar.gz", "file.tgz", "file.zip"];
     for ext in archive_extensions {
-      let orl = ORL::parse(&format!("orl://local/path/{}?entry=inner", ext)).unwrap();
+      let orl = ORL::parse(format!("orl://local/path/{}?entry=inner", ext)).unwrap();
       assert_eq!(orl.target_type(), TargetType::Archive, "{} should be Archive", ext);
     }
   }

@@ -583,7 +583,7 @@ mod tests {
 
     // 验证变体能正确构造
     match passed {
-      TestResult::Passed => assert!(true),
+      TestResult::Passed => {}
       _ => panic!("Expected Passed"),
     }
 
@@ -593,7 +593,7 @@ mod tests {
     }
 
     match skipped {
-      TestResult::Skipped => assert!(true),
+      TestResult::Skipped => {}
       _ => panic!("Expected Skipped"),
     }
 
@@ -947,17 +947,17 @@ mod tests {
 
     // 验证枚举值能正确构造（编译时检查）
     match json_format {
-      ReportFormat::Json => assert!(true),
+      ReportFormat::Json => {}
       _ => panic!("Expected Json format"),
     }
 
     match markdown_format {
-      ReportFormat::Markdown => assert!(true),
+      ReportFormat::Markdown => {}
       _ => panic!("Expected Markdown format"),
     }
 
     match html_format {
-      ReportFormat::Html => assert!(true),
+      ReportFormat::Html => {}
       _ => panic!("Expected Html format"),
     }
   }

@@ -118,6 +118,6 @@ mod tests {
 
   #[test]
   fn test_default_true_helper() {
-    assert_eq!(default_true(), true);
+    assert!(default_true());
   }
 }

@@ -338,7 +338,7 @@ mod tests {
     let args = create_test_args();
     let config = AgentConfig::from_args(args);
     let threads = config.get_worker_threads();
-    assert!(threads >= 1 && threads <= 16);
+    assert!((1..=16).contains(&threads));
   }
 
   #[test]

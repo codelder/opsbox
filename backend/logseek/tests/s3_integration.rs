@@ -46,7 +46,7 @@ async fn test_s3_api_endpoints() {
   // 需要创建测试路由器来测试API端点
   println!("⚠️ S3 API端点测试暂时跳过，需要实现测试路由器");
   // 使用assert!(true)来确保测试通过
-  assert!(true);
+  // Placeholder
 }
 
 /// 测试S3连接测试（使用Mock服务器）

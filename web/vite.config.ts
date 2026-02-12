@@ -22,7 +22,7 @@ export default defineConfig({
       reporter: ['text', 'json', 'html'],
       exclude: ['**/node_modules/**', '**/dist/**', '**/tests/**', '**/*.d.ts'],
       thresholds: {
-        lines: 70,    // 业务逻辑行覆盖率
+        lines: 70, // 业务逻辑行覆盖率
         functions: 70,
         branches: 60,
         statements: 70

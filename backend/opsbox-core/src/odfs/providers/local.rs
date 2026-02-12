@@ -209,18 +209,18 @@ mod tests {
   #[tokio::test]
   async fn test_detect_file_type_helper() {
     assert_eq!(
-      detect_file_type(&Path::new("test.gz")).await,
+      detect_file_type(Path::new("test.gz")).await,
       (Some("application/gzip".to_string()), false, Some("gzip".to_string()))
     );
     assert_eq!(
-      detect_file_type(&Path::new("test.tar")).await,
+      detect_file_type(Path::new("test.tar")).await,
       (Some("application/x-tar".to_string()), true, None)
     );
     assert_eq!(
-      detect_file_type(&Path::new("test.zip")).await,
+      detect_file_type(Path::new("test.zip")).await,
       (Some("application/zip".to_string()), true, None)
     );
-    assert_eq!(detect_file_type(&Path::new("test.txt")).await, (None, false, None));
-    assert_eq!(detect_file_type(&Path::new("test_no_ext")).await, (None, false, None));
+    assert_eq!(detect_file_type(Path::new("test.txt")).await, (None, false, None));
+    assert_eq!(detect_file_type(Path::new("test_no_ext")).await, (None, false, None));
   }
 }

@@ -130,7 +130,7 @@ mod tests {
     #[tokio::test]
     async fn test_preload_entry_large() {
         // Create content slightly larger than our max check
-        let content = vec![0u8; 100];
+        let content = [0u8; 100];
         let mut reader = &content[..];
         // max size smaller than content
         let res = preload_entry(&mut reader, 50).await.expect("preload failed");
@@ -146,7 +146,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_preload_entry_empty() {
-        let content = vec![];
+        let content: [u8; 0] = [];
         let mut reader = &content[..];
         let res = preload_entry(&mut reader, 100).await.expect("preload failed");
         match res {

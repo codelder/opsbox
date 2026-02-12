@@ -27,7 +27,7 @@ test.describe('Query Syntax Integration Tests', () => {
   const TEST_APP = `e2e_query_syntax_${RUN_ID}`;
 
   // 辅助函数：展开所有折叠的搜索结果
-  async function expandAllResults(page: any) {
+  async function expandAllResults(page: import('@playwright/test').Page) {
     // 等待结果加载
     await page.waitForSelector('.text-lg.font-semibold', { timeout: 10000 });
 

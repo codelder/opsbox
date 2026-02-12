@@ -142,23 +142,13 @@ mod tests {
     assert!(!is_looks_like_text(b"Hello\0world"));
 
     // High ratio of printable
-    let mut data = Vec::new();
-    for _ in 0..95 {
-      data.push(b'a');
-    }
-    for _ in 0..5 {
-      data.push(0xFF); // non-printable
-    }
+    let mut data = vec![b'a'; 95];
+    data.extend(std::iter::repeat_n(0xFF, 5)); // non-printable
     assert!(is_looks_like_text(&data)); // 95% printable
 
     // Low ratio of printable
-    let mut data = Vec::new();
-    for _ in 0..50 {
-      data.push(b'a');
-    }
-    for _ in 0..51 {
-      data.push(0xFF); // non-printable
-    }
+    let mut data = vec![b'a'; 50];
+    data.extend(std::iter::repeat_n(0xFF, 51)); // non-printable
     assert!(!is_looks_like_text(&data)); // < 50% printable
   }
 

@@ -95,7 +95,7 @@ async fn test_large_file_encoding_detection() {
   let (lines, encoding) = result.unwrap().expect("应该返回内容");
 
   assert_eq!(encoding.to_lowercase(), "utf-8", "应该检测为 UTF-8");
-  assert!(lines.len() > 0, "应该读取到行");
+  assert!(!lines.is_empty(), "应该读取到行");
 
   // 验证性能（应该在合理时间内完成）
   assert!(
@@ -126,7 +126,7 @@ async fn test_invalid_encoding_names() {
 /// 测试编码别名处理
 #[tokio::test]
 async fn test_encoding_aliases() {
-  let gbk_data = vec![0xC4, 0xE3, 0xBA, 0xC3]; // "你好" in GBK
+  let gbk_data = [0xC4, 0xE3, 0xBA, 0xC3]; // "你好" in GBK
 
   let aliases = vec![
     ("gbk", "gbk"),
@@ -255,7 +255,7 @@ async fn test_empty_file_handling() {
 
   // 空文件可能返回 None 或空内容
   if let Ok(Some((lines, encoding))) = result {
-    assert!(lines.is_empty() || lines.len() == 0, "空文件应该返回空行列表");
+    assert!(lines.is_empty(), "空文件应该返回空行列表");
     println!("空文件处理结果: 编码={}, 行数={}", encoding, lines.len());
   }
 }
@@ -294,7 +294,7 @@ async fn test_various_line_endings() {
 /// 测试特殊字符文件
 #[tokio::test]
 async fn test_special_characters_file() {
-  let special_content = "Special chars: ¡¢£¤¥¦§¨©ª«¬­®¯°±²³´µ¶·¸¹º»¼½¾¿\n\
+  let special_content = "Special chars: ¡¢£¤¥¦§¨©ª«¬\u{AD}®¯°±²³´µ¶·¸¹º»¼½¾¿\n\
                           Emoji: 🎉🎊🎁🎄🎅🤶🧑‍🎄🦌🌟⭐✨🔔🕯️🎶🎵🎼\n\
                           Math: ∫∑∏√∂∆π∞≈≠≤≥\n";
 

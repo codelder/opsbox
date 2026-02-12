@@ -36,7 +36,7 @@ impl S3DiscoveryFileSystem {
       .into_iter()
       .map(|p| {
         let name = p.profile_name.clone();
-        let path = ResourcePath::from_str(&format!("/{}", p.profile_name));
+        let path = ResourcePath::parse(&format!("/{}", p.profile_name));
 
         DirEntry {
           name,
@@ -74,7 +74,7 @@ impl S3DiscoveryFileSystem {
       .map(|b| {
         let name = b.name.unwrap_or_default();
         // NOTE: Once we select a bucket, ORL structure changes to orl://profile:bucket@s3/
-        let path = ResourcePath::from_str(&format!("/{}:{}", profile_name, name));
+        let path = ResourcePath::parse(&format!("/{}:{}", profile_name, name));
 
         let modified = b.creation_date
           .map(|d| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(d.secs() as u64));
@@ -85,6 +85,7 @@ impl S3DiscoveryFileSystem {
           metadata: FileMetadata {
             is_dir: true,
             is_file: false,
+            is_symlink: false,
             size: 0,
             modified,
             created: None,

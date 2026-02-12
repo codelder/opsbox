@@ -228,10 +228,10 @@ mod tests {
     // Test that Result<T> works correctly with AppError
     let ok_result: Result<String> = Ok("success".to_string());
     assert!(ok_result.is_ok());
-    assert_eq!(ok_result.unwrap(), "success");
+    assert!(matches!(ok_result, Ok(s) if s == "success"));
 
     let err_result: Result<String> = Err(AppError::config("config error"));
     assert!(err_result.is_err());
-    assert!(matches!(err_result.unwrap_err(), AppError::Config(msg) if msg == "config error"));
+    assert!(matches!(err_result, Err(AppError::Config(msg)) if msg == "config error"));
   }
 }

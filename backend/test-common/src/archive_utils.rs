@@ -482,9 +482,9 @@ mod tests {
   fn test_archive_format_clone() {
     // 测试ArchiveFormat的Clone实现
     let format1 = ArchiveFormat::Tar;
-    let format2 = format1.clone();
+    let format2 = format1;
     match format2 {
-      ArchiveFormat::Tar => assert!(true),
+      ArchiveFormat::Tar => {}
       _ => panic!("Expected Tar"),
     }
   }
@@ -495,12 +495,12 @@ mod tests {
     let format1 = ArchiveFormat::Zip;
     let format2 = format1; // Copy
     match format2 {
-      ArchiveFormat::Zip => assert!(true),
+      ArchiveFormat::Zip => {}
       _ => panic!("Expected Zip"),
     }
     // format1应该仍然可用（因为是Copy）
     match format1 {
-      ArchiveFormat::Zip => assert!(true),
+      ArchiveFormat::Zip => {}
       _ => panic!("Expected Zip"),
     }
   }

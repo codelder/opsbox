@@ -349,12 +349,14 @@ mod tests {
   #[test]
   fn test_search_result_collector_assertions() {
     // 测试收集器的断言方法
-    let mut collector = SearchResultCollector::default();
+    let mut collector = SearchResultCollector {
+      success_count: 2,
+      error_count: 1,
+      complete_count: 3,
+      ..Default::default()
+    };
 
     // 设置一些测试数据
-    collector.success_count = 2;
-    collector.error_count = 1;
-    collector.complete_count = 3;
     collector.matched_paths.insert("/var/log/test1.log".to_string());
     collector.matched_paths.insert("/var/log/test2.log".to_string());
     collector.completed_sources.insert("source1".to_string());
@@ -496,7 +498,7 @@ mod tests {
       } => {
         assert_eq!(source, "source1");
         assert_eq!(message, "test error");
-        assert_eq!(*recoverable, true);
+        assert!(*recoverable);
       }
       _ => panic!("Expected Error event"),
     }
@@ -526,7 +528,7 @@ mod tests {
 
     // 接收事件
     let mut received_count = 0;
-    while let Some(_) = rx.recv().await {
+    while rx.recv().await.is_some() {
       received_count += 1;
       if received_count >= 2 {
         break;

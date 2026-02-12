@@ -78,121 +78,73 @@ pub async fn view_cache_json(
 
       match resource.endpoint.location {
         Location::Remote { .. } => {
-          // 检查是否是归档条目
-          let is_archive_target = resource.archive_context.is_some();
-          // 归档条目：使用 create_entry_stream 下载归档并读取条目
-          if is_archive_target {
-            debug!(
-              "🚀 Agent 归档条目：使用 create_entry_stream 读取: agent_id={}, path={}",
-              agent_id,
-              resource.primary_path.to_string()
-            );
-
-            let mut stream = create_entry_stream(&pool, &params.file)
-              .await
-              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
-
-            // 获取要查找的 entry 路径
-            let target_entry = resource.archive_context.as_ref().map(|c| c.inner_path.to_string());
-
-            // 读取条目
-            let mut found = false;
-            let mut checked_count = 0;
-            while let Some(entry_res) = stream
-              .next_entry()
-              .await
-              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
-            {
-              let (meta, mut reader) = entry_res;
-              checked_count += 1;
-
-              // 如果指定了 entry 路径，检查是否匹配
-              if let Some(ref target) = target_entry {
-                let meta_path = meta.path.trim_start_matches('/').trim_start_matches("./");
-                let target_path = target.trim_start_matches('/').trim_start_matches("./");
-                if meta_path != target_path {
-                  continue;
-                }
-              }
-
-              let result = read_text_file(&mut reader, None)
-                .await
-                .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
-
-              if let Some((lines, encoding)) = result {
-                tracing::debug!("文件编码: {}", encoding);
-                all_lines = lines;
-                encoding_name = encoding;
-                found = true;
-              } else {
-                tracing::warn!("文件被检测为二进制或为空: {}", params.file);
-              }
-              break;
-            }
-
-            if !found {
-              tracing::warn!(
-                "在归档中未找到指定条目: {:?}, 共检查 {} 个条目",
-                target_entry,
-                checked_count
-              );
-            }
+          // 对于 Agent 来源，我们优先使用 Agent 的搜索能力
+          // 如果是归档条目，将其转换为“路径式”格式发给 Agent，因为 Agent 已具备自动探测并在搜索中展开归档的能力
+          let path_str = resource.primary_path.to_string();
+          let full_path = if let Some(ref ctx) = resource.archive_context {
+            format!(
+              "{}/{}",
+              path_str.trim_end_matches('/'),
+              ctx.inner_path.to_string().trim_start_matches('/')
+            )
           } else {
-            // 普通文件：使用 Agent search API 读取 (or should we use file_raw API?)
-            // Legacy uses search API for text files?
-            // "普通文件：使用 search API 读取"
-            debug!("🚀 准备调用 Agent 读取文件: agent_id={}, path={}", agent_id, resource.primary_path.to_string());
+            path_str
+          };
 
-            let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
-              .await
-              .map_err(|e| {
-                LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
-              })?;
+          debug!(
+            "🚀 准备调用 Agent 读取文件: agent_id={}, full_path={}",
+            agent_id, full_path
+          );
 
-            // Reconstruct exact target options for Agent Search
-            let path_str = resource.primary_path.to_string();
-            let target = if resource.archive_context.is_some() {
-              Target::Dir {
-                path: path_str.clone(),
-                recursive: true,
-              }
-            } else {
-              Target::Files {
-                paths: vec![path_str.clone()],
-              }
-            };
+          let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
+            .await
+            .map_err(|e| {
+              LogSeekApiError::Service(ServiceError::ProcessingError(format!(
+                "无法创建 Agent 客户端: {}",
+                e
+              )))
+            })?;
 
-            let options = crate::agent::SearchOptions {
-              path_filter: None,
-              target,
-              timeout_secs: Some(30),
-              ..Default::default()
-            };
+          let target = Target::Files {
+            paths: vec![full_path.clone()],
+          };
 
-            debug!("📤 发送 Agent 搜索请求: query='/.*/', options={:?}", options);
+          let options = crate::agent::SearchOptions {
+            path_filter: None,
+            target,
+            timeout_secs: Some(30),
+            ..Default::default()
+          };
 
-            let mut stream = client
-              .search("/.*/", 0, options)
-              .await
-              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 搜索失败: {}", e))))?;
+          debug!("📤 发送 Agent 搜索请求: query='/.*/', options={:?}", options);
 
-            debug!("📥以此 Agent 搜索流建立成功，开始接收数据...");
+          let mut stream = client.search("/.*/", 0, options).await.map_err(|e| {
+            LogSeekApiError::Service(ServiceError::ProcessingError(format!(
+              "Agent 搜索失败: {}",
+              e
+            )))
+          })?;
 
-            while let Some(item) = stream.next().await {
-              match item {
-                Ok(res) => {
-                  all_lines.extend(res.lines);
-                  if let Some(enc) = res.encoding
-                    && encoding_name == "UTF-8"
-                  {
-                    encoding_name = enc;
-                  }
+          debug!("📥以此 Agent 搜索流建立成功，开始接收数据...");
+
+          while let Some(item) = stream.next().await {
+            match item {
+              Ok(res) => {
+                all_lines.extend(res.lines);
+                if let Some(enc) = res.encoding
+                  && encoding_name == "UTF-8"
+                {
+                  encoding_name = enc;
                 }
-                Err(e) => {
-                  tracing::warn!("Agent 流返回错误: {}", e);
-                }
+              }
+              Err(e) => {
+                tracing::warn!("Agent 流返回错误: {}", e);
               }
             }
+          }
+
+          if all_lines.is_empty() {
+            tracing::warn!("Agent 搜索未返回内容: {}", full_path);
           }
         }
         _ => {
@@ -433,11 +385,24 @@ pub async fn view_raw_file(
         })?;
 
       // 构造请求路径
-      // Agent /api/v1/file_raw needs path param.
-      let target_path = resource.primary_path.to_string();
-      let query_path = format!("/api/v1/file_raw?path={}", urlencoding::encode(&target_path));
+      let path_str = resource.primary_path.to_string();
+      let full_path = if let Some(ref ctx) = resource.archive_context {
+        format!(
+          "{}/{}",
+          path_str.trim_end_matches('/'),
+          ctx.inner_path.to_string().trim_start_matches('/')
+        )
+      } else {
+        path_str
+      };
+      let query_path = format!("/api/v1/file_raw?path={}", urlencoding::encode(&full_path));
 
-      tracing::debug!("Agent 原始文件请求: agent_id={}, query={}", agent_id, query_path);
+      tracing::debug!(
+        "Agent 原始文件请求: agent_id={}, full_path={}, query={}",
+        agent_id,
+        full_path,
+        query_path
+      );
 
       // 调用 Agent API
       let response = client
@@ -660,7 +625,7 @@ mod tests {
     let file_path = temp_dir.path().join("raw.png");
     // Write some bytes to trigger sniff
     let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-    std::fs::write(&file_path, &png_header).unwrap();
+    std::fs::write(&file_path, png_header).unwrap();
 
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     let file_url = format!("orl://local{}", file_path.to_str().unwrap());

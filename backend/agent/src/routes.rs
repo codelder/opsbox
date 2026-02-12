@@ -332,7 +332,6 @@ mod tests {
   use axum::http::{Request, StatusCode};
   use std::path::PathBuf;
   use std::sync::{Arc, Mutex};
-  use tempfile;
   use tower::ServiceExt;
 
   fn create_test_config(roots: Vec<String>) -> Arc<AgentConfig> {
@@ -419,7 +418,7 @@ mod tests {
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), 1024 * 10).await.unwrap();
     let res: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(res["items"].as_array().unwrap().len() >= 1);
+    assert!(!res["items"].as_array().unwrap().is_empty());
   }
 
   #[tokio::test]

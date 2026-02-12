@@ -118,7 +118,7 @@ async fn test_proxy_get_log_config_success() {
     None => {
       // 服务器无法启动，跳过网络测试，至少验证了Agent注册和路由创建
       println!("⚠️ 代理获取配置测试跳过网络部分（Mock服务器不可用）");
-      assert!(true, "Agent注册和路由创建成功");
+      // Agent注册和路由创建成功
     }
   }
 }
@@ -163,7 +163,7 @@ async fn test_proxy_update_log_level_success() {
     None => {
       // 服务器无法启动，跳过网络测试
       println!("⚠️ 代理更新日志级别测试跳过网络部分（Mock服务器不可用）");
-      assert!(true, "Agent注册和路由创建成功");
+      // Agent注册和路由创建成功
     }
   }
 }
@@ -208,7 +208,7 @@ async fn test_proxy_update_log_retention_success() {
     None => {
       // 服务器无法启动，跳过网络测试
       println!("⚠️ 代理更新日志保留数量测试跳过网络部分（Mock服务器不可用）");
-      assert!(true, "Agent注册和路由创建成功");
+      // Agent注册和路由创建成功
     }
   }
 }
@@ -375,7 +375,7 @@ async fn test_proxy_multiple_agents() {
     _ => {
       // 至少一个服务器无法启动，跳过网络测试
       println!("⚠️ 代理多Agent测试跳过网络部分（Mock服务器不可用）");
-      assert!(true, "多个Agent注册和路由创建成功");
+      // 多个Agent注册和路由创建成功
     }
   }
 }
@@ -438,7 +438,7 @@ async fn test_proxy_concurrent_requests() {
     None => {
       // 服务器无法启动，跳过并发网络测试
       println!("⚠️ 代理并发请求测试跳过网络部分（Mock服务器不可用）");
-      assert!(true, "Agent注册和路由创建成功");
+      // Agent注册和路由创建成功
     }
   }
 }
@@ -505,7 +505,7 @@ async fn test_proxy_timeout_scenario() {
     Err(e) => {
       // 无法绑定端口（可能由于CI环境限制）
       println!("⚠️ 代理超时场景测试跳过：无法绑定端口 {}: {}", port, e);
-      assert!(true, "端口查找逻辑正常工作");
+      // 端口查找逻辑正常工作
     }
   }
 }
@@ -547,7 +547,7 @@ async fn test_proxy_all_log_levels() {
     None => {
       // 服务器无法启动，跳过网络测试
       println!("⚠️ 代理所有日志级别测试跳过网络部分（Mock服务器不可用）");
-      assert!(true, "Agent注册和路由创建成功");
+      // Agent注册和路由创建成功
     }
   }
 }
@@ -598,7 +598,7 @@ async fn test_proxy_retention_boundary_values() {
     None => {
       // 服务器无法启动，跳过网络测试
       println!("⚠️ 代理保留边界值测试跳过网络部分（Mock服务器不可用）");
-      assert!(true, "Agent注册和路由创建成功");
+      // Agent注册和路由创建成功
     }
   }
 }

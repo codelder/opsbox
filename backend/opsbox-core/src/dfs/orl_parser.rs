@@ -36,7 +36,7 @@
 
 use std::collections::HashMap;
 
-use percent_encoding::percent_decode_str;
+use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 
 use super::{
     archive::{ArchiveContext, ArchiveType},
@@ -112,13 +112,15 @@ impl OrlParser {
             .split_once('?')
             .unwrap_or((path_and_query, ""));
 
-        // 解析归档上下文（从主路径推断归档类型）
-        let archive_context = Self::parse_archive_context(query_str, path_str)?;
+        // 解析查询参数（归档上下文和 glob 过滤）
+        let (archive_context, filter_glob) = Self::parse_query_params(query_str, path_str)?;
 
         // 构建 path
         let path = format!("/{path_str}");
 
-        Ok(Resource::new(endpoint, path.into(), archive_context))
+        let mut resource = Resource::new(endpoint, path.into(), archive_context);
+        resource.filter_glob = filter_glob;
+        Ok(resource)
     }
 
     /// 解析 endpoint 部分
@@ -145,7 +147,22 @@ impl OrlParser {
         match type_str {
             "agent" => Self::parse_agent_endpoint(identity),
             "s3" => Self::parse_s3_endpoint(identity),
-            _ => Err(OrlParseError::UnknownEndpointType(type_str.to_string())),
+            _ => {
+                if let Some(addr) = type_str.strip_prefix("agent.") {
+                    // orl://identity@agent.host:port/path 格式
+                    if let Some((host, port_str)) = addr.split_once(':') {
+                        let port = port_str.parse::<u16>().map_err(|_| {
+                            OrlParseError::InvalidAgentFormat(format!("Invalid port number: {port_str}"))
+                        })?;
+                        Ok(Endpoint::agent(host.to_string(), port, identity.to_string()))
+                    } else {
+                        // 只有 host，使用默认端口
+                        Ok(Endpoint::agent(addr.to_string(), 4001, identity.to_string()))
+                    }
+                } else {
+                    Err(OrlParseError::UnknownEndpointType(type_str.to_string()))
+                }
+            }
         }
     }
 
@@ -189,25 +206,28 @@ impl OrlParser {
         }
     }
 
-    /// 解析归档上下文
+    /// 解析查询参数
     ///
-    /// 支持 entry 参数指定归档内路径
-    /// archive_type 从主路径推断
-    fn parse_archive_context(query: &str, main_path: &str) -> Result<Option<ArchiveContext>, OrlParseError> {
+    /// 从查询字符串中提取 archive context（entry 参数）和 glob 过滤器
+    fn parse_query_params(query: &str, main_path: &str) -> Result<(Option<ArchiveContext>, Option<String>), OrlParseError> {
         if query.is_empty() {
-            return Ok(None);
+            return Ok((None, None));
         }
 
         let params = Self::parse_query_string(query);
 
-        if let Some(inner_path) = params.get("entry") {
-            // 从主路径推断归档类型
+        // 提取归档上下文
+        let archive_context = if let Some(inner_path) = params.get("entry") {
             let archive_type = Self::infer_archive_type_from_path(main_path);
-
-            Ok(Some(ArchiveContext::from_path_str(inner_path, archive_type)))
+            Some(ArchiveContext::from_path_str(inner_path, archive_type))
         } else {
-            Ok(None)
-        }
+            None
+        };
+
+        // 提取 glob 过滤器
+        let filter_glob = params.get("glob").cloned();
+
+        Ok((archive_context, filter_glob))
     }
 
     /// 解析查询字符串
@@ -256,26 +276,33 @@ impl OrlParser {
 ///
 /// // 本地文件
 /// let endpoint = Endpoint::local_fs();
-/// let path = ResourcePath::from_str("/var/log/app.log");
-/// let orl = build_orl(&endpoint, &path, None);
+/// let path = ResourcePath::parse("/var/log/app.log");
+/// let orl = build_orl(&endpoint, &path, None, None);
 /// assert_eq!(orl, "orl://local/var/log/app.log");
 ///
 /// // Agent 代理
 /// let endpoint = Endpoint::agent("192.168.1.100".to_string(), 4001, "web-01".to_string());
-/// let path = ResourcePath::from_str("/var/log/app.log");
-/// let orl = build_orl(&endpoint, &path, None);
-/// assert_eq!(orl, "orl://web-01@192.168.1.100:4001@agent/var/log/app.log");
+/// let path = ResourcePath::parse("/var/log/app.log");
+/// let orl = build_orl(&endpoint, &path, None, None);
+/// assert_eq!(orl, "orl://web-01@agent.192.168.1.100:4001/var/log/app.log");
 ///
 /// // 归档内文件
 /// let endpoint = Endpoint::local_fs();
-/// let path = ResourcePath::from_str("/data/archive.tar");
-/// let orl = build_orl(&endpoint, &path, Some("inner/file.txt"));
-/// assert_eq!(orl, "orl://local/data/archive.tar?entry=inner/file.txt");
+/// let path = ResourcePath::parse("/data/archive.tar");
+/// let orl = build_orl(&endpoint, &path, Some("inner/file.txt"), None);
+/// assert_eq!(orl, "orl://local/data/archive.tar?entry=inner%2Ffile%2Etxt");
+///
+/// // 带 glob 过滤
+/// let endpoint = Endpoint::local_fs();
+/// let path = ResourcePath::parse("/var/log");
+/// let orl = build_orl(&endpoint, &path, None, Some("*.log"));
+/// assert_eq!(orl, "orl://local/var/log?glob=%2A%2Elog");
 /// ```
 pub fn build_orl(
     endpoint: &Endpoint,
     path: &crate::dfs::ResourcePath,
     entry: Option<&str>,
+    glob: Option<&str>,
 ) -> String {
     let endpoint_str = build_endpoint_string(endpoint);
     let path_str = path.to_string();
@@ -283,10 +310,21 @@ pub fn build_orl(
     // 移除路径前导斜杠（ORL 格式中路径紧跟 endpoint 后）
     let path_without_leading_slash = path_str.trim_start_matches('/');
 
+    // 构建查询参数
+    let mut query_parts = Vec::new();
     if let Some(entry_path) = entry {
-        format!("orl://{endpoint_str}/{path_without_leading_slash}?entry={entry_path}")
-    } else {
+        let encoded = utf8_percent_encode(entry_path, NON_ALPHANUMERIC).to_string();
+        query_parts.push(format!("entry={encoded}"));
+    }
+    if let Some(glob_pattern) = glob {
+        let encoded = utf8_percent_encode(glob_pattern, NON_ALPHANUMERIC).to_string();
+        query_parts.push(format!("glob={encoded}"));
+    }
+
+    if query_parts.is_empty() {
         format!("orl://{endpoint_str}/{path_without_leading_slash}")
+    } else {
+        format!("orl://{endpoint_str}/{path_without_leading_slash}?{}", query_parts.join("&"))
     }
 }
 
@@ -297,8 +335,8 @@ fn build_endpoint_string(endpoint: &Endpoint) -> String {
     match &endpoint.location {
         Location::Local => "local".to_string(),
         Location::Remote { host, port } => {
-            // Agent endpoint: identity@host:port@agent
-            format!("{}@{}:{}@agent", endpoint.identity, host, port)
+            // Agent endpoint: identity@agent.host:port
+            format!("{}@agent.{}:{}", endpoint.identity, host, port)
         }
         Location::Cloud => {
             // S3 endpoint: profile[:bucket]@s3
@@ -323,7 +361,7 @@ fn build_endpoint_string(endpoint: &Endpoint) -> String {
 /// ```
 pub fn build_orl_from_resource(resource: &Resource) -> String {
     let entry = resource.archive_context.as_ref().map(|ctx| ctx.inner_path.to_string());
-    build_orl(&resource.endpoint, &resource.primary_path, entry.as_deref())
+    build_orl(&resource.endpoint, &resource.primary_path, entry.as_deref(), resource.filter_glob.as_deref())
 }
 
 #[cfg(test)]

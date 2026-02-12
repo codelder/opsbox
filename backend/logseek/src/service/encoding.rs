@@ -420,7 +420,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_read_lines_utf16_le() {
-    let data = vec![0xFF, 0xFE, b'l', 0, b'1', 0, b'\n', 0, b'l', 0, b'2', 0];
+    let data = [0xFF, 0xFE, b'l', 0, b'1', 0, b'\n', 0, b'l', 0, b'2', 0];
     let mut reader = BufReader::new(&data[2..]);
     let sample = data[0..2].to_vec();
 
@@ -432,7 +432,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_read_lines_utf16_be() {
-    let data = vec![0xFE, 0xFF, 0, b'l', 0, b'1', 0, b'\n', 0, b'l', 0, b'2'];
+    let data = [0xFE, 0xFF, 0, b'l', 0, b'1', 0, b'\n', 0, b'l', 0, b'2'];
     let mut reader = BufReader::new(&data[2..]);
     let sample = data[0..2].to_vec();
 
@@ -444,7 +444,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_read_lines_gbk() {
-    let data = vec![0xC4, 0xE3, 0xBA, 0xC3, b'\n', b'w', b'o', b'r', b'l', b'd']; // 你好
+    let data = [0xC4, 0xE3, 0xBA, 0xC3, b'\n', b'w', b'o', b'r', b'l', b'd']; // 你好
     let mut reader = BufReader::new(&data[..]);
     let sample = Vec::new();
 
@@ -456,7 +456,7 @@ mod tests {
 
   #[tokio::test]
   async fn test_read_text_file_with_qualifier() {
-    let data = vec![0xC4, 0xE3, 0xBA, 0xC3];
+    let data = [0xC4, 0xE3, 0xBA, 0xC3];
     let mut reader = &data[..];
 
     let result = read_text_file(&mut reader, Some("gbk")).await.unwrap();
@@ -488,6 +488,6 @@ mod tests {
     // The logic in read_lines_utf8 seems to handle incomplete samples
     // If sample is "par" and reader has "t2\n", it might become "part2\n"
     // Let's verify what it actually does.
-    assert!(lines.len() >= 1);
+    assert!(!lines.is_empty());
   }
 }

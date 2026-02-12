@@ -197,7 +197,7 @@ test.describe('Performance Boundary Tests', () => {
   test('should handle large result sets with pagination (load more)', async ({ page }) => {
     // Mock 大量搜索结果
     await page.route('**/search.ndjson', async (route) => {
-      const jsonResults: any[] = [];
+      const jsonResults: Record<string, unknown>[] = [];
 
       // 生成 100 个结果
       for (let i = 0; i < 100; i++) {
@@ -319,7 +319,7 @@ test.describe('Performance Boundary Tests', () => {
   test('should handle rapid scrolling without lag', async ({ page }) => {
     // Mock 大量结果
     await page.route(/.*\/search\.ndjson/, async (route) => {
-      const jsonResults: any[] = [];
+      const jsonResults: Record<string, unknown>[] = [];
 
       for (let i = 0; i < 500; i++) {
         jsonResults.push({

@@ -435,14 +435,14 @@ pub async fn create_entry_stream_from_resource(
       // 确定根目录
       let path_buf = PathBuf::from(&path);
       let (root, relative_path) = if path_buf.is_dir() {
-        (path_buf.clone(), ResourcePath::from_str(""))
+        (path_buf.clone(), ResourcePath::parse(""))
       } else if path_buf.exists() {
         let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
         let file_name = path_buf.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        (parent, ResourcePath::from_str(&file_name))
+        (parent, ResourcePath::parse(&file_name))
       } else {
         let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
-        (parent, ResourcePath::from_str(""))
+        (parent, ResourcePath::parse(""))
       };
 
       let fs = LocalFileSystem::new(root)
@@ -482,7 +482,7 @@ pub async fn create_entry_stream_from_resource(
       let s3_storage = S3Storage::new(s3_config)
         .map_err(|e| format!("创建 S3 存储失败: {}", e))?;
 
-      let resource_path = ResourcePath::from_str(object_key);
+      let resource_path = ResourcePath::parse(object_key);
       s3_storage
         .as_entry_stream(&resource_path, true, &search_config)
         .await
@@ -533,7 +533,7 @@ mod tests {
   #[tokio::test]
   async fn test_preload_entry_large() {
     // Create content slightly larger than our max check, but smaller than the chunk size (64KB)
-    let content = vec![0u8; 100];
+    let content = [0u8; 100];
     let mut reader = &content[..];
     // max size smaller than content
     let res = preload_entry(&mut reader, 50).await.expect("preload failed");
@@ -588,7 +588,7 @@ mod tests {
       std::env::set_var("ENTRY_CONCURRENCY", "not-a-number");
       let conc = entry_concurrency();
       // 无效值应回退到默认计算
-      assert!(conc >= 1 && conc <= 128);
+      assert!((1..=128).contains(&conc));
 
       // 测试超出范围的值
       std::env::set_var("ENTRY_CONCURRENCY", "0"); // 小于最小值
@@ -611,7 +611,7 @@ mod tests {
   #[tokio::test]
   async fn test_preload_entry_empty() {
     // 测试空文件
-    let content = vec![];
+    let content: [u8; 0] = [];
     let mut reader = &content[..];
     let res = preload_entry(&mut reader, 100).await.expect("preload failed");
     match res {
@@ -644,7 +644,7 @@ mod tests {
   #[tokio::test]
   async fn test_preload_entry_single_byte() {
     // 测试单字节文件
-    let content = vec![42u8];
+    let content = [42u8];
     let mut reader = &content[..];
     let res = preload_entry(&mut reader, 100).await.expect("preload failed");
     match res {

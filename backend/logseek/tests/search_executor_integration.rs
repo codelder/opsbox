@@ -326,7 +326,7 @@ async fn test_concurrent_search_resource_limits() {
   // 验证最大并发数没有超过限制
   let observed_max = max_observed.load(Ordering::SeqCst);
   assert!(
-    observed_max <= max_concurrency as usize,
+    observed_max <= max_concurrency,
     "最大并发数 {} 超过了限制 {}",
     observed_max,
     max_concurrency
@@ -468,9 +468,8 @@ async fn test_search_timeout_handling() {
   // 使用超时接收事件
   let mut received_count = 0;
   while let Ok(Some(event)) = timeout(Duration::from_millis(100), rx.recv()).await {
-    match event {
-      SearchEvent::Success(_) => received_count += 1,
-      _ => {}
+    if let SearchEvent::Success(_) = event {
+      received_count += 1;
     }
 
     // 最多接收 3 个事件

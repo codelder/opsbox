@@ -95,7 +95,7 @@ async fn test_tar_archive_creation() {
     Err(e) => {
       // 如果创建归档失败（可能由于沙盒环境限制），跳过测试
       println!("⚠️ 无法创建测试tar归档（可能由于环境限制）: {}", e);
-      assert!(true, "测试环境可能不支持创建tar归档");
+      // 测试环境可能不支持创建tar归档
     }
   }
 }
@@ -124,7 +124,7 @@ async fn test_tar_gz_archive_creation() {
     Err(e) => {
       // 如果创建归档失败（可能由于沙盒环境限制），跳过测试
       println!("⚠️ 无法创建测试tar.gz归档（可能由于环境限制）: {}", e);
-      assert!(true, "测试环境可能不支持创建tar.gz归档");
+      // 测试环境可能不支持创建tar.gz归档
     }
   }
 }

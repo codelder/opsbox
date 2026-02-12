@@ -142,6 +142,7 @@ impl OpbxFileSystem for AgentProxyFS {
                 return Ok(FileMetadata {
                     is_dir: item.is_dir,
                     is_file: !item.is_dir,
+                    is_symlink: item.is_symlink,
                     size: item.size.unwrap_or(0),
                     modified: item.modified.and_then(|ts| {
                         if ts >= 0 {
@@ -195,6 +196,7 @@ impl OpbxFileSystem for AgentProxyFS {
             let file_meta = FileMetadata {
                 is_dir: item.is_dir,
                 is_file: !item.is_dir,
+                is_symlink: item.is_symlink,
                 size: item.size.unwrap_or(0),
                 modified: item.modified.and_then(|ts| {
                     if ts >= 0 {
@@ -208,7 +210,7 @@ impl OpbxFileSystem for AgentProxyFS {
             };
 
             // 使用相对路径构建 ResourcePath
-            let entry_path = ResourcePath::from_str(&item.path);
+            let entry_path = ResourcePath::parse(&item.path);
 
             entries.push(DirEntry {
                 name: item.name,
@@ -437,19 +439,19 @@ mod tests {
         let fs = AgentProxyFS::new(client);
 
         // 空路径
-        let path = ResourcePath::from_str("");
+        let path = ResourcePath::parse("");
         assert_eq!(fs.resource_path_to_api_path(&path), "/");
 
         // 单级路径
-        let path = ResourcePath::from_str("file.txt");
+        let path = ResourcePath::parse("file.txt");
         assert_eq!(fs.resource_path_to_api_path(&path), "/file.txt");
 
         // 多级路径
-        let path = ResourcePath::from_str("dir/file.txt");
+        let path = ResourcePath::parse("dir/file.txt");
         assert_eq!(fs.resource_path_to_api_path(&path), "/dir/file.txt");
 
         // 绝对路径
-        let path = ResourcePath::from_str("/var/log/app.log");
+        let path = ResourcePath::parse("/var/log/app.log");
         assert_eq!(fs.resource_path_to_api_path(&path), "/var/log/app.log");
     }
 

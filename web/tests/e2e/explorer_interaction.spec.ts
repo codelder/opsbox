@@ -8,7 +8,7 @@ test.describe('Explorer Interaction E2E (Mocked)', () => {
       // 标准化路径，移除结尾斜杠进行匹配
       const orl = (body.orl || '').replace(/\/$/, '');
 
-      let items: any[] = [];
+      let items: Record<string, unknown>[] = [];
       if (orl === 'orl://local' || orl === '') {
         items = [{ name: 'Users', path: 'orl://local/Users/', type: 'dir' }];
       } else if (orl === 'orl://local/Users') {

@@ -51,32 +51,46 @@ impl SearchResultHandler {
 
   /// 根据结果路径构造完整的 ORL 字符串
   fn build_result_orl(&self, res_path: &str) -> String {
-    use opsbox_core::dfs::Resource;
+    use opsbox_core::dfs::{ArchiveContext, Resource};
 
-    // 判断是否为归档资源
+    // 判断是否为归档资源（显式 Context 或 后验识别）
     if self.resource.archive_context.is_some() {
-      // 归档内文件：保持原始归档路径，更新 entry 参数
+      // 1. 已有归档上下文：保持原始归档路径，更新 entry 参数
       let mut result_resource = self.resource.clone();
-      // 更新 archive_context 的 inner_path
       if let Some(ref mut ctx) = result_resource.archive_context {
-        ctx.inner_path = opsbox_core::dfs::ResourcePath::from_str(res_path);
+        ctx.inner_path = opsbox_core::dfs::ResourcePath::parse(res_path);
       }
       build_orl_from_resource(&result_resource)
     } else {
-      // 普通文件：构造新路径
-      let full_path = if res_path.starts_with('/') {
-        res_path.to_string()
+      // 2. 无归档上下文：检查 Primary Path 是否本身是一个归档文件 (Heuristic)
+      let path_str = self.resource.primary_path.to_string().to_lowercase();
+      let is_archive = path_str.ends_with(".tar")
+        || path_str.ends_with(".tar.gz")
+        || path_str.ends_with(".tgz")
+        || path_str.ends_with(".zip")
+        || path_str.ends_with(".gz");
+
+      if is_archive {
+        // 这是一个开启了自动展开的归档搜索，应使用 ?entry= 格式
+        let mut result_resource = self.resource.clone();
+        result_resource.archive_context = Some(ArchiveContext::from_path_str(res_path, None));
+        build_orl_from_resource(&result_resource)
       } else {
-        let base = self.resource.primary_path.to_string();
-        let base = base.trim_end_matches('/');
-        format!("{}/{}", base, res_path.trim_start_matches('/'))
-      };
-      let result_resource = Resource::new(
-        self.resource.endpoint.clone(),
-        opsbox_core::dfs::ResourcePath::from_str(&full_path),
-        None,
-      );
-      build_orl_from_resource(&result_resource)
+        // 3. 普通文件/目录：构造新路径
+        let full_path = if res_path.starts_with('/') {
+          res_path.to_string()
+        } else {
+          let base = self.resource.primary_path.to_string();
+          let base = base.trim_end_matches('/');
+          format!("{}/{}", base, res_path.trim_start_matches('/'))
+        };
+        let result_resource = Resource::new(
+          self.resource.endpoint.clone(),
+          opsbox_core::dfs::ResourcePath::parse(&full_path),
+          None,
+        );
+        build_orl_from_resource(&result_resource)
+      }
     }
   }
 
@@ -141,9 +155,9 @@ impl SearchResultHandler {
   fn display_name(&self) -> String {
     // 简化显示：提取关键部分
     match &self.resource.endpoint.location {
-      Location::Local => format!("local:{}", self.resource.primary_path.to_string()),
-      Location::Remote { .. } => format!("agent:{}:{}", self.resource.endpoint.identity, self.resource.primary_path.to_string()),
-      Location::Cloud => format!("s3:{}:{}", self.resource.endpoint.identity, self.resource.primary_path.to_string()),
+      Location::Local => format!("local:{}", self.resource.primary_path),
+      Location::Remote { .. } => format!("agent:{}:{}", self.resource.endpoint.identity, self.resource.primary_path),
+      Location::Cloud => format!("s3:{}:{}", self.resource.endpoint.identity, self.resource.primary_path),
     }
   }
 
@@ -314,7 +328,7 @@ impl SearchExecutor {
           Ok(provider) => {
             // 获取显示名称用于错误报告
             let display_name = match &resource.endpoint.location {
-              Location::Local => format!("local:{}", resource.primary_path.to_string()),
+              Location::Local => format!("local:{}", resource.primary_path),
               Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
               Location::Cloud => format!("s3:{}", resource.endpoint.identity),
             };
@@ -331,7 +345,7 @@ impl SearchExecutor {
           Err(e) => {
             tracing::error!("Invalid Endpoint Type: {}", e);
             let display_name = match &resource.endpoint.location {
-              Location::Local => format!("local:{}", resource.primary_path.to_string()),
+              Location::Local => format!("local:{}", resource.primary_path),
               Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
               Location::Cloud => format!("s3:{}", resource.endpoint.identity),
             };
@@ -1205,7 +1219,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置
 SOURCES = [
-    "orl://agent.nonexistent-agent-id/logs"
+    "orl://nonexistent-agent-id@agent/logs"
 ]
 "#;
 
@@ -1270,7 +1284,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（带 subpath）
 SOURCES = [
-    "orl://agent.test-agent-with-subpath/var/log/app"
+    "orl://test-agent-with-subpath@agent/var/log/app"
 ]
 "#;
 
@@ -1325,8 +1339,8 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（Files target）
 SOURCES = [
-    "orl://agent.test-agent-files/logs/app.log",
-    "orl://agent.test-agent-files/logs/error.log"
+    "orl://test-agent-files@agent/logs/app.log",
+    "orl://test-agent-files@agent/logs/error.log"
 ]
 "#;
 
@@ -1379,7 +1393,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（Archive target）
 SOURCES = [
-    "orl://agent.test-agent-archive/backups/logs.tar.gz"
+    "orl://test-agent-archive@agent/backups/logs.tar.gz"
 ]
 "#;
 
@@ -1433,7 +1447,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置（带 filter_glob）
 SOURCES = [
-    "orl://agent.test-agent-filter/logs?glob=*.log"
+    "orl://test-agent-filter@agent/logs?glob=*.log"
 ]
 "#;
 
@@ -1486,7 +1500,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置
 SOURCES = [
-    "orl://agent.test-agent-recoverable/logs"
+    "orl://test-agent-recoverable@agent/logs"
 ]
 "#;
 
@@ -1527,7 +1541,7 @@ SOURCES = [
     let mixed_script = r#"
 # 混合 Agent 和 Local 数据源
 SOURCES = [
-    "orl://agent.test-agent-mixed/logs",
+    "orl://test-agent-mixed@agent/logs",
     "orl://local/tmp"
 ]
 "#;
@@ -1593,9 +1607,9 @@ SOURCES = [
     let multi_agent_script = r#"
 # 多个 Agent 数据源
 SOURCES = [
-    "orl://agent.agent-1/logs",
-    "orl://agent.agent-2/logs",
-    "orl://agent.agent-3/logs"
+    "orl://agent-1@agent/logs",
+    "orl://agent-2@agent/logs",
+    "orl://agent-3@agent/logs"
 ]
 "#;
 
@@ -1639,7 +1653,7 @@ SOURCES = [
     let agent_script = r#"
 # Agent 数据源配置
 SOURCES = [
-    "orl://agent.specific-agent-id-12345/logs"
+    "orl://specific-agent-id-12345@agent/logs"
 ]
 "#;
 
@@ -2231,11 +2245,11 @@ SOURCES = [
     std::fs::write(temp_path.join("test.log"), "error in log\n").unwrap();
     std::fs::write(temp_path.join("test.txt"), "error in txt\n").unwrap();
 
-    // 创建 planner（只搜索 .log 文件）
+    // 创建 planner
     let planner_script = format!(
       r#"
 SOURCES = [
-    "orl://local/{}?glob=**/*.log"
+    "orl://local/{}"
 ]
 "#,
       escape_path_for_starlark(temp_path)
@@ -2249,8 +2263,8 @@ SOURCES = [
     let config = SearchExecutorConfig::default();
     let executor = SearchExecutor::new(pool, config);
 
-    // 执行搜索
-    let result = executor.search("error", "test-sid".to_string(), 0, None).await;
+    // 执行搜索（使用 path: 限定词过滤 .log 文件）
+    let result = executor.search("error path:*.log", "test-sid".to_string(), 0, None).await;
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();

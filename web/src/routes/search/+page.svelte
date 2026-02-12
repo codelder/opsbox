@@ -141,7 +141,6 @@
 
         let child = currentParent.children.get(segment);
         if (!child) {
-          const nodeTargetType = isArchiveFile ? 'archive' : 'dir';
           const nodeUrl = stringifyOrl({
             endpointId: parsed.endpointId,
             endpointType: parsed.endpointType,

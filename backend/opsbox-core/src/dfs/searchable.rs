@@ -62,10 +62,10 @@ impl SearchConfig {
 
     /// 从环境变量读取并发配置
     pub fn concurrency_from_env() -> usize {
-        if let Ok(val) = std::env::var("ENTRY_CONCURRENCY") {
-            if let Ok(parsed) = val.parse::<usize>() {
-                return parsed.clamp(1, 128);
-            }
+        if let Ok(val) = std::env::var("ENTRY_CONCURRENCY")
+            && let Ok(parsed) = val.parse::<usize>()
+        {
+            return parsed.clamp(1, 128);
         }
         Self::default().max_concurrency
     }

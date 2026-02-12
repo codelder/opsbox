@@ -54,6 +54,8 @@ pub struct FileMetadata {
     pub is_dir: bool,
     /// 是否为文件
     pub is_file: bool,
+    /// 是否为符号链接
+    pub is_symlink: bool,
     /// 文件大小
     pub size: u64,
     /// 修改时间
@@ -68,6 +70,7 @@ impl FileMetadata {
         Self {
             is_dir: true,
             is_file: false,
+            is_symlink: false,
             size,
             modified: None,
             created: None,
@@ -79,6 +82,7 @@ impl FileMetadata {
         Self {
             is_dir: false,
             is_file: true,
+            is_symlink: false,
             size,
             modified: None,
             created: None,

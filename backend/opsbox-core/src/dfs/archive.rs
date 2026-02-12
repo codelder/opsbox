@@ -80,10 +80,9 @@ impl ArchiveType {
             let sig = &head[..2];
             if sig == [0x1F, 0x8B] {
                 // 尝试解压头部以检测内部是否为 Tar
-                if let Some(inner_head) = Self::try_decompress_gzip_head(head) {
-                    if inner_head.len() >= 512 && &inner_head[257..262] == b"ustar" {
+                if let Some(inner_head) = Self::try_decompress_gzip_head(head)
+                    && inner_head.len() >= 512 && &inner_head[257..262] == b"ustar" {
                         return ArchiveType::TarGz;
-                    }
                 }
                 return ArchiveType::Gz;
             }
@@ -147,7 +146,7 @@ impl ArchiveContext {
     /// 从路径字符串创建归档上下文
     pub fn from_path_str(inner_path: &str, archive_type: Option<ArchiveType>) -> Self {
         Self {
-            inner_path: ResourcePath::from_str(inner_path),
+            inner_path: ResourcePath::parse(inner_path),
             archive_type,
         }
     }
@@ -180,7 +179,7 @@ mod tests {
     #[test]
     fn test_archive_type_from_magic_bytes_zip() {
         // ZIP local file header: 50 4B 03 04
-        let zip_head = vec![0x50, 0x4B, 0x03, 04, 0x00, 0x00, 0x00, 0x00];
+        let zip_head = vec![0x50, 0x4B, 0x03, 0x04, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(ArchiveType::from_magic_bytes(&zip_head), ArchiveType::Zip);
 
         // ZIP end of central directory: 50 4B 05 06
@@ -253,7 +252,7 @@ mod tests {
 
     #[test]
     fn test_archive_context_new() {
-        let inner_path = ResourcePath::from_str("logs/app.log");
+        let inner_path = ResourcePath::parse("logs/app.log");
         let ctx = ArchiveContext::new(inner_path.clone(), Some(ArchiveType::Tar));
         assert_eq!(ctx.inner_path, inner_path);
         assert_eq!(ctx.archive_type, Some(ArchiveType::Tar));

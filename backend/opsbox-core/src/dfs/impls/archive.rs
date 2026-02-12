@@ -94,7 +94,7 @@ where
     async fn scan_all_entries(&self) -> Result<Vec<ArchiveEntry>, FsError> {
         match self.archive_type {
             ArchiveType::Unknown => {
-                return Err(FsError::InvalidConfig("Unknown archive type".to_string()));
+                Err(FsError::InvalidConfig("Unknown archive type".to_string()))
             }
             ArchiveType::Tar => {
                 let mut archive = self.new_tar_archive().await?;
@@ -244,7 +244,7 @@ where
 
             result.push(ArchiveEntry {
                 path: name,
-                size: entry.uncompressed_size() as u64,
+                size: entry.uncompressed_size(),
                 is_dir: entry.dir().unwrap_or(false),
             });
         }
@@ -354,6 +354,7 @@ where
                         return Ok(FileMetadata {
                             is_dir,
                             is_file: !is_dir,
+                            is_symlink: false,
                             size,
                             modified: None,
                             created: None,
@@ -384,6 +385,7 @@ where
                         return Ok(FileMetadata {
                             is_dir,
                             is_file: !is_dir,
+                            is_symlink: false,
                             size,
                             modified: None,
                             created: None,
@@ -402,11 +404,12 @@ where
                     .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::NotFound, e.to_string())))?
                     .metadata()
                     .await
-                    .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+                    .map_err(|e| FsError::Io(io::Error::other(e.to_string())))?;
 
                 Ok(FileMetadata {
                     is_dir: false,
                     is_file: true,
+                    is_symlink: false,
                     size: metadata.len(),
                     modified: metadata.modified().ok(),
                     created: None,
@@ -430,7 +433,8 @@ where
                     return Ok(FileMetadata {
                         is_dir: entry.dir().unwrap_or(false),
                         is_file: !entry.dir().unwrap_or(false),
-                        size: entry.uncompressed_size() as u64,
+                        is_symlink: false,
+                        size: entry.uncompressed_size(),
                         modified: None,
                         created: None,
                     });
@@ -505,7 +509,7 @@ where
                             if seen.insert(component.to_string()) {
                                 result.push(DirEntry {
                                     name: component.to_string(),
-                                    path: ResourcePath::from_str(&entry_path),
+                                    path: ResourcePath::parse(&entry_path),
                                     metadata: FileMetadata::dir(0),
                                 });
                             }
@@ -513,7 +517,7 @@ where
                             // 文件组件
                             result.push(DirEntry {
                                 name: component.to_string(),
-                                path: ResourcePath::from_str(&entry_path),
+                                path: ResourcePath::parse(&entry_path),
                                 metadata: FileMetadata::file(entry.size),
                             });
                         }
@@ -533,7 +537,7 @@ where
                 if dir_path.is_empty() || dir_path == "/" {
                     // 返回虚拟文件条目，路径为 /<file_name> 而不是 /
                     // 这样 map_entry 可以正确构建 ORL 的 entry 参数
-                    let entry_path = ResourcePath::from_str(&format!("/{}", file_name));
+                    let entry_path = ResourcePath::parse(&format!("/{}", file_name));
                     Ok(vec![DirEntry {
                         name: file_name.to_string(),
                         path: entry_path,
@@ -575,7 +579,7 @@ where
                         entry
                             .read_to_end(&mut buf)
                             .await
-                            .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+                            .map_err(|e| FsError::Io(io::Error::other(e.to_string())))?;
 
                         return Ok(Box::pin(MemoryReader::new(buf)));
                     }
@@ -602,7 +606,7 @@ where
                         entry
                             .read_to_end(&mut buf)
                             .await
-                            .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+                            .map_err(|e| FsError::Io(io::Error::other(e.to_string())))?;
 
                         return Ok(Box::pin(MemoryReader::new(buf)));
                     }
@@ -633,7 +637,7 @@ where
                     let mut buf = Vec::new();
                     FuturesAsyncReadExt::read_to_end(&mut entry_reader, &mut buf)
                         .await
-                        .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+                        .map_err(|e| FsError::Io(io::Error::other(e.to_string())))?;
 
                     return Ok(Box::pin(MemoryReader::new(buf)));
                 }
@@ -651,7 +655,7 @@ where
                 let mut buf = Vec::new();
                 AsyncReadExt::read_to_end(&mut decoder, &mut buf)
                     .await
-                    .map_err(|e| FsError::Io(io::Error::new(io::ErrorKind::Other, e.to_string())))?;
+                    .map_err(|e| FsError::Io(io::Error::other(e.to_string())))?;
 
                 Ok(Box::pin(MemoryReader::new(buf)))
             }
@@ -813,7 +817,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let meta = archive_fs.metadata(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        let meta = archive_fs.metadata(&ResourcePath::parse("/test.txt")).await.unwrap();
         assert!(meta.is_file);
         assert_eq!(meta.size, 13);
     }
@@ -831,7 +835,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let entries = archive_fs.read_dir(&ResourcePath::from_str("/")).await.unwrap();
+        let entries = archive_fs.read_dir(&ResourcePath::parse("/")).await.unwrap();
         assert!(entries.iter().any(|e| e.name == "test.txt"));
         assert!(entries.iter().any(|e| e.name == "logs"));
     }
@@ -849,7 +853,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let mut reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        let mut reader = archive_fs.open_read(&ResourcePath::parse("/test.txt")).await.unwrap();
         use tokio::io::AsyncReadExt;
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
@@ -869,7 +873,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let meta = archive_fs.metadata(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        let meta = archive_fs.metadata(&ResourcePath::parse("/test.txt")).await.unwrap();
         assert!(meta.is_file);
         assert_eq!(meta.size, 17);
     }
@@ -887,7 +891,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let entries = archive_fs.read_dir(&ResourcePath::from_str("/")).await.unwrap();
+        let entries = archive_fs.read_dir(&ResourcePath::parse("/")).await.unwrap();
         assert!(entries.iter().any(|e| e.name == "test.txt"));
         assert!(entries.iter().any(|e| e.name == "logs"));
     }
@@ -905,7 +909,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let mut reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        let mut reader = archive_fs.open_read(&ResourcePath::parse("/test.txt")).await.unwrap();
         use tokio::io::AsyncReadExt;
         let mut buffer = Vec::new();
         reader.read_to_end(&mut buffer).await.unwrap();
@@ -986,7 +990,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let meta = archive_fs.metadata(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        let meta = archive_fs.metadata(&ResourcePath::parse("/test.txt")).await.unwrap();
         assert!(meta.is_file);
         assert_eq!(meta.size, 12);  // "hello tar.gz" 是 12 字节
     }
@@ -1004,7 +1008,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let entries = archive_fs.read_dir(&ResourcePath::from_str("/")).await.unwrap();
+        let entries = archive_fs.read_dir(&ResourcePath::parse("/")).await.unwrap();
         assert!(entries.iter().any(|e| e.name == "test.txt"));
         assert!(entries.iter().any(|e| e.name == "logs"));
     }
@@ -1022,7 +1026,7 @@ mod tests {
             NamedTempFile::new().unwrap(),
         );
 
-        let mut reader = archive_fs.open_read(&ResourcePath::from_str("/test.txt")).await.unwrap();
+        let mut reader = archive_fs.open_read(&ResourcePath::parse("/test.txt")).await.unwrap();
         let mut bytes = Vec::new();
         tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut bytes)
             .await
@@ -1100,7 +1104,7 @@ mod tests {
         );
 
         // 列出归档根目录
-        let entries = archive_fs.read_dir(&ResourcePath::from_str("/")).await.unwrap();
+        let entries = archive_fs.read_dir(&ResourcePath::parse("/")).await.unwrap();
 
         // 找到 "home" 目录条目
         let home_entry = entries.iter().find(|e| e.name == "home").expect("应该找到 home 目录");
@@ -1118,7 +1122,7 @@ mod tests {
         );
 
         // 验证可以正确进入 home 目录
-        let home_entries = archive_fs.read_dir(&ResourcePath::from_str("/home")).await.unwrap();
+        let home_entries = archive_fs.read_dir(&ResourcePath::parse("/home")).await.unwrap();
         assert!(home_entries.iter().any(|e| e.name == "bbipadm"), "应该在 home 目录中找到 bbipadm");
         assert!(home_entries.iter().any(|e| e.name == "readme.txt"), "应该在 home 目录中找到 readme.txt");
     }

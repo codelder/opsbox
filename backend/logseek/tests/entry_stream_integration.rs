@@ -42,7 +42,7 @@ impl MockEntryStream {
   }
 
   fn add_error(&mut self, msg: &str) {
-    self.entries.push_back(Err(io::Error::new(io::ErrorKind::Other, msg)));
+    self.entries.push_back(Err(io::Error::other(msg)));
   }
 }
 
@@ -169,7 +169,7 @@ async fn test_process_stream_cancellation() {
 
   // 4. 接收几个后取消
   let mut count = 0;
-  while let Some(_) = rx.recv().await {
+  while rx.recv().await.is_some() {
     count += 1;
     if count >= 5 {
       token.cancel();
@@ -210,7 +210,7 @@ async fn test_process_stream_with_base_path_stripping() {
   tokio::spawn(async move { stream_processor.process_stream(&mut stream, tx).await });
 
   let mut count = 0;
-  while let Some(_) = rx.recv().await {
+  while rx.recv().await.is_some() {
     count += 1;
   }
 
@@ -244,7 +244,7 @@ async fn test_preload_large_file_partial() {
   tokio::spawn(async move { stream_processor.process_stream(&mut stream, tx).await });
 
   let mut count = 0;
-  while let Some(_) = rx.recv().await {
+  while rx.recv().await.is_some() {
     count += 1;
   }
 
@@ -265,7 +265,7 @@ async fn test_process_stream_empty() {
   let handle = tokio::spawn(async move { stream_processor.process_stream(&mut stream, tx).await });
 
   let mut count = 0;
-  while let Some(_) = rx.recv().await {
+  while rx.recv().await.is_some() {
     count += 1;
   }
 
@@ -334,6 +334,6 @@ async fn test_process_stream_error_handling() {
   assert!(res.is_err(), "Should return error when stream fails");
 
   // 但是在错误之前处理的数据应该被发送
-  assert!(results.len() >= 1, "Should process entries before error");
+  assert!(!results.is_empty(), "Should process entries before error");
   assert_eq!(results[0].path, "/logs/ok.log");
 }

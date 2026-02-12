@@ -24,6 +24,7 @@ pub enum FsConfig {
     },
 
     /// Agent 代理配置
+    #[allow(clippy::type_complexity)]
     Agent {
         client_factory: Box<dyn Fn(&str, u16) -> Result<AgentClient, String> + Send + Sync>,
     },
@@ -88,7 +89,7 @@ pub fn create_fs(endpoint: &Endpoint, config: &FsConfig) -> Result<Box<dyn OpbxF
         (_, FsConfig::Agent { client_factory }) => {
             if let Location::Remote { host, port } = &endpoint.location {
                 let agent_client = client_factory(host, *port)
-                    .map_err(|e| FsError::Agent(e))?;
+                    .map_err(FsError::Agent)?;
                 let fs = AgentProxyFS::new(agent_client);
                 Ok(Box::new(fs))
             } else {
@@ -172,9 +173,8 @@ mod tests {
         let result = create_fs(&endpoint, &config);
         // 注意：S3Storage 的创建在没有真实 AWS 环境时会失败
         // 这里我们只验证配置匹配
-        match result {
-            Err(FsError::S3(_)) => {} // 预期会失败，因为没有真实的 AWS 环境
-            _ => {}
+        if let Err(FsError::S3(_)) = result {
+            // 预期会失败，因为没有真实的 AWS 环境
         }
     }
 

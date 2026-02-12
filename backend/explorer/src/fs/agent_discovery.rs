@@ -50,7 +50,7 @@ impl OpbxFileSystem for AgentDiscoveryFileSystem {
 
         // Agent discovery 条目的路径不重要，重要的是名称
         // map_entry 会从名称中提取 agent ID 并构造正确的 ORL
-        let path = ResourcePath::from_str("/");
+        let path = ResourcePath::parse("/");
 
         DirEntry {
           name: name.clone(),

@@ -151,7 +151,7 @@ pub async fn test_script(
   let sources: Vec<String> = plan
     .sources
     .iter()
-    .map(|r| opsbox_core::dfs::build_orl_from_resource(r))
+    .map(opsbox_core::dfs::build_orl_from_resource)
     .collect();
 
   Ok(Json(PlannerTestResponse {

@@ -116,7 +116,7 @@ impl SearchRequest {
     if !self.path_includes.is_empty() {
       let mut builder = globset::GlobSetBuilder::new();
       for p in &self.path_includes {
-        match globset::GlobBuilder::new(p).literal_separator(true).build() {
+        match globset::GlobBuilder::new(p).build() {
           Ok(g) => {
             builder.add(g);
           }
@@ -132,7 +132,7 @@ impl SearchRequest {
     if !self.path_excludes.is_empty() {
       let mut builder = globset::GlobSetBuilder::new();
       for p in &self.path_excludes {
-        match globset::GlobBuilder::new(p).literal_separator(true).build() {
+        match globset::GlobBuilder::new(p).build() {
           Ok(g) => {
             builder.add(g);
           }
@@ -228,27 +228,43 @@ impl SearchableFileSystem for LocalSearchProvider {
 
     // 2. 确定根目录（使用路径本身或其父目录）
     let path = PathBuf::from(&path_str);
+
+    // Check if it is an archive based on extension (heuristic)
+    let is_archive = path.is_file() && path.extension().is_some_and(|ext| {
+        let s = ext.to_string_lossy().to_lowercase();
+        s == "tar" || s == "gz" || s == "tgz" || s == "zip"
+    });
+
     let (root, relative_path) = if path.is_dir() {
-      (path.clone(), ResourcePath::from_str(""))
+      (path.clone(), ResourcePath::parse(""))
     } else if path.exists() {
       // 单个文件
-      (path.parent().unwrap_or(&path).to_path_buf(), ResourcePath::from_str(path.file_name().unwrap().to_string_lossy().as_ref()))
+      (path.parent().unwrap_or(&path).to_path_buf(), ResourcePath::parse(path.file_name().unwrap().to_string_lossy().as_ref()))
     } else {
       // 路径不存在，尝试使用父目录作为 root
       let parent = path.parent().unwrap_or(&path).to_path_buf();
-      (parent, ResourcePath::from_str(""))
+      (parent, ResourcePath::parse(""))
     };
 
-    // 3. 创建本地文件系统
-    let fs = LocalFileSystem::new(root)
-      .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))?;
-
     // 4. 获取 EntryStream
-    let search_config = SearchConfig::default();
-    let mut entry_stream = fs
-      .as_entry_stream(&relative_path, true, &search_config)
-      .await
-      .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?;
+    // 如果是归档文件，直接使用 Archive Stream，绕过 DFS 抽象（因为 DFS 可能不自动展开归档）
+    let mut entry_stream: Box<dyn opsbox_core::fs::EntryStream> = if is_archive {
+        info!("[LocalSearchProvider] 检测到归档文件，使用归档流模式: {}", path.display());
+        let file = tokio::fs::File::open(&path).await
+            .map_err(|e| ServiceError::ProcessingError(format!("打开归档文件失败: {}", e)))?;
+        opsbox_core::fs::create_archive_stream_from_reader(file, Some(&path_str)).await
+            .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
+    } else {
+        // 3. 创建本地文件系统 (Moved inside else block or duplicated creation if needed?
+        // FS creation is cheap.
+        let fs = LocalFileSystem::new(root)
+          .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))?;
+
+        let search_config = SearchConfig::default();
+        fs.as_entry_stream(&relative_path, true, &search_config)
+          .await
+          .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
+    };
 
     // 5. 创建 SearchProcessor 并转换为 DFS ContentProcessor
     let search_proc = Arc::new(SearchProcessor::new_with_encoding(
@@ -265,9 +281,23 @@ impl SearchableFileSystem for LocalSearchProvider {
     }
 
     // 7. 路径过滤：base_path
-    processor = processor.with_base_path(&path_str);
+    // 对于归档文件，不设置 base_path（条目路径相对于归档内部）
+    // 对于目录搜索，设置 base_path 以支持相对 Glob
+    if !is_archive {
+        processor = processor.with_base_path(&path_str);
+    }
 
-    // 8. 路径过滤：用户输入的额外过滤
+    // 8. 路径过滤：ORL 携带的内置 glob 过滤
+    if let Some(ref glob) = ctx.resource.filter_glob
+      && let Ok(filter) = crate::query::path_glob_to_filter(glob) {
+        let dfs_filter = opsbox_core::dfs::search::PathFilter {
+          include: filter.include,
+          exclude: filter.exclude,
+        };
+        processor = processor.with_extra_path_filter(dfs_filter);
+    }
+
+    // 9. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
     if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
       let dfs_filter = opsbox_core::dfs::search::PathFilter {
@@ -277,16 +307,29 @@ impl SearchableFileSystem for LocalSearchProvider {
       processor = processor.with_extra_path_filter(dfs_filter);
     }
 
-    // 9. 处理并发送结果
+    // 10. 处理并发送结果
     let tx = ctx.tx.clone();
+    let tx_stopped = ctx.tx.clone();
+    let tx_err = ctx.tx.clone();
+    processor = processor.with_is_stopped_fn(move || tx_stopped.is_closed());
+    processor = processor.with_error_callback(move |msg| {
+      let _ = tx_err.try_send(SearchEvent::Error {
+        source: "LocalSearchProvider".to_string(),
+        message: msg,
+        recoverable: true,
+      });
+    });
     processor
       .process_stream(entry_stream.as_mut(), move |content| {
-        // 将 ProcessedContent 转换为 SearchEvent
-        if let Some(result_value) = content.result {
-          if let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value) {
-            let mut result = search_result;
-            result.archive_path = content.archive_path;
-            let _ = tx.blocking_send(SearchEvent::Success(result));
+        let tx = tx.clone();
+        async move {
+          // 将 ProcessedContent 转换为 SearchEvent
+          if let Some(result_value) = content.result
+            && let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value) {
+              let mut result = search_result;
+              result.archive_path = content.archive_path;
+              // 使用异步 send，不再阻塞线程
+              let _ = tx.send(SearchEvent::Success(result)).await;
           }
         }
       })
@@ -349,12 +392,42 @@ impl SearchableFileSystem for S3SearchProvider {
       .map_err(|e| ServiceError::ProcessingError(format!("创建 S3 存储失败: {}", e)))?;
 
     // 6. 获取 EntryStream
+    // 6. 获取 EntryStream
     let search_config = SearchConfig::default();
-    let resource_path = ResourcePath::from_str(object_key);
-    let mut entry_stream = s3_storage
-      .as_entry_stream(&resource_path, true, &search_config)
-      .await
-      .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?;
+    let resource_path = ResourcePath::parse(object_key);
+
+    // Check if it is an archive based on object key extension
+    let is_archive = object_key.to_lowercase().ends_with(".tar") ||
+                     object_key.to_lowercase().ends_with(".tar.gz") ||
+                     object_key.to_lowercase().ends_with(".tgz") ||
+                     object_key.to_lowercase().ends_with(".zip");
+
+    let mut entry_stream: Box<dyn opsbox_core::fs::EntryStream> = if is_archive {
+        info!("[S3SearchProvider] 检测到归档文件，使用归档流模式: bucket={} key={}", bucket_name, object_key);
+        // S3Storage needs a method to get reader efficiently?
+        // S3Storage doesn't expose public `get_object`.
+        // But `as_entry_stream` uses internal logic.
+        // We might need to use `s3_storage.read_object(path)` if available?
+        // opsbox-core S3Storage export `read_object_range`?
+        // Let's assume we can fallback to `as_entry_stream` if strictly needed,
+        // BUT `as_entry_stream` might treat it as single file.
+        // Actually S3Storage implementation might handle it?
+        // If not, we have a problem accessing `get_reader` from `S3Storage` externally.
+        // Wait, S3Storage implements `OpbxFileSystem`. `open_file`?
+        use opsbox_core::dfs::OpbxFileSystem;
+        match s3_storage.open_read(&resource_path).await {
+            Ok(reader) => {
+                 opsbox_core::fs::create_archive_stream_from_reader(reader, Some(&path_str)).await
+                    .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
+            }
+            Err(e) => return Err(ServiceError::ProcessingError(format!("打开 S3 文件失败: {}", e))),
+        }
+    } else {
+        s3_storage
+          .as_entry_stream(&resource_path, true, &search_config)
+          .await
+          .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
+    };
 
     // 7. 创建 SearchProcessor
     let search_proc = Arc::new(SearchProcessor::new_with_encoding(
@@ -370,7 +443,24 @@ impl SearchableFileSystem for S3SearchProvider {
       processor = processor.with_cancel_token(token);
     }
 
-    // 9. 路径过滤：用户输入的额外过滤
+    // 9. 路径过滤：设置 base_path (仅非归档)
+    if !is_archive {
+        // S3 paths start with bucket/key or just key?
+        // path_str includes bucket usually? ORL: orl://profile@s3/bucket/key
+        // path_str is `bucket/key` (lines 361 logic).
+        processor = processor.with_base_path(&path_str);
+    }
+
+    // 10. 路径过滤：ORL 携带的内置 glob 过滤
+    if let Some(ref glob) = ctx.resource.filter_glob
+      && let Ok(filter) = crate::query::path_glob_to_filter(glob) {
+        let dfs_filter = opsbox_core::dfs::search::PathFilter {
+          include: filter.include,
+          exclude: filter.exclude,
+        };
+        processor = processor.with_extra_path_filter(dfs_filter);
+    }
+    // 10. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
     if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
       let dfs_filter = opsbox_core::dfs::search::PathFilter {
@@ -380,15 +470,27 @@ impl SearchableFileSystem for S3SearchProvider {
       processor = processor.with_extra_path_filter(dfs_filter);
     }
 
-    // 10. 处理并发送结果
+    // 11. 处理并发送结果
     let tx = ctx.tx.clone();
+    let tx_stopped = ctx.tx.clone();
+    let tx_err = ctx.tx.clone();
+    processor = processor.with_is_stopped_fn(move || tx_stopped.is_closed());
+    processor = processor.with_error_callback(move |msg| {
+      let _ = tx_err.try_send(SearchEvent::Error {
+        source: "S3SearchProvider".to_string(),
+        message: msg,
+        recoverable: true,
+      });
+    });
     processor
       .process_stream(entry_stream.as_mut(), move |content| {
-        if let Some(result_value) = content.result {
-          if let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value) {
-            let mut result = search_result;
-            result.archive_path = content.archive_path;
-            let _ = tx.blocking_send(SearchEvent::Success(result));
+        let tx = tx.clone();
+        async move {
+          if let Some(result_value) = content.result
+            && let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value) {
+              let mut result = search_result;
+              result.archive_path = content.archive_path;
+              let _ = tx.send(SearchEvent::Success(result)).await;
           }
         }
       })
@@ -437,15 +539,28 @@ impl SearchableFileSystem for AgentSearchProvider {
         entry: ctx.resource.archive_context.as_ref().map(|c| c.inner_path.to_string()),
       }
     } else {
-      AgentTarget::Dir {
-        path: path.clone(),
-        recursive: true,
+      // Check if it is an archive based on extension (heuristic)
+      let is_archive = path.to_lowercase().ends_with(".tar")
+        || path.to_lowercase().ends_with(".tar.gz")
+        || path.to_lowercase().ends_with(".tgz")
+        || path.to_lowercase().ends_with(".zip");
+
+      if is_archive {
+        AgentTarget::Archive {
+          path: path.clone(),
+          entry: None,
+        }
+      } else {
+        AgentTarget::Dir {
+          path: path.clone(),
+          recursive: true,
+        }
       }
     };
 
     let search_options = SearchOptions {
       target,
-      path_filter: None, // TODO: 从 Resource 提取 glob
+      path_filter: ctx.resource.filter_glob.clone(),
       path_includes: req.path_includes.clone(),
       path_excludes: req.path_excludes.clone(),
       encoding: req.encoding.clone(),

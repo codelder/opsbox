@@ -94,7 +94,7 @@ async fn test_nl2q_integration_with_db() {
   let backend = LlmBackend {
     name: "test-ollama".to_string(),
     provider: ProviderKind::Ollama,
-    base_url: base_url,
+    base_url,
     model: "test-model".to_string(),
     timeout_secs: 5,
     api_key: None,

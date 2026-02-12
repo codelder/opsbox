@@ -90,7 +90,7 @@ mod tests {
 
   #[test]
   fn test_agent_manager_module_name() {
-    let module = AgentManagerModule::default();
+    let module = AgentManagerModule;
     assert_eq!(module.name(), "AgentManager");
     assert_eq!(module.api_prefix(), "/api/v1/agents");
   }
@@ -98,7 +98,7 @@ mod tests {
   #[tokio::test]
   async fn test_agent_manager_module_lifecycle() {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    let module = AgentManagerModule::default();
+    let module = AgentManagerModule;
 
     // Test name and prefix
     assert_eq!(module.name(), "AgentManager");

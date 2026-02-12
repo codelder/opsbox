@@ -108,7 +108,7 @@ async fn test_concurrent_search_boundary() {
     let path = generator
       .create_file(&format!("file{}.log", i), &content)
       .await
-      .expect(&format!("创建文件{}失败", i));
+      .unwrap_or_else(|_| panic!("创建文件{}失败", i));
     file_paths.push(path);
   }
 

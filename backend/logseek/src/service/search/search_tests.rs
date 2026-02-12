@@ -204,7 +204,7 @@ async fn test_process_content_with_context_overlap() {
   assert!(result.is_some());
   let res = result.unwrap();
   // Context should merge since matches are close
-  assert!(res.merged.len() >= 1);
+  assert!(!res.merged.is_empty());
 }
 
 #[test]

@@ -1,22 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { page } from '$app/state';
-  import { goto, replaceState } from '$app/navigation';
+  import { goto } from '$app/navigation';
   import { Button } from '$lib/components/ui/button';
-  import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
-  import { type ResourceItem, type Orl, listResources } from '$lib/modules/explorer';
+  import { type ResourceItem, listResources } from '$lib/modules/explorer';
   import {
-    Folder,
-    File,
     ArrowLeft,
     RefreshCw,
-    Home,
     Download,
     Server,
-    HardDrive,
     Cloud,
-    ChevronRight,
     ChevronDown,
     Monitor,
     LayoutList,
@@ -27,6 +21,7 @@
     ExternalLink,
     Copy,
     Info,
+    Folder,
     Music,
     Film,
     Image,
@@ -37,10 +32,21 @@
     Terminal
   } from 'lucide-svelte';
   import { ContextMenu } from 'bits-ui';
-  import { cn } from '$lib/utils';
   import { isTextFile, isImageFile, isArchiveFile, truncateMiddle } from '$lib/modules/explorer/utils';
   import errorIcon from '$lib/assets/error.svg';
   import errorDarkIcon from '$lib/assets/error-dark.svg';
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type IconComponent = any;
+
+  interface SidebarItem {
+    key?: string;
+    label?: string;
+    name: string;
+    path: string;
+    icon?: IconComponent;
+    colorClass?: string;
+  }
 
   // State
   let currentOrlStr = $state('');
@@ -58,10 +64,7 @@
   });
 
   // Sidebar State
-  let expandedSections = $state({
-    s3: false,
-    agent: false
-  });
+
   let sidebarData = $state({
     s3: [] as ResourceItem[],
     agent: [] as ResourceItem[]
@@ -152,29 +155,12 @@
     try {
       items = await listResources(orl);
       return true;
-    } catch (e: any) {
-      error = e.message;
+    } catch (e) {
+      error = (e as Error).message;
       items = [];
       return false;
     } finally {
       loading = false;
-    }
-  }
-
-  async function toggleSection(section: 's3' | 'agent') {
-    expandedSections[section] = !expandedSections[section];
-
-    // Load if expanding and empty
-    if (expandedSections[section] && sidebarData[section].length === 0) {
-      sidebarLoading[section] = true;
-      try {
-        const rootOrl = section === 's3' ? 'orl://s3/' : 'orl://agent/';
-        sidebarData[section] = await listResources(rootOrl);
-      } catch (e) {
-        console.error(`Failed to load sidebar ${section}`, e);
-      } finally {
-        sidebarLoading[section] = false;
-      }
     }
   }
 
@@ -259,12 +245,13 @@
   async function goUp() {
     try {
       let urlStr = currentOrlStr;
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity
       const url = new URL(urlStr);
 
       // Check if we are inside an archive (using ?entry= query parameter)
       const entry = url.searchParams.get('entry');
       if (entry) {
-        const entryParts = entry.split('/').filter((p) => p);
+        const entryParts = entry.split('/').filter((p: string) => p);
         if (entryParts.length > 1) {
           entryParts.pop();
           url.searchParams.set('entry', entryParts.join('/'));
@@ -276,7 +263,7 @@
       }
 
       // Normal path navigation
-      const pathParts = url.pathname.split('/').filter((p) => p);
+      const pathParts = url.pathname.split('/').filter((p: string) => p);
       if (pathParts.length > 0) {
         pathParts.pop();
         url.pathname = '/' + pathParts.join('/');
@@ -321,7 +308,7 @@
     return `${bytes.toFixed(1)} ${units[i]}`;
   }
 
-  function getFileIcon(item: ResourceItem): any {
+  function getFileIcon(item: ResourceItem): IconComponent | null {
     if (item.mime_type) {
       if (item.mime_type.startsWith('image/')) return Image;
       if (item.mime_type.startsWith('video/')) return Film;
@@ -405,9 +392,9 @@
         <h3 class="mb-3 text-sm font-light tracking-wider text-foreground uppercase opacity-70">Explorer</h3>
         <Separator class="mb-4" />
 
-        {#snippet renderLevel(items: any[], depth: number)}
+        {#snippet renderLevel(items: SidebarItem[], depth: number)}
           <div class="space-y-0.5">
-            {#each items as item}
+            {#each items as item (item.path)}
               {@const isActive =
                 (depth === 0 && activeType === item.key) ||
                 (depth === 1 && (activeId === item.name || currentOrlStr.startsWith(item.path)))}
@@ -438,13 +425,14 @@
               {@const children = sidebarData[activeRoot.key as 's3' | 'agent']}
               {#if children && children.length > 0}
                 <Separator class="my-3" />
-                {@render renderLevel(
-                  children.map((c) => ({
-                    ...c,
-                    colorClass: activeRoot.key === 's3' ? 'bg-blue-500' : 'bg-green-500'
-                  })),
-                  1
+                {@const mappedChildren = children.map(
+                  (c) =>
+                    ({
+                      ...c,
+                      colorClass: activeRoot.key === 's3' ? 'bg-blue-500' : 'bg-green-500'
+                    }) as SidebarItem
                 )}
+                {@render renderLevel(mappedChildren, 1)}
               {:else if sidebarLoading[activeRoot.key as 's3' | 'agent']}
                 <div class="mt-4 animate-pulse px-2 py-1 text-xs text-muted-foreground">Loading...</div>
               {:else}
@@ -458,9 +446,9 @@
 
         {@render renderLevel(
           [
-            { key: 'local', label: 'Local Machine', path: 'orl://local/', icon: Monitor },
-            { key: 'agent', label: 'Remote Agents', path: 'orl://agent/', icon: Server },
-            { key: 's3', label: 'S3 Storage', path: 'orl://s3/', icon: Cloud }
+            { key: 'local', label: 'Local Machine', name: 'local', path: 'orl://local/', icon: Monitor },
+            { key: 'agent', label: 'Remote Agents', name: 'agent', path: 'orl://agent/', icon: Server },
+            { key: 's3', label: 'S3 Storage', name: 's3', path: 'orl://s3/', icon: Cloud }
           ],
           0
         )}
@@ -468,7 +456,7 @@
     </div>
   </aside>
 
-  {#snippet macOSFolder(className = 'h-16 w-16', hasFiles = true, icon: any = null)}
+  {#snippet macOSFolder(className = 'h-16 w-16', hasFiles = true, icon: IconComponent | null = null)}
     <div class="relative {className} flex items-center justify-center">
       <svg viewBox="0 0 100 88" class="h-full w-full drop-shadow-sm">
         <defs>
@@ -549,7 +537,7 @@
     </div>
   {/snippet}
 
-  {#snippet macOSFile(className = 'h-16 w-16', icon: any = null, isText: boolean = false)}
+  {#snippet macOSFile(className = 'h-16 w-16', icon: IconComponent | null = null, isText: boolean = false)}
     <div class="relative {className} flex items-center justify-center">
       <div class="relative h-full w-[76%]">
         <!-- Unified SVG for perfect alignment and realistic shadows -->
@@ -650,7 +638,7 @@
 
           <!-- Zipper Track -->
           <g transform="translate(37, 24)">
-            {#each Array(10) as _, i}
+            {#each Array.from({ length: 10 }).map((_, i) => i) as i (i)}
               <rect x={i % 2 === 0 ? 0 : 5} y={i * 4} width="3" height="1.6" fill="#94a3b8" rx="0.3" />
             {/each}
           </g>
@@ -734,7 +722,7 @@
         <!-- macOS Style Tags Row -->
         <div class="flex items-center justify-between px-3 py-2">
           <div class="flex w-full justify-between px-1">
-            {#each [{ color: '#ff5f57', label: '红色' }, { color: '#febc2e', label: '橙色' }, { color: '#fedd34', label: '黄色' }, { color: '#28c840', label: '绿色' }, { color: '#4a90e2', label: '蓝色' }, { color: '#a370f7', label: '紫色' }, { color: '#8e8e93', label: '灰色' }] as tag}
+            {#each [{ color: '#ff5f57', label: '红色' }, { color: '#febc2e', label: '橙色' }, { color: '#fedd34', label: '黄色' }, { color: '#28c840', label: '绿色' }, { color: '#4a90e2', label: '蓝色' }, { color: '#a370f7', label: '紫色' }, { color: '#8e8e93', label: '灰色' }] as tag (tag.color)}
               <button
                 class="h-[18px] w-[18px] rounded-full ring-1 ring-black/5 transition-transform hover:scale-110 active:scale-90 dark:ring-white/10"
                 style="background-color: {tag.color}"
@@ -939,7 +927,7 @@
                       <td class="w-full p-8 text-center text-muted-foreground"> This directory is empty. </td>
                     </tr>
                   {/if}
-                  {#each displayedItems as item}
+                  {#each displayedItems as item (item.path)}
                     <ContextMenu.Root>
                       <ContextMenu.Trigger
                         class="pointer-events-auto flex w-full cursor-pointer border-t border-border/40 hover:bg-muted/50 dark:border-gray-700/50"
@@ -953,18 +941,27 @@
                             }}
                             oncontextmenu={(e) => {
                               handleRowClick(item);
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               (props as any).oncontextmenu?.(e);
                             }}
                             ondblclick={() => handleRowDoubleClick(item)}
                           >
                             <td class="flex w-14 flex-0 items-center justify-center p-2">
                               {#if item.type === 'dir'}
-                                {@render macOSFolder('h-5 w-5', !!item.has_children)}
+                                {@render macOSFolder(
+                                  'h-5 w-5',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkdir'}
-                                {@render macOSFolder('h-5 w-5', !!item.has_children, Link)}
+                                {@render macOSFolder(
+                                  'h-5 w-5',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkfile'}
                                 {@render macOSFile('h-5 w-5', Link, isTextFile(item))}
-                              {:else if getFileIcon(item) === FileArchive}
+                              {:else if (getFileIcon(item) as IconComponent) === FileArchive}
                                 {@render macOSArchive('h-5 w-5', item.name)}
                               {:else}
                                 {@render macOSFile('h-5 w-5', getFileIcon(item), isTextFile(item))}
@@ -999,7 +996,7 @@
                 {#if displayedItems.length === 0 && !loading}
                   <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
                 {/if}
-                {#each displayedItems as item}
+                {#each displayedItems as item (item.path)}
                   <div class="flex flex-col items-center gap-0">
                     <ContextMenu.Root>
                       <ContextMenu.Trigger>
@@ -1016,6 +1013,7 @@
                             }}
                             oncontextmenu={(e) => {
                               handleRowClick(item);
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               (props as any).oncontextmenu?.(e);
                             }}
                             ondblclick={() => handleRowDoubleClick(item)}
@@ -1024,12 +1022,20 @@
                           >
                             <div class="transition-transform group-hover/icon:scale-105">
                               {#if item.type === 'dir'}
-                                {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children)}
+                                {@render macOSFolder(
+                                  'h-[70px] w-[70px]',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkdir'}
-                                {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children, Link)}
+                                {@render macOSFolder(
+                                  'h-[70px] w-[70px]',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkfile'}
                                 {@render macOSFile('h-[62px] w-[62px]', Link, isTextFile(item))}
-                              {:else if getFileIcon(item) === FileArchive}
+                              {:else if (getFileIcon(item) as IconComponent) === FileArchive}
                                 {@render macOSArchive('h-[62px] w-[62px]', item.name)}
                               {:else}
                                 {@render macOSFile('h-[62px] w-[62px]', getFileIcon(item), isTextFile(item))}
@@ -1049,6 +1055,7 @@
                             class="flex flex-col items-center"
                             oncontextmenu={(e) => {
                               handleRowClick(item);
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               (props as any).oncontextmenu?.(e);
                             }}
                           >

@@ -15,6 +15,8 @@ pub struct Resource {
     pub primary_path: ResourcePath,
     /// 归档上下文（可选）
     pub archive_context: Option<ArchiveContext>,
+    /// ORL 内置路径过滤 glob（可选，来自 `?glob=` 参数）
+    pub filter_glob: Option<String>,
 }
 
 impl Resource {
@@ -28,15 +30,23 @@ impl Resource {
             endpoint,
             primary_path,
             archive_context,
+            filter_glob: None,
         }
+    }
+
+    /// 设置路径过滤 glob
+    pub fn with_filter_glob(mut self, glob: String) -> Self {
+        self.filter_glob = Some(glob);
+        self
     }
 
     /// 创建本地文件资源
     pub fn local(path: &str) -> Self {
         Self {
             endpoint: Endpoint::local_fs(),
-            primary_path: ResourcePath::from_str(path),
+            primary_path: ResourcePath::parse(path),
             archive_context: None,
+            filter_glob: None,
         }
     }
 
@@ -44,8 +54,9 @@ impl Resource {
     pub fn local_archive(archive_path: &str, inner_path: &str, archive_type: Option<super::archive::ArchiveType>) -> Self {
         Self {
             endpoint: Endpoint::local_fs(),
-            primary_path: ResourcePath::from_str(archive_path),
+            primary_path: ResourcePath::parse(archive_path),
             archive_context: Some(ArchiveContext::from_path_str(inner_path, archive_type)),
+            filter_glob: None,
         }
     }
 
@@ -53,8 +64,9 @@ impl Resource {
     pub fn s3(profile: String, path: &str) -> Self {
         Self {
             endpoint: Endpoint::s3(profile),
-            primary_path: ResourcePath::from_str(path),
+            primary_path: ResourcePath::parse(path),
             archive_context: None,
+            filter_glob: None,
         }
     }
 
@@ -62,8 +74,9 @@ impl Resource {
     pub fn agent(host: String, port: u16, agent_name: String, path: &str) -> Self {
         Self {
             endpoint: Endpoint::agent(host, port, agent_name),
-            primary_path: ResourcePath::from_str(path),
+            primary_path: ResourcePath::parse(path),
             archive_context: None,
+            filter_glob: None,
         }
     }
 
@@ -78,8 +91,9 @@ impl Resource {
     ) -> Self {
         Self {
             endpoint: Endpoint::agent(host, port, agent_name),
-            primary_path: ResourcePath::from_str(archive_path),
+            primary_path: ResourcePath::parse(archive_path),
             archive_context: Some(ArchiveContext::from_path_str(inner_path, archive_type)),
+            filter_glob: None,
         }
     }
 

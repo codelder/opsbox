@@ -56,7 +56,7 @@ export function parseOrl(urlStr: string): OrlInfo | null {
     if (rawPath.startsWith('/')) {
       rawPath = rawPath.slice(1);
     }
-    let path = decodeURIComponent(rawPath);
+    const path = decodeURIComponent(rawPath);
 
     if (uri.port) {
       serverAddr = (serverAddr || '') + ':' + uri.port;
@@ -64,7 +64,7 @@ export function parseOrl(urlStr: string): OrlInfo | null {
 
     // Parse Query
     const queryParams = new URLSearchParams(uri.query || '');
-    const entryPath = queryParams.get('entry') || undefined;
+    const entryPath = queryParams.get('entry') ? decodeURIComponent(queryParams.get('entry')!) : undefined;
 
     // Infer targetType
     const targetType: TargetType = entryPath ? 'archive' : 'dir';
@@ -96,7 +96,6 @@ export function stringifyOrl(parts: {
   entryPath?: string;
 }): string {
   let id = parts.endpointId;
-  let bucket = '';
 
   let host = parts.endpointType;
   let port: string | undefined;
@@ -117,7 +116,7 @@ export function stringifyOrl(parts: {
   url.username = id;
   if (port) url.port = port;
 
-  let finalPath = parts.path;
+  const finalPath = parts.path;
   url.pathname = finalPath.startsWith('/') ? finalPath : '/' + finalPath;
 
   if (parts.entryPath) {

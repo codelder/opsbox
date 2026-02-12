@@ -252,7 +252,7 @@ mod tests {
     // 检查文件大小接近1MB
     let metadata = fs::metadata(&file_path).await.unwrap();
     let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
-    assert!(size_mb >= 0.9 && size_mb <= 1.1); // 允许10%误差
+    assert!((0.9..=1.1).contains(&size_mb)); // 允许10%误差
   }
 
   #[test]

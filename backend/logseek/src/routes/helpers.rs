@@ -43,7 +43,7 @@ mod tests {
   fn test_s3_max_concurrency_default() {
     // Without env var or tuning, should return default 12
     let concurrency = s3_max_concurrency();
-    assert!(concurrency >= 1 && concurrency <= 128);
+    assert!((1..=128).contains(&concurrency));
   }
 
   #[test]

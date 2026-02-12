@@ -23,7 +23,10 @@ test.describe('Local Gzip Archive E2E', () => {
 
     // Create a test log file
     const testLogFile = path.join(TEST_ROOT_DIR, 'app_tranTime.log');
-    fs.writeFileSync(testLogFile, '2024-01-01 12:00:00 [INFO] Application started\n2024-01-01 12:01:00 [DEBUG] Processing request\n2024-01-01 12:02:00 [INFO] Request completed\n');
+    fs.writeFileSync(
+      testLogFile,
+      '2024-01-01 12:00:00 [INFO] Application started\n2024-01-01 12:01:00 [DEBUG] Processing request\n2024-01-01 12:02:00 [INFO] Request completed\n'
+    );
 
     // Create a gzip compressed version using system gzip command
     const gzFile = path.join(TEST_ROOT_DIR, 'app_tranTime.log.gz');
@@ -47,11 +50,12 @@ test.describe('Local Gzip Archive E2E', () => {
 
     // Capture console for debugging
     const consoleLogs: string[] = [];
-    page.on('console', msg => {
+    page.on('console', (msg) => {
       consoleLogs.push(`[${msg.type()}] ${msg.text()}`);
     });
 
     // Capture API requests/responses
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const apiCalls: { url: string; status: number; body?: any }[] = [];
     page.on('response', async (response) => {
       if (response.url().includes('/api/v1/explorer/')) {
@@ -100,9 +104,12 @@ test.describe('Local Gzip Archive E2E', () => {
     // This is what ArchiveFileSystem returns for Gz type
 
     // Check if there's an error message
-    const hasError = await page.locator('body').textContent().then(text => {
-      return /错误|Error|Failed/i.test(text);
-    });
+    const hasError = await page
+      .locator('body')
+      .textContent()
+      .then((text) => {
+        return /错误|Error|Failed/i.test(text || '');
+      });
 
     if (hasError) {
       const errorText = await page.locator('body').textContent();
@@ -110,7 +117,7 @@ test.describe('Local Gzip Archive E2E', () => {
     }
 
     // We should either see the virtual file entry OR an error (which helps debugging)
-    const bodyText = await page.locator('body').textContent();
+    const bodyText = (await page.locator('body').textContent()) || '';
     console.log(`Page content after double-click: ${bodyText.substring(0, 500)}...`);
 
     // If successful, we should see the virtual file
@@ -120,7 +127,7 @@ test.describe('Local Gzip Archive E2E', () => {
     await expect(internalFileButton).toBeVisible({ timeout: 5000 });
   });
 
-  test('should return proper API response for gz file list', async ({ page, request }) => {
+  test('should return proper API response for gz file list', async ({ request }) => {
     // Direct API test - bypass UI
     const orl = `orl://local${TEST_ROOT_DIR}/app_tranTime.log.gz`;
     const response = await request.post(`/api/v1/explorer/list`, {
@@ -232,7 +239,7 @@ test.describe('Local Gzip Archive E2E', () => {
     expect(fileParam).not.toContain('%3Fentry%3D%252F');
 
     // Verify the page shows file content, not an error message
-    const pageText = await newPage.locator('body').textContent() || '';
+    const pageText = (await newPage.locator('body').textContent()) || '';
     console.log(`Page content preview: ${pageText.substring(0, 500)}`);
 
     // The page should contain our test log content

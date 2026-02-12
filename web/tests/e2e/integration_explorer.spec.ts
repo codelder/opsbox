@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -54,7 +54,7 @@ async function stopProcess(proc: ChildProcessWithoutNullStreams) {
 /**
  * 等待agent注册到服务器（通过API检查）
  */
-async function waitForAgentReady(request: any, agentId: string, maxWait = 15000): Promise<void> {
+async function waitForAgentReady(request: APIRequestContext, agentId: string, maxWait = 15000): Promise<void> {
   const start = Date.now();
   const interval = 500;
 
@@ -65,14 +65,13 @@ async function waitForAgentReady(request: any, agentId: string, maxWait = 15000)
         console.log(`Agent ${agentId} is ready after ${Date.now() - start}ms`);
         return;
       }
-    } catch (error) {
+    } catch {
       // API调用失败，agent可能还未注册
     }
-    await new Promise(r => setTimeout(r, interval));
+    await new Promise((r) => setTimeout(r, interval));
   }
   throw new Error(`Agent ${agentId} not ready after ${maxWait}ms`);
 }
-
 
 test.describe('Explorer E2E', () => {
   test.describe.configure({ mode: 'serial' });
@@ -157,12 +156,12 @@ test.describe('Explorer E2E', () => {
     // This test ensures frontend sends the correct "orl" field name to backend
 
     // Monitor network requests to verify correct field name
-    const requests: any[] = [];
+    const requests: Record<string, unknown>[] = [];
     page.on('request', (request) => {
       if (request.url().includes('/api/v1/explorer/list')) {
         const postData = request.postData();
         if (postData) {
-          requests.push(JSON.parse(postData));
+          requests.push(JSON.parse(postData) as Record<string, unknown>);
         }
       }
     });
@@ -299,7 +298,13 @@ test.describe('Explorer E2E', () => {
 
   test('should verify API requests use correct field names', async ({ page }) => {
     // Monitor all explorer API requests
-    const requests: any[] = [];
+    interface ExplorerRequest {
+      url: string;
+      method: string;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      body: Record<string, any> | null;
+    }
+    const requests: ExplorerRequest[] = [];
     page.on('request', (request) => {
       if (request.url().includes('/api/v1/explorer/')) {
         const postData = request.postData();
@@ -324,8 +329,9 @@ test.describe('Explorer E2E', () => {
 
     for (const req of listRequests) {
       if (req.body) {
-        expect(req.body).toHaveProperty('orl');
-        expect(req.body).not.toHaveProperty('odfi');
+        const body = req.body as Record<string, unknown>;
+        expect(body).toHaveProperty('orl');
+        expect(body).not.toHaveProperty('odfi');
       }
     }
   });
@@ -770,7 +776,9 @@ test.describe('Explorer E2E', () => {
       await stopProcess(proc);
       try {
         await request.delete(`http://127.0.0.1:4001/api/v1/agents/${navAgentId}`);
-      } catch {}
+      } catch {
+        // ignore
+      }
     }
 
     // --- S3 URL Logic Test ---

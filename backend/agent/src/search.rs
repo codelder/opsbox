@@ -13,7 +13,7 @@ use logseek::{
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// 执行搜索
 pub async fn execute_search(
@@ -111,13 +111,19 @@ pub async fn execute_search(
   }
 
   // 5. 执行搜索
+  // 5. 执行搜索
   for search_path in filtered_paths {
     if cancel_token.is_cancelled() {
       info!("搜索任务 {} 已被取消", task_id);
-      return;
+      break;
     }
 
-    debug!("开始搜索路径: {}", search_path.display());
+    if !search_path.exists() {
+      warn!("搜索路径不存在: {}", search_path.display());
+      continue;
+    }
+
+    info!("开始搜索路径: {}", search_path.display());
 
     let path_str = search_path.to_string_lossy().to_string();
     let target_hint = match &request.target {
@@ -151,16 +157,16 @@ pub async fn execute_search(
         }
       }
       Some(ConfigTarget::Files { paths }) => Box::new(opsbox_core::fs::MultiFileEntryStream::new(paths)),
-      Some(ConfigTarget::Archive { path, .. }) => match tokio::fs::File::open(&path).await {
-        Ok(f) => match opsbox_core::fs::create_archive_stream_from_reader(f, Some(&path)).await {
+      Some(ConfigTarget::Archive { path: _, .. }) => match tokio::fs::File::open(&search_path).await {
+        Ok(f) => match opsbox_core::fs::create_archive_stream_from_reader(f, Some(&path_str)).await {
           Ok(s) => s,
           Err(e) => {
-            warn!("打开归档流失败 {}: {}", path, e);
+            warn!("打开归档流失败 {}: {}", search_path.display(), e);
             continue;
           }
         },
         Err(e) => {
-          warn!("打开归档文件失败 {}: {}", path, e);
+          warn!("打开归档文件失败 {}: {}", search_path.display(), e);
           continue;
         }
       },
@@ -176,6 +182,8 @@ pub async fn execute_search(
     let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
       .with_cancel_token(Arc::new(cancel_token.clone()));
 
+    // Only set base_path for Directory/Files targets to allow relative glob matching.
+    // For Archive targets, entries are already relative to archive root, so no base_path stripping needed.
     if matches!(&request.target, ConfigTarget::Dir { .. }) {
       if search_path.is_file() {
         if let Some(parent) = search_path.parent() {
@@ -186,7 +194,8 @@ pub async fn execute_search(
       } else {
         stream_processor = stream_processor.with_base_path(search_path.clone());
       }
-    } else if let Some(parent) = search_path.parent() {
+    } else if matches!(&request.target, ConfigTarget::Files { .. })
+       && let Some(parent) = search_path.parent() {
       stream_processor = stream_processor.with_base_path(parent.to_path_buf());
     }
 
@@ -215,7 +224,7 @@ fn combine_filters(includes: &[String], excludes: &[String]) -> Option<logseek::
   if !includes.is_empty() {
     let mut builder = globset::GlobSetBuilder::new();
     for p in includes {
-      match globset::GlobBuilder::new(p).literal_separator(true).build() {
+      match globset::GlobBuilder::new(p).build() {
         Ok(g) => {
           builder.add(g);
         }
@@ -231,7 +240,7 @@ fn combine_filters(includes: &[String], excludes: &[String]) -> Option<logseek::
   if !excludes.is_empty() {
     let mut builder = globset::GlobSetBuilder::new();
     for p in excludes {
-      match globset::GlobBuilder::new(p).literal_separator(true).build() {
+      match globset::GlobBuilder::new(p).build() {
         Ok(g) => {
           builder.add(g);
         }
