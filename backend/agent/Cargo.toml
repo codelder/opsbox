@@ -17,6 +17,8 @@ path = "src/main.rs"
 [dependencies]
 # 复用 logseek 的搜索逻辑和存储抽象
 logseek = { path = "../logseek" }
+# 复用 explorer 的资源浏览逻辑（不包含 agent-manager feature）
+explorer = { path = "../explorer", default-features = false }
 opsbox-core = { path = "../opsbox-core" }
 
 # Web 框架
@@ -74,6 +76,6 @@ windows-service = "0.8"
 
 [package.metadata.generate-rpm]
 assets = [
-  # 将已构建的二进制安装到 /usr/bin；把“你的二进制名”替换为实际二进制名
+  # 将已构建的二进制安装到 /usr/bin；把"你的二进制名"替换为实际二进制名
   { source = "../target/x86_64-unknown-linux-musl/release/opsbox-agent", dest = "/usr/bin/opsbox-agent", mode = "0755" }
 ]

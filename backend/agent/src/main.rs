@@ -9,6 +9,7 @@
 mod api;
 mod config;
 mod daemon;
+mod explorer;
 mod path;
 mod routes;
 mod search;

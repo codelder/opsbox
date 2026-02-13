@@ -168,6 +168,8 @@ impl AgentInfo {
 pub struct AgentListRequest {
   /// 请求列举的目录路径
   pub path: String,
+  /// 归档内路径（可选，用于浏览归档内容）
+  pub entry: Option<String>,
 }
 
 /// Agent 文件条目
@@ -253,12 +255,14 @@ mod tests {
   fn test_agent_list_request_serialization() {
     let req = AgentListRequest {
       path: "/var/log".to_string(),
+      entry: None,
     };
     let json = serde_json::to_string(&req).unwrap();
     assert!(json.contains("/var/log"));
 
     let deserialized: AgentListRequest = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.path, "/var/log");
+    assert!(deserialized.entry.is_none());
   }
 
   #[test]

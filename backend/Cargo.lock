@@ -3243,6 +3243,7 @@ dependencies = [
  "chrono",
  "clap",
  "daemonize",
+ "explorer",
  "futures",
  "globset",
  "hostname",

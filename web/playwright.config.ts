@@ -1,5 +1,10 @@
 /// <reference types="node" />
 import { defineConfig, devices } from '@playwright/test';
+import { fileURLToPath } from 'url';
+
+// Resolve global setup/teardown paths for ESM
+const globalSetupPath = fileURLToPath(new URL('./tests/e2e/global-setup.ts', import.meta.url));
+const globalTeardownPath = fileURLToPath(new URL('./tests/e2e/global-teardown.ts', import.meta.url));
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -8,6 +13,12 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: 'line',
+  // Global setup: cleanup leftover resources from previous runs
+  globalSetup: globalSetupPath,
+  // Global teardown: cleanup resources from this run
+  globalTeardown: globalTeardownPath,
+  // Global timeout for entire test run
+  globalTimeout: process.env.CI ? 600000 : 300000,
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry'

@@ -1,7 +1,15 @@
+//! Explorer 模块
+//!
+//! 提供分布式资源浏览功能，支持本地文件系统、Agent 远程文件和 S3 存储。
+
 pub mod api;
 pub mod domain;
 pub mod fs;
 pub mod service;
+
+// 重新导出供 Agent 使用的类型
+pub use service::{ListerConfig, LocalEntry, ResourceLister};
+pub use domain::{ResourceItem, ResourceType};
 
 use async_trait::async_trait;
 use axum::Router;
@@ -25,6 +33,7 @@ impl Module for ExplorerModule {
     Ok(())
   }
 
+  #[cfg(feature = "agent-manager")]
   fn router(&self, pool: SqlitePool) -> Router {
     let mut service = service::ExplorerService::new(pool);
 
@@ -35,6 +44,12 @@ impl Module for ExplorerModule {
       tracing::warn!("Explorer: 全局 Agent Manager 未初始化，Agent 功能将不可用");
     }
 
+    api::router(Arc::new(service))
+  }
+
+  #[cfg(not(feature = "agent-manager"))]
+  fn router(&self, pool: SqlitePool) -> Router {
+    let service = service::ExplorerService::new(pool);
     api::router(Arc::new(service))
   }
 }

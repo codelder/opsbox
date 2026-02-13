@@ -1,7 +1,16 @@
+//! Explorer Service 模块
+//!
+//! 提供资源浏览和下载功能，支持本地文件系统、Agent 远程文件和 S3 存储。
+
+mod lister;
+
+// 重新导出 lister 的公共类型
+pub use lister::{ListerConfig, LocalEntry, ResourceLister};
+
 use crate::domain::{ResourceItem, ResourceType};
 use opsbox_core::dfs::{
     endpoint::{Location, StorageBackend},
-    impls::{AgentClient, AgentProxyFS, LocalFileSystem, S3Storage, S3Config},
+    impls::{LocalFileSystem, S3Storage, S3Config},
     orl_parser::OrlParser,
     path::ResourcePath,
     resource::Resource,
@@ -10,11 +19,17 @@ use opsbox_core::dfs::{
 use opsbox_core::SqlitePool;
 use opsbox_core::repository::s3::{load_s3_profile};
 
-// Discovery filesystems
+// Discovery filesystems - 仅在 agent-manager feature 启用时可用
+#[cfg(feature = "agent-manager")]
 use crate::fs::agent_discovery::AgentDiscoveryFileSystem;
 use crate::fs::s3_discovery::S3DiscoveryFileSystem;
 
+// Agent 相关导入 - 仅在 agent-manager feature 启用时可用
+#[cfg(feature = "agent-manager")]
 use agent_manager::AgentManager;
+#[cfg(feature = "agent-manager")]
+use opsbox_core::dfs::impls::{AgentClient, AgentProxyFS};
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -27,6 +42,7 @@ use tokio::io::{AsyncRead, AsyncWriteExt};
 /// Explorer Service - 使用 DFS 模块进行文件系统操作
 pub struct ExplorerService {
   db_pool: SqlitePool,
+  #[cfg(feature = "agent-manager")]
   agent_manager: Option<Arc<AgentManager>>,
   s3_configs_cache: Arc<tokio::sync::RwLock<HashMap<String, S3Config>>>,
 }
@@ -35,11 +51,13 @@ impl ExplorerService {
   pub fn new(db_pool: SqlitePool) -> Self {
     Self {
       db_pool,
+      #[cfg(feature = "agent-manager")]
       agent_manager: None,
       s3_configs_cache: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     }
   }
 
+  #[cfg(feature = "agent-manager")]
   pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
     self.agent_manager = Some(manager);
     self
@@ -131,7 +149,7 @@ impl ExplorerService {
   /// - 远程文件（Agent）：流式复制到临时文件
   /// - 无大小限制，使用流式处理
   async fn list_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<Vec<ResourceItem>, String> {
-    use opsbox_core::dfs::impls::{ArchiveFileSystem, LocalFileSystem};
+    use opsbox_core::dfs::impls::ArchiveFileSystem;
 
     // 获取归档类型
     let archive_type = ctx.archive_type
@@ -221,7 +239,7 @@ impl ExplorerService {
   /// - 远程文件（Agent）：流式复制到临时文件
   /// - 无大小限制，使用流式处理
   async fn download_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
-    use opsbox_core::dfs::impls::{ArchiveFileSystem, LocalFileSystem};
+    use opsbox_core::dfs::impls::ArchiveFileSystem;
 
     // 获取归档类型
     let archive_type = ctx.archive_type
@@ -403,6 +421,7 @@ impl ExplorerService {
   async fn create_fs_for_resource(&self, resource: &Resource) -> Result<Box<dyn OpbxFileSystem>, String> {
     // 检查是否是 discovery endpoints
     match resource.endpoint.identity.as_str() {
+      #[cfg(feature = "agent-manager")]
       "agent.root" => {
         let manager = self.agent_manager.as_ref()
           .ok_or_else(|| "AgentManager not configured".to_string())?;
@@ -437,6 +456,7 @@ impl ExplorerService {
               .map_err(|e| format!("Failed to create local FS: {}", e))?;
             Ok(Box::new(fs) as Box<dyn OpbxFileSystem>)
           }
+          #[cfg(feature = "agent-manager")]
           Location::Remote { host, port } => {
             // 对于 Agent endpoint，需要从 AgentManager 查询实际的 host 和 port
             let (actual_host, actual_port) = if let Some(manager) = &self.agent_manager {
@@ -466,6 +486,10 @@ impl ExplorerService {
               .map_err(|e| format!("Failed to create Agent client: {}", e))?;
             let fs = AgentProxyFS::new(client);
             Ok(Box::new(fs) as Box<dyn OpbxFileSystem>)
+          }
+          #[cfg(not(feature = "agent-manager"))]
+          Location::Remote { .. } => {
+            Err("Agent remote location not supported (agent-manager feature disabled)".to_string())
           }
           Location::Cloud => {
             Err("Cloud location not supported for Directory backend".to_string())
@@ -534,6 +558,7 @@ impl ExplorerService {
 
     // 特殊处理：agent discovery 返回的 agent 条目
     // 从条目名称中提取 agent ID（格式为 "agent-name (agent-id)" 或 "agent-id"）
+    #[allow(unused_variables)]
     let path = if parent_resource.endpoint.identity == "agent.root" {
       // 从名称中提取 agent ID
       let agent_id = if entry.name.contains(" (") {
@@ -716,56 +741,7 @@ impl ExplorerService {
 
   /// 根据文件扩展名推断 MIME 类型
   fn guess_mime_type(name: &str) -> Option<String> {
-    let ext = name.rsplit('.').next()?.to_lowercase();
-    let mime = match ext.as_str() {
-      // 文本 / 日志 / 配置
-      "txt" | "log" | "out" | "err" => "text/plain",
-      "csv" => "text/csv",
-      "json" => "application/json",
-      "xml" => "application/xml",
-      "yaml" | "yml" => "text/yaml",
-      "toml" => "text/toml",
-      "ini" | "cfg" | "conf" | "properties" => "text/plain",
-      "md" | "markdown" => "text/markdown",
-      "html" | "htm" => "text/html",
-      "css" => "text/css",
-      // 代码
-      "js" | "mjs" | "cjs" => "text/javascript",
-      "ts" | "tsx" | "jsx" => "text/typescript",
-      "rs" => "text/x-rust",
-      "py" => "text/x-python",
-      "go" => "text/x-go",
-      "java" => "text/x-java",
-      "c" | "h" => "text/x-c",
-      "cpp" | "cc" | "cxx" | "hpp" => "text/x-c++",
-      "sh" | "bash" | "zsh" => "text/x-shellscript",
-      "sql" => "application/sql",
-      // 归档
-      "gz" | "gzip" => "application/gzip",
-      "tar" => "application/x-tar",
-      "zip" => "application/zip",
-      "tgz" => "application/gzip",
-      "bz2" => "application/x-bzip2",
-      "xz" => "application/x-xz",
-      "7z" => "application/x-7z-compressed",
-      "rar" => "application/x-rar-compressed",
-      // 图片
-      "png" => "image/png",
-      "jpg" | "jpeg" => "image/jpeg",
-      "gif" => "image/gif",
-      "webp" => "image/webp",
-      "svg" => "image/svg+xml",
-      "ico" => "image/x-icon",
-      // 音视频
-      "mp3" => "audio/mpeg",
-      "mp4" => "video/mp4",
-      "wav" => "audio/wav",
-      // 其他
-      "pdf" => "application/pdf",
-      "wasm" => "application/wasm",
-      _ => return None,
-    };
-    Some(mime.to_string())
+    ResourceLister::guess_mime_type(name)
   }
 }
 
@@ -784,25 +760,6 @@ mod tests {
   #[tokio::test]
   async fn test_explorer_service_download_local() {
     let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
-
-    // 使用临时目录作为测试根目录
-    let temp_dir = tempfile::tempdir().unwrap();
-    let file_path = temp_dir.path().join("test.txt");
-    tokio::fs::write(&file_path, "hello download").await.unwrap();
-
-    // 创建使用 tempdir 的 service
-    // 注意：当前 ExplorerService 不支持自定义 root，
-    // 所以这个测试需要调整 ExplorerService 的实现或使用不同的测试方法
-    //
-    // 临时方案：直接测试 LocalFileSystem 而不是通过 ExplorerService
-    //
-    // 实际上，为了正确测试 ExplorerService，
-    // 我们需要能够配置 LocalFileSystem 的 root 路径
-    //
-    // 这是一个已知的限制，需要在未来版本中修复
-
-    // 由于当前限制，这个测试被跳过
-    // 正确的实现需要 ExplorerService 支持 root 路径配置
 
     // 简单测试：验证错误处理
     let service = ExplorerService::new(pool);

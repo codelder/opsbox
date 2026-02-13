@@ -164,7 +164,7 @@ pub async fn update_log_retention(
   ))))
 }
 
-/// 列出目录文件
+/// 列出目录文件（支持归档浏览）
 pub async fn handle_list_files(
   State(state): State<AppState>,
   Query(req): Query<AgentListRequest>,
@@ -210,39 +210,36 @@ pub async fn handle_list_files(
     return Ok(Json(AgentListResponse { items: all_items }));
   }
 
-  // Security check: ensure path is within allowed directories or subdirectories
-  use crate::path::resolve_directory_path;
-  let resolved_paths = match resolve_directory_path(&state.config, &path_str) {
-    Ok(p) => p,
+  // 使用 AgentExplorer 进行列表操作（支持归档）
+  use crate::explorer::AgentExplorer;
+  let explorer = AgentExplorer::new(state.config.clone());
+
+  // 解码 entry 参数（如果有）
+  let entry = req.entry.as_ref().map(|e| decode_path(e));
+
+  match explorer.list(&path_str, entry.as_deref()).await {
+    Ok(entries) => {
+      let items = entries
+        .into_iter()
+        .map(|entry| AgentFileItem {
+          name: entry.name,
+          path: entry.path,
+          is_dir: entry.is_dir,
+          is_symlink: entry.is_symlink,
+          size: Some(entry.size),
+          modified: entry.modified.map(|t| t as i64),
+          child_count: entry.child_count.map(|c| c as u32),
+          hidden_child_count: entry.hidden_child_count.map(|c| c as u32),
+          mime_type: entry.mime_type,
+        })
+        .collect();
+      Ok(Json(AgentListResponse { items }))
+    }
     Err(e) => {
       // 访问被拒绝或路径不在允许范围内，统一返回 NotFound 避免泄露信息
-      return Err(AppError::not_found(format!("Access denied or path not found: {}", e)));
+      Err(AppError::not_found(format!("Access denied or path not found: {}", e)))
     }
-  };
-
-  // Use the first resolved path for listing
-  let path = &resolved_paths[0];
-
-  let items = opsbox_core::fs::list_directory(path)
-    .await
-    .map_err(|e| AppError::internal(e.to_string()))?;
-
-  let items = items
-    .into_iter()
-    .map(|item| AgentFileItem {
-      name: item.name,
-      path: item.path,
-      is_dir: item.is_dir,
-      is_symlink: item.is_symlink,
-      size: item.size,
-      modified: item.modified,
-      child_count: item.child_count,
-      hidden_child_count: item.hidden_child_count,
-      mime_type: item.mime_type,
-    })
-    .collect();
-
-  Ok(Json(AgentListResponse { items }))
+  }
 }
 
 use axum::body::Body;
@@ -251,62 +248,56 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct GetFileRequest {
   pub path: String,
+  /// 归档内路径（可选）
+  pub entry: Option<String>,
 }
 
-/// GET 原始文件内容
+/// GET 原始文件内容（支持归档内文件下载）
 pub async fn handle_get_file_raw(
   State(state): State<AppState>,
   Query(req): Query<GetFileRequest>,
 ) -> Result<impl IntoResponse> {
   let path_str = decode_path(&req.path);
 
-  // Security check: ensure path is within allowed directories or subdirectories
-  use crate::path::resolve_directory_path;
-  let resolved_paths = match resolve_directory_path(&state.config, &path_str) {
-    Ok(p) => p,
-    Err(e) => {
-      warn!("RawFile: Path resolution failed for {}: {}", path_str, e);
-      return Err(AppError::not_found(format!("Access denied or path not found: {}", e)));
-    }
-  };
+  // 使用 AgentExplorer 进行下载操作（支持归档）
+  use crate::explorer::AgentExplorer;
+  let explorer = AgentExplorer::new(state.config.clone());
 
-  // Use the first resolved path
-  let path = &resolved_paths[0];
+  // 解码 entry 参数（如果有）
+  let entry = req.entry.as_ref().map(|e| decode_path(e));
 
-  if !path.exists() || !path.is_file() {
-    warn!(
-      "RawFile: File check failed for {:?}: exists={}, is_file={}",
-      path,
-      path.exists(),
-      path.is_file()
-    );
-    return Err(AppError::not_found(format!(
-      "File not found or not a file: {}",
-      path_str
-    )));
-  }
+  match explorer.download(&path_str, entry.as_deref()).await {
+    Ok((name, size, reader)) => {
+      // 获取 MIME 类型
+      let mime = AgentExplorer::guess_mime_type(&name)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
 
-  // Open file
-  let file = tokio::fs::File::open(path)
-    .await
-    .map_err(|e| AppError::internal(e.to_string()))?;
-  let stream = tokio_util::io::ReaderStream::new(file);
-  let body = Body::from_stream(stream);
+      // 创建流式响应
+      use tokio_util::io::ReaderStream;
+      let stream = ReaderStream::new(reader);
+      let body = Body::from_stream(stream);
 
-  // Guess mime
-  let _mime = mime_guess::from_path(path).first_or_octet_stream().as_ref().to_string();
+      // URL 编码文件名用于 Content-Disposition
+      let encoded_name = urlencoding::encode(&name);
 
-  Ok(
-    axum::response::Response::builder()
-      .status(StatusCode::OK)
-      .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
-      .header(
-        axum::http::header::CONTENT_DISPOSITION,
-        "attachment; filename=\"file.bin\"",
+      Ok(
+        axum::response::Response::builder()
+          .status(StatusCode::OK)
+          .header(axum::http::header::CONTENT_TYPE, mime)
+          .header(
+            axum::http::header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", name, encoded_name),
+          )
+          .header(axum::http::header::CONTENT_LENGTH, size.unwrap_or(0))
+          .body(body)
+          .unwrap(),
       )
-      .body(body)
-      .unwrap(),
-  )
+    }
+    Err(e) => {
+      warn!("RawFile: Download failed for {}: {}", path_str, e);
+      Err(AppError::not_found(format!("Access denied or file not found: {}", e)))
+    }
+  }
 }
 
 /// 创建 Agent 路由
