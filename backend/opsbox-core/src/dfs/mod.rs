@@ -11,7 +11,7 @@
 //! - **文件系统创建**: create_fs 函数
 //! - **文件系统实现**: LocalFileSystem
 //! - **ORL 解析**: OrlParser
-//! - **搜索能力**: Searchable trait, ContentProcessor, EntryStreamProcessor
+//! - **搜索能力**: Searchable trait
 
 pub mod archive;
 pub mod endpoint;
@@ -22,7 +22,6 @@ pub mod orl_parser;
 pub mod path;
 pub mod resource;
 pub mod searchable;
-pub mod search;
 
 // 重新导出核心类型
 pub use endpoint::{AccessMethod, Endpoint, Location, StorageBackend};
@@ -34,4 +33,3 @@ pub use factory::{create_fs, FsConfig};
 pub use impls::{AgentClient, AgentProxyFS, ArchiveFileSystem, LocalFileSystem, S3Config, S3Storage};
 pub use orl_parser::{OrlParser, OrlParseError, build_orl, build_orl_from_resource};
 pub use searchable::{SearchConfig, Searchable};
-pub use search::{ContentProcessor, EntryStreamProcessor, PathFilter, ProcessedContent};

@@ -15,7 +15,9 @@ use std::future::Future;
 
 use crate::fs::{EntryMeta, EntrySource, EntryStream, PrefixedReader};
 
-use super::types::{preload_entry, ContentProcessor, PreloadResult, ProcessedContent};
+use super::types::{ContentProcessor, ProcessedContent};
+use super::preload::{preload_entry, PreloadResult};
+use super::filter::PathFilter;
 
 /// 统一条目流处理器：消费 EntryStream，调用 ContentProcessor 处理内容
 pub struct EntryStreamProcessor<P: ContentProcessor> {
@@ -34,44 +36,16 @@ pub struct EntryStreamProcessor<P: ContentProcessor> {
     error_callback: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
-/// 路径过滤器（简化版，从 logseek 复制）
-#[derive(Clone, Default)]
-pub struct PathFilter {
-    /// 包含模式
-    pub include: Option<globset::GlobSet>,
-    /// 排除模式
-    pub exclude: Option<globset::GlobSet>,
-}
-
-impl PathFilter {
-    /// 检查路径是否被允许
-    pub fn is_allowed(&self, path: &str) -> bool {
-        // 先检查排除
-        if let Some(ref exclude) = self.exclude
-            && exclude.is_match(path)
-        {
-            return false;
-        }
-        // 再检查包含
-        if let Some(ref include) = self.include
-            && !include.is_match(path)
-        {
-            return false;
-        }
-        true
-    }
-}
-
 impl<P: ContentProcessor + 'static> EntryStreamProcessor<P> {
     /// 创建新的条目流处理器
     pub fn new(processor: Arc<P>) -> Self {
         Self {
             processor,
-            content_timeout: Duration::from_secs(30),
+            content_timeout: Duration::from_secs(60),  // 改为 60秒
             extra_path_filters: Vec::new(),
             cancel_token: None,
             base_path: None,
-            preload_threshold: 50 * 1024 * 1024, // 50MB
+            preload_threshold: 120 * 1024 * 1024,      // 改为 120MB
             is_stopped_fn: None,
             error_callback: None,
         }
@@ -151,7 +125,6 @@ impl<P: ContentProcessor + 'static> EntryStreamProcessor<P> {
         default.clamp(1, 128)
     }
 
-    /// 并发处理条目
     /// 并发处理条目
     pub async fn process_stream<F, Fut>(
         &mut self,
@@ -291,7 +264,6 @@ impl<P: ContentProcessor + 'static> EntryStreamProcessor<P> {
     }
 
     /// 处理归档条目
-    /// 处理归档条目
     async fn process_archive_entry<F, Fut>(
         &mut self,
         meta: &EntryMeta,
@@ -405,7 +377,6 @@ impl<P: ContentProcessor + 'static> EntryStreamProcessor<P> {
     }
 
     /// 处理普通文件
-    /// 处理普通文件
     async fn process_regular_entry<F, Fut>(
         &mut self,
         meta: &EntryMeta,
@@ -457,6 +428,7 @@ impl<P: ContentProcessor + 'static> EntryStreamProcessor<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
 
     #[test]
     fn test_entry_concurrency() {
@@ -465,45 +437,10 @@ mod tests {
         assert!(conc <= 128);
     }
 
-    #[test]
-    fn test_path_filter() {
-        let mut builder = globset::GlobSetBuilder::new();
-        builder.add(globset::Glob::new("*.log").unwrap());
-        let include = builder.build().unwrap();
-
-        let filter = PathFilter {
-            include: Some(include),
-            exclude: None,
-        };
-
-        assert!(filter.is_allowed("test.log"));
-        assert!(filter.is_allowed("path/to/test.log"));
-        assert!(!filter.is_allowed("test.txt"));
-    }
-
-    #[test]
-    fn test_path_filter_with_exclude() {
-        let mut include_builder = globset::GlobSetBuilder::new();
-        include_builder.add(globset::Glob::new("*").unwrap());
-        let include = include_builder.build().unwrap();
-
-        let mut exclude_builder = globset::GlobSetBuilder::new();
-        exclude_builder.add(globset::Glob::new("*.tmp").unwrap());
-        let exclude = exclude_builder.build().unwrap();
-
-        let filter = PathFilter {
-            include: Some(include),
-            exclude: Some(exclude),
-        };
-
-        assert!(filter.is_allowed("test.log"));
-        assert!(!filter.is_allowed("test.tmp"));
-    }
-
     /// Dummy processor for testing
     struct DummyProcessor;
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl ContentProcessor for DummyProcessor {
         async fn process_content(
             &self,

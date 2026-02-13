@@ -13,6 +13,7 @@ pub mod dfs;
 pub mod error;
 pub mod fs;
 pub mod odfs;
+pub mod processing;
 pub mod repository;
 pub mod storage;
 

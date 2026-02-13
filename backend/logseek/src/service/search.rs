@@ -12,7 +12,7 @@ use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tracing::{debug, trace, warn};
 
-use opsbox_core::dfs::search::{ContentProcessor, ProcessedContent};
+use opsbox_core::processing::{ContentProcessor, ProcessedContent};
 
 pub mod sink;
 use sink::BooleanContextSink;

@@ -274,7 +274,7 @@ impl SearchableFileSystem for LocalSearchProvider {
     ));
 
     // 6. 创建 DFS EntryStreamProcessor
-    let mut processor = opsbox_core::dfs::search::EntryStreamProcessor::new(search_proc);
+    let mut processor = opsbox_core::processing::EntryStreamProcessor::new(search_proc);
 
     if let Some(token) = ctx.cancel_token.clone() {
       processor = processor.with_cancel_token(token);
@@ -290,9 +290,11 @@ impl SearchableFileSystem for LocalSearchProvider {
     // 8. 路径过滤：ORL 携带的内置 glob 过滤
     if let Some(ref glob) = ctx.resource.filter_glob
       && let Ok(filter) = crate::query::path_glob_to_filter(glob) {
-        let dfs_filter = opsbox_core::dfs::search::PathFilter {
+        let dfs_filter = opsbox_core::processing::PathFilter {
           include: filter.include,
           exclude: filter.exclude,
+          include_contains: filter.include_contains,
+          exclude_contains: filter.exclude_contains,
         };
         processor = processor.with_extra_path_filter(dfs_filter);
     }
@@ -300,9 +302,11 @@ impl SearchableFileSystem for LocalSearchProvider {
     // 9. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
     if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
-      let dfs_filter = opsbox_core::dfs::search::PathFilter {
+      let dfs_filter = opsbox_core::processing::PathFilter {
         include: extra_filter.include,
         exclude: extra_filter.exclude,
+        include_contains: extra_filter.include_contains,
+        exclude_contains: extra_filter.exclude_contains,
       };
       processor = processor.with_extra_path_filter(dfs_filter);
     }
@@ -437,7 +441,7 @@ impl SearchableFileSystem for S3SearchProvider {
     ));
 
     // 8. 创建 DFS EntryStreamProcessor
-    let mut processor = opsbox_core::dfs::search::EntryStreamProcessor::new(search_proc);
+    let mut processor = opsbox_core::processing::EntryStreamProcessor::new(search_proc);
 
     if let Some(token) = ctx.cancel_token.clone() {
       processor = processor.with_cancel_token(token);
@@ -454,18 +458,22 @@ impl SearchableFileSystem for S3SearchProvider {
     // 10. 路径过滤：ORL 携带的内置 glob 过滤
     if let Some(ref glob) = ctx.resource.filter_glob
       && let Ok(filter) = crate::query::path_glob_to_filter(glob) {
-        let dfs_filter = opsbox_core::dfs::search::PathFilter {
+        let dfs_filter = opsbox_core::processing::PathFilter {
           include: filter.include,
           exclude: filter.exclude,
+          include_contains: filter.include_contains,
+          exclude_contains: filter.exclude_contains,
         };
         processor = processor.with_extra_path_filter(dfs_filter);
     }
     // 10. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
     if extra_filter.include.is_some() || extra_filter.exclude.is_some() {
-      let dfs_filter = opsbox_core::dfs::search::PathFilter {
+      let dfs_filter = opsbox_core::processing::PathFilter {
         include: extra_filter.include,
         exclude: extra_filter.exclude,
+        include_contains: extra_filter.include_contains,
+        exclude_contains: extra_filter.exclude_contains,
       };
       processor = processor.with_extra_path_filter(dfs_filter);
     }
