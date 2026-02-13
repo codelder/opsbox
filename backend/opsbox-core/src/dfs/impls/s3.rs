@@ -13,7 +13,7 @@ use aws_sdk_s3::{
 use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
     path::ResourcePath,
-    searchable::{SearchConfig, Searchable},
+    searchable::{SearchConfig, Streamable},
 };
 use crate::fs::EntryStream;
 
@@ -503,7 +503,7 @@ impl EntryStream for S3EntryStream {
 }
 
 #[async_trait]
-impl Searchable for S3Storage {
+impl Streamable for S3Storage {
     /// 获取条目流用于搜索
     async fn as_entry_stream(
         &self,

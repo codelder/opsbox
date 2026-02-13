@@ -10,7 +10,7 @@ use serde_json;
 use super::super::{
     filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
-    searchable::{SearchConfig, Searchable},
+    searchable::{SearchConfig, Streamable},
 };
 use crate::fs::EntryStream;
 
@@ -384,7 +384,7 @@ impl EntryStream for AgentEntryStream {
 }
 
 #[async_trait]
-impl Searchable for AgentProxyFS {
+impl Streamable for AgentProxyFS {
     /// 获取条目流用于搜索
     async fn as_entry_stream(
         &self,

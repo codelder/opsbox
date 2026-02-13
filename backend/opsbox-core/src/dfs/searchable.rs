@@ -1,7 +1,7 @@
-//! Searchable trait - 统一的搜索接口
+//! Streamable trait - 可流式化的文件系统接口
 //!
-//! 为文件系统提供者提供搜索能力的抽象。
-//! 扩展 OpbxFileSystem trait，添加 as_entry_stream 方法用于搜索。
+//! 为文件系统提供者提供条目流（EntryStream）的能力。
+//! 扩展 OpbxFileSystem trait，添加 as_entry_stream 方法用于获取文件条目流。
 
 use std::time::Duration;
 
@@ -71,12 +71,12 @@ impl SearchConfig {
     }
 }
 
-/// 可搜索文件系统 trait
+/// 可流式化文件系统 trait
 ///
 /// 扩展 OpbxFileSystem，提供获取 EntryStream 的能力。
-/// 所有支持搜索的文件系统提供者都应实现此 trait。
+/// 所有支持条目流访问的文件系统提供者都应实现此 trait。
 #[async_trait]
-pub trait Searchable: OpbxFileSystem {
+pub trait Streamable: OpbxFileSystem {
     /// 获取条目流用于搜索
     ///
     /// # Arguments

@@ -1,77 +1,21 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
-import * as net from 'net';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  getFreePort,
+  findAgentCommand,
+  stopProcess,
+  waitForAgentReady,
+  DEFAULT_AGENT_READY_TIMEOUT
+} from './utils/agent';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Set debug logging for Rust components
 process.env.RUST_LOG = 'debug';
-
-function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      server.close(() => {
-        if (!addr || typeof addr === 'string') {
-          reject(new Error('Failed to allocate a free port'));
-          return;
-        }
-        resolve(addr.port);
-      });
-    });
-  });
-}
-
-function findAgentCommand(repoRoot: string): { command: string; argsPrefix: string[]; cwd: string } {
-  const backendDir = path.join(repoRoot, 'backend');
-  return {
-    command: 'cargo',
-    argsPrefix: ['run', '--release', '-p', 'opsbox-agent', '--'],
-    cwd: backendDir
-  };
-}
-
-async function stopProcess(proc: ChildProcessWithoutNullStreams) {
-  if (proc.exitCode !== null) return;
-  proc.kill('SIGINT');
-
-  const exited = await Promise.race([
-    new Promise<boolean>((resolve) => proc.once('exit', () => resolve(true))),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000))
-  ]);
-  if (exited) return;
-
-  proc.kill('SIGKILL');
-  await new Promise<void>((resolve) => proc.once('exit', () => resolve()));
-}
-
-/**
- * 等待agent注册到服务器（通过API检查）
- */
-async function waitForAgentReady(request: APIRequestContext, agentId: string, maxWait = 15000): Promise<void> {
-  const start = Date.now();
-  const interval = 500;
-
-  while (Date.now() - start < maxWait) {
-    try {
-      const response = await request.get(`http://127.0.0.1:4001/api/v1/agents/${agentId}`);
-      if (response.ok()) {
-        console.log(`Agent ${agentId} is ready after ${Date.now() - start}ms`);
-        return;
-      }
-    } catch {
-      // API调用失败，agent可能还未注册
-    }
-    await new Promise((r) => setTimeout(r, interval));
-  }
-  throw new Error(`Agent ${agentId} not ready after ${maxWait}ms`);
-}
 
 test.describe('Explorer E2E', () => {
   test.describe.configure({ mode: 'serial' });
@@ -128,8 +72,9 @@ test.describe('Explorer E2E', () => {
     agentProc.stderr.on('data', (d) => process.stderr.write(d));
 
     // Wait for agent to be ready - rely only on API registration (Scheme A)
+    // Use increased timeout (30s) to handle compilation delays in parallel test runs
     try {
-      await waitForAgentReady(request, AGENT_ID, 15000);
+      await waitForAgentReady(request, AGENT_ID, DEFAULT_AGENT_READY_TIMEOUT);
       console.log(`Agent ${AGENT_ID} fully ready`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

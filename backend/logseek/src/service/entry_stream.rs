@@ -7,7 +7,7 @@ use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
 use opsbox_core::fs::{EntrySource, EntryStream, PrefixedReader};
-use opsbox_core::dfs::{Resource, Location, Searchable, SearchConfig, ResourcePath, OrlParser};
+use opsbox_core::dfs::{Resource, Location, Streamable, SearchConfig, ResourcePath, OrlParser};
 
 use crate::query::PathFilter;
 

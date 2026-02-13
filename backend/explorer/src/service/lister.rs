@@ -630,10 +630,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_tar_archive() {
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
         use tar::Builder;
-        use std::io::Write;
 
         let temp_dir = tempfile::tempdir().unwrap();
         let tar_path = temp_dir.path().join("test.tar");

@@ -18,6 +18,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 test.describe('Explorer Interaction E2E', () => {
+  // 配置为串行模式，避免并行测试时的目录清理冲突
+  test.describe.configure({ mode: 'serial' });
+
   const RUN_ID = Date.now();
   const TEST_DIR = path.join(__dirname, `temp_explorer_interaction_${RUN_ID}`);
   const LOGS_DIR = path.join(TEST_DIR, 'logs');

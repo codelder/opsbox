@@ -11,7 +11,7 @@
 //! - **文件系统创建**: create_fs 函数
 //! - **文件系统实现**: LocalFileSystem
 //! - **ORL 解析**: OrlParser
-//! - **搜索能力**: Searchable trait
+//! - **流式能力**: Streamable trait
 
 pub mod archive;
 pub mod endpoint;
@@ -32,4 +32,4 @@ pub use filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem};
 pub use factory::{create_fs, FsConfig};
 pub use impls::{AgentClient, AgentProxyFS, ArchiveFileSystem, LocalFileSystem, S3Config, S3Storage};
 pub use orl_parser::{OrlParser, OrlParseError, build_orl, build_orl_from_resource};
-pub use searchable::{SearchConfig, Searchable};
+pub use searchable::{SearchConfig, Streamable};

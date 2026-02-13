@@ -1,4 +1,4 @@
-//! SearchableFileSystem trait - 统一的搜索接口
+//! SearchProvider trait - 统一的搜索提供者接口
 //!
 //! 为不同的文件系统 provider 提供统一的搜索能力抽象。
 //! 使用 DFS (Distributed File System) 模块进行文件系统操作。
@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::{Resource, Location, Searchable, SearchConfig, ResourcePath};
+use opsbox_core::dfs::{Resource, Location, Streamable, SearchConfig, ResourcePath};
 
 use super::ServiceError;
 use super::search::{SearchEvent, SearchProcessor, SearchResult};
@@ -163,11 +163,11 @@ impl SearchContext {
   }
 }
 
-/// 可搜索文件系统 trait
+/// 搜索提供者 trait
 ///
 /// 为不同的存储 provider 提供统一的搜索接口
 #[async_trait]
-pub trait SearchableFileSystem: Send + Sync {
+pub trait SearchProvider: Send + Sync {
   /// 执行搜索
   ///
   /// # Arguments
@@ -185,20 +185,20 @@ pub trait SearchableFileSystem: Send + Sync {
 pub async fn create_search_provider(
   _pool: &SqlitePool,
   resource: &Resource,
-) -> Result<Box<dyn SearchableFileSystem>, ServiceError> {
+) -> Result<Box<dyn SearchProvider>, ServiceError> {
   match &resource.endpoint.location {
     Location::Local => {
       // Local 文件系统搜索
-      Ok(Box::new(LocalSearchProvider) as Box<dyn SearchableFileSystem>)
+      Ok(Box::new(LocalSearchProvider) as Box<dyn SearchProvider>)
     }
     Location::Cloud => {
       // S3 对象存储搜索
       let profile = resource.endpoint.identity.clone();
-      Ok(Box::new(S3SearchProvider { profile }) as Box<dyn SearchableFileSystem>)
+      Ok(Box::new(S3SearchProvider { profile }) as Box<dyn SearchProvider>)
     }
     Location::Remote { .. } => {
       // Agent 代理搜索
-      Ok(Box::new(AgentSearchProvider) as Box<dyn SearchableFileSystem>)
+      Ok(Box::new(AgentSearchProvider) as Box<dyn SearchProvider>)
     }
   }
 }
@@ -210,7 +210,7 @@ pub async fn create_search_provider(
 struct LocalSearchProvider;
 
 #[async_trait]
-impl SearchableFileSystem for LocalSearchProvider {
+impl SearchProvider for LocalSearchProvider {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
     use opsbox_core::dfs::LocalFileSystem;
     use std::path::PathBuf;
@@ -353,7 +353,7 @@ struct S3SearchProvider {
 }
 
 #[async_trait]
-impl SearchableFileSystem for S3SearchProvider {
+impl SearchProvider for S3SearchProvider {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, pool: &SqlitePool) -> Result<(), ServiceError> {
     use opsbox_core::dfs::S3Storage;
     use opsbox_core::dfs::S3Config;
@@ -516,7 +516,7 @@ impl SearchableFileSystem for S3SearchProvider {
 struct AgentSearchProvider;
 
 #[async_trait]
-impl SearchableFileSystem for AgentSearchProvider {
+impl SearchProvider for AgentSearchProvider {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, pool: &SqlitePool) -> Result<(), ServiceError> {
     use crate::agent::{SearchOptions, SearchService, Target as AgentTarget, create_agent_client_by_id};
     use futures::StreamExt;

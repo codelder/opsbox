@@ -19,7 +19,7 @@ use super::super::{
     archive::ArchiveType,
     filesystem::{DirEntry, FileMetadata, FsError, MemoryReader, OpbxFileSystem},
     path::ResourcePath,
-    searchable::{SearchConfig, Searchable},
+    searchable::{SearchConfig, Streamable},
 };
 use crate::fs::EntryStream;
 
@@ -664,7 +664,7 @@ where
 }
 
 #[async_trait]
-impl<F> Searchable for ArchiveFileSystem<F>
+impl<F> Streamable for ArchiveFileSystem<F>
 where
     F: OpbxFileSystem + Send + Sync,
 {

@@ -8,189 +8,26 @@
  * - Supports entry parameter for navigating inside archives
  */
 
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect } from '@playwright/test';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'child_process';
 import * as fs from 'fs';
-import * as net from 'net';
 import * as path from 'path';
-import * as zlib from 'zlib';
 import { fileURLToPath } from 'url';
+import {
+  getFreePort,
+  findAgentCommand,
+  stopProcess,
+  waitForAgentReady,
+  writeTarFile,
+  writeTarGzFile,
+  DEFAULT_AGENT_READY_TIMEOUT
+} from './utils/agent';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Set debug logging for Rust components
 process.env.RUST_LOG = 'debug';
-
-function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      server.close(() => {
-        if (!addr || typeof addr === 'string') {
-          reject(new Error('Failed to allocate a free port'));
-          return;
-        }
-        resolve(addr.port);
-      });
-    });
-  });
-}
-
-function findAgentCommand(repoRoot: string): { command: string; argsPrefix: string[]; cwd: string } {
-  const backendDir = path.join(repoRoot, 'backend');
-  return {
-    command: 'cargo',
-    argsPrefix: ['run', '--release', '-p', 'opsbox-agent', '--'],
-    cwd: backendDir
-  };
-}
-
-async function stopProcess(proc: ChildProcessWithoutNullStreams) {
-  if (proc.exitCode !== null) return;
-  proc.kill('SIGINT');
-
-  const exited = await Promise.race([
-    new Promise<boolean>((resolve) => proc.once('exit', () => resolve(true))),
-    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000))
-  ]);
-  if (exited) return;
-
-  proc.kill('SIGKILL');
-  await new Promise<void>((resolve) => proc.once('exit', () => resolve()));
-}
-
-/**
- * Wait for agent to register to server via API check
- */
-async function waitForAgentReady(request: APIRequestContext, agentId: string, maxWait = 15000): Promise<void> {
-  const start = Date.now();
-  const interval = 500;
-
-  while (Date.now() - start < maxWait) {
-    try {
-      const response = await request.get(`http://127.0.0.1:4001/api/v1/agents/${agentId}`);
-      if (response.ok()) {
-        console.log(`Agent ${agentId} is ready after ${Date.now() - start}ms`);
-        return;
-      }
-    } catch {
-      // API call failed, agent not yet registered
-    }
-    await new Promise((r) => setTimeout(r, interval));
-  }
-  throw new Error(`Agent ${agentId} not ready after ${maxWait}ms`);
-}
-
-/**
- * Write a tar file with given entries (pure JS implementation)
- */
-function writeTarFile(outFile: string, entries: Array<{ name: string; content: string }>) {
-  const blocks: Buffer[] = [];
-
-  function writeHeader(name: string, size: number) {
-    const header = Buffer.alloc(512, 0);
-
-    const writeString = (offset: number, length: number, value: string) => {
-      header.write(value, offset, Math.min(length, Buffer.byteLength(value)), 'utf8');
-    };
-
-    const writeOctal = (offset: number, length: number, value: number) => {
-      const s = value.toString(8).padStart(length - 1, '0') + '\0';
-      writeString(offset, length, s);
-    };
-
-    writeString(0, 100, name);
-    writeOctal(100, 8, 0o644);
-    writeOctal(108, 8, 0);
-    writeOctal(116, 8, 0);
-    writeOctal(124, 12, size);
-    writeOctal(136, 12, Math.floor(Date.now() / 1000));
-
-    header.fill(0x20, 148, 156);
-    writeString(156, 1, '0');
-    writeString(257, 6, 'ustar\0');
-    writeString(263, 2, '00');
-
-    let checksum = 0;
-    for (const byte of header) checksum += byte;
-    const checksumStr = checksum.toString(8).padStart(6, '0') + '\0 ';
-    writeString(148, 8, checksumStr);
-
-    return header;
-  }
-
-  for (const entry of entries) {
-    const content = Buffer.from(entry.content, 'utf8');
-    blocks.push(writeHeader(entry.name, content.length));
-    blocks.push(content);
-
-    const remainder = content.length % 512;
-    if (remainder !== 0) {
-      blocks.push(Buffer.alloc(512 - remainder, 0));
-    }
-  }
-
-  blocks.push(Buffer.alloc(1024, 0));
-  fs.writeFileSync(outFile, Buffer.concat(blocks));
-}
-
-/**
- * Write a tar.gz file with given entries
- */
-function writeTarGzFile(outFile: string, entries: Array<{ name: string; content: string }>) {
-  const blocks: Buffer[] = [];
-
-  function writeHeader(name: string, size: number) {
-    const header = Buffer.alloc(512, 0);
-
-    const writeString = (offset: number, length: number, value: string) => {
-      header.write(value, offset, Math.min(length, Buffer.byteLength(value)), 'utf8');
-    };
-
-    const writeOctal = (offset: number, length: number, value: number) => {
-      const s = value.toString(8).padStart(length - 1, '0') + '\0';
-      writeString(offset, length, s);
-    };
-
-    writeString(0, 100, name);
-    writeOctal(100, 8, 0o644);
-    writeOctal(108, 8, 0);
-    writeOctal(116, 8, 0);
-    writeOctal(124, 12, size);
-    writeOctal(136, 12, Math.floor(Date.now() / 1000));
-
-    header.fill(0x20, 148, 156);
-    writeString(156, 1, '0');
-    writeString(257, 6, 'ustar\0');
-    writeString(263, 2, '00');
-
-    let checksum = 0;
-    for (const byte of header) checksum += byte;
-    const checksumStr = checksum.toString(8).padStart(6, '0') + '\0 ';
-    writeString(148, 8, checksumStr);
-
-    return header;
-  }
-
-  for (const entry of entries) {
-    const content = Buffer.from(entry.content, 'utf8');
-    blocks.push(writeHeader(entry.name, content.length));
-    blocks.push(content);
-
-    const remainder = content.length % 512;
-    if (remainder !== 0) {
-      blocks.push(Buffer.alloc(512 - remainder, 0));
-    }
-  }
-
-  blocks.push(Buffer.alloc(1024, 0));
-  const tarData = Buffer.concat(blocks);
-  const gzipped = zlib.gzipSync(tarData);
-  fs.writeFileSync(outFile, gzipped);
-}
 
 test.describe('Agent Archive Explorer E2E', () => {
   test.describe.configure({ mode: 'serial' });
@@ -217,30 +54,21 @@ test.describe('Agent Archive Explorer E2E', () => {
     fs.mkdirSync(TEST_AGENT_LOG_DIR, { recursive: true });
 
     // Create tar archive with nested directory
-    writeTarFile(
-      path.join(TEST_LOGS_DIR, 'test.tar'),
-      [
-        { name: 'root.log', content: `2025-01-01 10:00:00 [INFO] root log ${MARKER_TAR}\n` },
-        { name: 'subdir/nested.log', content: `2025-01-01 10:01:00 [INFO] nested log ${MARKER_TAR}\n` }
-      ]
-    );
+    writeTarFile(path.join(TEST_LOGS_DIR, 'test.tar'), [
+      { name: 'root.log', content: `2025-01-01 10:00:00 [INFO] root log ${MARKER_TAR}\n` },
+      { name: 'subdir/nested.log', content: `2025-01-01 10:01:00 [INFO] nested log ${MARKER_TAR}\n` }
+    ]);
 
     // Create tar.gz archive with nested directory
-    writeTarGzFile(
-      path.join(TEST_LOGS_DIR, 'test.tar.gz'),
-      [
-        { name: 'app.log', content: `2025-01-01 11:00:00 [INFO] app log ${MARKER_TARGZ}\n` },
-        { name: 'internal/service.log', content: `2025-01-01 11:01:00 [INFO] service log ${MARKER_TARGZ}\n` }
-      ]
-    );
+    writeTarGzFile(path.join(TEST_LOGS_DIR, 'test.tar.gz'), [
+      { name: 'app.log', content: `2025-01-01 11:00:00 [INFO] app log ${MARKER_TARGZ}\n` },
+      { name: 'internal/service.log', content: `2025-01-01 11:01:00 [INFO] service log ${MARKER_TARGZ}\n` }
+    ]);
 
     // Create tgz archive (same format as tar.gz)
-    writeTarGzFile(
-      path.join(TEST_LOGS_DIR, 'test.tgz'),
-      [
-        { name: 'data.log', content: `2025-01-01 12:00:00 [INFO] data log TGZ\n` }
-      ]
-    );
+    writeTarGzFile(path.join(TEST_LOGS_DIR, 'test.tgz'), [
+      { name: 'data.log', content: `2025-01-01 12:00:00 [INFO] data log TGZ\n` }
+    ]);
 
     // Create zip archive using system zip command (if available)
     try {
@@ -285,8 +113,8 @@ test.describe('Agent Archive Explorer E2E', () => {
     agentProc.stdout.on('data', (d) => process.stdout.write(d));
     agentProc.stderr.on('data', (d) => process.stderr.write(d));
 
-    // Wait for agent to be ready
-    await waitForAgentReady(request, AGENT_ID, 15000);
+    // Wait for agent to be ready (use increased timeout for parallel test runs)
+    await waitForAgentReady(request, AGENT_ID, DEFAULT_AGENT_READY_TIMEOUT);
   });
 
   test.afterAll(async ({ request }) => {
@@ -303,7 +131,9 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   test('should list tar archive contents on agent', async ({ page }) => {
     // Navigate to agent logs directory
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`);
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
     await page.waitForLoadState('networkidle');
 
     // Verify tar file is visible (use exact match to avoid matching test.tar.gz)
@@ -323,7 +153,9 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   test('should navigate into archive subdirectories on agent', async ({ page }) => {
     // Navigate to tar archive
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`);
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
     await page.waitForLoadState('networkidle');
 
     // Enter tar archive
@@ -349,7 +181,9 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   test('should list tar.gz archive contents on agent', async ({ page }) => {
     // Navigate to agent logs directory
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`);
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
     await page.waitForLoadState('networkidle');
 
     // Verify tar.gz file is visible
@@ -367,7 +201,9 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   test('should list tgz archive contents on agent', async ({ page }) => {
     // Navigate to agent logs directory
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`);
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
     await page.waitForLoadState('networkidle');
 
     // Verify tgz file is visible
@@ -384,7 +220,9 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   test('should download file from tar archive on agent', async ({ page }) => {
     // Navigate to tar archive
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`);
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
     await page.waitForLoadState('networkidle');
 
     // Enter tar archive
@@ -445,7 +283,9 @@ test.describe('Agent Archive Explorer E2E', () => {
     }
 
     // Navigate to agent logs directory
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`);
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
     await page.waitForLoadState('networkidle');
 
     // Verify zip file is visible
@@ -472,7 +312,7 @@ test.describe('Agent Archive Explorer E2E', () => {
 
     // The view page should either show file content or an appropriate message
     // Since we're viewing an archive entry from an agent, it should work if backend supports it
-    const bodyText = await page.locator('body').textContent() || '';
+    const bodyText = (await page.locator('body').textContent()) || '';
     const hasNoFatalError = !bodyText.includes('500') && !bodyText.includes('404');
     expect(hasNoFatalError).toBeTruthy();
   });
@@ -527,7 +367,9 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   test('should handle multiple archive formats in same directory', async ({ page }) => {
     // Navigate to agent logs directory
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`);
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
     await page.waitForLoadState('networkidle');
 
     // Should see all archive formats

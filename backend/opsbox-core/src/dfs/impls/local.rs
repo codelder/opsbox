@@ -11,7 +11,7 @@ use tokio::fs;
 use super::super::{
   filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem},
   path::ResourcePath,
-  searchable::{SearchConfig, Searchable},
+  searchable::{SearchConfig, Streamable},
 };
 use crate::fs::EntryStream;
 
@@ -130,7 +130,7 @@ impl OpbxFileSystem for LocalFileSystem {
 }
 
 #[async_trait]
-impl Searchable for LocalFileSystem {
+impl Streamable for LocalFileSystem {
   /// 获取条目流用于搜索
   async fn as_entry_stream(
     &self,
