@@ -100,10 +100,7 @@ test.describe('Search UX E2E', () => {
       const buttonCount = await openButtons.count();
 
       if (buttonCount > 0) {
-        const [newPage] = await Promise.all([
-          page.context().waitForEvent('page'),
-          openButtons.first().click()
-        ]);
+        const [newPage] = await Promise.all([page.context().waitForEvent('page'), openButtons.first().click()]);
 
         await newPage.waitForLoadState();
 

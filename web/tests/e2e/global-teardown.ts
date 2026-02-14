@@ -20,11 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Prefixes for temporary directories created by e2e tests
-const TEMP_DIR_PREFIXES = [
-  'temp_',
-  'e2e_test_',
-  'e2e_temp_',
-];
+const TEMP_DIR_PREFIXES = ['temp_', 'e2e_test_', 'e2e_temp_'];
 
 // Maximum age (in ms) for temp directories before cleanup (30 seconds)
 // Reduced from 5 minutes to ensure faster cleanup in CI
@@ -116,7 +112,7 @@ function cleanupTempDirectories(forceAll = false): { cleaned: number; size: numb
       const fullPath = path.join(__dirname, name);
 
       // Check if it matches any temp prefix
-      const isTempDir = TEMP_DIR_PREFIXES.some(prefix => name.startsWith(prefix));
+      const isTempDir = TEMP_DIR_PREFIXES.some((prefix) => name.startsWith(prefix));
       if (!isTempDir) continue;
 
       try {

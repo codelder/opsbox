@@ -70,16 +70,10 @@ impl IntoResponse for LogSeekApiError {
     let (status, title, detail) = match &self {
       // Service 层错误映射
       LogSeekApiError::Service(e) => match e {
-        ServiceError::SearchFailed { .. } => {
-          (StatusCode::INTERNAL_SERVER_ERROR, "搜索失败", e.to_string())
-        }
+        ServiceError::SearchFailed { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "搜索失败", e.to_string()),
         ServiceError::ConfigError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "配置错误", e.to_string()),
-        ServiceError::ProcessingError(_) => {
-          (StatusCode::INTERNAL_SERVER_ERROR, "数据处理失败", e.to_string())
-        }
-        ServiceError::IoError { .. } => {
-          (StatusCode::INTERNAL_SERVER_ERROR, "IO 操作失败", e.to_string())
-        }
+        ServiceError::ProcessingError(_) => (StatusCode::INTERNAL_SERVER_ERROR, "数据处理失败", e.to_string()),
+        ServiceError::IoError { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "IO 操作失败", e.to_string()),
         ServiceError::ChannelClosed => (
           StatusCode::INTERNAL_SERVER_ERROR,
           "通信中断",
@@ -96,15 +90,9 @@ impl IntoResponse for LogSeekApiError {
       LogSeekApiError::Repository(e) => match e {
         RepositoryError::NotFound(_) => (StatusCode::NOT_FOUND, "资源不存在", e.to_string()),
         RepositoryError::StorageError(_) => (StatusCode::BAD_GATEWAY, "存储服务错误", e.to_string()),
-        RepositoryError::Database(_) => {
-          (StatusCode::INTERNAL_SERVER_ERROR, "数据库错误", e.to_string())
-        }
-        RepositoryError::QueryFailed(_) => {
-          (StatusCode::INTERNAL_SERVER_ERROR, "查询失败", e.to_string())
-        }
-        RepositoryError::CacheFailed(_) => {
-          (StatusCode::INTERNAL_SERVER_ERROR, "缓存操作失败", e.to_string())
-        }
+        RepositoryError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "数据库错误", e.to_string()),
+        RepositoryError::QueryFailed(_) => (StatusCode::INTERNAL_SERVER_ERROR, "查询失败", e.to_string()),
+        RepositoryError::CacheFailed(_) => (StatusCode::INTERNAL_SERVER_ERROR, "缓存操作失败", e.to_string()),
       },
 
       // Domain 层错误映射
@@ -332,8 +320,7 @@ mod tests {
   #[tokio::test]
   async fn test_error_context_preserved() {
     // 测试错误上下文信息是否完整保留
-    let service_err =
-      ServiceError::ProcessingError("处理文件 /path/to/file.log 时发生错误: 编码不支持".to_string());
+    let service_err = ServiceError::ProcessingError("处理文件 /path/to/file.log 时发生错误: 编码不支持".to_string());
     let api_err: LogSeekApiError = service_err.into();
     let response = api_err.into_response();
 

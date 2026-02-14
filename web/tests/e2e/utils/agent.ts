@@ -132,25 +132,27 @@ export interface SpawnAgentOptions {
  * @param options - Agent spawn options
  * @returns The spawned process and its configuration
  */
-export function spawnAgent(
-  repoRoot: string,
-  options: SpawnAgentOptions
-): ChildProcessWithoutNullStreams {
+export function spawnAgent(repoRoot: string, options: SpawnAgentOptions): ChildProcessWithoutNullStreams {
   const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
 
-  const searchRoots = Array.isArray(options.searchRoots)
-    ? options.searchRoots.join(',')
-    : options.searchRoots;
+  const searchRoots = Array.isArray(options.searchRoots) ? options.searchRoots.join(',') : options.searchRoots;
 
   const args = [
     ...argsPrefix,
-    '--agent-id', options.agentId,
-    '--agent-name', options.agentName,
-    '--server-endpoint', options.serverEndpoint ?? 'http://127.0.0.1:4001',
-    '--search-roots', searchRoots,
-    '--listen-port', String(options.listenPort),
-    '--log-dir', options.logDir,
-    '--log-retention', String(options.logRetention ?? 1),
+    '--agent-id',
+    options.agentId,
+    '--agent-name',
+    options.agentName,
+    '--server-endpoint',
+    options.serverEndpoint ?? 'http://127.0.0.1:4001',
+    '--search-roots',
+    searchRoots,
+    '--listen-port',
+    String(options.listenPort),
+    '--log-dir',
+    options.logDir,
+    '--log-retention',
+    String(options.logRetention ?? 1)
   ];
 
   if (options.noHeartbeat !== false) {

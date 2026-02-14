@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::{Resource, Location, Streamable, SearchConfig, ResourcePath};
+use opsbox_core::dfs::{Location, Resource, ResourcePath, SearchConfig, Streamable};
 
 use super::ServiceError;
 use super::search::{SearchEvent, SearchProcessor, SearchResult};
@@ -230,16 +230,20 @@ impl SearchProvider for LocalSearchProvider {
     let path = PathBuf::from(&path_str);
 
     // Check if it is an archive based on extension (heuristic)
-    let is_archive = path.is_file() && path.extension().is_some_and(|ext| {
+    let is_archive = path.is_file()
+      && path.extension().is_some_and(|ext| {
         let s = ext.to_string_lossy().to_lowercase();
         s == "tar" || s == "gz" || s == "tgz" || s == "zip"
-    });
+      });
 
     let (root, relative_path) = if path.is_dir() {
       (path.clone(), ResourcePath::parse(""))
     } else if path.exists() {
       // 单个文件
-      (path.parent().unwrap_or(&path).to_path_buf(), ResourcePath::parse(path.file_name().unwrap().to_string_lossy().as_ref()))
+      (
+        path.parent().unwrap_or(&path).to_path_buf(),
+        ResourcePath::parse(path.file_name().unwrap().to_string_lossy().as_ref()),
+      )
     } else {
       // 路径不存在，尝试使用父目录作为 root
       let parent = path.parent().unwrap_or(&path).to_path_buf();
@@ -249,21 +253,26 @@ impl SearchProvider for LocalSearchProvider {
     // 4. 获取 EntryStream
     // 如果是归档文件，直接使用 Archive Stream，绕过 DFS 抽象（因为 DFS 可能不自动展开归档）
     let mut entry_stream: Box<dyn opsbox_core::fs::EntryStream> = if is_archive {
-        info!("[LocalSearchProvider] 检测到归档文件，使用归档流模式: {}", path.display());
-        let file = tokio::fs::File::open(&path).await
-            .map_err(|e| ServiceError::ProcessingError(format!("打开归档文件失败: {}", e)))?;
-        opsbox_core::fs::create_archive_stream_from_reader(file, Some(&path_str)).await
-            .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
+      info!(
+        "[LocalSearchProvider] 检测到归档文件，使用归档流模式: {}",
+        path.display()
+      );
+      let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| ServiceError::ProcessingError(format!("打开归档文件失败: {}", e)))?;
+      opsbox_core::fs::create_archive_stream_from_reader(file, Some(&path_str))
+        .await
+        .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
     } else {
-        // 3. 创建本地文件系统 (Moved inside else block or duplicated creation if needed?
-        // FS creation is cheap.
-        let fs = LocalFileSystem::new(root)
-          .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))?;
+      // 3. 创建本地文件系统 (Moved inside else block or duplicated creation if needed?
+      // FS creation is cheap.
+      let fs = LocalFileSystem::new(root)
+        .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))?;
 
-        let search_config = SearchConfig::default();
-        fs.as_entry_stream(&relative_path, true, &search_config)
-          .await
-          .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
+      let search_config = SearchConfig::default();
+      fs.as_entry_stream(&relative_path, true, &search_config)
+        .await
+        .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
     };
 
     // 5. 创建 SearchProcessor 并转换为 DFS ContentProcessor
@@ -284,19 +293,20 @@ impl SearchProvider for LocalSearchProvider {
     // 对于归档文件，不设置 base_path（条目路径相对于归档内部）
     // 对于目录搜索，设置 base_path 以支持相对 Glob
     if !is_archive {
-        processor = processor.with_base_path(&path_str);
+      processor = processor.with_base_path(&path_str);
     }
 
     // 8. 路径过滤：ORL 携带的内置 glob 过滤
     if let Some(ref glob) = ctx.resource.filter_glob
-      && let Ok(filter) = crate::query::path_glob_to_filter(glob) {
-        let dfs_filter = opsbox_core::processing::PathFilter {
-          include: filter.include,
-          exclude: filter.exclude,
-          include_contains: filter.include_contains,
-          exclude_contains: filter.exclude_contains,
-        };
-        processor = processor.with_extra_path_filter(dfs_filter);
+      && let Ok(filter) = crate::query::path_glob_to_filter(glob)
+    {
+      let dfs_filter = opsbox_core::processing::PathFilter {
+        include: filter.include,
+        exclude: filter.exclude,
+        include_contains: filter.include_contains,
+        exclude_contains: filter.exclude_contains,
+      };
+      processor = processor.with_extra_path_filter(dfs_filter);
     }
 
     // 9. 路径过滤：用户输入的额外过滤
@@ -329,11 +339,12 @@ impl SearchProvider for LocalSearchProvider {
         async move {
           // 将 ProcessedContent 转换为 SearchEvent
           if let Some(result_value) = content.result
-            && let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value) {
-              let mut result = search_result;
-              result.archive_path = content.archive_path;
-              // 使用异步 send，不再阻塞线程
-              let _ = tx.send(SearchEvent::Success(result)).await;
+            && let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value)
+          {
+            let mut result = search_result;
+            result.archive_path = content.archive_path;
+            // 使用异步 send，不再阻塞线程
+            let _ = tx.send(SearchEvent::Success(result)).await;
           }
         }
       })
@@ -355,8 +366,8 @@ struct S3SearchProvider {
 #[async_trait]
 impl SearchProvider for S3SearchProvider {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, pool: &SqlitePool) -> Result<(), ServiceError> {
-    use opsbox_core::dfs::S3Storage;
     use opsbox_core::dfs::S3Config;
+    use opsbox_core::dfs::S3Storage;
     use tracing::info;
 
     let path_str = ctx.resource.primary_path.to_string();
@@ -392,8 +403,8 @@ impl SearchProvider for S3SearchProvider {
       .map_err(|e| ServiceError::ProcessingError(format!("查询解析失败: {:?}", e)))?;
 
     // 5. 创建 S3 存储
-    let s3_storage = S3Storage::new(s3_config)
-      .map_err(|e| ServiceError::ProcessingError(format!("创建 S3 存储失败: {}", e)))?;
+    let s3_storage =
+      S3Storage::new(s3_config).map_err(|e| ServiceError::ProcessingError(format!("创建 S3 存储失败: {}", e)))?;
 
     // 6. 获取 EntryStream
     // 6. 获取 EntryStream
@@ -401,36 +412,38 @@ impl SearchProvider for S3SearchProvider {
     let resource_path = ResourcePath::parse(object_key);
 
     // Check if it is an archive based on object key extension
-    let is_archive = object_key.to_lowercase().ends_with(".tar") ||
-                     object_key.to_lowercase().ends_with(".tar.gz") ||
-                     object_key.to_lowercase().ends_with(".tgz") ||
-                     object_key.to_lowercase().ends_with(".zip");
+    let is_archive = object_key.to_lowercase().ends_with(".tar")
+      || object_key.to_lowercase().ends_with(".tar.gz")
+      || object_key.to_lowercase().ends_with(".tgz")
+      || object_key.to_lowercase().ends_with(".zip");
 
     let mut entry_stream: Box<dyn opsbox_core::fs::EntryStream> = if is_archive {
-        info!("[S3SearchProvider] 检测到归档文件，使用归档流模式: bucket={} key={}", bucket_name, object_key);
-        // S3Storage needs a method to get reader efficiently?
-        // S3Storage doesn't expose public `get_object`.
-        // But `as_entry_stream` uses internal logic.
-        // We might need to use `s3_storage.read_object(path)` if available?
-        // opsbox-core S3Storage export `read_object_range`?
-        // Let's assume we can fallback to `as_entry_stream` if strictly needed,
-        // BUT `as_entry_stream` might treat it as single file.
-        // Actually S3Storage implementation might handle it?
-        // If not, we have a problem accessing `get_reader` from `S3Storage` externally.
-        // Wait, S3Storage implements `OpbxFileSystem`. `open_file`?
-        use opsbox_core::dfs::OpbxFileSystem;
-        match s3_storage.open_read(&resource_path).await {
-            Ok(reader) => {
-                 opsbox_core::fs::create_archive_stream_from_reader(reader, Some(&path_str)).await
-                    .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
-            }
-            Err(e) => return Err(ServiceError::ProcessingError(format!("打开 S3 文件失败: {}", e))),
-        }
-    } else {
-        s3_storage
-          .as_entry_stream(&resource_path, true, &search_config)
+      info!(
+        "[S3SearchProvider] 检测到归档文件，使用归档流模式: bucket={} key={}",
+        bucket_name, object_key
+      );
+      // S3Storage needs a method to get reader efficiently?
+      // S3Storage doesn't expose public `get_object`.
+      // But `as_entry_stream` uses internal logic.
+      // We might need to use `s3_storage.read_object(path)` if available?
+      // opsbox-core S3Storage export `read_object_range`?
+      // Let's assume we can fallback to `as_entry_stream` if strictly needed,
+      // BUT `as_entry_stream` might treat it as single file.
+      // Actually S3Storage implementation might handle it?
+      // If not, we have a problem accessing `get_reader` from `S3Storage` externally.
+      // Wait, S3Storage implements `OpbxFileSystem`. `open_file`?
+      use opsbox_core::dfs::OpbxFileSystem;
+      match s3_storage.open_read(&resource_path).await {
+        Ok(reader) => opsbox_core::fs::create_archive_stream_from_reader(reader, Some(&path_str))
           .await
-          .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
+          .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?,
+        Err(e) => return Err(ServiceError::ProcessingError(format!("打开 S3 文件失败: {}", e))),
+      }
+    } else {
+      s3_storage
+        .as_entry_stream(&resource_path, true, &search_config)
+        .await
+        .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
     };
 
     // 7. 创建 SearchProcessor
@@ -449,22 +462,23 @@ impl SearchProvider for S3SearchProvider {
 
     // 9. 路径过滤：设置 base_path (仅非归档)
     if !is_archive {
-        // S3 paths start with bucket/key or just key?
-        // path_str includes bucket usually? ORL: orl://profile@s3/bucket/key
-        // path_str is `bucket/key` (lines 361 logic).
-        processor = processor.with_base_path(&path_str);
+      // S3 paths start with bucket/key or just key?
+      // path_str includes bucket usually? ORL: orl://profile@s3/bucket/key
+      // path_str is `bucket/key` (lines 361 logic).
+      processor = processor.with_base_path(&path_str);
     }
 
     // 10. 路径过滤：ORL 携带的内置 glob 过滤
     if let Some(ref glob) = ctx.resource.filter_glob
-      && let Ok(filter) = crate::query::path_glob_to_filter(glob) {
-        let dfs_filter = opsbox_core::processing::PathFilter {
-          include: filter.include,
-          exclude: filter.exclude,
-          include_contains: filter.include_contains,
-          exclude_contains: filter.exclude_contains,
-        };
-        processor = processor.with_extra_path_filter(dfs_filter);
+      && let Ok(filter) = crate::query::path_glob_to_filter(glob)
+    {
+      let dfs_filter = opsbox_core::processing::PathFilter {
+        include: filter.include,
+        exclude: filter.exclude,
+        include_contains: filter.include_contains,
+        exclude_contains: filter.exclude_contains,
+      };
+      processor = processor.with_extra_path_filter(dfs_filter);
     }
     // 10. 路径过滤：用户输入的额外过滤
     let extra_filter = req.to_path_filter();
@@ -495,10 +509,11 @@ impl SearchProvider for S3SearchProvider {
         let tx = tx.clone();
         async move {
           if let Some(result_value) = content.result
-            && let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value) {
-              let mut result = search_result;
-              result.archive_path = content.archive_path;
-              let _ = tx.send(SearchEvent::Success(result)).await;
+            && let Ok(search_result) = serde_json::from_value::<SearchResult>(result_value)
+          {
+            let mut result = search_result;
+            result.archive_path = content.archive_path;
+            let _ = tx.send(SearchEvent::Success(result)).await;
           }
         }
       })

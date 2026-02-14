@@ -136,17 +136,13 @@ impl Query {
   pub fn with_path_filter(mut self, pattern: Option<String>) -> Result<Self, String> {
     if let Some(p) = pattern {
       if let Some(stripped) = p.strip_prefix('!') {
-        let glob = globset::GlobBuilder::new(stripped)
-          .build()
-          .map_err(|e| e.to_string())?;
+        let glob = globset::GlobBuilder::new(stripped).build().map_err(|e| e.to_string())?;
         let mut builder = globset::GlobSetBuilder::new();
         builder.add(glob);
         let set = builder.build().map_err(|e| e.to_string())?;
         self.path_filter.exclude = Some(set);
       } else {
-        let glob = globset::GlobBuilder::new(&p)
-          .build()
-          .map_err(|e| e.to_string())?;
+        let glob = globset::GlobBuilder::new(&p).build().map_err(|e| e.to_string())?;
         let mut builder = globset::GlobSetBuilder::new();
         builder.add(glob);
         let set = builder.build().map_err(|e| e.to_string())?;

@@ -26,17 +26,12 @@ impl MockEntryStream {
     }
   }
 
-  fn add_entry(&mut self, path: &str, content: &[u8], is_compressed: bool) {
+  fn add_entry(&mut self, path: &str, content: &[u8], source: EntrySource) {
     let meta = EntryMeta {
       path: path.to_string(),
       container_path: None,
       size: Some(content.len() as u64),
-      is_compressed,
-      source: if is_compressed {
-        EntrySource::Gz
-      } else {
-        EntrySource::File
-      },
+      source,
     };
     self.entries.push_back(Ok((meta, content.to_vec())));
   }
@@ -78,8 +73,8 @@ fn create_simple_query(term: &str) -> Arc<Query> {
 async fn test_process_stream_basic_flow() {
   // 1. 准备数据
   let mut stream = MockEntryStream::new();
-  stream.add_entry("/logs/app.log", b"error: something went wrong", false);
-  stream.add_entry("/logs/other.log", b"info: everything is fine", false);
+  stream.add_entry("/logs/app.log", b"error: something went wrong", EntrySource::File);
+  stream.add_entry("/logs/other.log", b"info: everything is fine", EntrySource::File);
 
   // 2. 准备处理器 (搜索 "error")
   let query = create_simple_query("error");
@@ -110,9 +105,9 @@ async fn test_process_stream_basic_flow() {
 async fn test_process_stream_with_extra_filter() {
   // 1. 准备数据
   let mut stream = MockEntryStream::new();
-  stream.add_entry("/logs/app.log", b"error: match 1", false);
-  stream.add_entry("/logs/skip.log", b"error: match 2", false); // 应该被过滤
-  stream.add_entry("/logs/sub/app2.log", b"error: match 3", false);
+  stream.add_entry("/logs/app.log", b"error: match 1", EntrySource::File);
+  stream.add_entry("/logs/skip.log", b"error: match 2", EntrySource::File); // 应该被过滤
+  stream.add_entry("/logs/sub/app2.log", b"error: match 3", EntrySource::File);
 
   // 2. 准备处理器 (搜索 "error")
   let query = create_simple_query("error");
@@ -150,7 +145,7 @@ async fn test_process_stream_cancellation() {
   // 1. 准备大量数据
   let mut stream = MockEntryStream::new();
   for i in 0..100 {
-    stream.add_entry(&format!("/logs/{}.log", i), b"error", false);
+    stream.add_entry(&format!("/logs/{}.log", i), b"error", EntrySource::File);
   }
 
   // 2. 准备 Token
@@ -194,7 +189,7 @@ async fn test_process_stream_with_base_path_stripping() {
   // 如果设置了 base_path="/logs"，那么 "/logs/app.log" 应该变成 "app.log" 传给 filter
 
   let mut stream = MockEntryStream::new();
-  stream.add_entry("/logs/app.log", b"error", false);
+  stream.add_entry("/logs/app.log", b"error", EntrySource::File);
 
   let query = create_simple_query("error");
   let processor = Arc::new(SearchProcessor::new(query, 0));
@@ -219,7 +214,7 @@ async fn test_process_stream_with_base_path_stripping() {
 
 #[tokio::test]
 async fn test_preload_large_file_partial() {
-  // 测试大文件预读逻辑（通过 is_compressed=true 触发）
+  // 测试大文件预读逻辑（通过 source=Gz 触发压缩分支）
   // 大文件 logic in process_stream handles `Partial` result from preload_entry.
   // 实际上我们需要构造一个真正足够大的文件，或者 Mock preloading behavior (难)
   // 或者我们相信 entry_stream.rs 的单元测试，这里只测集成流。
@@ -234,7 +229,7 @@ async fn test_preload_large_file_partial() {
 
   // 不过我们可以测试 compressed 文件的处理流程
   let mut stream = MockEntryStream::new();
-  stream.add_entry("/logs/archive.gz", b"error in gzip", true); // is_compressed=true
+  stream.add_entry("/logs/archive.gz", b"error in gzip", EntrySource::Gz);
 
   let query = create_simple_query("error");
   let processor = Arc::new(SearchProcessor::new(query, 0));
@@ -277,9 +272,9 @@ async fn test_process_stream_empty() {
 async fn test_process_stream_content_search() {
   // 测试内容搜索逻辑
   let mut stream = MockEntryStream::new();
-  stream.add_entry("/logs/match.log", b"this line has an error here", false);
-  stream.add_entry("/logs/no_match.log", b"this line is clean", false);
-  stream.add_entry("/logs/partial.log", b"err but not full match", false); // "error" query matches "error" substring? usually words unless regex? simple query usually substring.
+  stream.add_entry("/logs/match.log", b"this line has an error here", EntrySource::File);
+  stream.add_entry("/logs/no_match.log", b"this line is clean", EntrySource::File);
+  stream.add_entry("/logs/partial.log", b"err but not full match", EntrySource::File); // "error" query matches "error" substring? usually words unless regex? simple query usually substring.
 
   // create_simple_query("error") -> 应该匹配 "error" 子串
   let query = create_simple_query("error");
@@ -308,9 +303,9 @@ async fn test_process_stream_content_search() {
 async fn test_process_stream_error_handling() {
   // 测试流读取出错
   let mut stream = MockEntryStream::new();
-  stream.add_entry("/logs/ok.log", b"error: yes", false);
+  stream.add_entry("/logs/ok.log", b"error: yes", EntrySource::File);
   stream.add_error("disk failure");
-  stream.add_entry("/logs/ignored.log", b"error: ignored", false);
+  stream.add_entry("/logs/ignored.log", b"error: ignored", EntrySource::File);
 
   let query = create_simple_query("error");
   let processor = Arc::new(SearchProcessor::new(query, 0));

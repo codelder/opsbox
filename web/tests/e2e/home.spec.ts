@@ -21,7 +21,10 @@ test.describe('Home Page E2E', () => {
     await page.waitForSelector('search, [role="search"], textarea, input', { timeout: 10000 });
 
     // 验证搜索输入框存在
-    const searchInput = page.getByRole('search').getByRole('textbox').or(page.locator('textarea, input[type="text"]').first());
+    const searchInput = page
+      .getByRole('search')
+      .getByRole('textbox')
+      .or(page.locator('textarea, input[type="text"]').first());
     await expect(searchInput).toBeVisible();
 
     // 验证 AI 模式按钮存在
@@ -43,7 +46,10 @@ test.describe('Home Page E2E', () => {
 
   test('should navigate to search page and perform real search', async ({ page }) => {
     // 填入搜索词并提交
-    const searchInput = page.getByRole('search').getByRole('textbox').or(page.locator('textarea, input[type="text"]').first());
+    const searchInput = page
+      .getByRole('search')
+      .getByRole('textbox')
+      .or(page.locator('textarea, input[type="text"]').first());
     await searchInput.fill('ERROR');
     await searchInput.press('Enter');
 
@@ -66,7 +72,10 @@ test.describe('Home Page E2E', () => {
   });
 
   test('should support Enter key to submit search', async ({ page }) => {
-    const searchInput = page.getByRole('search').getByRole('textbox').or(page.locator('textarea, input[type="text"]').first());
+    const searchInput = page
+      .getByRole('search')
+      .getByRole('textbox')
+      .or(page.locator('textarea, input[type="text"]').first());
     await searchInput.fill('INFO');
     await searchInput.press('Enter');
 
@@ -85,7 +94,10 @@ test.describe('Home Page E2E', () => {
   test('should click syntax hint buttons to insert text', async ({ page }) => {
     await page.waitForSelector('button:has-text("OR")', { timeout: 10000 });
 
-    const searchInput = page.getByRole('search').getByRole('textbox').or(page.locator('textarea, input[type="text"]').first());
+    const searchInput = page
+      .getByRole('search')
+      .getByRole('textbox')
+      .or(page.locator('textarea, input[type="text"]').first());
 
     // 点击 OR 按钮应该插入 OR 到搜索框
     const orButton = page.getByRole('button', { name: 'OR', exact: true });

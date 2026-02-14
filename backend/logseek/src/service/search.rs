@@ -1867,12 +1867,12 @@ foo lower
   async fn run_tar_search_bytes(tar_gz: Vec<u8>, spec: &Query, ctx: usize) -> Vec<SearchResult> {
     use crate::service::entry_stream::EntryStreamProcessor;
     use futures::io::Cursor;
-    use opsbox_core::fs::TarGzEntryStream;
+    use opsbox_core::fs::TarArchiveEntryStream;
     use tokio::sync::mpsc;
     use tokio_util::compat::FuturesAsyncReadCompatExt;
 
     let cursor = Cursor::new(tar_gz).compat();
-    let mut stream = TarGzEntryStream::new(cursor, None).await.unwrap();
+    let mut stream = TarArchiveEntryStream::new_tar_gz(cursor, None).await.unwrap();
     let proc = Arc::new(SearchProcessor::new(Arc::new(spec.clone()), ctx));
     let mut esp = EntryStreamProcessor::new(proc);
     let (tx, mut rx) = mpsc::channel::<SearchEvent>(64);

@@ -71,7 +71,8 @@ async fn test_orl_parse_agent_with_id() {
 #[tokio::test]
 async fn test_orl_parse_s3_with_profile() {
   // 测试 S3 ORL (新格式: profile@s3)
-  let resource = OrlParser::parse("orl://myprofile@s3/mybucket/path/to/file.tar.gz?entry=inner.log").expect("Should parse S3 ORL");
+  let resource =
+    OrlParser::parse("orl://myprofile@s3/mybucket/path/to/file.tar.gz?entry=inner.log").expect("Should parse S3 ORL");
 
   assert_eq!(resource.endpoint.location, Location::Cloud);
   assert_eq!(resource.endpoint.identity, "myprofile");
@@ -197,7 +198,10 @@ SOURCES = [
 
   println!("✓ Mixed sources parsed successfully");
   for (i, resource) in result.sources.iter().enumerate() {
-    println!("  Source[{}]: {:?} (location={:?})", i, resource, resource.endpoint.location);
+    println!(
+      "  Source[{}]: {:?} (location={:?})",
+      i, resource, resource.endpoint.location
+    );
   }
 }
 
@@ -331,7 +335,10 @@ SOURCES = ["orl://{}@s3/{}/{}?glob=*.log&entry=service.log"]
   assert_eq!(resource.endpoint.identity, profile);
   assert_eq!(resource.primary_path.to_string(), format!("/{}/{}", bucket, key));
   // archive_context should be present when ?entry= is specified
-  assert!(resource.archive_context.is_some(), "Should have archive context with ?entry=");
+  assert!(
+    resource.archive_context.is_some(),
+    "Should have archive context with ?entry="
+  );
   println!("  location: {:?}", resource.endpoint.location);
   println!("  identity: {}", resource.endpoint.identity);
   println!("  primary_path: {}", resource.primary_path);

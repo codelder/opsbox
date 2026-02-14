@@ -4,16 +4,13 @@
 
 use crate::api::LogSeekApiError;
 use crate::api::models::NL2QOut;
-use crate::service::nl2q::{call_llm, NLBody};
 use crate::service::ServiceError;
+use crate::service::nl2q::{NLBody, call_llm};
 use axum::extract::{Json, State};
 use opsbox_core::SqlitePool;
 
 // NL → Q 端点，实现将自然语言转换为查询字符串
-pub async fn nl2q(
-  State(pool): State<SqlitePool>,
-  Json(body): Json<NLBody>,
-) -> Result<Json<NL2QOut>, LogSeekApiError> {
+pub async fn nl2q(State(pool): State<SqlitePool>, Json(body): Json<NLBody>) -> Result<Json<NL2QOut>, LogSeekApiError> {
   tracing::info!("NL2Q API请求: {}", body.nl);
 
   let start = std::time::Instant::now();

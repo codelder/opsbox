@@ -5,8 +5,8 @@
 use logseek::repository::planners;
 use logseek::service::search::SearchEvent;
 use logseek::service::search_executor::{SearchExecutor, SearchExecutorConfig};
-use opsbox_core::dfs::OrlParser;
 use opsbox_core::SqlitePool;
+use opsbox_core::dfs::OrlParser;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::fs::File;
 use std::io::Write;

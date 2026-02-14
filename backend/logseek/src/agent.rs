@@ -62,8 +62,7 @@ impl Default for SearchOptions {
 }
 
 /// 搜索结果流
-pub type SearchResultStream =
-  Box<dyn Stream<Item = Result<SearchResult, AgentClientError>> + Send + Unpin>;
+pub type SearchResultStream = Box<dyn Stream<Item = Result<SearchResult, AgentClientError>> + Send + Unpin>;
 
 /// 搜索服务 trait（远程执行搜索，直接返回结果）
 #[async_trait]

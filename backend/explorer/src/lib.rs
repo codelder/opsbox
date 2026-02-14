@@ -8,8 +8,8 @@ pub mod fs;
 pub mod service;
 
 // 重新导出供 Agent 使用的类型
-pub use service::{ListerConfig, LocalEntry, ResourceLister};
 pub use domain::{ResourceItem, ResourceType};
+pub use service::{ListerConfig, LocalEntry, ResourceLister};
 
 use async_trait::async_trait;
 use axum::Router;

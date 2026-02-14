@@ -195,7 +195,8 @@ pub async fn execute_search(
         stream_processor = stream_processor.with_base_path(search_path.clone());
       }
     } else if matches!(&request.target, ConfigTarget::Files { .. })
-       && let Some(parent) = search_path.parent() {
+      && let Some(parent) = search_path.parent()
+    {
       stream_processor = stream_processor.with_base_path(parent.to_path_buf());
     }
 

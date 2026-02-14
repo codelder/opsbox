@@ -60,9 +60,7 @@ impl OpbxFileSystem for LocalFileSystem {
       .await
       .map_err(|e| FsError::NotFound(format!("{}: {}", full_path.display(), e)))?;
 
-    let symlink_meta = fs::symlink_metadata(&full_path)
-      .await
-      .ok();
+    let symlink_meta = fs::symlink_metadata(&full_path).await.ok();
     let is_symlink = symlink_meta
       .as_ref()
       .map(|m| m.file_type().is_symlink())

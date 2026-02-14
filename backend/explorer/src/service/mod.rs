@@ -8,16 +8,16 @@ mod lister;
 pub use lister::{ListerConfig, LocalEntry, ResourceLister};
 
 use crate::domain::{ResourceItem, ResourceType};
-use opsbox_core::dfs::{
-    endpoint::{Location, StorageBackend},
-    impls::{LocalFileSystem, S3Storage, S3Config},
-    orl_parser::OrlParser,
-    path::ResourcePath,
-    resource::Resource,
-    filesystem::{DirEntry, OpbxFileSystem},
-};
 use opsbox_core::SqlitePool;
-use opsbox_core::repository::s3::{load_s3_profile};
+use opsbox_core::dfs::{
+  endpoint::{Location, StorageBackend},
+  filesystem::{DirEntry, OpbxFileSystem},
+  impls::{LocalFileSystem, S3Config, S3Storage},
+  orl_parser::OrlParser,
+  path::ResourcePath,
+  resource::Resource,
+};
+use opsbox_core::repository::s3::load_s3_profile;
 
 // Discovery filesystems - 仅在 agent-manager feature 启用时可用
 #[cfg(feature = "agent-manager")]
@@ -66,8 +66,7 @@ impl ExplorerService {
   /// 列出指定路径下的资源
   pub async fn list(&self, orl: &str) -> Result<Vec<ResourceItem>, String> {
     // 解析 ORL 字符串为 Resource
-    let resource = OrlParser::parse(orl)
-      .map_err(|e| format!("Failed to parse ORL: {}", e))?;
+    let resource = OrlParser::parse(orl).map_err(|e| format!("Failed to parse ORL: {}", e))?;
 
     // 自动检测归档类型
     let resource = self.auto_detect_archive(resource).await?;
@@ -79,15 +78,17 @@ impl ExplorerService {
 
     // 特殊处理：S3 profile 根路径（列出 buckets）
     let path_str = resource.primary_path.to_string();
-    let is_s3_root = resource.endpoint.backend == StorageBackend::ObjectStorage
-      && (path_str == "/" || path_str.is_empty());
+    let is_s3_root =
+      resource.endpoint.backend == StorageBackend::ObjectStorage && (path_str == "/" || path_str.is_empty());
 
     if is_s3_root {
       // 使用 S3DiscoveryFileSystem 列出该 profile 的 buckets
       let profile_name = &resource.endpoint.identity;
       let discovery_path = ResourcePath::parse(&format!("/{}", profile_name));
       let fs = S3DiscoveryFileSystem::new(self.db_pool.clone());
-      let entries = fs.read_dir(&discovery_path).await
+      let entries = fs
+        .read_dir(&discovery_path)
+        .await
         .map_err(|e| format!("Failed to list S3 buckets: {}", e))?;
       return Ok(entries.into_iter().map(|e| self.map_entry(e, &resource)).collect());
     }
@@ -96,7 +97,8 @@ impl ExplorerService {
     let fs = self.create_fs_for_resource(&resource).await?;
 
     // 读取目录
-    let entries = fs.read_dir(&resource.primary_path)
+    let entries = fs
+      .read_dir(&resource.primary_path)
       .await
       .map_err(|e| format!("Failed to read directory: {}", e))?;
 
@@ -105,10 +107,12 @@ impl ExplorerService {
   }
 
   /// 下载资源
-  pub async fn download(&self, orl: &str) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
+  pub async fn download(
+    &self,
+    orl: &str,
+  ) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
     // 解析 ORL 字符串为 Resource
-    let resource = OrlParser::parse(orl)
-      .map_err(|e| format!("Failed to parse ORL: {}", e))?;
+    let resource = OrlParser::parse(orl).map_err(|e| format!("Failed to parse ORL: {}", e))?;
 
     // 自动检测归档类型（对于下载也需要检测）
     let resource = self.auto_detect_archive(resource).await?;
@@ -122,19 +126,23 @@ impl ExplorerService {
     let fs = self.create_fs_for_resource(&resource).await?;
 
     // 获取元数据
-    let meta = fs.metadata(&resource.primary_path)
+    let meta = fs
+      .metadata(&resource.primary_path)
       .await
       .map_err(|e| format!("Failed to get metadata: {}", e))?;
 
     // 打开文件
-    let dfs_reader = fs.open_read(&resource.primary_path)
+    let dfs_reader = fs
+      .open_read(&resource.primary_path)
       .await
       .map_err(|e| format!("Failed to open file: {}", e))?;
 
     // 获取文件名
-    let name = resource.primary_path
+    let name = resource
+      .primary_path
       .segments()
-      .last().cloned()
+      .last()
+      .cloned()
       .unwrap_or_else(|| "download".to_string());
 
     // DFS 现在直接返回 tokio::io::AsyncRead，无需适配器
@@ -148,11 +156,16 @@ impl ExplorerService {
   /// - 内存数据源（S3）：流式复制到临时文件
   /// - 远程文件（Agent）：流式复制到临时文件
   /// - 无大小限制，使用流式处理
-  async fn list_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<Vec<ResourceItem>, String> {
+  async fn list_archive(
+    &self,
+    resource: &Resource,
+    ctx: &opsbox_core::dfs::archive::ArchiveContext,
+  ) -> Result<Vec<ResourceItem>, String> {
     use opsbox_core::dfs::impls::ArchiveFileSystem;
 
     // 获取归档类型
-    let archive_type = ctx.archive_type
+    let archive_type = ctx
+      .archive_type
       .ok_or_else(|| "Archive type not specified".to_string())?;
 
     // 根据资源类型选择处理方式
@@ -167,24 +180,29 @@ impl ExplorerService {
         let temp_file_result = tokio::task::spawn_blocking(tempfile::NamedTempFile::new)
           .await
           .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
-        let temp_file = temp_file_result
-          .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let temp_file = temp_file_result.map_err(|e| format!("Failed to create temp file: {}", e))?;
         let temp_path = temp_file.path().to_path_buf();
 
         let base_fs = self.create_fs_for_resource(resource).await?;
-        let mut reader = base_fs.open_read(&resource.primary_path)
+        let mut reader = base_fs
+          .open_read(&resource.primary_path)
           .await
           .map_err(|e| format!("Failed to open archive file: {}", e))?;
 
-        let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
-          .map_err(|e| format!("Failed to clone temp file: {}", e))?);
+        let mut dst = tokio::fs::File::from_std(
+          temp_file
+            .as_file()
+            .try_clone()
+            .map_err(|e| format!("Failed to clone temp file: {}", e))?,
+        );
 
         // DFS 现在统一使用 tokio::io::AsyncRead，直接使用 tokio::io::copy
         tokio::io::copy(&mut reader, &mut dst)
           .await
           .map_err(|e| format!("Failed to copy archive data: {}", e))?;
 
-        dst.flush()
+        dst
+          .flush()
           .await
           .map_err(|e| format!("Failed to flush temp file: {}", e))?;
 
@@ -198,16 +216,11 @@ impl ExplorerService {
       .ok_or_else(|| "Failed to get archive parent directory".to_string())?;
 
     // 创建归档文件系统
-    let local_fs = LocalFileSystem::new(archive_dir.to_path_buf())
-      .map_err(|e| format!("Failed to create local FS: {}", e))?;
+    let local_fs =
+      LocalFileSystem::new(archive_dir.to_path_buf()).map_err(|e| format!("Failed to create local FS: {}", e))?;
 
     let archive_fs = if let Some(tf) = temp_file {
-      ArchiveFileSystem::with_temp_file(
-        local_fs,
-        archive_type,
-        archive_path,
-        tf,
-      )
+      ArchiveFileSystem::with_temp_file(local_fs, archive_type, archive_path, tf)
     } else {
       ArchiveFileSystem::with_path(local_fs, archive_type, archive_path)
     };
@@ -238,11 +251,16 @@ impl ExplorerService {
   /// - 内存数据源（S3）：流式复制到临时文件
   /// - 远程文件（Agent）：流式复制到临时文件
   /// - 无大小限制，使用流式处理
-  async fn download_archive(&self, resource: &Resource, ctx: &opsbox_core::dfs::archive::ArchiveContext) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
+  async fn download_archive(
+    &self,
+    resource: &Resource,
+    ctx: &opsbox_core::dfs::archive::ArchiveContext,
+  ) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
     use opsbox_core::dfs::impls::ArchiveFileSystem;
 
     // 获取归档类型
-    let archive_type = ctx.archive_type
+    let archive_type = ctx
+      .archive_type
       .ok_or_else(|| "Archive type not specified".to_string())?;
 
     // 根据资源类型选择处理方式
@@ -257,24 +275,29 @@ impl ExplorerService {
         let temp_file_result = tokio::task::spawn_blocking(tempfile::NamedTempFile::new)
           .await
           .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
-        let temp_file = temp_file_result
-          .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        let temp_file = temp_file_result.map_err(|e| format!("Failed to create temp file: {}", e))?;
         let temp_path = temp_file.path().to_path_buf();
 
         let base_fs = self.create_fs_for_resource(resource).await?;
-        let mut reader = base_fs.open_read(&resource.primary_path)
+        let mut reader = base_fs
+          .open_read(&resource.primary_path)
           .await
           .map_err(|e| format!("Failed to open archive file: {}", e))?;
 
-        let mut dst = tokio::fs::File::from_std(temp_file.as_file().try_clone()
-          .map_err(|e| format!("Failed to clone temp file: {}", e))?);
+        let mut dst = tokio::fs::File::from_std(
+          temp_file
+            .as_file()
+            .try_clone()
+            .map_err(|e| format!("Failed to clone temp file: {}", e))?,
+        );
 
         // DFS 现在统一使用 tokio::io::AsyncRead，直接使用 tokio::io::copy
         tokio::io::copy(&mut reader, &mut dst)
           .await
           .map_err(|e| format!("Failed to copy archive data: {}", e))?;
 
-        dst.flush()
+        dst
+          .flush()
           .await
           .map_err(|e| format!("Failed to flush temp file: {}", e))?;
 
@@ -288,47 +311,40 @@ impl ExplorerService {
       .ok_or_else(|| "Failed to get archive parent directory".to_string())?;
 
     // 创建归档文件系统
-    let local_fs = LocalFileSystem::new(archive_dir.to_path_buf())
-      .map_err(|e| format!("Failed to create local FS: {}", e))?;
+    let local_fs =
+      LocalFileSystem::new(archive_dir.to_path_buf()).map_err(|e| format!("Failed to create local FS: {}", e))?;
 
     let archive_fs = if let Some(tf) = temp_file {
-      ArchiveFileSystem::with_temp_file(
-        local_fs,
-        archive_type,
-        archive_path,
-        tf,
-      )
+      ArchiveFileSystem::with_temp_file(local_fs, archive_type, archive_path, tf)
     } else {
       ArchiveFileSystem::with_path(local_fs, archive_type, archive_path)
     };
 
     // 使用归档内路径获取元数据和打开文件
-    let meta = archive_fs.metadata(&ctx.inner_path)
-      .await
-      .map_err(|e| {
-        let error_str = e.to_string();
-        if error_str.contains("numeric field did not have utf-8") {
-          "无法解析归档文件：文件可能损坏或使用了不兼容的格式".to_string()
-        } else {
-          format!("Failed to get metadata: {}", error_str)
-        }
-      })?;
+    let meta = archive_fs.metadata(&ctx.inner_path).await.map_err(|e| {
+      let error_str = e.to_string();
+      if error_str.contains("numeric field did not have utf-8") {
+        "无法解析归档文件：文件可能损坏或使用了不兼容的格式".to_string()
+      } else {
+        format!("Failed to get metadata: {}", error_str)
+      }
+    })?;
 
-    let dfs_reader = archive_fs.open_read(&ctx.inner_path)
-      .await
-      .map_err(|e| {
-        let error_str = e.to_string();
-        if error_str.contains("numeric field did not have utf-8") {
-          "无法读取归档内文件：文件可能损坏".to_string()
-        } else {
-          format!("Failed to open file: {}", error_str)
-        }
-      })?;
+    let dfs_reader = archive_fs.open_read(&ctx.inner_path).await.map_err(|e| {
+      let error_str = e.to_string();
+      if error_str.contains("numeric field did not have utf-8") {
+        "无法读取归档内文件：文件可能损坏".to_string()
+      } else {
+        format!("Failed to open file: {}", error_str)
+      }
+    })?;
 
     // 获取文件名
-    let name = ctx.inner_path
+    let name = ctx
+      .inner_path
       .segments()
-      .last().cloned()
+      .last()
+      .cloned()
       .unwrap_or_else(|| "download".to_string());
 
     // DFS 现在直接返回 tokio::io::AsyncRead，无需适配器
@@ -347,8 +363,8 @@ impl ExplorerService {
     // 特殊处理：S3 根路径和 discovery endpoints 不需要检测
     let path_str = resource.primary_path.to_string();
     let is_discovery = matches!(resource.endpoint.identity.as_str(), "agent.root" | "s3.root");
-    let is_s3_root = resource.endpoint.backend == StorageBackend::ObjectStorage
-      && (path_str == "/" || path_str.is_empty());
+    let is_s3_root =
+      resource.endpoint.backend == StorageBackend::ObjectStorage && (path_str == "/" || path_str.is_empty());
 
     if is_discovery || is_s3_root {
       return Ok(resource);
@@ -386,10 +402,7 @@ impl ExplorerService {
 
           // 如果是归档扩展名，设置 archive_context
           if let Some(at) = archive_type {
-            resource.archive_context = Some(ArchiveContext::new(
-              ResourcePath::parse("/"),
-              Some(at),
-            ));
+            resource.archive_context = Some(ArchiveContext::new(ResourcePath::parse("/"), Some(at)));
           }
 
           return Ok(resource);
@@ -409,7 +422,7 @@ impl ExplorerService {
     // 如果检测到归档类型，设置 archive_context
     if archive_type != ArchiveType::Unknown {
       resource.archive_context = Some(ArchiveContext::new(
-        ResourcePath::parse("/"),  // 归档内路径默认为根
+        ResourcePath::parse("/"), // 归档内路径默认为根
         Some(archive_type),
       ));
     }
@@ -423,7 +436,9 @@ impl ExplorerService {
     match resource.endpoint.identity.as_str() {
       #[cfg(feature = "agent-manager")]
       "agent.root" => {
-        let manager = self.agent_manager.as_ref()
+        let manager = self
+          .agent_manager
+          .as_ref()
           .ok_or_else(|| "AgentManager not configured".to_string())?;
         let fs = AgentDiscoveryFileSystem::new(manager.clone());
         return Ok(Box::new(fs) as Box<dyn OpbxFileSystem>);
@@ -452,8 +467,7 @@ impl ExplorerService {
               PathBuf::from(".")
             };
 
-            let fs = LocalFileSystem::new(root)
-              .map_err(|e| format!("Failed to create local FS: {}", e))?;
+            let fs = LocalFileSystem::new(root).map_err(|e| format!("Failed to create local FS: {}", e))?;
             Ok(Box::new(fs) as Box<dyn OpbxFileSystem>)
           }
           #[cfg(feature = "agent-manager")]
@@ -462,22 +476,21 @@ impl ExplorerService {
             let (actual_host, actual_port) = if let Some(manager) = &self.agent_manager {
               // 查询 Agent 的实际监听端口和主机
               let agent_info = manager.get_agent(&resource.endpoint.identity).await;
-              let queried_port = agent_info
-                .as_ref()
-                .and_then(|agent| {
-                  agent.tags.iter()
-                    .find(|t| t.key == "listen_port")
-                    .and_then(|t| t.value.parse::<u16>().ok())
-                });
+              let queried_port = agent_info.as_ref().and_then(|agent| {
+                agent
+                  .tags
+                  .iter()
+                  .find(|t| t.key == "listen_port")
+                  .and_then(|t| t.value.parse::<u16>().ok())
+              });
               let queried_host = agent_info
                 .as_ref()
-                .and_then(|agent| {
-                  agent.tags.iter()
-                    .find(|t| t.key == "host")
-                    .map(|t| t.value.clone())
-                });
+                .and_then(|agent| agent.tags.iter().find(|t| t.key == "host").map(|t| t.value.clone()));
 
-              (queried_host.unwrap_or_else(|| host.clone()), queried_port.unwrap_or(*port))
+              (
+                queried_host.unwrap_or_else(|| host.clone()),
+                queried_port.unwrap_or(*port),
+              )
             } else {
               (host.clone(), *port)
             };
@@ -491,9 +504,7 @@ impl ExplorerService {
           Location::Remote { .. } => {
             Err("Agent remote location not supported (agent-manager feature disabled)".to_string())
           }
-          Location::Cloud => {
-            Err("Cloud location not supported for Directory backend".to_string())
-          }
+          Location::Cloud => Err("Cloud location not supported for Directory backend".to_string()),
         }
       }
       StorageBackend::ObjectStorage => {
@@ -504,16 +515,17 @@ impl ExplorerService {
         // 如果 endpoint.bucket 存在，说明 ORL 包含了 bucket (profile:bucket@s3)
         // 否则，从路径中提取 bucket 名称（兼容旧格式）
         if let Some(ref bucket) = resource.endpoint.bucket {
-            s3_config.bucket = Some(bucket.clone());
+          s3_config.bucket = Some(bucket.clone());
         } else {
-            // 从路径中提取 bucket 名称作为默认 bucket（兼容旧格式）
-            let path_segments = resource.primary_path.segments();
-            if !path_segments.is_empty() && !path_segments[0].is_empty() {
-                s3_config.bucket = Some(path_segments[0].clone());
-            }
+          // 从路径中提取 bucket 名称作为默认 bucket（兼容旧格式）
+          let path_segments = resource.primary_path.segments();
+          if !path_segments.is_empty() && !path_segments[0].is_empty() {
+            s3_config.bucket = Some(path_segments[0].clone());
+          }
         }
 
-        let fs = S3Storage::new_async(s3_config).await
+        let fs = S3Storage::new_async(s3_config)
+          .await
           .map_err(|e| format!("Failed to create S3 FS: {}", e))?;
         Ok(Box::new(fs) as Box<dyn OpbxFileSystem>)
       }
@@ -563,7 +575,8 @@ impl ExplorerService {
       // 从名称中提取 agent ID
       let agent_id = if entry.name.contains(" (") {
         // 格式: "agent-name (agent-id)"
-        entry.name
+        entry
+          .name
           .split(" (")
           .last()
           .and_then(|s| s.strip_suffix(')'))
@@ -607,7 +620,9 @@ impl ExplorerService {
         .and_then(|s| s.to_str())
         .unwrap_or("");
 
-      let entry_path = if parent_resource.archive_context.as_ref()
+      let entry_path = if parent_resource
+        .archive_context
+        .as_ref()
         .and_then(|ctx| ctx.archive_type)
         == Some(opsbox_core::dfs::archive::ArchiveType::Gz)
         && entry_path_str.starts_with("/.tmp")
@@ -629,7 +644,9 @@ impl ExplorerService {
         let auth = self.resource_endpoint_orl(parent_resource);
 
         // 构建路径部分，确保以 / 开头
-        let path_suffix = entry.path.segments()
+        let path_suffix = entry
+          .path
+          .segments()
           .iter()
           .map(|s| urlencoding::encode(s).into_owned())
           .collect::<Vec<_>>()
@@ -654,22 +671,23 @@ impl ExplorerService {
 
     // 对于 Gz 归档，修正显示名称（避免显示临时文件名）
     let display_name = match &parent_resource.archive_context {
-      Some(ctx) if matches!(ctx.archive_type, Some(opsbox_core::dfs::archive::ArchiveType::Gz))
-        => {
-          // 检查是否是临时文件名模式
-          if entry.name.starts_with(".tmp") {
-            // 从原始归档路径中提取正确的文件名
-            parent_resource.primary_path.to_string()
-              .split('/')
-              .next_back()
-              .and_then(|s| std::path::Path::new(s).file_stem())
-              .and_then(|s| s.to_str())
-              .unwrap_or(&entry.name)
-              .to_string()
-          } else {
-            entry.name.clone()
-          }
+      Some(ctx) if matches!(ctx.archive_type, Some(opsbox_core::dfs::archive::ArchiveType::Gz)) => {
+        // 检查是否是临时文件名模式
+        if entry.name.starts_with(".tmp") {
+          // 从原始归档路径中提取正确的文件名
+          parent_resource
+            .primary_path
+            .to_string()
+            .split('/')
+            .next_back()
+            .and_then(|s| std::path::Path::new(s).file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or(&entry.name)
+            .to_string()
+        } else {
+          entry.name.clone()
         }
+      }
       _ => entry.name.clone(),
     };
 
@@ -686,7 +704,11 @@ impl ExplorerService {
     } else {
       // 普通文件或目录
       let rtype = if entry.metadata.is_symlink {
-        if entry.metadata.is_dir { ResourceType::LinkDir } else { ResourceType::LinkFile }
+        if entry.metadata.is_dir {
+          ResourceType::LinkDir
+        } else {
+          ResourceType::LinkFile
+        }
       } else if entry.metadata.is_dir {
         ResourceType::Dir
       } else {
@@ -707,7 +729,9 @@ impl ExplorerService {
       path: resource_path,
       r#type: resource_type,
       size: Some(entry.metadata.size),
-      modified: entry.metadata.modified
+      modified: entry
+        .metadata
+        .modified
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64),
       has_children,
@@ -793,7 +817,7 @@ mod tests {
 
   // 简单的 URL 编码函数（用于测试）
   fn encode_uri_component(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
   }
 }

@@ -269,8 +269,7 @@ pub async fn handle_get_file_raw(
   match explorer.download(&path_str, entry.as_deref()).await {
     Ok((name, size, reader)) => {
       // 获取 MIME 类型
-      let mime = AgentExplorer::guess_mime_type(&name)
-        .unwrap_or_else(|| "application/octet-stream".to_string());
+      let mime = AgentExplorer::guess_mime_type(&name).unwrap_or_else(|| "application/octet-stream".to_string());
 
       // 创建流式响应
       use tokio_util::io::ReaderStream;

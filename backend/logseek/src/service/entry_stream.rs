@@ -6,8 +6,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
-use opsbox_core::fs::{EntrySource, EntryStream, PrefixedReader};
-use opsbox_core::dfs::{Resource, Location, Streamable, SearchConfig, ResourcePath, OrlParser};
+use opsbox_core::dfs::{Location, OrlParser, Resource, ResourcePath, SearchConfig, Streamable};
+use opsbox_core::fs::{EntryStream, PrefixedReader};
 
 use crate::query::PathFilter;
 
@@ -212,7 +212,7 @@ impl EntryStreamProcessor {
         continue;
       }
 
-      if meta.is_compressed || meta.source == EntrySource::Tar || meta.source == EntrySource::TarGz {
+      if meta.source.is_archive() || meta.source.is_compressed() {
         // tar.gz 等共享底层读取器的来源：必须保证串行读取，但可以预读小文件到内存后并发处理
         // 优化：对于文件（< 120MB），预读到内存后允许并发处理，充分利用多核 CPU
         const MAX_PRELOAD_SIZE: usize = 120 * 1024 * 1024;
@@ -438,22 +438,24 @@ pub async fn create_entry_stream_from_resource(
         (path_buf.clone(), ResourcePath::parse(""))
       } else if path_buf.exists() {
         let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
-        let file_name = path_buf.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let file_name = path_buf
+          .file_name()
+          .map(|n| n.to_string_lossy().to_string())
+          .unwrap_or_default();
         (parent, ResourcePath::parse(&file_name))
       } else {
         let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
         (parent, ResourcePath::parse(""))
       };
 
-      let fs = LocalFileSystem::new(root)
-        .map_err(|e| format!("创建本地文件系统失败: {}", e))?;
+      let fs = LocalFileSystem::new(root).map_err(|e| format!("创建本地文件系统失败: {}", e))?;
 
       fs.as_entry_stream(&relative_path, true, &search_config)
         .await
         .map_err(|e| format!("创建条目流失败: {}", e))
     }
     Location::Cloud => {
-      use opsbox_core::dfs::{S3Storage, S3Config};
+      use opsbox_core::dfs::{S3Config, S3Storage};
 
       let profile = &resource.endpoint.identity;
 
@@ -479,8 +481,7 @@ pub async fn create_entry_stream_from_resource(
 
       let s3_config = s3_config.with_bucket(bucket_name.to_string());
 
-      let s3_storage = S3Storage::new(s3_config)
-        .map_err(|e| format!("创建 S3 存储失败: {}", e))?;
+      let s3_storage = S3Storage::new(s3_config).map_err(|e| format!("创建 S3 存储失败: {}", e))?;
 
       let resource_path = ResourcePath::parse(object_key);
       s3_storage
@@ -488,21 +489,15 @@ pub async fn create_entry_stream_from_resource(
         .await
         .map_err(|e| format!("创建条目流失败: {}", e))
     }
-    Location::Remote { .. } => {
-      Err("Agent 类型应由调用方处理，不支持 create_entry_stream_from_resource".to_string())
-    }
+    Location::Remote { .. } => Err("Agent 类型应由调用方处理，不支持 create_entry_stream_from_resource".to_string()),
   }
 }
 
 /// 从 ORL 字符串创建条目流（兼容旧接口）
 ///
 /// 解析 ORL 字符串并创建对应的条目流
-pub async fn create_entry_stream(
-  db_pool: &SqlitePool,
-  orl_str: &str,
-) -> Result<Box<dyn EntryStream>, String> {
-  let resource = OrlParser::parse(orl_str)
-    .map_err(|e| format!("解析 ORL 失败: {}", e))?;
+pub async fn create_entry_stream(db_pool: &SqlitePool, orl_str: &str) -> Result<Box<dyn EntryStream>, String> {
+  let resource = OrlParser::parse(orl_str).map_err(|e| format!("解析 ORL 失败: {}", e))?;
 
   create_entry_stream_from_resource(db_pool, &resource).await
 }

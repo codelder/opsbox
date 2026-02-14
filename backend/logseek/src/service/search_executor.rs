@@ -4,7 +4,7 @@ use crate::service::ServiceError;
 use crate::service::search::{SearchEvent, SearchResult};
 use crate::service::searchable::{SearchContext, SearchRequest, create_search_provider};
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::{Resource, build_orl_from_resource, Location};
+use opsbox_core::dfs::{Location, Resource, build_orl_from_resource};
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 
@@ -156,7 +156,10 @@ impl SearchResultHandler {
     // 简化显示：提取关键部分
     match &self.resource.endpoint.location {
       Location::Local => format!("local:{}", self.resource.primary_path),
-      Location::Remote { .. } => format!("agent:{}:{}", self.resource.endpoint.identity, self.resource.primary_path),
+      Location::Remote { .. } => format!(
+        "agent:{}:{}",
+        self.resource.endpoint.identity, self.resource.primary_path
+      ),
       Location::Cloud => format!("s3:{}:{}", self.resource.endpoint.identity, self.resource.primary_path),
     }
   }
@@ -2264,7 +2267,9 @@ SOURCES = [
     let executor = SearchExecutor::new(pool, config);
 
     // 执行搜索（使用 path: 限定词过滤 .log 文件）
-    let result = executor.search("error path:*.log", "test-sid".to_string(), 0, None).await;
+    let result = executor
+      .search("error path:*.log", "test-sid".to_string(), 0, None)
+      .await;
     assert!(result.is_ok());
 
     let mut rx = result.unwrap();

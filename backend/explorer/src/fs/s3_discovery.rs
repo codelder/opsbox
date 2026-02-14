@@ -7,12 +7,12 @@
 //! /{profile} -> List Buckets
 
 use async_trait::async_trait;
+use opsbox_core::SqlitePool;
 use opsbox_core::dfs::{
-    filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
-    path::ResourcePath,
+  filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
+  path::ResourcePath,
 };
 use opsbox_core::repository::s3::{list_s3_profiles, load_s3_profile};
-use opsbox_core::SqlitePool;
 use std::pin::Pin;
 
 /// S3 发现文件系统
@@ -76,7 +76,8 @@ impl S3DiscoveryFileSystem {
         // NOTE: Once we select a bucket, ORL structure changes to orl://profile:bucket@s3/
         let path = ResourcePath::parse(&format!("/{}:{}", profile_name, name));
 
-        let modified = b.creation_date
+        let modified = b
+          .creation_date
           .map(|d| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(d.secs() as u64));
 
         DirEntry {

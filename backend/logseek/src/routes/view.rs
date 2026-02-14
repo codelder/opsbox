@@ -99,10 +99,7 @@ pub async fn view_cache_json(
           let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
             .await
             .map_err(|e| {
-              LogSeekApiError::Service(ServiceError::ProcessingError(format!(
-                "无法创建 Agent 客户端: {}",
-                e
-              )))
+              LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
             })?;
 
           let target = Target::Files {
@@ -118,12 +115,10 @@ pub async fn view_cache_json(
 
           debug!("📤 发送 Agent 搜索请求: query='/.*/', options={:?}", options);
 
-          let mut stream = client.search("/.*/", 0, options).await.map_err(|e| {
-            LogSeekApiError::Service(ServiceError::ProcessingError(format!(
-              "Agent 搜索失败: {}",
-              e
-            )))
-          })?;
+          let mut stream = client
+            .search("/.*/", 0, options)
+            .await
+            .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 搜索失败: {}", e))))?;
 
           debug!("📥以此 Agent 搜索流建立成功，开始接收数据...");
 

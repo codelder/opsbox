@@ -5,8 +5,8 @@
 use agent_manager::AgentManager;
 use async_trait::async_trait;
 use opsbox_core::dfs::{
-    filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
-    path::ResourcePath,
+  filesystem::{DirEntry, FileMetadata, OpbxFileSystem},
+  path::ResourcePath,
 };
 use std::pin::Pin;
 use std::sync::Arc;

@@ -292,12 +292,16 @@ impl crate::fs::EntryStream for S3EntryStream {
       head.truncate(n);
 
       let kind = sniff_file_type(&head);
-      let is_compressed = kind.is_gzip();
+      let source = if kind.is_gzip() {
+        crate::fs::EntrySource::Gz
+      } else {
+        crate::fs::EntrySource::File
+      };
 
       // 重构流（因为头部已被读取）
       let prefixed = PrefixedReader::new(head, buf_reader);
 
-      let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = if is_compressed {
+      let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = if source.is_compressed() {
         // 使用 tokio 版本的 GzipDecoder，无需 compat (PrefixedReader 实现了 AsyncRead)
         let gz = async_compression::tokio::bufread::GzipDecoder::new(tokio::io::BufReader::new(prefixed));
         Box::new(gz)
@@ -309,8 +313,7 @@ impl crate::fs::EntryStream for S3EntryStream {
         path: key.clone(),
         container_path: None,
         size,
-        is_compressed: true,
-        source: crate::fs::EntrySource::File,
+        source,
       };
 
       Ok(Some((meta, reader)))

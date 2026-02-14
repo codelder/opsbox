@@ -56,20 +56,11 @@ function createPngFile(width: number, height: number, color: [number, number, nu
   const idatCrc = crc32(Buffer.concat([Buffer.from('IDAT'), compressed]));
   const idatLen = Buffer.alloc(4);
   idatLen.writeUInt32BE(compressed.length, 0);
-  const idatChunk = Buffer.concat([
-    idatLen,
-    Buffer.from('IDAT'),
-    compressed,
-    idatCrc
-  ]);
+  const idatChunk = Buffer.concat([idatLen, Buffer.from('IDAT'), compressed, idatCrc]);
 
   // IEND chunk
   const iendCrc = crc32(Buffer.from('IEND'));
-  const iendChunk = Buffer.concat([
-    Buffer.from([0, 0, 0, 0]),
-    Buffer.from('IEND'),
-    iendCrc
-  ]);
+  const iendChunk = Buffer.concat([Buffer.from([0, 0, 0, 0]), Buffer.from('IEND'), iendCrc]);
 
   return Buffer.concat([pngSignature, ihdrChunk, idatChunk, iendChunk]);
 }
@@ -181,7 +172,7 @@ test.describe('Image Viewer E2E', () => {
     await page.waitForLoadState('networkidle');
 
     // 应该显示错误信息
-    const bodyText = await page.locator('body').textContent() || '';
+    const bodyText = (await page.locator('body').textContent()) || '';
     expect(bodyText).toContain('sid');
   });
 
@@ -358,7 +349,7 @@ test.describe('Image Viewer E2E', () => {
     await page.waitForSelector('img', { timeout: 10000 });
 
     // 查找图片计数器（格式如 "2/4" 或 "2 of 4"）
-    const bodyText = await page.locator('body').textContent() || '';
+    const bodyText = (await page.locator('body').textContent()) || '';
     const hasCounter = /\d\s*[\/]\s*\d/.test(bodyText);
 
     // 如果存在计数器，验证格式
@@ -379,7 +370,7 @@ test.describe('Image Viewer E2E', () => {
     await page.waitForSelector('img', { timeout: 10000 });
 
     // 检查文件名是否显示在页面某处
-    const bodyText = await page.locator('body').textContent() || '';
+    const bodyText = (await page.locator('body').textContent()) || '';
     expect(bodyText).toContain('photo1.png');
   });
 

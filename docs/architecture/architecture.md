@@ -25,8 +25,7 @@ pub trait SearchService   // Push 模式（远程 Agent 搜索）
 // EntryStream 实现类型
 - FsEntryStream           ← 文件系统目录流（DFS遍历，支持递归）✅
 - MultiFileEntryStream    ← 文件列表流（支持单文件或多文件）✅
-- TarGzEntryStream        ← tar.gz 归档流 ✅
-- TarEntryStream          ← tar 归档流（未压缩）✅
+- TarArchiveEntryStream   ← 统一 tar/tar.gz 归档流（`new_tar` / `new_tar_gz`）✅
 - GzipEntryStream         ← 单个 gzip 文件流 ✅
 
 // 存储源支持
@@ -117,7 +116,7 @@ view_file("tar.gz+s3://prod:logs/archive.tar.gz:app.log", 1, 100)
 - 现状：使用统一的 `Source` 模型（Endpoint + Target + Filter），位于 `domain/config.rs`
 - EntryStreamFactory：统一创建 Local/S3/TarGz 的 EntryStream
   - Local：通过 `build_local_entry_stream()` 创建 `FsEntryStream`
-  - S3：支持 tar.gz 对象展开为 `TarGzEntryStream`
+  - S3：支持 tar.gz 对象展开为 `TarArchiveEntryStream::new_tar_gz(...)`
   - TarGz：自动探测压缩格式并创建对应流
 - Agent：在 `routes/search.rs` 中直接构造 `AgentClient` 并调用其 `SearchService`，实现远程搜索
 - 规划器：通过 Starlark 脚本动态生成 Source 配置，支持 Local/Agent/S3 混合数据源

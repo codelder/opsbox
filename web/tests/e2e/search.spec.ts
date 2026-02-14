@@ -153,7 +153,10 @@ test.describe('Search E2E', () => {
     );
 
     // 验证搜索完成，显示结果计数（可能是 0）
-    const resultsText = await page.locator('.text-lg.font-semibold').textContent().catch(() => '0 个结果');
+    const resultsText = await page
+      .locator('.text-lg.font-semibold')
+      .textContent()
+      .catch(() => '0 个结果');
     expect(resultsText).toMatch(/\d+\s*个结果/);
   });
 });

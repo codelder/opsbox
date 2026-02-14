@@ -103,7 +103,7 @@ export class ResourceTracker {
         } catch (e) {
           console.error(`[ResourceTracker] Failed to delete profile ${name}:`, e);
         }
-      }),
+      })
     ]);
 
     // 3. Cleanup directories
@@ -214,11 +214,7 @@ export async function stopProcess(proc: ChildProcessWithoutNullStreams, timeout 
 /**
  * Wait for a process to be ready by polling a health endpoint
  */
-export async function waitForHealthy(
-  url: string,
-  timeout = 30000,
-  interval = 500
-): Promise<boolean> {
+export async function waitForHealthy(url: string, timeout = 30000, interval = 500): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     try {
@@ -243,7 +239,7 @@ export const test = base.extend<{
     await use(tracker);
     // Always cleanup, even if test fails
     await tracker.cleanupAll();
-  },
+  }
 });
 
 export { expect } from '@playwright/test';

@@ -24,7 +24,7 @@ test.describe('Settings Page E2E', () => {
       await expect(page.locator('body')).toBeVisible();
 
       // 验证有设置相关内容
-      const pageContent = await page.locator('body').textContent() || '';
+      const pageContent = (await page.locator('body').textContent()) || '';
       // 页面应该有内容
       expect(pageContent.length).toBeGreaterThan(0);
     });
@@ -45,7 +45,7 @@ test.describe('Settings Page E2E', () => {
       await page.waitForLoadState('networkidle');
 
       // 检查 planner 相关内容是否存在
-      const bodyText = await page.locator('body').textContent() || '';
+      const bodyText = (await page.locator('body').textContent()) || '';
       // 页面应该正常加载
       expect(bodyText.length).toBeGreaterThan(0);
     });
@@ -123,7 +123,7 @@ test.describe('Settings Page E2E', () => {
       await expect(page.locator('body')).toBeVisible();
 
       // 检查是否有 Agent 相关内容
-      const bodyText = await page.locator('body').textContent() || '';
+      const bodyText = (await page.locator('body').textContent()) || '';
       // 页面应该有内容
       expect(bodyText.length).toBeGreaterThan(0);
     });
@@ -165,14 +165,14 @@ test.describe('Settings Page E2E', () => {
       if (themeCount > 0) {
         // 记录初始主题
         const html = page.locator('html');
-        const initialClass = await html.getAttribute('class') || '';
+        const initialClass = (await html.getAttribute('class')) || '';
 
         // 点击切换主题
         await themeButton.first().click();
         await page.waitForTimeout(300);
 
         // 验证主题类存在
-        const newClass = await html.getAttribute('class') || '';
+        const newClass = (await html.getAttribute('class')) || '';
         expect(newClass).toBeDefined();
       }
     });

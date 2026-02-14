@@ -5,9 +5,9 @@
 use crate::api::{LogSeekApiError, models::SearchBody};
 use crate::query::{KeywordHighlight, Query};
 use crate::repository::cache::{cache as simple_cache, new_sid};
-use crate::service::{ServiceError, search::SearchEvent};
 use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
-use crate::utils::renderer::{render_json_chunks, SearchJsonResult};
+use crate::service::{ServiceError, search::SearchEvent};
+use crate::utils::renderer::{SearchJsonResult, render_json_chunks};
 use axum::{
   body::Body,
   extract::{Json, State},
@@ -107,12 +107,7 @@ fn build_ndjson_response(
     )
     .header("X-Logseek-SID", sid_header)
     .body(Body::from_stream(stream))
-    .map_err(|e| {
-      LogSeekApiError::Service(ServiceError::ProcessingError(format!(
-        "构建 HTTP 响应失败: {}",
-        e
-      )))
-    })
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
 }
 
 /// 搜索处理函数（多存储源并行搜索）
@@ -164,19 +159,17 @@ pub async fn delete_search_session(
   tracing::info!("[Search] 清理会话缓存: sid={}", sid);
   simple_cache().remove_sid(&sid).await;
 
-  HttpResponse::builder().status(200).body(Body::empty()).map_err(|e| {
-    LogSeekApiError::Service(ServiceError::ProcessingError(format!(
-      "构建响应失败: {}",
-      e
-    )))
-  })
+  HttpResponse::builder()
+    .status(200)
+    .body(Body::empty())
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建响应失败: {}", e))))
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use axum::http::StatusCode;
   use crate::service::search::SearchResult;
+  use axum::http::StatusCode;
   use futures::StreamExt;
   use tokio::sync::mpsc;
 

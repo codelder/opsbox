@@ -56,7 +56,7 @@ impl OpsFileSystem for ZipOpsFS {
         } else {
           OpsFileType::File
         },
-        size: entry.uncompressed_size() as u64,
+        size: entry.uncompressed_size(),
         modified: None,
         mode: 0,
         mime_type: None,

@@ -171,10 +171,7 @@ test.describe('Explorer Interaction E2E', () => {
     await expect(fileItem).toBeVisible({ timeout: 5000 });
 
     // 双击打开
-    const [newPage] = await Promise.all([
-      page.waitForEvent('popup'),
-      fileItem.dblclick()
-    ]);
+    const [newPage] = await Promise.all([page.waitForEvent('popup'), fileItem.dblclick()]);
 
     // 验证新页面 URL
     await expect(newPage).toHaveURL(/\/view\?/);
