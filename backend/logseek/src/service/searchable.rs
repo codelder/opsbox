@@ -115,7 +115,7 @@ impl SearchProvider for LocalSearchProvider {
     // 归档判定在 SearchExecutor 分发前完成，这里直接读取资源上下文
     let is_archive = ctx.resource.is_archive();
 
-    let (root, relative_path) = if path.is_dir() {
+    let (search_root, relative_path) = if path.is_dir() {
       (path.clone(), ResourcePath::parse(""))
     } else if path.exists() {
       (
@@ -140,7 +140,7 @@ impl SearchProvider for LocalSearchProvider {
         .await
         .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
     } else {
-      let fs = LocalFileSystem::new(root)
+      let fs = LocalFileSystem::new(search_root)
         .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))?;
       let search_config = SearchConfig::default();
       fs.as_entry_stream(&relative_path, true, &search_config)
