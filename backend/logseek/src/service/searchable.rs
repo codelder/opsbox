@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use opsbox_core::SqlitePool;
+use opsbox_core::dfs::archive::infer_archive_from_path;
 use opsbox_core::dfs::{Location, Resource, ResourcePath, SearchConfig, Streamable};
 
 use super::ServiceError;
@@ -111,12 +112,8 @@ impl SearchProvider for LocalSearchProvider {
     // 1. 确定路径类型和根目录
     let path = PathBuf::from(&path_str);
 
-    // 检测归档文件
-    let is_archive = path.is_file()
-      && path.extension().is_some_and(|ext| {
-        let s = ext.to_string_lossy().to_lowercase();
-        s == "tar" || s == "gz" || s == "tgz" || s == "zip"
-      });
+    // 归档判定在 SearchExecutor 分发前完成，这里直接读取资源上下文
+    let is_archive = ctx.resource.is_archive();
 
     let (root, relative_path) = if path.is_dir() {
       (path.clone(), ResourcePath::parse(""))
@@ -235,11 +232,8 @@ impl SearchProvider for S3SearchProvider {
     let search_config = SearchConfig::default();
     let resource_path = ResourcePath::parse(object_key);
 
-    // 检测归档文件
-    let is_archive = object_key.to_lowercase().ends_with(".tar")
-      || object_key.to_lowercase().ends_with(".tar.gz")
-      || object_key.to_lowercase().ends_with(".tgz")
-      || object_key.to_lowercase().ends_with(".zip");
+    // 归档判定在 SearchExecutor 分发前完成，这里直接读取资源上下文
+    let is_archive = ctx.resource.is_archive();
 
     let mut entry_stream: Box<dyn opsbox_core::fs::EntryStream> = if is_archive {
       info!(
@@ -323,28 +317,22 @@ impl SearchProvider for AgentSearchProvider {
     }
 
     // 构造 SearchOptions
+    let is_archive = ctx.resource.is_archive() || infer_archive_from_path(&path).is_some();
+
     let target = if ctx.resource.archive_context.is_some() {
       AgentTarget::Archive {
         path: path.clone(),
         entry: ctx.resource.archive_context.as_ref().map(|c| c.inner_path.to_string()),
       }
+    } else if is_archive {
+      AgentTarget::Archive {
+        path: path.clone(),
+        entry: None,
+      }
     } else {
-      // Check if it is an archive based on extension (heuristic)
-      let is_archive = path.to_lowercase().ends_with(".tar")
-        || path.to_lowercase().ends_with(".tar.gz")
-        || path.to_lowercase().ends_with(".tgz")
-        || path.to_lowercase().ends_with(".zip");
-
-      if is_archive {
-        AgentTarget::Archive {
-          path: path.clone(),
-          entry: None,
-        }
-      } else {
-        AgentTarget::Dir {
-          path: path.clone(),
-          recursive: true,
-        }
+      AgentTarget::Dir {
+        path: path.clone(),
+        recursive: true,
       }
     };
 

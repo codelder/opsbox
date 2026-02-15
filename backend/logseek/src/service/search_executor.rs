@@ -4,7 +4,11 @@ use crate::service::ServiceError;
 use crate::service::search::{SearchEvent, SearchResult};
 use crate::service::searchable::{SearchContext, SearchRequest, create_search_provider};
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::{Location, Resource, build_orl_from_resource};
+use opsbox_core::dfs::archive::{detect_archive_type, infer_archive_from_path};
+use opsbox_core::dfs::{
+  ArchiveContext, Location, OpbxFileSystem, Resource, ResourcePath, StorageBackend, build_orl_from_resource,
+};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 
@@ -51,7 +55,7 @@ impl SearchResultHandler {
 
   /// 根据结果路径构造完整的 ORL 字符串
   fn build_result_orl(&self, res_path: &str) -> String {
-    use opsbox_core::dfs::{ArchiveContext, Resource};
+    use opsbox_core::dfs::Resource;
 
     // 判断是否为归档资源（显式 Context 或 后验识别）
     if self.resource.archive_context.is_some() {
@@ -61,36 +65,27 @@ impl SearchResultHandler {
         ctx.inner_path = opsbox_core::dfs::ResourcePath::parse(res_path);
       }
       build_orl_from_resource(&result_resource)
-    } else {
+    } else if infer_archive_from_path(&self.resource.primary_path.to_string()).is_some() {
       // 2. 无归档上下文：检查 Primary Path 是否本身是一个归档文件 (Heuristic)
-      let path_str = self.resource.primary_path.to_string().to_lowercase();
-      let is_archive = path_str.ends_with(".tar")
-        || path_str.ends_with(".tar.gz")
-        || path_str.ends_with(".tgz")
-        || path_str.ends_with(".zip")
-        || path_str.ends_with(".gz");
-
-      if is_archive {
-        // 这是一个开启了自动展开的归档搜索，应使用 ?entry= 格式
-        let mut result_resource = self.resource.clone();
-        result_resource.archive_context = Some(ArchiveContext::from_path_str(res_path, None));
-        build_orl_from_resource(&result_resource)
+      // 这是一个开启了自动展开的归档搜索，应使用 ?entry= 格式
+      let mut result_resource = self.resource.clone();
+      result_resource.archive_context = Some(ArchiveContext::from_path_str(res_path, None));
+      build_orl_from_resource(&result_resource)
+    } else {
+      // 3. 普通文件/目录：构造新路径
+      let full_path = if res_path.starts_with('/') {
+        res_path.to_string()
       } else {
-        // 3. 普通文件/目录：构造新路径
-        let full_path = if res_path.starts_with('/') {
-          res_path.to_string()
-        } else {
-          let base = self.resource.primary_path.to_string();
-          let base = base.trim_end_matches('/');
-          format!("{}/{}", base, res_path.trim_start_matches('/'))
-        };
-        let result_resource = Resource::new(
-          self.resource.endpoint.clone(),
-          opsbox_core::dfs::ResourcePath::parse(&full_path),
-          None,
-        );
-        build_orl_from_resource(&result_resource)
-      }
+        let base = self.resource.primary_path.to_string();
+        let base = base.trim_end_matches('/');
+        format!("{}/{}", base, res_path.trim_start_matches('/'))
+      };
+      let result_resource = Resource::new(
+        self.resource.endpoint.clone(),
+        opsbox_core::dfs::ResourcePath::parse(&full_path),
+        None,
+      );
+      build_orl_from_resource(&result_resource)
     }
   }
 
@@ -201,6 +196,58 @@ fn format_error_source_display(resource: &Resource) -> String {
   }
 }
 
+/// 为资源创建文件系统（用于分发前归档检测）
+async fn create_fs_for_resource(
+  resource: &Resource,
+  pool: &SqlitePool,
+) -> Result<Box<dyn OpbxFileSystem>, ServiceError> {
+  use opsbox_core::dfs::{LocalFileSystem, S3Config, S3Storage};
+
+  match &resource.endpoint.location {
+    Location::Local => {
+      let path_str = resource.primary_path.to_string();
+      let root = if path_str.starts_with('/') {
+        PathBuf::from("/")
+      } else {
+        PathBuf::from(".")
+      };
+      LocalFileSystem::new(root)
+        .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
+        .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))
+    }
+    Location::Cloud => {
+      let profile = crate::repository::s3::load_s3_profile(pool, &resource.endpoint.identity)
+        .await
+        .map_err(|e| ServiceError::ProcessingError(format!("加载 S3 Profile 失败: {:?}", e)))?
+        .ok_or_else(|| ServiceError::ProcessingError(format!("S3 Profile 不存在: {}", resource.endpoint.identity)))?;
+
+      let mut s3_config = S3Config::new(
+        resource.endpoint.identity.clone(),
+        profile.endpoint,
+        profile.access_key,
+        profile.secret_key,
+      );
+
+      // 与 Explorer 保持一致：优先使用 endpoint.bucket，否则回退到路径首段。
+      if let Some(ref bucket) = resource.endpoint.bucket {
+        s3_config.bucket = Some(bucket.clone());
+      } else {
+        let path_segments = resource.primary_path.segments();
+        if !path_segments.is_empty() && !path_segments[0].is_empty() {
+          s3_config.bucket = Some(path_segments[0].clone());
+        }
+      }
+
+      S3Storage::new(s3_config)
+        .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
+        .map_err(|e| ServiceError::ProcessingError(format!("创建 S3 存储失败: {}", e)))
+    }
+    Location::Remote { .. } => Err(ServiceError::ProcessingError(
+      "Agent not supported for pre-detection".to_string(),
+    )),
+  }
+}
+
 #[derive(Clone)]
 pub struct SearchExecutor {
   pool: SqlitePool,
@@ -298,7 +345,7 @@ impl SearchExecutor {
 
     for source in sources {
       let io_sem = self.io_semaphore.clone();
-      let resource = source;
+      let source_resource = source;
       let tx = tx.clone(); // 下游通道
       let pool = self.pool.clone();
 
@@ -312,6 +359,22 @@ impl SearchExecutor {
           Ok(p) => p,
           Err(_) => return,
         };
+
+        // 0. 分发前归档检测：将结果写回 resource.archive_context
+        let mut resource = source_resource;
+        let path_str = resource.primary_path.to_string();
+        let is_discovery = matches!(resource.endpoint.identity.as_str(), "agent.root" | "s3.root");
+        let is_s3_root =
+          resource.endpoint.backend == StorageBackend::ObjectStorage && (path_str == "/" || path_str.is_empty());
+
+        if !is_discovery
+          && !is_s3_root
+          && resource.archive_context.is_none()
+          && let Ok(fs) = create_fs_for_resource(&resource, &pool).await
+          && let Some(archive_type) = detect_archive_type(fs.as_ref(), &resource).await
+        {
+          resource.archive_context = Some(ArchiveContext::new(ResourcePath::parse("/"), Some(archive_type)));
+        }
 
         // 1. 创建中间通道 (Provider -> Internal -> Handler -> Downstream)
         let (tx_internal, rx_internal) = mpsc::channel(32);

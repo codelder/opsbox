@@ -353,7 +353,7 @@ impl ExplorerService {
 
   /// 自动检测归档类型（基于文件内容 magic bytes）
   async fn auto_detect_archive(&self, mut resource: Resource) -> Result<Resource, String> {
-    use opsbox_core::dfs::{archive::ArchiveContext, archive::ArchiveType};
+    use opsbox_core::dfs::archive::{ArchiveContext, detect_archive_type};
 
     // 如果已经是归档类型，直接返回
     if resource.archive_context.is_some() {
@@ -373,54 +373,7 @@ impl ExplorerService {
     // 创建临时文件系统读取文件头
     let fs = self.create_fs_for_resource(&resource).await?;
 
-    // 尝试打开文件并获取头部数据
-    let head_bytes = match fs.open_read(&resource.primary_path).await {
-      Ok(mut reader) => {
-        // DFS 现在使用标准 tokio::io::AsyncRead
-        // 读取前 2048 字节用于归档类型检测
-        use tokio::io::AsyncReadExt;
-        let mut buffer = vec![0u8; 2048];
-        let n = reader.read(&mut buffer).await.unwrap_or(0);
-        buffer.truncate(n);
-
-        if buffer.is_empty() {
-          // 无法读取数据，回退到扩展名检测
-          let path_lower = path_str.to_lowercase();
-
-          // 根据扩展名确定归档类型
-          let archive_type = if path_lower.ends_with(".tar") {
-            Some(ArchiveType::Tar)
-          } else if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
-            Some(ArchiveType::TarGz)
-          } else if path_lower.ends_with(".zip") {
-            Some(ArchiveType::Zip)
-          } else if path_lower.ends_with(".gz") {
-            Some(ArchiveType::Gz)
-          } else {
-            None
-          };
-
-          // 如果是归档扩展名，设置 archive_context
-          if let Some(at) = archive_type {
-            resource.archive_context = Some(ArchiveContext::new(ResourcePath::parse("/"), Some(at)));
-          }
-
-          return Ok(resource);
-        }
-
-        buffer
-      }
-      Err(_) => {
-        // 无法打开文件（可能是目录），返回原资源
-        return Ok(resource);
-      }
-    };
-
-    // 使用 magic bytes 检测归档类型（完全基于内容）
-    let archive_type = ArchiveType::from_magic_bytes(&head_bytes);
-
-    // 如果检测到归档类型，设置 archive_context
-    if archive_type != ArchiveType::Unknown {
+    if let Some(archive_type) = detect_archive_type(fs.as_ref(), &resource).await {
       resource.archive_context = Some(ArchiveContext::new(
         ResourcePath::parse("/"), // 归档内路径默认为根
         Some(archive_type),

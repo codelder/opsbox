@@ -2,7 +2,9 @@
 //!
 //! 定义了 ArchiveType 和 ArchiveContext
 
+use super::filesystem::OpbxFileSystem;
 use super::path::ResourcePath;
+use super::resource::Resource;
 
 /// 归档类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -118,6 +120,64 @@ impl ArchiveType {
   }
 }
 
+/// 检测资源是否为归档文件（magic bytes 优先）
+///
+/// 行为与 Explorer `auto_detect_archive` 保持一致：
+/// - 成功读取文件头：使用 magic bytes 检测
+/// - 读取数据为空：回退到扩展名检测
+/// - open_read 失败（可能是目录）：返回 None，不设置归档
+pub async fn detect_archive_type(fs: &dyn OpbxFileSystem, resource: &Resource) -> Option<ArchiveType> {
+  use tokio::io::AsyncReadExt;
+
+  let path_str = resource.primary_path.to_string();
+
+  let head_bytes = match fs.open_read(&resource.primary_path).await {
+    Ok(mut reader) => {
+      let mut buffer = vec![0u8; 2048];
+      let n = reader.read(&mut buffer).await.unwrap_or(0);
+      buffer.truncate(n);
+
+      if buffer.is_empty() {
+        return infer_archive_from_path(&path_str);
+      }
+      buffer
+    }
+    Err(_) => {
+      // 与 Explorer 对齐：open_read 失败时不进行扩展名回退
+      return None;
+    }
+  };
+
+  let archive_type = ArchiveType::from_magic_bytes(&head_bytes);
+  if archive_type != ArchiveType::Unknown {
+    Some(archive_type)
+  } else {
+    None
+  }
+}
+
+/// 从路径推断归档类型（扩展名回退）
+///
+/// 使用 `ArchiveType::from_extension`，并将 `.tgz` 归一化为 `TarGz`。
+pub fn infer_archive_from_path(path: &str) -> Option<ArchiveType> {
+  let lower = path.to_lowercase();
+
+  // 复合扩展名优先，避免被 `.gz` 提前匹配。
+  if lower.ends_with(".tar.gz") {
+    return Some(ArchiveType::TarGz);
+  }
+
+  if let Some(pos) = lower.rfind('.') {
+    let ext = &lower[pos..];
+    match ArchiveType::from_extension(ext) {
+      Some(ArchiveType::Tgz) => Some(ArchiveType::TarGz),
+      other => other,
+    }
+  } else {
+    None
+  }
+}
+
 /// 归档上下文
 ///
 /// 表示资源位于归档文件内的上下文信息
@@ -150,6 +210,9 @@ impl ArchiveContext {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::dfs::{DirEntry, Endpoint, FileMetadata, FsError, Resource};
+  use async_trait::async_trait;
+  use std::pin::Pin;
 
   #[test]
   fn test_archive_type_from_extension() {
@@ -244,6 +307,47 @@ mod tests {
     // Too short data
     let short_head = vec![0x50];
     assert_eq!(ArchiveType::from_magic_bytes(&short_head), ArchiveType::Unknown);
+  }
+
+  #[test]
+  fn test_infer_archive_from_path_normalize_tgz() {
+    assert_eq!(infer_archive_from_path("a.tgz"), Some(ArchiveType::TarGz));
+    assert_eq!(infer_archive_from_path("a.tar.gz"), Some(ArchiveType::TarGz));
+    assert_eq!(infer_archive_from_path("a.gz"), Some(ArchiveType::Gz));
+    assert_eq!(infer_archive_from_path("a.log"), None);
+  }
+
+  #[tokio::test]
+  async fn test_detect_archive_no_fallback_on_open_read_failure() {
+    struct MockFailingFS;
+
+    #[async_trait]
+    impl OpbxFileSystem for MockFailingFS {
+      async fn metadata(&self, _path: &ResourcePath) -> Result<FileMetadata, FsError> {
+        unreachable!("not used")
+      }
+
+      async fn read_dir(&self, _path: &ResourcePath) -> Result<Vec<DirEntry>, FsError> {
+        unreachable!("not used")
+      }
+
+      async fn open_read(
+        &self,
+        _path: &ResourcePath,
+      ) -> Result<Pin<Box<dyn tokio::io::AsyncRead + Send + Unpin>>, FsError> {
+        Err(FsError::NotFound("mock failure".to_string()))
+      }
+    }
+
+    let resource = Resource {
+      endpoint: Endpoint::local_fs(),
+      primary_path: ResourcePath::parse("/tmp/archive.tar.gz"),
+      archive_context: None,
+      filter_glob: None,
+    };
+
+    let result = detect_archive_type(&MockFailingFS, &resource).await;
+    assert!(result.is_none(), "open_read 失败时不应回退扩展名");
   }
 
   #[test]
