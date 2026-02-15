@@ -234,6 +234,59 @@ fn eval_expr(expr: &Expr, f: &dyn Fn(usize) -> bool) -> bool {
   }
 }
 
+/// 将 includes 和 excludes 列表组合成一个 PathFilter
+///
+/// 该函数用于统一 Local/S3/Agent 的路径过滤逻辑。
+/// 无效的 glob 模式会被记录警告并跳过。
+///
+/// # Arguments
+/// * `includes` - 包含的 glob 模式列表
+/// * `excludes` - 排除的 glob 模式列表
+///
+/// # Returns
+/// * `Some(PathFilter)` - 如果有任何有效的过滤规则
+/// * `None` - 如果没有有效的过滤规则
+pub fn combine_path_filters(includes: &[String], excludes: &[String]) -> Option<PathFilter> {
+  let mut filter = PathFilter::default();
+  let mut has_filter = false;
+
+  // 处理 includes
+  if !includes.is_empty() {
+    let mut builder = globset::GlobSetBuilder::new();
+    for p in includes {
+      match globset::GlobBuilder::new(p).build() {
+        Ok(g) => {
+          builder.add(g);
+        }
+        Err(e) => tracing::warn!("无效的 path glob: {} ({})", p, e),
+      }
+    }
+    if let Ok(set) = builder.build() {
+      filter.include = Some(set);
+      has_filter = true;
+    }
+  }
+
+  // 处理 excludes
+  if !excludes.is_empty() {
+    let mut builder = globset::GlobSetBuilder::new();
+    for p in excludes {
+      match globset::GlobBuilder::new(p).build() {
+        Ok(g) => {
+          builder.add(g);
+        }
+        Err(e) => tracing::warn!("无效的 -path glob: {} ({})", p, e),
+      }
+    }
+    if let Ok(set) = builder.build() {
+      filter.exclude = Some(set);
+      has_filter = true;
+    }
+  }
+
+  if has_filter { Some(filter) } else { None }
+}
+
 /// 将 glob 表达式转换为 PathFilter（仅包含 include 规则）
 pub fn path_glob_to_filter(glob: &str) -> Result<PathFilter, String> {
   // 使用 strict glob 模式：literal_separator(true)
@@ -257,6 +310,48 @@ pub fn path_glob_to_filter(glob: &str) -> Result<PathFilter, String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn test_combine_path_filters_empty() {
+    let result = combine_path_filters(&[], &[]);
+    assert!(result.is_none());
+  }
+
+  #[test]
+  fn test_combine_path_filters_with_includes() {
+    let result = combine_path_filters(&["*.log".to_string()], &[]);
+    assert!(result.is_some());
+    let filter = result.unwrap();
+    assert!(filter.include.is_some());
+    assert!(filter.exclude.is_none());
+  }
+
+  #[test]
+  fn test_combine_path_filters_with_excludes() {
+    let result = combine_path_filters(&[], &["*.tmp".to_string()]);
+    assert!(result.is_some());
+    let filter = result.unwrap();
+    assert!(filter.include.is_none());
+    assert!(filter.exclude.is_some());
+  }
+
+  #[test]
+  fn test_combine_path_filters_with_both() {
+    let result = combine_path_filters(&["*.log".to_string()], &["*.tmp".to_string()]);
+    assert!(result.is_some());
+    let filter = result.unwrap();
+    assert!(filter.include.is_some());
+    assert!(filter.exclude.is_some());
+  }
+
+  #[test]
+  fn test_combine_path_filters_invalid_glob() {
+    // Invalid glob patterns should be handled gracefully
+    let result = combine_path_filters(&["[invalid".to_string()], &[]);
+    // The function logs warnings for invalid globs but returns a filter
+    // with empty include/exclude sets
+    assert!(result.is_some());
+  }
 
   #[test]
   fn test_path_glob_filter_strict() {

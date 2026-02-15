@@ -320,6 +320,7 @@ mod tests {
   use super::*;
   use axum::body::Body;
   use axum::http::{Request, StatusCode};
+  use axum::response::Response;
   use std::path::PathBuf;
   use std::sync::{Arc, Mutex};
   use tower::ServiceExt;
@@ -339,6 +340,25 @@ mod tests {
       reload_handle: None,
       current_log_level: Arc::new(Mutex::new("info".to_string())),
     })
+  }
+
+  async fn collect_ndjson_events(response: Response) -> Vec<serde_json::Value> {
+    use tokio_stream::StreamExt;
+
+    let mut events = Vec::new();
+    let mut stream = response.into_body().into_data_stream();
+    while let Some(chunk_res) = stream.next().await {
+      let chunk = chunk_res.unwrap();
+      let text = String::from_utf8_lossy(&chunk);
+      for line in text.lines() {
+        if line.trim().is_empty() {
+          continue;
+        }
+        let json: serde_json::Value = serde_json::from_str(line).unwrap();
+        events.push(json);
+      }
+    }
+    events
   }
 
   #[tokio::test]
@@ -528,31 +548,387 @@ mod tests {
 
     assert_eq!(response.status(), StatusCode::OK);
 
-    // 检查响应流
-    use tokio_stream::StreamExt;
-    let mut stream = response.into_body().into_data_stream();
-    let mut found_match = false;
-    let mut found_complete = false;
-
-    while let Some(chunk_res) = stream.next().await {
-      let chunk = chunk_res.unwrap();
-      let s = String::from_utf8_lossy(&chunk);
-      for line in s.lines() {
-        if line.trim().is_empty() {
-          continue;
-        }
-        let json: serde_json::Value = serde_json::from_str(line).unwrap();
-        if json["type"] == "result" {
-          found_match = true;
-        }
-        if json["type"] == "complete" {
-          found_complete = true;
-        }
-      }
-    }
+    let events = collect_ndjson_events(response).await;
+    let found_match = events.iter().any(|e| e["type"] == "result");
+    let found_complete = events.iter().any(|e| e["type"] == "complete");
 
     assert!(found_match, "Should find at least one match result in stream");
     assert!(found_complete, "Should find complete event in stream");
+  }
+
+  /// 测试 Target::Dir { path: "subdir" } 的端到端搜索行为
+  /// 验证 resolve_target_paths 返回的完整路径不会被错误地再次拼接
+  /// 这是针对 P1 回归的集成测试
+  #[tokio::test]
+  async fn test_handle_search_dir_with_subdir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // 创建目录结构: root/app/logs/error.log
+    let app_dir = root.join("app");
+    let logs_dir = app_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+
+    // 在 subdir 中创建包含关键字的文件
+    let error_log = logs_dir.join("error.log");
+    std::fs::write(&error_log, "2025-01-01 ERROR: critical failure in app\n").unwrap();
+
+    // 同时在 root 创建一个文件（用于验证没有搜索到错误的位置）
+    let root_log = root.join("root.log");
+    std::fs::write(&root_log, "INFO: root level log\n").unwrap();
+
+    let canon_root = std::fs::canonicalize(root).unwrap();
+    let app = create_router(create_test_config(vec![canon_root.to_string_lossy().to_string()]));
+
+    // 关键测试：使用 Target::Dir { path: "app/logs" }
+    // resolve_target_paths 应该返回 /path/to/root/app/logs
+    // execute_search 不应该再把 "app/logs" 拼接到这个路径上
+    let search_req = serde_json::json!({
+        "task_id": "test-subdir-task",
+        "query": "ERROR",
+        "context_lines": 0,
+        "path_filter": null,
+        "path_includes": [],
+        "path_excludes": [],
+        "target": {
+            "type": "dir",
+            "path": "app/logs",  // 关键：使用嵌套子目录
+            "recursive": false
+        }
+    });
+
+    let response = app
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/api/v1/search")
+          .header("content-type", "application/json")
+          .body(Body::from(serde_json::to_string(&search_req).unwrap()))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let events = collect_ndjson_events(response).await;
+    let mut found_match = false;
+    let mut found_complete = false;
+
+    for event in events {
+      if event["type"] == "result" {
+        found_match = true;
+        // SearchResult 在 data 字段中
+        let path = event["data"]["path"].as_str().unwrap_or("");
+        // 验证结果来自正确的文件（在 app/logs 中）
+        // 关键断言：路径包含 app/logs/error.log，而不是 app/logs/app/logs/error.log
+        assert!(
+          path.contains("error.log") && path.contains("logs"),
+          "Result should be from app/logs/error.log, got path: {}",
+          path
+        );
+        // 额外验证：确保没有重复拼接（例如 app/logs/app/logs）
+        let path_str = path.to_string();
+        assert!(
+          !path_str.contains("app/logs/app") && !path_str.contains("logs/logs"),
+          "Path should not contain duplicated path segments (indicating incorrect path concatenation): {}",
+          path
+        );
+      }
+      if event["type"] == "complete" {
+        found_complete = true;
+      }
+      if event["type"] == "error" {
+        panic!("Unexpected error in search: {:?}", event);
+      }
+    }
+
+    // 关键断言：应该找到匹配结果（说明路径解析正确）
+    assert!(
+      found_match,
+      "Should find match in app/logs/error.log - if this fails, path may be incorrectly concatenated"
+    );
+    assert!(found_complete, "Should find complete event in stream");
+  }
+
+  /// 测试 Target::Files 的端到端搜索行为
+  /// 验证相对路径和多文件场景，断言结果不重复、都命中
+  #[tokio::test]
+  async fn test_handle_search_files_with_relative_paths() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // 创建多个文件
+    let file1 = root.join("error1.log");
+    let file2 = root.join("error2.log");
+    let file3 = root.join("info.log"); // 不包含关键字的文件
+    std::fs::write(&file1, "2025-01-01 ERROR: first error\n").unwrap();
+    std::fs::write(&file2, "2025-01-01 ERROR: second error\n").unwrap();
+    std::fs::write(&file3, "2025-01-01 INFO: info message\n").unwrap();
+
+    let canon_root = std::fs::canonicalize(root).unwrap();
+    let app = create_router(create_test_config(vec![canon_root.to_string_lossy().to_string()]));
+
+    // 使用相对路径的多文件搜索
+    let search_req = serde_json::json!({
+        "task_id": "test-files-task",
+        "query": "ERROR",
+        "context_lines": 0,
+        "path_filter": null,
+        "path_includes": [],
+        "path_excludes": [],
+        "target": {
+            "type": "files",
+            "paths": ["error1.log", "error2.log", "info.log"]  // 相对路径
+        }
+    });
+
+    let response = app
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/api/v1/search")
+          .header("content-type", "application/json")
+          .body(Body::from(serde_json::to_string(&search_req).unwrap()))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    use std::collections::HashSet;
+    let events = collect_ndjson_events(response).await;
+    let mut found_files: HashSet<String> = HashSet::new();
+    let mut result_count = 0usize;
+    let mut found_complete = false;
+
+    for event in events {
+      if event["type"] == "result" {
+        result_count += 1;
+        let path = event["data"]["path"].as_str().unwrap_or("");
+        if let Some(name) = std::path::Path::new(path).file_name().and_then(|n| n.to_str()) {
+          found_files.insert(name.to_string());
+        }
+      }
+      if event["type"] == "complete" {
+        found_complete = true;
+      }
+      if event["type"] == "error" {
+        panic!("Unexpected error in search: {:?}", event);
+      }
+    }
+
+    // 断言：应该正好产生 2 条结果，且精确命中两个 error 文件
+    assert_eq!(result_count, 2, "Should produce exactly 2 result events");
+    let expected = HashSet::from(["error1.log".to_string(), "error2.log".to_string()]);
+    assert_eq!(
+      found_files, expected,
+      "Results should exactly come from error1.log and error2.log"
+    );
+    assert!(found_complete, "Should find complete event");
+  }
+
+  /// 测试非法 query 返回 Error 事件
+  /// 验证非法查询表达式返回 type=error 且 source=agent-query-parse
+  #[tokio::test]
+  async fn test_handle_search_invalid_query_returns_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let file1 = tmp.path().join("test.log");
+    std::fs::write(&file1, "some content\n").unwrap();
+
+    let canon_root = std::fs::canonicalize(tmp.path()).unwrap();
+    let app = create_router(create_test_config(vec![canon_root.to_string_lossy().to_string()]));
+
+    // 使用非法的查询表达式（无效的 glob 模式会导致 parse_github_like 失败）
+    // path: 限定符会验证 glob 模式，[invalid 是无效的 glob 字符类
+    let search_req = serde_json::json!({
+        "task_id": "test-invalid-query",
+        "query": "test path:[invalid",  // 无效的 glob 模式
+        "context_lines": 0,
+        "path_filter": null,
+        "path_includes": [],
+        "path_excludes": [],
+        "target": {
+            "type": "dir",
+            "path": ".",
+            "recursive": false
+        }
+    });
+
+    let response = app
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/api/v1/search")
+          .header("content-type", "application/json")
+          .body(Body::from(serde_json::to_string(&search_req).unwrap()))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let events = collect_ndjson_events(response).await;
+    let mut found_query_parse_error = false;
+    let mut found_complete = false;
+    let mut error_details: Option<String> = None;
+
+    for event in events {
+      if event["type"] == "error" {
+        // source 在 data 对象里面
+        let source = event["data"]["source"].as_str().unwrap_or("");
+        error_details = Some(format!("{:?}", event));
+        // 关键断言：错误来源应该是 agent-query-parse
+        if source == "agent-query-parse" {
+          found_query_parse_error = true;
+        }
+      }
+      if event["type"] == "complete" {
+        found_complete = true;
+      }
+    }
+
+    // 关键断言：应该收到 agent-query-parse 错误事件
+    assert!(
+      found_query_parse_error,
+      "Should receive error event with source='agent-query-parse' for invalid query. Got error: {:?}",
+      error_details
+    );
+    // 非法查询应该立即终止，不应该有 complete 事件
+    assert!(
+      !found_complete,
+      "Should NOT receive complete event for invalid query (should fail early)"
+    );
+  }
+
+  /// 测试 Dir 的 recursive 语义
+  /// 验证 recursive=true 递归扫描，recursive=false 只扫一层
+  #[tokio::test]
+  async fn test_handle_search_dir_recursive_semantics() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // 创建目录结构:
+    // root/level1.log (第一层)
+    // root/subdir/level2.log (第二层)
+    // root/subdir/nested/level3.log (第三层)
+    let subdir = root.join("subdir");
+    let nested = subdir.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+
+    std::fs::write(root.join("level1.log"), "UNIQUE_KEYWORD at level1\n").unwrap();
+    std::fs::write(subdir.join("level2.log"), "UNIQUE_KEYWORD at level2\n").unwrap();
+    std::fs::write(nested.join("level3.log"), "UNIQUE_KEYWORD at level3\n").unwrap();
+
+    let canon_root = std::fs::canonicalize(root).unwrap();
+    let app = create_router(create_test_config(vec![canon_root.to_string_lossy().to_string()]));
+
+    // 测试 1: recursive=false，应该只扫描目标目录（不进入子目录）
+    let search_req_non_recursive = serde_json::json!({
+        "task_id": "test-non-recursive",
+        "query": "UNIQUE_KEYWORD",
+        "context_lines": 0,
+        "path_filter": null,
+        "path_includes": [],
+        "path_excludes": [],
+        "target": {
+            "type": "dir",
+            "path": "subdir",  // 指定子目录
+            "recursive": false  // 只扫 subdir 这一层
+        }
+    });
+
+    let response = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/api/v1/search")
+          .header("content-type", "application/json")
+          .body(Body::from(serde_json::to_string(&search_req_non_recursive).unwrap()))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    use std::collections::HashSet;
+    let events = collect_ndjson_events(response).await;
+    let mut non_recursive_paths: HashSet<String> = HashSet::new();
+
+    for event in events {
+      if event["type"] == "result" {
+        let path = event["data"]["path"].as_str().unwrap_or("").to_string();
+        non_recursive_paths.insert(path);
+      }
+    }
+
+    // recursive=false 应该只找到 subdir 下的 level2.log（不进入 nested）
+    assert_eq!(
+      non_recursive_paths.len(),
+      1,
+      "recursive=false should only find 1 result in subdir (not nested). Found: {:?}",
+      non_recursive_paths
+    );
+    assert!(
+      non_recursive_paths.iter().any(|p| p.contains("level2.log")),
+      "Result should be level2.log, got: {:?}",
+      non_recursive_paths
+    );
+
+    // 测试 2: recursive=true，应该递归扫描所有层级
+    let search_req_recursive = serde_json::json!({
+        "task_id": "test-recursive",
+        "query": "UNIQUE_KEYWORD",
+        "context_lines": 0,
+        "path_filter": null,
+        "path_includes": [],
+        "path_excludes": [],
+        "target": {
+            "type": "dir",
+            "path": "subdir",
+            "recursive": true  // 递归扫描
+        }
+    });
+
+    let response = app
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/api/v1/search")
+          .header("content-type", "application/json")
+          .body(Body::from(serde_json::to_string(&search_req_recursive).unwrap()))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    let events = collect_ndjson_events(response).await;
+    let mut recursive_paths: HashSet<String> = HashSet::new();
+
+    for event in events {
+      if event["type"] == "result" {
+        let path = event["data"]["path"].as_str().unwrap_or("").to_string();
+        recursive_paths.insert(path);
+      }
+    }
+
+    // recursive=true 应该找到 2 个结果（level2.log 和 level3.log）
+    assert_eq!(
+      recursive_paths.len(),
+      2,
+      "recursive=true should find 2 results in subdir and nested. Found: {:?}",
+      recursive_paths
+    );
+    assert!(
+      recursive_paths.iter().any(|p| p.contains("level2.log")),
+      "Should find level2.log"
+    );
+    assert!(
+      recursive_paths.iter().any(|p| p.contains("level3.log")),
+      "Should find level3.log (in nested)"
+    );
   }
 
   #[tokio::test]

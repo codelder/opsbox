@@ -8,8 +8,10 @@ use logseek::{
   agent::AgentSearchRequest,
   domain::config::Target as ConfigTarget,
   query::Query,
-  service::search::{SearchEvent, SearchProcessor},
+  service::search::SearchEvent,
+  service::search_runner::{self, SearchRunnerConfig},
 };
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -39,7 +41,7 @@ pub async fn execute_search(
     };
   }
 
-  // 1. 解析查询（第三层过滤：query 中的 path: 指令）
+  // 1. 解析查询（提前解析，避免重复解析，同时确保错误能正确上报）
   let spec = match Query::parse_github_like(&request.query) {
     Ok(s) => Arc::new(s),
     Err(e) => {
@@ -53,14 +55,7 @@ pub async fn execute_search(
     }
   };
 
-  // 2. 创建搜索处理器（支持用户指定的编码）
-  let processor = Arc::new(SearchProcessor::new_with_encoding(
-    spec.clone(),
-    request.context_lines,
-    request.encoding.clone(),
-  ));
-
-  // 3. 第一层过滤：解析 Target 到实际路径
+  // 2. 解析 Target 到实际路径（保留安全边界：白名单校验）
   let base_paths = match resolve_target_paths(&config, &request.target) {
     Ok(paths) => {
       info!("Target 解析成功: {:?}", paths);
@@ -83,24 +78,7 @@ pub async fn execute_search(
     }
   };
 
-  // 4. 额外路径过滤
-  let mut extra_filters = Vec::new();
-
-  // 4.1 Base Filter (来自 ORL)
-  if let Some(base) = &request.path_filter
-    && let Ok(f) = logseek::query::path_glob_to_filter(base)
-  {
-    extra_filters.push(f);
-  }
-
-  // 4.2 User Filter (path_includes / path_excludes)
-  if let Some(user_filter) = combine_filters(&request.path_includes, &request.path_excludes) {
-    extra_filters.push(user_filter);
-  }
-
-  let filtered_paths = base_paths;
-
-  if filtered_paths.is_empty() {
+  if base_paths.is_empty() {
     warn!("没有找到匹配的搜索路径");
     send_event!(SearchEvent::Error {
       source: "agent-path".to_string(),
@@ -110,9 +88,22 @@ pub async fn execute_search(
     return;
   }
 
+  // 3. 构建路径过滤器
+  let extra_filters = search_runner::build_path_filters(
+    request.path_filter.as_deref(),
+    &request.path_includes,
+    &request.path_excludes,
+  );
+
+  // 4. 构建搜索配置（共享查询解析结果，避免重复解析）
+  let runner_config = SearchRunnerConfig::new(&request.query)
+    .with_context_lines(request.context_lines)
+    .with_encoding_opt(request.encoding.clone())
+    .with_extra_filters(extra_filters)
+    .with_query_spec(spec); // 复用已解析的 Query
+
   // 5. 执行搜索
-  // 5. 执行搜索
-  for search_path in filtered_paths {
+  for search_path in &base_paths {
     if cancel_token.is_cancelled() {
       info!("搜索任务 {} 已被取消", task_id);
       break;
@@ -126,29 +117,16 @@ pub async fn execute_search(
     info!("开始搜索路径: {}", search_path.display());
 
     let path_str = search_path.to_string_lossy().to_string();
-    let target_hint = match &request.target {
-      ConfigTarget::Files { .. } => Some(ConfigTarget::Files {
-        paths: vec![path_str.clone()],
-      }),
-      ConfigTarget::Dir { recursive, .. } => Some(ConfigTarget::Dir {
-        path: ".".to_string(),
-        recursive: *recursive,
-      }),
-      ConfigTarget::Archive { path, .. } => Some(ConfigTarget::Archive {
-        path: path.clone(),
-        entry: None,
-      }),
-    };
 
-    // Create estream
-    let mut estream: Box<dyn opsbox_core::fs::EntryStream> = match target_hint {
-      Some(ConfigTarget::Dir { path, recursive }) => {
-        let full_path = if path == "." {
-          search_path.clone()
-        } else {
-          search_path.join(path)
-        };
-        match opsbox_core::fs::FsEntryStream::new(full_path, recursive).await {
+    // 5.1 创建 EntryStream
+    // 注意：resolve_target_paths 已经返回解析后的目标路径
+    // - 对于 Dir 目标：search_path 已经是完整的目录路径，不需要再拼接 path
+    // - 对于 Files 目标：base_paths 已经是解析后的文件列表
+    // - 对于 Archive 目标：search_path 是归档文件的完整路径
+    let mut estream: Box<dyn opsbox_core::fs::EntryStream> = match &request.target {
+      ConfigTarget::Dir { recursive, .. } => {
+        // search_path 已经是 resolve_target_paths 解析后的完整目录路径
+        match opsbox_core::fs::FsEntryStream::new(search_path.clone(), *recursive).await {
           Ok(s) => Box::new(s),
           Err(e) => {
             warn!("构建本地条目流失败 {}: {}", search_path.display(), e);
@@ -156,8 +134,12 @@ pub async fn execute_search(
           }
         }
       }
-      Some(ConfigTarget::Files { paths }) => Box::new(opsbox_core::fs::MultiFileEntryStream::new(paths)),
-      Some(ConfigTarget::Archive { path: _, .. }) => match tokio::fs::File::open(&search_path).await {
+      ConfigTarget::Files { .. } => {
+        // 对于 Files 目标，base_paths 已经是解析后的文件列表
+        // 每个 search_path 是一个文件，创建单文件流
+        Box::new(opsbox_core::fs::MultiFileEntryStream::new(vec![path_str.clone()]))
+      }
+      ConfigTarget::Archive { .. } => match tokio::fs::File::open(search_path).await {
         Ok(f) => match opsbox_core::fs::create_archive_stream_from_reader(f, Some(&path_str)).await {
           Ok(s) => s,
           Err(e) => {
@@ -170,41 +152,33 @@ pub async fn execute_search(
           continue;
         }
       },
-      None => match opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(&path_str), true).await {
-        Ok(s) => Box::new(s),
-        Err(e) => {
-          warn!("构建本地条目流失败 {}: {}", path_str, e);
-          continue;
-        }
-      },
     };
 
-    let mut stream_processor = logseek::service::entry_stream::EntryStreamProcessor::new(processor.clone())
-      .with_cancel_token(Arc::new(cancel_token.clone()));
-
-    // Only set base_path for Directory/Files targets to allow relative glob matching.
-    // For Archive targets, entries are already relative to archive root, so no base_path stripping needed.
-    if matches!(&request.target, ConfigTarget::Dir { .. }) {
-      if search_path.is_file() {
-        if let Some(parent) = search_path.parent() {
-          stream_processor = stream_processor.with_base_path(parent.to_path_buf());
+    // 5.2 确定 base_path（仅对目录/文件目标，归档不需要）
+    let base_path = match &request.target {
+      ConfigTarget::Dir { .. } => {
+        if search_path.is_file() {
+          search_path.parent().map(PathBuf::from)
         } else {
-          stream_processor = stream_processor.with_base_path(search_path.clone());
+          Some(search_path.clone())
         }
-      } else {
-        stream_processor = stream_processor.with_base_path(search_path.clone());
       }
-    } else if matches!(&request.target, ConfigTarget::Files { .. })
-      && let Some(parent) = search_path.parent()
+      ConfigTarget::Files { .. } => search_path.parent().map(PathBuf::from),
+      ConfigTarget::Archive { .. } => None,
+    };
+
+    // 5.3 执行搜索（复用配置）
+    let path_runner_config = runner_config.clone().with_base_path_opt(base_path);
+
+    if let Err(e) = search_runner::run_search(
+      estream.as_mut(),
+      path_runner_config,
+      tx.clone(),
+      Some(Arc::new(cancel_token.clone())),
+      "Agent",
+    )
+    .await
     {
-      stream_processor = stream_processor.with_base_path(parent.to_path_buf());
-    }
-
-    for filter in &extra_filters {
-      stream_processor = stream_processor.with_extra_path_filter(filter.clone());
-    }
-
-    if let Err(e) = stream_processor.process_stream(&mut *estream, tx.clone()).await {
       warn!("处理条目流失败 {}: {}", search_path.display(), e);
     }
   }
@@ -216,91 +190,4 @@ pub async fn execute_search(
   });
 
   info!("搜索完成: task_id={}", task_id);
-}
-
-fn combine_filters(includes: &[String], excludes: &[String]) -> Option<logseek::query::PathFilter> {
-  let mut final_filter = logseek::query::PathFilter::default();
-  let mut has_filter = false;
-
-  if !includes.is_empty() {
-    let mut builder = globset::GlobSetBuilder::new();
-    for p in includes {
-      match globset::GlobBuilder::new(p).build() {
-        Ok(g) => {
-          builder.add(g);
-        }
-        Err(e) => warn!("无效的 path glob: {} ({})", p, e),
-      }
-    }
-    if let Ok(set) = builder.build() {
-      final_filter.include = Some(set);
-      has_filter = true;
-    }
-  }
-
-  if !excludes.is_empty() {
-    let mut builder = globset::GlobSetBuilder::new();
-    for p in excludes {
-      match globset::GlobBuilder::new(p).build() {
-        Ok(g) => {
-          builder.add(g);
-        }
-        Err(e) => warn!("无效的 -path glob: {} ({})", p, e),
-      }
-    }
-    if let Ok(set) = builder.build() {
-      final_filter.exclude = Some(set);
-      has_filter = true;
-    }
-  }
-
-  if has_filter { Some(final_filter) } else { None }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_combine_filters_empty() {
-    let result = combine_filters(&[], &[]);
-    assert!(result.is_none());
-  }
-
-  #[test]
-  fn test_combine_filters_with_includes() {
-    let result = combine_filters(&["*.log".to_string()], &[]);
-    assert!(result.is_some());
-    let filter = result.unwrap();
-    assert!(filter.include.is_some());
-    assert!(filter.exclude.is_none());
-  }
-
-  #[test]
-  fn test_combine_filters_with_excludes() {
-    let result = combine_filters(&[], &["*.tmp".to_string()]);
-    assert!(result.is_some());
-    let filter = result.unwrap();
-    assert!(filter.include.is_none());
-    assert!(filter.exclude.is_some());
-  }
-
-  #[test]
-  fn test_combine_filters_with_both() {
-    let result = combine_filters(&["*.log".to_string()], &["*.tmp".to_string()]);
-    assert!(result.is_some());
-    let filter = result.unwrap();
-    assert!(filter.include.is_some());
-    assert!(filter.exclude.is_some());
-  }
-
-  #[test]
-  fn test_combine_filters_invalid_glob() {
-    // Invalid glob pattern should be handled gracefully
-    // When all includes are invalid, an empty filter is returned
-    let result = combine_filters(&["[invalid".to_string()], &[]);
-    // The function logs a warning for invalid globs but still returns a filter
-    // with empty include/exclude sets
-    assert!(result.is_some());
-  }
 }

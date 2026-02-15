@@ -191,6 +191,16 @@ impl SearchResultHandler {
   }
 }
 
+/// 生成资源的错误报告显示名称
+/// 格式: "type:identifier" 其中 type 是 local/agent/s3
+fn format_error_source_display(resource: &Resource) -> String {
+  match &resource.endpoint.location {
+    Location::Local => format!("local:{}", resource.primary_path),
+    Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
+    Location::Cloud => format!("s3:{}", resource.endpoint.identity),
+  }
+}
+
 #[derive(Clone)]
 pub struct SearchExecutor {
   pool: SqlitePool,
@@ -330,11 +340,7 @@ impl SearchExecutor {
         match provider_res {
           Ok(provider) => {
             // 获取显示名称用于错误报告
-            let display_name = match &resource.endpoint.location {
-              Location::Local => format!("local:{}", resource.primary_path),
-              Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
-              Location::Cloud => format!("s3:{}", resource.endpoint.identity),
-            };
+            let display_name = format_error_source_display(&resource);
             if let Err(e) = provider.search(&ctx, &request, &pool).await {
               let _ = tx_internal
                 .send(SearchEvent::Error {
@@ -347,11 +353,7 @@ impl SearchExecutor {
           }
           Err(e) => {
             tracing::error!("Invalid Endpoint Type: {}", e);
-            let display_name = match &resource.endpoint.location {
-              Location::Local => format!("local:{}", resource.primary_path),
-              Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
-              Location::Cloud => format!("s3:{}", resource.endpoint.identity),
-            };
+            let display_name = format_error_source_display(&resource);
             let _ = tx_internal
               .send(SearchEvent::Error {
                 source: display_name,
