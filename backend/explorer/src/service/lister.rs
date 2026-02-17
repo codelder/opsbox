@@ -8,7 +8,7 @@ use std::pin::Pin;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 use opsbox_core::dfs::{
-  archive::ArchiveType,
+  archive::{ArchiveType, detect_archive_type_from_head, infer_archive_from_path},
   filesystem::{DirEntry, OpbxFileSystem},
   impls::{ArchiveFileSystem, LocalFileSystem},
   path::ResourcePath,
@@ -277,7 +277,7 @@ impl ResourceLister {
 
         if !buffer.is_empty() {
           // 使用 magic bytes 检测
-          let archive_type = ArchiveType::from_magic_bytes(&buffer);
+          let archive_type = detect_archive_type_from_head(&buffer);
           if archive_type != ArchiveType::Unknown {
             return Some(archive_type);
           }
@@ -286,36 +286,12 @@ impl ResourceLister {
     }
 
     // 回退到扩展名检测
-    let path_lower = path.to_string_lossy().to_lowercase();
-
-    if path_lower.ends_with(".tar") {
-      Some(ArchiveType::Tar)
-    } else if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
-      Some(ArchiveType::TarGz)
-    } else if path_lower.ends_with(".zip") {
-      Some(ArchiveType::Zip)
-    } else if path_lower.ends_with(".gz") {
-      Some(ArchiveType::Gz)
-    } else {
-      None
-    }
+    infer_archive_from_path(&path.to_string_lossy())
   }
 
   /// 从路径字符串检测归档类型
   pub fn detect_archive_type_from_path(&self, path: &str) -> Option<ArchiveType> {
-    let path_lower = path.to_lowercase();
-
-    if path_lower.ends_with(".tar") {
-      Some(ArchiveType::Tar)
-    } else if path_lower.ends_with(".tar.gz") || path_lower.ends_with(".tgz") {
-      Some(ArchiveType::TarGz)
-    } else if path_lower.ends_with(".zip") {
-      Some(ArchiveType::Zip)
-    } else if path_lower.ends_with(".gz") {
-      Some(ArchiveType::Gz)
-    } else {
-      None
-    }
+    infer_archive_from_path(path)
   }
 
   /// 将 DirEntry 映射为 LocalEntry

@@ -78,6 +78,7 @@ pub struct PathFilter {
 
 impl PathFilter {
   pub fn is_allowed(&self, path: &str) -> bool {
+    // 排除规则：任一命中即排除（并集）
     if let Some(ex) = &self.exclude
       && ex.is_match(path)
     {
@@ -86,15 +87,21 @@ impl PathFilter {
     if self.exclude_contains.iter().any(|s| path.contains(s)) {
       return false;
     }
-    if let Some(inc) = &self.include
-      && !inc.is_match(path)
-    {
-      return false;
+
+    // 包含规则：如果没有任何包含规则，则允许
+    // 如果有包含规则，任一命中即允许（并集）
+    let has_include = self.include.is_some();
+    let has_include_contains = !self.include_contains.is_empty();
+
+    if !has_include && !has_include_contains {
+      return true;
     }
-    if !self.include_contains.is_empty() && !self.include_contains.iter().any(|s| path.contains(s)) {
-      return false;
-    }
-    true
+
+    // 检查是否命中任一包含规则
+    let matches_include = self.include.as_ref().is_some_and(|inc| inc.is_match(path));
+    let matches_include_contains = self.include_contains.iter().any(|s| path.contains(s));
+
+    matches_include || matches_include_contains
   }
 }
 
@@ -253,48 +260,93 @@ pub fn combine_path_filters(includes: &[String], excludes: &[String]) -> Option<
   // 处理 includes
   if !includes.is_empty() {
     let mut builder = globset::GlobSetBuilder::new();
+    let mut has_include_glob = false;
     for p in includes {
-      match globset::GlobBuilder::new(p).build() {
-        Ok(g) => {
-          builder.add(g);
+      match classify_path_pattern(p) {
+        PathPatternRule::Glob(pat) => match build_strict_path_glob(&pat) {
+          Ok(g) => {
+            builder.add(g);
+            has_include_glob = true;
+            has_filter = true;
+          }
+          Err(e) => tracing::warn!("无效的 path glob: {} ({})", p, e),
+        },
+        PathPatternRule::Contains(raw) => {
+          filter.include_contains.push(raw);
+          has_filter = true;
         }
-        Err(e) => tracing::warn!("无效的 path glob: {} ({})", p, e),
       }
     }
-    if let Ok(set) = builder.build() {
+    if has_include_glob && let Ok(set) = builder.build() {
       filter.include = Some(set);
-      has_filter = true;
     }
   }
 
   // 处理 excludes
   if !excludes.is_empty() {
     let mut builder = globset::GlobSetBuilder::new();
+    let mut has_exclude_glob = false;
     for p in excludes {
-      match globset::GlobBuilder::new(p).build() {
-        Ok(g) => {
-          builder.add(g);
+      match classify_path_pattern(p) {
+        PathPatternRule::Glob(pat) => match build_strict_path_glob(&pat) {
+          Ok(g) => {
+            builder.add(g);
+            has_exclude_glob = true;
+            has_filter = true;
+          }
+          Err(e) => tracing::warn!("无效的 -path glob: {} ({})", p, e),
+        },
+        PathPatternRule::Contains(raw) => {
+          filter.exclude_contains.push(raw);
+          has_filter = true;
         }
-        Err(e) => tracing::warn!("无效的 -path glob: {} ({})", p, e),
       }
     }
-    if let Ok(set) = builder.build() {
+    if has_exclude_glob && let Ok(set) = builder.build() {
       filter.exclude = Some(set);
-      has_filter = true;
     }
   }
 
   if has_filter { Some(filter) } else { None }
 }
 
+pub(super) enum PathPatternRule {
+  Glob(String),
+  Contains(String),
+}
+
+pub(super) fn classify_path_pattern(pattern: &str) -> PathPatternRule {
+  if is_glob_pattern(pattern) {
+    PathPatternRule::Glob(normalize_path_glob_pattern(pattern))
+  } else {
+    PathPatternRule::Contains(pattern.to_string())
+  }
+}
+
+pub(super) fn build_strict_path_glob(pattern: &str) -> Result<globset::Glob, globset::Error> {
+  globset::GlobBuilder::new(pattern).literal_separator(true).build()
+}
+
+fn is_glob_pattern(pattern: &str) -> bool {
+  // 与 parser::parse_github_like 保持同一判定规则，避免语义漂移。
+  pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
+}
+
+fn normalize_path_glob_pattern(pattern: &str) -> String {
+  // 与 parser::parse_github_like 保持一致：
+  // 非绝对路径且非 **/ 前缀时，自动补全为 **/xxx。
+  if pattern.starts_with('/') || pattern.starts_with("**/") {
+    pattern.to_string()
+  } else {
+    format!("**/{}", pattern)
+  }
+}
+
 /// 将 glob 表达式转换为 PathFilter（仅包含 include 规则）
 pub fn path_glob_to_filter(glob: &str) -> Result<PathFilter, String> {
   // 使用 strict glob 模式：literal_separator(true)
   // 这意味着 * 不能匹配路径分隔符，必须使用 ** 才能跨目录匹配
-  let glob = globset::GlobBuilder::new(glob)
-    .literal_separator(true)
-    .build()
-    .map_err(|e| format!("无效路径模式: {}", e))?;
+  let glob = build_strict_path_glob(glob).map_err(|e| format!("无效路径模式: {}", e))?;
 
   let mut builder = globset::GlobSetBuilder::new();
   builder.add(glob);
@@ -346,11 +398,28 @@ mod tests {
 
   #[test]
   fn test_combine_path_filters_invalid_glob() {
-    // Invalid glob patterns should be handled gracefully
+    // Invalid glob patterns should be handled gracefully.
+    // 无有效规则时返回 None。
     let result = combine_path_filters(&["[invalid".to_string()], &[]);
-    // The function logs warnings for invalid globs but returns a filter
-    // with empty include/exclude sets
-    assert!(result.is_some());
+    assert!(result.is_none());
+  }
+
+  #[test]
+  fn test_combine_path_filters_plain_exclude_uses_contains() {
+    let filter = combine_path_filters(&[], &["vendor/".to_string()]).unwrap();
+    assert!(filter.exclude.is_none());
+    assert_eq!(filter.exclude_contains, vec!["vendor/".to_string()]);
+    assert!(!filter.is_allowed("lib/vendor/a.js"));
+    assert!(filter.is_allowed("lib/src/a.js"));
+  }
+
+  #[test]
+  fn test_combine_path_filters_plain_include_uses_contains() {
+    let filter = combine_path_filters(&["src/".to_string()], &[]).unwrap();
+    assert!(filter.include.is_none());
+    assert_eq!(filter.include_contains, vec!["src/".to_string()]);
+    assert!(filter.is_allowed("app/src/main.rs"));
+    assert!(!filter.is_allowed("app/tests/main.rs"));
   }
 
   #[test]
@@ -480,5 +549,85 @@ mod tests {
 
     let deserialized: KeywordHighlight = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized, hl);
+  }
+
+  // ========== 语义对齐测试 ==========
+
+  /// 测试：combine_path_filters 与 parse_github_like 对无通配符 pattern 语义一致
+  #[test]
+  fn test_combine_and_parser_semantics_aligned_for_plain_path() {
+    let combined = combine_path_filters(&[], &["vendor/".to_string()]).unwrap();
+    let parsed = Query::parse_github_like("error -path:vendor/").unwrap();
+
+    // 两者都应走 contains 语义
+    let path = "lib/vendor/a.js";
+    assert_eq!(combined.is_allowed(path), parsed.path_filter.is_allowed(path));
+    assert!(!combined.is_allowed(path), "vendor/ 应该排除包含 vendor/ 的路径");
+  }
+
+  /// 测试：**/vendor/** glob 等价于 vendor/ contains
+  #[test]
+  fn test_glob_vendor_recursive_excludes() {
+    let filter = combine_path_filters(&[], &["**/vendor/**".to_string()]).unwrap();
+    assert!(!filter.is_allowed("lib/vendor/a.js"), "应排除 vendor 目录下的文件");
+    assert!(filter.is_allowed("lib/src/a.js"), "不应排除非 vendor 目录");
+  }
+
+  /// 测试：**ptcr** (glob) 与 ptcr (contains) 语义不等价
+  /// glob **ptcr** 只匹配文件名包含 ptcr，不匹配目录名
+  #[test]
+  fn test_glob_star_ptcr_not_equivalent_to_contains_ptcr() {
+    let filter_contains = combine_path_filters(&["ptcr".to_string()], &[]).unwrap();
+    let filter_glob = combine_path_filters(&["**ptcr**".to_string()], &[]).unwrap();
+
+    // 目录名是 ptcr：contains 匹配，glob 不匹配
+    assert!(filter_contains.is_allowed("lib/ptcr/a.js"));
+    assert!(!filter_glob.is_allowed("lib/ptcr/a.js"));
+
+    // 目录名包含 ptcr：contains 匹配，glob 不匹配
+    assert!(filter_contains.is_allowed("lib/myptcr/a.js"));
+    assert!(!filter_glob.is_allowed("lib/myptcr/a.js"));
+
+    // 文件名包含 ptcr：两者都匹配
+    assert!(filter_contains.is_allowed("ptcr.js"));
+    assert!(filter_glob.is_allowed("ptcr.js"));
+    assert!(filter_contains.is_allowed("myptcrfile.js"));
+    assert!(filter_glob.is_allowed("myptcrfile.js"));
+  }
+
+  /// 测试：contains ptcr 可用 4 个 glob 模式组合等价
+  #[test]
+  fn test_contains_ptcr_equivalent_to_glob_combination() {
+    let filter_contains = combine_path_filters(&["ptcr".to_string()], &[]).unwrap();
+    let filter_glob_combo = combine_path_filters(
+      &[
+        "**/ptcr/**".to_string(),   // 目录名精确是 ptcr
+        "**/*ptcr*/**".to_string(), // 目录名包含 ptcr
+        "**/*ptcr*".to_string(),    // 文件名包含 ptcr
+        "ptcr".to_string(),         // 根目录精确匹配
+      ],
+      &[],
+    )
+    .unwrap();
+
+    // 验证所有场景语义等价
+    let test_cases = [
+      "ptcr",              // 精确匹配
+      "ptcr.js",           // 文件名以 ptcr 开头
+      "lib/ptcr/a.js",     // 目录名是 ptcr
+      "lib/myptcr/a.js",   // 目录名包含 ptcr
+      "myptcrfile.js",     // 文件名包含 ptcr
+      "lib/myptcrfile.js", // 嵌套路径文件名包含 ptcr
+    ];
+
+    for path in test_cases {
+      assert_eq!(
+        filter_contains.is_allowed(path),
+        filter_glob_combo.is_allowed(path),
+        "路径 '{}' 语义不等价",
+        path
+      );
+      assert!(filter_contains.is_allowed(path), "路径 '{}' 应被允许", path);
+    }
   }
 }

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::archive::infer_archive_from_path;
+use opsbox_core::dfs::archive::{ArchiveType, infer_archive_from_path};
 use opsbox_core::dfs::{Location, Resource, ResourcePath, SearchConfig, Streamable};
 
 use super::ServiceError;
@@ -136,7 +136,14 @@ impl SearchProvider for LocalSearchProvider {
       let file = tokio::fs::File::open(&path)
         .await
         .map_err(|e| ServiceError::ProcessingError(format!("打开归档文件失败: {}", e)))?;
-      opsbox_core::fs::create_archive_stream_from_reader(file, Some(&path_str))
+      // 使用已知类型，跳过内部 magic bytes 检测
+      let archive_type = ctx
+        .resource
+        .archive_context
+        .as_ref()
+        .and_then(|c| c.archive_type)
+        .unwrap_or(ArchiveType::Unknown);
+      opsbox_core::fs::open_archive_typed(file, Some(&path_str), archive_type)
         .await
         .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
     } else {
@@ -241,8 +248,15 @@ impl SearchProvider for S3SearchProvider {
         bucket_name, object_key
       );
       use opsbox_core::dfs::OpbxFileSystem;
+      // 使用已知类型，跳过内部 magic bytes 检测
+      let archive_type = ctx
+        .resource
+        .archive_context
+        .as_ref()
+        .and_then(|c| c.archive_type)
+        .unwrap_or(ArchiveType::Unknown);
       match s3_storage.open_read(&resource_path).await {
-        Ok(reader) => opsbox_core::fs::create_archive_stream_from_reader(reader, Some(&path_str))
+        Ok(reader) => opsbox_core::fs::open_archive_typed(reader, Some(&path_str), archive_type)
           .await
           .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?,
         Err(e) => return Err(ServiceError::ProcessingError(format!("打开 S3 文件失败: {}", e))),

@@ -57,36 +57,39 @@ impl SearchResultHandler {
   fn build_result_orl(&self, res_path: &str) -> String {
     use opsbox_core::dfs::Resource;
 
-    // 判断是否为归档资源（显式 Context 或 后验识别）
+    // 1. 已有归档上下文：保持原始归档路径，更新 entry 参数
     if self.resource.archive_context.is_some() {
-      // 1. 已有归档上下文：保持原始归档路径，更新 entry 参数
       let mut result_resource = self.resource.clone();
-      if let Some(ref mut ctx) = result_resource.archive_context {
-        ctx.inner_path = opsbox_core::dfs::ResourcePath::parse(res_path);
+      if let Some(ref mut result_ctx) = result_resource.archive_context {
+        result_ctx.inner_path = opsbox_core::dfs::ResourcePath::parse(res_path);
       }
-      build_orl_from_resource(&result_resource)
-    } else if infer_archive_from_path(&self.resource.primary_path.to_string()).is_some() {
-      // 2. 无归档上下文：检查 Primary Path 是否本身是一个归档文件 (Heuristic)
-      // 这是一个开启了自动展开的归档搜索，应使用 ?entry= 格式
+      return build_orl_from_resource(&result_resource);
+    }
+
+    // 2. Agent 兼容路径：扩展名后验兜底
+    // Agent 资源不在 Server 本地，detect_archive_type 可能失败，
+    // 此时使用扩展名作为最后的兜底判断
+    let is_agent = matches!(self.resource.endpoint.location, Location::Remote { .. });
+    if is_agent && infer_archive_from_path(&self.resource.primary_path.to_string()).is_some() {
       let mut result_resource = self.resource.clone();
       result_resource.archive_context = Some(ArchiveContext::from_path_str(res_path, None));
-      build_orl_from_resource(&result_resource)
-    } else {
-      // 3. 普通文件/目录：构造新路径
-      let full_path = if res_path.starts_with('/') {
-        res_path.to_string()
-      } else {
-        let base = self.resource.primary_path.to_string();
-        let base = base.trim_end_matches('/');
-        format!("{}/{}", base, res_path.trim_start_matches('/'))
-      };
-      let result_resource = Resource::new(
-        self.resource.endpoint.clone(),
-        opsbox_core::dfs::ResourcePath::parse(&full_path),
-        None,
-      );
-      build_orl_from_resource(&result_resource)
+      return build_orl_from_resource(&result_resource);
     }
+
+    // 3. 普通文件/目录：构造新路径
+    let full_path = if res_path.starts_with('/') {
+      res_path.to_string()
+    } else {
+      let base = self.resource.primary_path.to_string();
+      let base = base.trim_end_matches('/');
+      format!("{}/{}", base, res_path.trim_start_matches('/'))
+    };
+    let result_resource = Resource::new(
+      self.resource.endpoint.clone(),
+      opsbox_core::dfs::ResourcePath::parse(&full_path),
+      None,
+    );
+    build_orl_from_resource(&result_resource)
   }
 
   /// 缓存结果并发送成功事件

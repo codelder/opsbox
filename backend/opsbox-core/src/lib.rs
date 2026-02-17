@@ -8,6 +8,7 @@
 //! - 日志系统
 
 pub mod agent;
+pub mod common;
 pub mod database;
 pub mod dfs;
 pub mod error;
