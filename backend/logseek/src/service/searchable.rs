@@ -26,12 +26,7 @@ pub struct SearchRequest {
   pub path_excludes: Vec<String>,
 }
 
-impl SearchRequest {
-  /// 转换为路径过滤器
-  pub fn to_path_filter(&self) -> crate::query::PathFilter {
-    crate::query::combine_path_filters(&self.path_includes, &self.path_excludes).unwrap_or_default()
-  }
-}
+impl SearchRequest {}
 
 /// 搜索上下文
 #[derive(Clone)]
@@ -394,91 +389,5 @@ impl SearchProvider for AgentSearchProvider {
     );
 
     Ok(())
-  }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn test_search_request_to_path_filter_empty() {
-    let req = SearchRequest {
-      query: "test".to_string(),
-      context_lines: 2,
-      encoding: None,
-      path_includes: vec![],
-      path_excludes: vec![],
-    };
-
-    let filter = req.to_path_filter();
-    assert!(filter.include.is_none());
-    assert!(filter.exclude.is_none());
-  }
-
-  #[test]
-  fn test_search_request_to_path_filter_with_includes() {
-    let req = SearchRequest {
-      query: "test".to_string(),
-      context_lines: 2,
-      encoding: None,
-      path_includes: vec!["*.log".to_string()],
-      path_excludes: vec![],
-    };
-
-    let filter = req.to_path_filter();
-    assert!(filter.include.is_some());
-    assert!(filter.exclude.is_none());
-  }
-
-  #[test]
-  fn test_search_request_to_path_filter_with_excludes() {
-    let req = SearchRequest {
-      query: "test".to_string(),
-      context_lines: 2,
-      encoding: None,
-      path_includes: vec![],
-      path_excludes: vec!["*.tmp".to_string()],
-    };
-
-    let filter = req.to_path_filter();
-    assert!(filter.include.is_none());
-    assert!(filter.exclude.is_some());
-  }
-
-  #[test]
-  fn test_search_request_to_path_filter_with_both() {
-    let req = SearchRequest {
-      query: "test".to_string(),
-      context_lines: 2,
-      encoding: None,
-      path_includes: vec!["*.log".to_string()],
-      path_excludes: vec!["*.tmp".to_string()],
-    };
-
-    let filter = req.to_path_filter();
-    assert!(filter.include.is_some());
-    assert!(filter.exclude.is_some());
-  }
-
-  #[test]
-  fn test_search_request_invalid_glob() {
-    let req = SearchRequest {
-      query: "test".to_string(),
-      context_lines: 2,
-      encoding: None,
-      path_includes: vec!["[invalid".to_string()],
-      path_excludes: vec![],
-    };
-
-    // Invalid globs are logged as warnings but don't cause panic
-    // The filter builder will fail for invalid patterns
-    let filter = req.to_path_filter();
-    // Invalid patterns result in None since GlobSetBuilder fails
-    assert!(filter.include.is_none() || filter.include.is_some());
   }
 }

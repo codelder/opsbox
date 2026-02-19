@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::{debug, error, info, trace, warn};
 // 使用新的 LLM 客户端
 use crate::repository::llm::{self, ProviderKind};
@@ -18,12 +18,6 @@ const QUICK_GUIDE: &str = include_str!(concat!(
 pub struct NLBody {
   /// 自然语言需求文本
   pub nl: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NL2QResponse {
-  /// 生成的查询字符串（q）
-  pub q: String,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -259,15 +253,6 @@ mod tests {
   }
 
   #[test]
-  fn test_nl2q_response_serialization() {
-    let response = NL2QResponse {
-      q: "error AND warning".to_string(),
-    };
-    let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("error AND warning"));
-  }
-
-  #[test]
   fn test_quick_guide_loaded() {
     // 验证 QUICK_GUIDE 常量已正确加载
     assert!(QUICK_GUIDE.contains("查询语法指南"));
@@ -387,16 +372,5 @@ mod tests {
     assert!(result.is_ok());
     let body = result.unwrap();
     assert_eq!(body.nl, "test query");
-  }
-
-  #[test]
-  fn test_nl2q_response_serialize() {
-    // 测试NL2QResponse序列化
-    let response = NL2QResponse {
-      q: "test query".to_string(),
-    };
-    let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("test query"));
-    assert!(json.contains("q"));
   }
 }

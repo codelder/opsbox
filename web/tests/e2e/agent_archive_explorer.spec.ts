@@ -45,6 +45,7 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   let agentProc: ChildProcessWithoutNullStreams | null = null;
   let agentPort: number | null = null;
+  let zipArchiveReady = false;
 
   test.beforeAll(async ({ request }) => {
     test.setTimeout(120000);
@@ -71,14 +72,23 @@ test.describe('Agent Archive Explorer E2E', () => {
     ]);
 
     // Create zip archive using system zip command (if available)
+    const zipPath = path.join(TEST_LOGS_DIR, 'test.zip');
     try {
       const zipSourceDir = path.join(TEST_ROOT_DIR, 'zip_source');
       fs.mkdirSync(path.join(zipSourceDir, 'config'), { recursive: true });
       fs.writeFileSync(path.join(zipSourceDir, 'info.log'), `2025-01-01 13:00:00 [INFO] info log ZIP\n`);
       fs.writeFileSync(path.join(zipSourceDir, 'config/settings.log'), `2025-01-01 13:01:00 [INFO] settings log ZIP\n`);
-      execSync(`cd "${zipSourceDir}" && zip -r "${path.join(TEST_LOGS_DIR, 'test.zip')}" .`);
+      execSync(`cd "${zipSourceDir}" && zip -r "${zipPath}" .`);
+      zipArchiveReady = fs.existsSync(zipPath) && fs.statSync(zipPath).size > 0;
+      if (!zipArchiveReady) {
+        console.log('Skipping zip archive test - zip file is empty or missing');
+      }
     } catch (e) {
-      console.log('Skipping zip archive creation (zip command not available):', e);
+      zipArchiveReady = false;
+      if (fs.existsSync(zipPath)) {
+        fs.rmSync(zipPath, { force: true });
+      }
+      console.log('Skipping zip archive creation (zip command not available or failed):', e);
     }
 
     // Start agent
@@ -274,9 +284,8 @@ test.describe('Agent Archive Explorer E2E', () => {
   });
 
   test('should support zip archive on agent (if available)', async ({ page }) => {
-    // Check if zip file was created
-    const zipPath = path.join(TEST_LOGS_DIR, 'test.zip');
-    if (!fs.existsSync(zipPath)) {
+    // Check if zip file was created successfully
+    if (!zipArchiveReady) {
       // Skip this test gracefully - mark as passed since zip is optional
       console.log('Skipping zip archive test - zip file not created');
       return;

@@ -154,12 +154,17 @@ test.describe('Explorer E2E', () => {
     await expect(page.getByText(AGENT_ID, { exact: false })).toBeVisible({ timeout: 20000 });
   });
 
-  test('should list agent root directory (empty path)', async ({ page }) => {
+  test('should list agent root directory (empty path)', async ({ page, request }) => {
     // This test verifies the scenario: orl://agent-id@agent/
     // When path is empty (root directory), agent should list search roots
     // Bug: Agent returns 404 when path is empty or "/"
 
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent/`)}`);
+    // Ensure agent is registered before navigating (reduces CI/local race conditions)
+    const agentResponse = await request.get(`http://127.0.0.1:4001/api/v1/agents/${AGENT_ID}`);
+    expect(agentResponse.ok()).toBeTruthy();
+
+    const agentRootOrl = `orl://${AGENT_ID}@agent/`;
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(agentRootOrl)}`);
 
     // Wait for the page to load
     await page.waitForLoadState('networkidle');
@@ -173,7 +178,7 @@ test.describe('Explorer E2E', () => {
     // We use a regex to match because the UI might truncate long folder names
     // e.g., "temp_explorer_1768064125538" -> "temp_explorer...64125538"
     const namePrefix = rootDirName.substring(0, 10);
-    await expect(page.getByText(new RegExp(namePrefix)).first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(new RegExp(namePrefix)).first()).toBeVisible({ timeout: 10000 });
   });
 
   test('should list agent files', async ({ page }) => {

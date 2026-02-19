@@ -56,33 +56,15 @@ impl SearchRunnerConfig {
     self
   }
 
-  /// 设置编码
-  pub fn with_encoding(mut self, encoding: impl Into<String>) -> Self {
-    self.encoding = Some(encoding.into());
-    self
-  }
-
   /// 设置编码（可选版本）
   pub fn with_encoding_opt(mut self, encoding: Option<String>) -> Self {
     self.encoding = encoding;
     self
   }
 
-  /// 设置基础路径
-  pub fn with_base_path(mut self, path: impl Into<PathBuf>) -> Self {
-    self.base_path = Some(path.into());
-    self
-  }
-
   /// 设置基础路径（可选版本）
   pub fn with_base_path_opt(mut self, path: Option<PathBuf>) -> Self {
     self.base_path = path;
-    self
-  }
-
-  /// 添加额外路径过滤器
-  pub fn with_extra_filter(mut self, filter: PathFilter) -> Self {
-    self.extra_filters.push(filter);
     self
   }
 
@@ -232,8 +214,8 @@ mod tests {
   fn test_search_runner_config_builder() {
     let config = SearchRunnerConfig::new("error")
       .with_context_lines(3)
-      .with_encoding("GBK")
-      .with_base_path("/var/log");
+      .with_encoding_opt(Some("GBK".to_string()))
+      .with_base_path_opt(Some(PathBuf::from("/var/log")));
 
     assert_eq!(config.query, "error");
     assert_eq!(config.context_lines, 3);
@@ -244,7 +226,7 @@ mod tests {
   #[test]
   fn test_search_runner_config_with_filters() {
     let filter = PathFilter::default();
-    let config = SearchRunnerConfig::new("test").with_extra_filter(filter.clone());
+    let config = SearchRunnerConfig::new("test").with_extra_filters(vec![filter.clone()]);
 
     assert_eq!(config.extra_filters.len(), 1);
   }

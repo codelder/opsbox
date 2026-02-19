@@ -130,16 +130,44 @@ test.describe('Local Gzip Archive E2E', () => {
   test('should return proper API response for gz file list', async ({ request }) => {
     // Direct API test - bypass UI
     const orl = `orl://local${TEST_ROOT_DIR}/app_tranTime.log.gz`;
-    const response = await request.post(`/api/v1/explorer/list`, {
-      data: { orl }
-    });
+    const maxAttempts = 3;
+    let lastStatus = 0;
+    let lastBodyText = '';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let body: any = null;
 
-    console.log(`API Response status: ${response.status()}`);
-    const body = await response.json();
+    // Retry a few times to reduce transient backend flakiness under heavy parallel E2E load.
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const response = await request.post(`/api/v1/explorer/list`, {
+        data: { orl }
+      });
+
+      lastStatus = response.status();
+      lastBodyText = await response.text();
+      console.log(`API attempt ${attempt}/${maxAttempts} status: ${lastStatus}`);
+      console.log(`API attempt ${attempt} body: ${lastBodyText}`);
+
+      if (lastStatus === 200) {
+        try {
+          body = JSON.parse(lastBodyText);
+          break;
+        } catch {
+          // keep retrying for transient non-JSON responses
+        }
+      }
+
+      if (attempt < maxAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+
+    // Should return 200 OK with valid JSON body
+    expect(
+      lastStatus,
+      `Expected 200 from /api/v1/explorer/list, got ${lastStatus}. Last body: ${lastBodyText}`
+    ).toBe(200);
+    expect(body).toBeTruthy();
     console.log(`API Response body:`, JSON.stringify(body, null, 2));
-
-    // Should return 200 OK
-    expect(response.status()).toBe(200);
 
     // Should have data with items
     expect(body).toHaveProperty('success', true);

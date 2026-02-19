@@ -2,13 +2,11 @@
 //!
 //! 封装 explorer 库的 ResourceLister，添加 Agent 特定的安全检查和配置。
 
-use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::io::AsyncRead;
 
 use explorer::service::{LocalEntry, ResourceLister};
-use opsbox_core::dfs::archive::ArchiveType;
 
 use crate::config::AgentConfig;
 use crate::path::resolve_directory_path;
@@ -174,12 +172,6 @@ impl AgentExplorer {
       .download_archive_entry(resolved_path, inner_path, archive_type)
       .await
       .map_err(AgentExplorerError::FileOperation)
-  }
-
-  /// 检测归档类型（公开方法，供路由使用）
-  #[allow(dead_code)]
-  pub async fn detect_archive_type(&self, path: &Path) -> Option<ArchiveType> {
-    self.lister.detect_archive_type(path).await
   }
 
   /// 获取 MIME 类型

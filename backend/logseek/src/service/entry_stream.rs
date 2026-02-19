@@ -106,12 +106,6 @@ impl EntryStreamProcessor {
     self
   }
 
-  #[allow(dead_code)]
-  pub fn with_content_timeout(mut self, timeout: Duration) -> Self {
-    self.content_timeout = timeout;
-    self
-  }
-
   /// 並发处理条目（有畊并发，默认并发度 8，可通过 ENTRY_CONCURRENCY 环境变量调整，范围 1-64）
   pub async fn process_stream(
     &mut self,

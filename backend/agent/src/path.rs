@@ -2,7 +2,6 @@
 //!
 //! 提供路径解析、白名单校验和路径过滤功能
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use logseek::domain::config::Target as ConfigTarget;
 use std::collections::HashSet;
 use std::path::{Path as StdPath, PathBuf};
@@ -192,52 +191,6 @@ pub fn get_available_subdirs(config: &AgentConfig) -> Vec<String> {
   subdirs
 }
 
-/// 应用路径过滤器
-#[allow(dead_code)]
-pub fn apply_path_filter(paths: &[PathBuf], filter: &str) -> Result<Vec<PathBuf>, String> {
-  let glob = Glob::new(filter).map_err(|e| format!("路径过滤器语法错误: {}", e))?;
-
-  let glob_set = GlobSetBuilder::new()
-    .add(glob)
-    .build()
-    .map_err(|e| format!("构建路径过滤器失败: {}", e))?;
-
-  let mut filtered_paths = Vec::new();
-
-  for path in paths {
-    if path.is_file() {
-      if glob_set.is_match(path) {
-        filtered_paths.push(path.clone());
-      }
-    } else if path.is_dir() {
-      // 递归查找匹配的文件
-      find_matching_files(path, &glob_set, &mut filtered_paths)?;
-    }
-  }
-
-  Ok(filtered_paths)
-}
-
-/// 在目录中递归查找匹配的文件
-#[allow(dead_code)]
-fn find_matching_files(dir: &StdPath, glob_set: &GlobSet, results: &mut Vec<PathBuf>) -> Result<(), String> {
-  if let Ok(entries) = std::fs::read_dir(dir) {
-    for entry in entries.flatten() {
-      let path = entry.path();
-
-      if path.is_file() {
-        if glob_set.is_match(&path) {
-          results.push(path);
-        }
-      } else if path.is_dir() {
-        find_matching_files(&path, glob_set, results)?;
-      }
-    }
-  }
-
-  Ok(())
-}
-
 /// 规范化（canonicalize）已有路径，返回去除符号链接与 .. 的绝对路径
 pub fn canonicalize_existing(path: &StdPath) -> Result<PathBuf, String> {
   std::fs::canonicalize(path).map_err(|e| format!("路径规范化失败: {}: {}", path.display(), e))
@@ -290,44 +243,6 @@ mod tests {
     let roots = vec!["/nonexistent/path/12345".to_string()];
     let result = canonicalize_roots(&roots);
     assert!(result.is_empty());
-  }
-
-  #[test]
-  fn test_apply_path_filter_with_real_file() {
-    // Create temporary files
-    let temp_dir = tempfile::tempdir().unwrap();
-    let log_file = temp_dir.path().join("app.log");
-    let txt_file = temp_dir.path().join("app.txt");
-    std::fs::write(&log_file, "log content").unwrap();
-    std::fs::write(&txt_file, "text content").unwrap();
-
-    let paths = vec![log_file.clone(), txt_file.clone()];
-    let result = apply_path_filter(&paths, "*.log").unwrap();
-    assert_eq!(result.len(), 1);
-    assert!(result[0].ends_with("app.log"));
-  }
-
-  #[test]
-  fn test_apply_path_filter_no_match() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let log_file = temp_dir.path().join("app.log");
-    std::fs::write(&log_file, "log content").unwrap();
-
-    let paths = vec![log_file];
-    let result = apply_path_filter(&paths, "*.txt").unwrap();
-    assert!(result.is_empty());
-  }
-
-  #[test]
-  fn test_apply_path_filter_invalid_pattern() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let log_file = temp_dir.path().join("app.log");
-    std::fs::write(&log_file, "log content").unwrap();
-
-    let paths = vec![log_file];
-    // Invalid glob pattern
-    let result = apply_path_filter(&paths, "[invalid");
-    assert!(result.is_err());
   }
 
   #[test]

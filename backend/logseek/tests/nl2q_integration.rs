@@ -383,17 +383,17 @@ fn test_json_deserialization_edge_cases() {
 /// 测试JSON序列化响应
 #[test]
 fn test_json_response_serialization() {
-  use logseek::service::nl2q::NL2QResponse;
+  use logseek::api::models::NL2QOut;
 
   // 测试包含引号的响应
-  let response = NL2QResponse {
+  let response = NL2QOut {
     q: r#"field:"value""#.to_string(),
   };
   let json = serde_json::to_string(&response).unwrap();
   assert!(json.contains("\\\"value\\\""));
 
   // 测试空响应
-  let response = NL2QResponse { q: "".to_string() };
+  let response = NL2QOut { q: "".to_string() };
   let json = serde_json::to_string(&response).unwrap();
   assert!(json.contains("\"q\":\"\""));
 }
