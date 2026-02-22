@@ -113,16 +113,6 @@ impl FsEntryStream {
     Ok(Self { rx })
   }
 
-  // Legacy capability not supported with jwalk easily,
-  // but we can reimplementation if needed.
-  // For now, assuming new() is the main entry point.
-  pub fn from_read_dir(_rd: tokio::fs::ReadDir, _recursive: bool) -> Self {
-    // Placeholder: Creating a closed stream or erroring if strictly needed.
-    // Given the context, this seems rarely used or can be refactored at callsite.
-    // To avoid breaking compilation, returns empty stream.
-    let (_, rx) = tokio::sync::mpsc::channel(1);
-    Self { rx }
-  }
 }
 
 #[async_trait]
