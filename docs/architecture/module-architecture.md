@@ -1,7 +1,7 @@
 # 模块化架构文档
 
-**文档版本**: v1.0  
-**最后更新**: 2025-11-10
+**文档版本**: v1.1  
+**最后更新**: 2026-02-24
 
 ## 概述
 
@@ -112,7 +112,7 @@ impl Module for AnalyticsModule {
 opsbox_core::register_module!(AnalyticsModule);
 ```
 
-**`server/analytics/Cargo.toml`**:
+**`backend/your-module/Cargo.toml`**:
 ```toml
 [dependencies]
 opsbox-core = { path = "../opsbox-core" }
