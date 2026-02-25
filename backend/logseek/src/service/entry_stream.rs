@@ -6,7 +6,8 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::{Location, OrlParser, Resource, ResourcePath, SearchConfig, Streamable};
+use opsbox_core::dfs::archive::{ArchiveType, detect_archive_type};
+use opsbox_core::dfs::{Location, OpbxFileSystem, OrlParser, Resource, ResourcePath, SearchConfig, Streamable};
 use opsbox_core::fs::{EntryStream, PrefixedReader};
 
 use crate::query::PathFilter;
@@ -484,6 +485,135 @@ pub async fn create_entry_stream_from_resource(
         .map_err(|e| format!("创建条目流失败: {}", e))
     }
     Location::Remote { .. } => Err("Agent 类型应由调用方处理，不支持 create_entry_stream_from_resource".to_string()),
+  }
+}
+
+/// 从 Resource 创建用于搜索的条目流（含已知归档类型直通）
+///
+/// - 非归档资源：走标准 `create_entry_stream_from_resource`
+/// - 归档资源：按 `archive_context.archive_type` 直接打开归档流，避免重复探测
+pub async fn create_search_entry_stream_from_resource(
+  db_pool: &SqlitePool,
+  resource: &Resource,
+) -> Result<Box<dyn EntryStream>, String> {
+  if !resource.is_archive() {
+    return create_entry_stream_from_resource(db_pool, resource).await;
+  }
+
+  let path = resource.primary_path.to_string();
+  let archive_type = resource
+    .archive_context
+    .as_ref()
+    .and_then(|ctx| ctx.archive_type)
+    .unwrap_or(ArchiveType::Unknown);
+
+  match &resource.endpoint.location {
+    Location::Local => {
+      let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| format!("打开归档文件失败: {}", e))?;
+
+      opsbox_core::fs::open_archive_typed(file, Some(&path), archive_type)
+        .await
+        .map_err(|e| format!("创建归档流失败: {}", e))
+    }
+    Location::Cloud => {
+      use opsbox_core::dfs::{OpbxFileSystem, S3Config, S3Storage};
+
+      let profile = &resource.endpoint.identity;
+      let profile_row = crate::repository::s3::load_s3_profile(db_pool, profile)
+        .await
+        .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+        .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
+
+      let s3_config = S3Config::new(
+        profile.clone(),
+        profile_row.endpoint.clone(),
+        profile_row.access_key.clone(),
+        profile_row.secret_key.clone(),
+      );
+
+      let (bucket_name, object_key) = path
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or((path.trim_start_matches('/'), ""));
+
+      let s3_storage = S3Storage::new(s3_config.with_bucket(bucket_name.to_string()))
+        .map_err(|e| format!("创建 S3 存储失败: {}", e))?;
+
+      let reader = s3_storage
+        .open_read(&ResourcePath::parse(object_key))
+        .await
+        .map_err(|e| format!("打开 S3 文件失败: {}", e))?;
+
+      opsbox_core::fs::open_archive_typed(reader, Some(&path), archive_type)
+        .await
+        .map_err(|e| format!("创建归档流失败: {}", e))
+    }
+    Location::Remote { .. } => {
+      Err("Agent 类型应由调用方处理，不支持 create_search_entry_stream_from_resource".to_string())
+    }
+  }
+}
+
+/// 对资源执行轻量归档预检测，成功时返回归档类型
+///
+/// 该函数仅用于分发前标注 `archive_context`，失败时返回 `None`。
+pub async fn detect_archive_type_for_resource(db_pool: &SqlitePool, resource: &Resource) -> Option<ArchiveType> {
+  async fn create_fs_for_detection(
+    db_pool: &SqlitePool,
+    resource: &Resource,
+  ) -> Result<Box<dyn OpbxFileSystem>, String> {
+    use opsbox_core::dfs::{LocalFileSystem, S3Config, S3Storage};
+
+    match &resource.endpoint.location {
+      Location::Local => {
+        let path_str = resource.primary_path.to_string();
+        let root = if path_str.starts_with('/') {
+          std::path::PathBuf::from("/")
+        } else {
+          std::path::PathBuf::from(".")
+        };
+        LocalFileSystem::new(root)
+          .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
+          .map_err(|e| format!("创建本地文件系统失败: {}", e))
+      }
+      Location::Cloud => {
+        let profile = crate::repository::s3::load_s3_profile(db_pool, &resource.endpoint.identity)
+          .await
+          .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+          .ok_or_else(|| format!("S3 Profile 不存在: {}", resource.endpoint.identity))?;
+
+        let mut s3_config = S3Config::new(
+          resource.endpoint.identity.clone(),
+          profile.endpoint,
+          profile.access_key,
+          profile.secret_key,
+        );
+
+        if let Some(ref bucket) = resource.endpoint.bucket {
+          s3_config.bucket = Some(bucket.clone());
+        } else {
+          let path_segments = resource.primary_path.segments();
+          if !path_segments.is_empty() && !path_segments[0].is_empty() {
+            s3_config.bucket = Some(path_segments[0].clone());
+          }
+        }
+
+        S3Storage::new(s3_config)
+          .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
+          .map_err(|e| format!("创建 S3 存储失败: {}", e))
+      }
+      Location::Remote { .. } => Err("Agent 不支持归档预检测".to_string()),
+    }
+  }
+
+  match create_fs_for_detection(db_pool, resource).await {
+    Ok(fs) => detect_archive_type(fs.as_ref(), resource).await,
+    Err(err) => {
+      trace!("[EntryStream] 归档预检测跳过: {}", err);
+      None
+    }
   }
 }
 

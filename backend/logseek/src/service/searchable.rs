@@ -10,10 +10,11 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::archive::{ArchiveType, infer_archive_from_path};
-use opsbox_core::dfs::{Location, Resource, ResourcePath, SearchConfig, Streamable};
+use opsbox_core::dfs::archive::infer_archive_from_path;
+use opsbox_core::dfs::{Location, Resource};
 
 use super::ServiceError;
+use super::entry_stream::create_search_entry_stream_from_resource;
 use super::search::SearchEvent;
 
 /// 搜索请求参数
@@ -91,9 +92,7 @@ struct LocalSearchProvider;
 
 #[async_trait]
 impl SearchProvider for LocalSearchProvider {
-  async fn search(&self, ctx: &SearchContext, req: &SearchRequest, _pool: &SqlitePool) -> Result<(), ServiceError> {
-    use opsbox_core::dfs::LocalFileSystem;
-    use std::path::PathBuf;
+  async fn search(&self, ctx: &SearchContext, req: &SearchRequest, pool: &SqlitePool) -> Result<(), ServiceError> {
     use tracing::info;
 
     use super::search_runner::{self, SearchRunnerConfig};
@@ -104,53 +103,13 @@ impl SearchProvider for LocalSearchProvider {
       path_str, req.context_lines
     );
 
-    // 1. 确定路径类型和根目录
-    let path = PathBuf::from(&path_str);
-
-    // 归档判定在 SearchExecutor 分发前完成，这里直接读取资源上下文
+    // 归档判定在 SearchExecutor 分发前完成，这里直接读取资源上下文并统一创建流
     let is_archive = ctx.resource.is_archive();
+    let mut entry_stream = create_search_entry_stream_from_resource(pool, &ctx.resource)
+      .await
+      .map_err(ServiceError::ProcessingError)?;
 
-    let (search_root, relative_path) = if path.is_dir() {
-      (path.clone(), ResourcePath::parse(""))
-    } else if path.exists() {
-      (
-        path.parent().unwrap_or(&path).to_path_buf(),
-        ResourcePath::parse(path.file_name().unwrap().to_string_lossy().as_ref()),
-      )
-    } else {
-      let parent = path.parent().unwrap_or(&path).to_path_buf();
-      (parent, ResourcePath::parse(""))
-    };
-
-    // 2. 获取 EntryStream
-    let mut entry_stream: Box<dyn opsbox_core::fs::EntryStream> = if is_archive {
-      info!(
-        "[LocalSearchProvider] 检测到归档文件，使用归档流模式: {}",
-        path.display()
-      );
-      let file = tokio::fs::File::open(&path)
-        .await
-        .map_err(|e| ServiceError::ProcessingError(format!("打开归档文件失败: {}", e)))?;
-      // 使用已知类型，跳过内部 magic bytes 检测
-      let archive_type = ctx
-        .resource
-        .archive_context
-        .as_ref()
-        .and_then(|c| c.archive_type)
-        .unwrap_or(ArchiveType::Unknown);
-      opsbox_core::fs::open_archive_typed(file, Some(&path_str), archive_type)
-        .await
-        .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?
-    } else {
-      let fs = LocalFileSystem::new(search_root)
-        .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))?;
-      let search_config = SearchConfig::default();
-      fs.as_entry_stream(&relative_path, true, &search_config)
-        .await
-        .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
-    };
-
-    // 3. 构建搜索配置
+    // 1. 构建搜索配置
     let base_path = if !is_archive {
       Some(PathBuf::from(&path_str))
     } else {
@@ -169,7 +128,7 @@ impl SearchProvider for LocalSearchProvider {
       .with_base_path_opt(base_path)
       .with_extra_filters(extra_filters);
 
-    // 4. 执行搜索
+    // 2. 执行搜索
     search_runner::run_search(
       entry_stream.as_mut(),
       config,
@@ -192,8 +151,6 @@ struct S3SearchProvider {
 #[async_trait]
 impl SearchProvider for S3SearchProvider {
   async fn search(&self, ctx: &SearchContext, req: &SearchRequest, pool: &SqlitePool) -> Result<(), ServiceError> {
-    use opsbox_core::dfs::S3Config;
-    use opsbox_core::dfs::S3Storage;
     use tracing::info;
 
     use super::search_runner::{self, SearchRunnerConfig};
@@ -204,66 +161,13 @@ impl SearchProvider for S3SearchProvider {
       self.profile, path_str, req.context_lines
     );
 
-    // 1. 加载 Profile
-    let profile_row = crate::repository::s3::load_s3_profile(pool, &self.profile)
-      .await
-      .map_err(|e| ServiceError::ProcessingError(format!("加载 S3 Profile 失败: {:?}", e)))?
-      .ok_or_else(|| ServiceError::ProcessingError(format!("S3 Profile 不存在: {}", self.profile)))?;
-
-    // 2. 创建 S3Config
-    let s3_config = S3Config::new(
-      self.profile.clone(),
-      profile_row.endpoint.clone(),
-      profile_row.access_key.clone(),
-      profile_row.secret_key.clone(),
-    );
-
-    // 3. 提取 bucket 名称
-    let (bucket_name, object_key) = path_str
-      .trim_start_matches('/')
-      .split_once('/')
-      .unwrap_or((path_str.trim_start_matches('/'), ""));
-
-    let s3_config = s3_config.with_bucket(bucket_name.to_string());
-
-    // 4. 创建 S3 存储
-    let s3_storage =
-      S3Storage::new(s3_config).map_err(|e| ServiceError::ProcessingError(format!("创建 S3 存储失败: {}", e)))?;
-
-    // 5. 获取 EntryStream
-    let search_config = SearchConfig::default();
-    let resource_path = ResourcePath::parse(object_key);
-
-    // 归档判定在 SearchExecutor 分发前完成，这里直接读取资源上下文
+    // 归档判定在 SearchExecutor 分发前完成，这里统一创建流
     let is_archive = ctx.resource.is_archive();
+    let mut entry_stream = create_search_entry_stream_from_resource(pool, &ctx.resource)
+      .await
+      .map_err(ServiceError::ProcessingError)?;
 
-    let mut entry_stream: Box<dyn opsbox_core::fs::EntryStream> = if is_archive {
-      info!(
-        "[S3SearchProvider] 检测到归档文件，使用归档流模式: bucket={} key={}",
-        bucket_name, object_key
-      );
-      use opsbox_core::dfs::OpbxFileSystem;
-      // 使用已知类型，跳过内部 magic bytes 检测
-      let archive_type = ctx
-        .resource
-        .archive_context
-        .as_ref()
-        .and_then(|c| c.archive_type)
-        .unwrap_or(ArchiveType::Unknown);
-      match s3_storage.open_read(&resource_path).await {
-        Ok(reader) => opsbox_core::fs::open_archive_typed(reader, Some(&path_str), archive_type)
-          .await
-          .map_err(|e| ServiceError::ProcessingError(format!("创建归档流失败: {}", e)))?,
-        Err(e) => return Err(ServiceError::ProcessingError(format!("打开 S3 文件失败: {}", e))),
-      }
-    } else {
-      s3_storage
-        .as_entry_stream(&resource_path, true, &search_config)
-        .await
-        .map_err(|e| ServiceError::ProcessingError(format!("创建条目流失败: {}", e)))?
-    };
-
-    // 6. 构建搜索配置
+    // 1. 构建搜索配置
     let base_path = if !is_archive {
       Some(PathBuf::from(&path_str))
     } else {
@@ -282,7 +186,7 @@ impl SearchProvider for S3SearchProvider {
       .with_base_path_opt(base_path)
       .with_extra_filters(extra_filters);
 
-    // 7. 执行搜索
+    // 2. 执行搜索
     search_runner::run_search(
       entry_stream.as_mut(),
       config,

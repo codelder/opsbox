@@ -5,6 +5,7 @@ pub mod encoding;
 pub mod entry_stream;
 pub mod error;
 pub mod nl2q;
+pub mod resource_orl;
 pub mod search;
 pub mod search_executor;
 pub mod search_runner;

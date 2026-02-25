@@ -1,14 +1,12 @@
 use crate::domain::source_planner;
 use crate::repository::cache::cache as simple_cache;
 use crate::service::ServiceError;
+use crate::service::entry_stream::detect_archive_type_for_resource;
+use crate::service::resource_orl::build_search_result_orl;
 use crate::service::search::{SearchEvent, SearchResult};
 use crate::service::searchable::{SearchContext, SearchRequest, create_search_provider};
 use opsbox_core::SqlitePool;
-use opsbox_core::dfs::archive::{detect_archive_type, infer_archive_from_path};
-use opsbox_core::dfs::{
-  ArchiveContext, Location, OpbxFileSystem, Resource, ResourcePath, StorageBackend, build_orl_from_resource,
-};
-use std::path::PathBuf;
+use opsbox_core::dfs::{ArchiveContext, Location, Resource, ResourcePath, StorageBackend};
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 
@@ -53,48 +51,9 @@ impl SearchResultHandler {
     }
   }
 
-  /// 根据结果路径构造完整的 ORL 字符串
-  fn build_result_orl(&self, res_path: &str) -> String {
-    use opsbox_core::dfs::Resource;
-
-    // 1. 已有归档上下文：保持原始归档路径，更新 entry 参数
-    if self.resource.archive_context.is_some() {
-      let mut result_resource = self.resource.clone();
-      if let Some(ref mut result_ctx) = result_resource.archive_context {
-        result_ctx.inner_path = opsbox_core::dfs::ResourcePath::parse(res_path);
-      }
-      return build_orl_from_resource(&result_resource);
-    }
-
-    // 2. Agent 兼容路径：扩展名后验兜底
-    // Agent 资源不在 Server 本地，detect_archive_type 可能失败，
-    // 此时使用扩展名作为最后的兜底判断
-    let is_agent = matches!(self.resource.endpoint.location, Location::Remote { .. });
-    if is_agent && infer_archive_from_path(&self.resource.primary_path.to_string()).is_some() {
-      let mut result_resource = self.resource.clone();
-      result_resource.archive_context = Some(ArchiveContext::from_path_str(res_path, None));
-      return build_orl_from_resource(&result_resource);
-    }
-
-    // 3. 普通文件/目录：构造新路径
-    let full_path = if res_path.starts_with('/') {
-      res_path.to_string()
-    } else {
-      let base = self.resource.primary_path.to_string();
-      let base = base.trim_end_matches('/');
-      format!("{}/{}", base, res_path.trim_start_matches('/'))
-    };
-    let result_resource = Resource::new(
-      self.resource.endpoint.clone(),
-      opsbox_core::dfs::ResourcePath::parse(&full_path),
-      None,
-    );
-    build_orl_from_resource(&result_resource)
-  }
-
   /// 缓存结果并发送成功事件
   async fn cache_and_send(&self, mut result: SearchResult) -> bool {
-    let result_orl = self.build_result_orl(&result.path);
+    let result_orl = build_search_result_orl(&self.resource, &result.path);
     simple_cache()
       .put_lines(
         &self.sid,
@@ -196,58 +155,6 @@ fn format_error_source_display(resource: &Resource) -> String {
     Location::Local => format!("local:{}", resource.primary_path),
     Location::Remote { .. } => format!("agent:{}", resource.endpoint.identity),
     Location::Cloud => format!("s3:{}", resource.endpoint.identity),
-  }
-}
-
-/// 为资源创建文件系统（用于分发前归档检测）
-async fn create_fs_for_resource(
-  resource: &Resource,
-  pool: &SqlitePool,
-) -> Result<Box<dyn OpbxFileSystem>, ServiceError> {
-  use opsbox_core::dfs::{LocalFileSystem, S3Config, S3Storage};
-
-  match &resource.endpoint.location {
-    Location::Local => {
-      let path_str = resource.primary_path.to_string();
-      let root = if path_str.starts_with('/') {
-        PathBuf::from("/")
-      } else {
-        PathBuf::from(".")
-      };
-      LocalFileSystem::new(root)
-        .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
-        .map_err(|e| ServiceError::ProcessingError(format!("创建本地文件系统失败: {}", e)))
-    }
-    Location::Cloud => {
-      let profile = crate::repository::s3::load_s3_profile(pool, &resource.endpoint.identity)
-        .await
-        .map_err(|e| ServiceError::ProcessingError(format!("加载 S3 Profile 失败: {:?}", e)))?
-        .ok_or_else(|| ServiceError::ProcessingError(format!("S3 Profile 不存在: {}", resource.endpoint.identity)))?;
-
-      let mut s3_config = S3Config::new(
-        resource.endpoint.identity.clone(),
-        profile.endpoint,
-        profile.access_key,
-        profile.secret_key,
-      );
-
-      // 与 Explorer 保持一致：优先使用 endpoint.bucket，否则回退到路径首段。
-      if let Some(ref bucket) = resource.endpoint.bucket {
-        s3_config.bucket = Some(bucket.clone());
-      } else {
-        let path_segments = resource.primary_path.segments();
-        if !path_segments.is_empty() && !path_segments[0].is_empty() {
-          s3_config.bucket = Some(path_segments[0].clone());
-        }
-      }
-
-      S3Storage::new(s3_config)
-        .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
-        .map_err(|e| ServiceError::ProcessingError(format!("创建 S3 存储失败: {}", e)))
-    }
-    Location::Remote { .. } => Err(ServiceError::ProcessingError(
-      "Agent not supported for pre-detection".to_string(),
-    )),
   }
 }
 
@@ -373,8 +280,7 @@ impl SearchExecutor {
         if !is_discovery
           && !is_s3_root
           && resource.archive_context.is_none()
-          && let Ok(fs) = create_fs_for_resource(&resource, &pool).await
-          && let Some(archive_type) = detect_archive_type(fs.as_ref(), &resource).await
+          && let Some(archive_type) = detect_archive_type_for_resource(&pool, &resource).await
         {
           resource.archive_context = Some(ArchiveContext::new(ResourcePath::parse("/"), Some(archive_type)));
         }
