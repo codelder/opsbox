@@ -1,15 +1,9 @@
+use super::SearchProcessor;
 use crate::query::{Query, Term};
+use crate::service::encoding::detect_encoding;
 use encoding_rs::{UTF_8, UTF_16BE, UTF_16LE};
 use std::io::Cursor;
 use std::sync::Arc;
-// Re-import symbols to ensure they are available
-use super::SearchProcessor;
-// Note: detect_encoding is private in parent.
-// We will need parent to expose it or we can't test it directly here.
-// Let's comment out detect_encoding tests if we can't change visibility easily,
-// OR better yet, let's just make `detect_encoding` pub(super) in search.rs.
-// For now, I will assume I will fix search.rs visibility.
-use super::detect_encoding;
 
 #[test]
 fn test_search_processor_should_process_path() {
