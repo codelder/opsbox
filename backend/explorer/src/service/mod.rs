@@ -18,6 +18,7 @@ use opsbox_core::dfs::{
   resource::Resource,
 };
 use opsbox_core::repository::s3::load_s3_profile;
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
 // Discovery filesystems - 仅在 agent-manager feature 启用时可用
 #[cfg(feature = "agent-manager")]
@@ -38,6 +39,18 @@ use std::sync::Arc;
 // 用于归档文件系统的临时文件处理
 use tempfile;
 use tokio::io::{AsyncRead, AsyncWriteExt};
+
+// ORL 的 entry 查询值编码集合：
+// 保留 '/' 以兼容前端整串 ORL 编码流程，避免在 view 链路出现 %252F。
+const ORL_ENTRY_ENCODE_SET: &AsciiSet = &CONTROLS
+  .add(b' ')
+  .add(b'"')
+  .add(b'#')
+  .add(b'&')
+  .add(b'=')
+  .add(b'%')
+  .add(b'?')
+  .add(b'+');
 
 /// Explorer Service - 使用 DFS 模块进行文件系统操作
 pub struct ExplorerService {
@@ -586,10 +599,9 @@ impl ExplorerService {
         entry_path_str.clone()
       };
 
-      // 注意：不对 entry_path 进行 URL 编码，保持原始路径
-      // 前端会对整个 ORL 进行统一编码，避免双重编码问题
-      // 如果这里编码了（如 %2F），前端再编码会变成 %252F（双重编码）
-      format!("{}?entry={}", base, entry_path)
+      // 仅编码会破坏查询串结构的保留字符，保留 '/' 以避免前端链路出现双重编码。
+      let encoded_entry = utf8_percent_encode(&entry_path, ORL_ENTRY_ENCODE_SET).to_string();
+      format!("{}?entry={}", base, encoded_entry)
     } else {
       // 标准目录遍历
       if entry_path_str.starts_with('/') {
@@ -745,32 +757,33 @@ mod tests {
   }
 
   #[test]
-  fn test_archive_entry_path_not_double_encoded() {
-    // 验证归档条目路径不会双重编码
-    // 后端应该返回未编码的路径（如 ?entry=/home），而不是编码后的（如 ?entry=%2Fhome）
-    // 这样前端在编码整个 ORL 时就不会产生双重编码（%252F）
+  fn test_archive_entry_path_encodes_query_delimiters_but_keeps_slash() {
+    // 验证归档条目会编码查询分隔符，避免破坏 ORL 查询串；
+    // 同时保留 '/'，兼容前端整串 ORL 编码链路。
 
     let base = "orl://local/tmp/test.gz";
-    let entry_path = "/home/user/file.txt";
+    let entry_path = "/home/user/file&name=1.txt";
 
-    // 模拟后端构造路径的逻辑（不编码 entry 值）
-    let result = format!("{}?entry={}", base, entry_path);
+    // 模拟后端构造路径的逻辑（按 ORL entry 规则编码）
+    let result = format!(
+      "{}?entry={}",
+      base,
+      utf8_percent_encode(entry_path, ORL_ENTRY_ENCODE_SET)
+    );
 
-    // 验证：结果不应包含 %2F（编码的 /）
-    assert_eq!(result, "orl://local/tmp/test.gz?entry=/home/user/file.txt");
-    assert!(!result.contains("%2F"), "Entry path should not be URL-encoded");
+    // 验证：会编码 '&' 和 '='，且保留 '/'
+    assert_eq!(
+      result,
+      "orl://local/tmp/test.gz?entry=/home/user/file%26name%3D1.txt"
+    );
 
-    // 验证前端编码后的结果
-    let frontend_encoded = encode_uri_component(&result);
-    // ?entry=/ 变成 %3Fentry%3D%2F（单次编码）
-    assert!(frontend_encoded.contains("%3Fentry%3D%2F"));
-    // 不应该包含 %252F（双重编码）
-    assert!(!frontend_encoded.contains("%252F"));
-  }
-
-  // 简单的 URL 编码函数（用于测试）
-  fn encode_uri_component(s: &str) -> String {
-    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
-    utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
+    // 验证：后端解析 ORL 时能正确恢复原始 entry 路径
+    let parsed = opsbox_core::dfs::OrlParser::parse(&result).expect("ORL should parse");
+    let parsed_entry = parsed
+      .archive_context
+      .as_ref()
+      .map(|ctx| ctx.inner_path.to_string())
+      .unwrap_or_default();
+    assert_eq!(parsed_entry, entry_path);
   }
 }
