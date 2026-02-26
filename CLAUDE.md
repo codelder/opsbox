@@ -170,18 +170,50 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 ## Test Coverage
 
 ### Backend (Rust)
-- **Total Tests**: 950 passing
+- **Total Tests**: 1,031 tests (99.7% pass rate)
 - **Coverage Tool**: `cargo-llvm-cov`
 - **Test Requirements**: Requires `OPSBOX_NO_PROXY=1` for LLM module tests
 - **Coverage Status**: Comprehensive unit and integration tests across all modules
+- **Estimated Coverage**: ~75-80% overall
+
+#### Test Distribution by Module
+| Module | Unit Tests | Integration Tests | Total |
+|--------|------------|-------------------|-------|
+| logseek | 413 | 55 | 468 |
+| opsbox-core | 73 | 206 | 279 |
+| agent | 10 | 144 | 154 |
+| explorer | 17 | 9 | 26 |
+| agent-manager | 11 | 11 | 22 |
+| opsbox-server | 27 | - | 27 |
+| test-common | 20 | - | 20 |
 
 ### Frontend (TypeScript/Svelte)
+- **Total Tests**: 95 tests (100% pass rate)
 - **Server Tests**: 55 passing (Node.js environment)
-- **Browser Tests**: Currently not running (port permission issues)
+- **Browser Tests**: 40 passing (Chromium environment)
 - **Coverage Thresholds**: Set to 70% lines/functions/statements, 60% branches
-- **Current Coverage**: ~1% (mostly server-side utilities only)
+- **Current Coverage**: 14.85% overall
 
-**Note**: Frontend coverage is low because browser tests are disabled due to port permissions. Focus testing on core utilities (`orl.ts`, `highlight.ts`) which have good coverage (>80%).
+#### High Coverage Areas (>80%)
+- **ORL Utils**: 92.77% lines, 81.08% branches
+- **Highlight Utils**: 83.33% lines, 83.33% branches
+- **Explorer API**: 88.57% lines
+- **UI Components**: 84-100% (alert, badge, button, card, input, label, switch)
+
+**Note**: Overall frontend coverage is low due to untested route components and composables. Key utilities and API clients have excellent coverage (>80%).
+
+### Recent Test Additions (2026-02-27)
+
+**Iteration 1 - High Risk Areas:**
+- **Explorer Integration Tests**: 9 new tests (local files, agent files, archive navigation)
+- **DFS Integration Tests**: 5 new tests (archive combinations)
+- **Frontend API Client Tests**: 8 new tests (Explorer API)
+- **UI Component Tests**: 21 new tests (Agent Management, Server Log Settings)
+
+**Coverage Improvements:**
+- Explorer: 0 → 9 integration tests
+- DFS (opsbox-core): 0 → 5 integration tests
+- Frontend: 55 → 95 tests (+40 tests)
 
 ## Development Guidelines
 
