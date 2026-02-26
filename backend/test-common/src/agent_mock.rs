@@ -110,6 +110,15 @@ impl MockAgentServer {
               "child_dirs": 0
           }))
         }),
+      )
+      // 添加 list_files 端点支持 (AgentProxyFS 使用)
+      .route(
+        "/api/v1/list_files",
+        get(|| async {
+          Json(json!({
+              "items": []
+          }))
+        }),
       );
 
     let listener = TcpListener::bind(&address)

@@ -7,6 +7,9 @@ use opsbox_test_common::database::TestDatabase;
 use tempfile::TempDir;
 use tokio::fs;
 
+#[cfg(feature = "agent-manager")]
+use opsbox_test_common::agent_mock;
+
 #[tokio::test]
 async fn test_list_local_directory_with_files() {
     // Setup: Create test database and service
@@ -101,6 +104,97 @@ async fn test_list_local_with_permission_denied() {
         err_msg.to_lowercase().contains("denied") ||
         err_msg.to_lowercase().contains("access"),
         "Error should mention permission: {}",
+        err_msg
+    );
+}
+
+// ============================================================================
+// Agent File Browsing Tests
+// ============================================================================
+
+#[cfg(feature = "agent-manager")]
+#[tokio::test]
+async fn test_list_agent_files_success() {
+    // Setup: Start mock agent server
+    let port = opsbox_test_common::constants::AGENT_PORT_START;
+    let mock_server = agent_mock::start_mock_agent_server(port)
+        .await
+        .expect("Failed to start mock agent");
+
+    // Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
+
+    // Register mock agent (ORL format: agent-id@agent.host:port)
+    let orl = format!("orl://test-agent@agent.127.0.0.1:{}/logs", port);
+
+    // Execute: List agent files
+    let result = service.list(&orl).await;
+
+    // Cleanup
+    mock_server.stop().await.ok();
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "List should succeed: {:?}",
+        result.err()
+    );
+}
+
+#[cfg(feature = "agent-manager")]
+#[tokio::test]
+async fn test_list_agent_with_offline_agent() {
+    // Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
+
+    // Use non-existent agent (offline)
+    let orl = "orl://offline-agent@agent.127.0.0.1:9999/logs";
+
+    // Execute
+    let result = service.list(&orl).await;
+
+    // Assert: Should fail with connection error
+    assert!(result.is_err(), "Should fail for offline agent");
+    let err_msg = result.unwrap_err();
+    assert!(
+        err_msg.to_lowercase().contains("connection") ||
+        err_msg.to_lowercase().contains("timeout") ||
+        err_msg.to_lowercase().contains("unreachable") ||
+        err_msg.to_lowercase().contains("failed"),
+        "Error should indicate connection issue: {}",
+        err_msg
+    );
+}
+
+#[cfg(feature = "agent-manager")]
+#[tokio::test]
+async fn test_list_agent_with_network_error() {
+    // Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
+
+    // Use invalid port (network error)
+    let orl = "orl://error-agent@agent.127.0.0.1:1/logs";
+
+    // Execute
+    let result = service.list(&orl).await;
+
+    // Assert: Should fail with network error
+    assert!(result.is_err(), "Should fail with network error");
+    let err_msg = result.unwrap_err();
+    assert!(
+        err_msg.to_lowercase().contains("connection") ||
+        err_msg.to_lowercase().contains("refused") ||
+        err_msg.to_lowercase().contains("error"),
+        "Error should indicate network issue: {}",
         err_msg
     );
 }
