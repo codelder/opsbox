@@ -115,8 +115,12 @@ async fn test_list_local_with_permission_denied() {
 #[cfg(feature = "agent-manager")]
 #[tokio::test]
 async fn test_list_agent_files_success() {
-    // Setup: Start mock agent server
-    let port = opsbox_test_common::constants::AGENT_PORT_START;
+    // Setup: Find available port and start mock agent server
+    let port = agent_mock::find_available_port(
+        opsbox_test_common::constants::AGENT_PORT_START,
+        opsbox_test_common::constants::AGENT_PORT_END,
+    )
+    .expect("Failed to find available port");
     let mock_server = agent_mock::start_mock_agent_server(port)
         .await
         .expect("Failed to start mock agent");
@@ -133,15 +137,23 @@ async fn test_list_agent_files_success() {
     // Execute: List agent files
     let result = service.list(&orl).await;
 
-    // Cleanup
+    // Cleanup first (so cleanup happens even if assertion fails)
     mock_server.stop().await.ok();
 
-    // Assert
+    // Assert: Verify result structure
     assert!(
         result.is_ok(),
         "List should succeed: {:?}",
         result.err()
     );
+
+    let items = result.unwrap();
+    // Verify we got a valid Vec (even if empty from mock)
+    // items.len() always >= 0, so we just verify we can iterate
+    // If mock returns data, verify structure
+    for item in &items {
+        assert!(!item.name.is_empty(), "Item name should not be empty");
+    }
 }
 
 #[cfg(feature = "agent-manager")]

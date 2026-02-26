@@ -3366,6 +3366,7 @@ dependencies = [
  "logseek",
  "once_cell",
  "opsbox-core",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",

@@ -135,8 +135,33 @@ impl MockAgentServer {
         .expect("模拟Agent服务器启动失败");
     });
 
-    // 等待服务器启动
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    // Wait for server to be ready with retry loop
+    let client = reqwest::Client::new();
+    let max_retries = 10;
+    let retry_delay = tokio::time::Duration::from_millis(50);
+
+    for i in 0..max_retries {
+      match client
+        .get(format!("http://{}/api/v1/log/config", bound_address))
+        .timeout(tokio::time::Duration::from_millis(100))
+        .send()
+        .await
+      {
+        Ok(resp) if resp.status().is_success() => {
+          break; // Server is ready
+        }
+        _ if i < max_retries - 1 => {
+          tokio::time::sleep(retry_delay).await;
+        }
+        _ => {
+          task.abort();
+          return Err(TestError::Network(format!(
+            "Server failed to start after {} retries",
+            max_retries
+          )));
+        }
+      }
+    }
 
     Ok(Self {
       task,
