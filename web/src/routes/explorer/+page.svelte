@@ -177,6 +177,7 @@
     const newUrl = `${baseUrl}?orl=${encodedOrl}`;
     // 使用 goto 替代 replaceState，确保页面正确更新
     // { noScroll: true } 避免滚动影响用户体验
+    // eslint-disable-next-line svelte/no-navigation-without-resolve
     await goto(newUrl, { noScroll: true, keepFocus: true });
     return await loadResources(newOrl);
   }

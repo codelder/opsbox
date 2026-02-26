@@ -9,7 +9,7 @@ import { test as base, type APIRequestContext } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { type ChildProcessWithoutNullStreams } from 'child_process';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -234,7 +234,7 @@ export async function waitForHealthy(url: string, timeout = 30000, interval = 50
 export const test = base.extend<{
   resources: ResourceTracker;
 }>({
-  resources: async ({}, use) => {
+  resources: async (_, use) => {
     const tracker = new ResourceTracker();
     await use(tracker);
     // Always cleanup, even if test fails

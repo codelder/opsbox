@@ -206,7 +206,6 @@ test.describe('Image Viewer E2E', () => {
 
     // 获取图片初始 transform
     const img = page.locator('img').first();
-    const initialStyle = await img.evaluate((el) => el.style.transform || '');
 
     // 点击页面以聚焦，然后使用键盘缩放
     await img.click();
@@ -350,12 +349,12 @@ test.describe('Image Viewer E2E', () => {
 
     // 查找图片计数器（格式如 "2/4" 或 "2 of 4"）
     const bodyText = (await page.locator('body').textContent()) || '';
-    const hasCounter = /\d\s*[\/]\s*\d/.test(bodyText);
+    const hasCounter = /\d\s*[/]\s*\d/.test(bodyText);
 
     // 如果存在计数器，验证格式
     if (hasCounter) {
       // 应该显示 "2/4" 或类似格式（photo2 是 4 张中的第 2 张）
-      expect(bodyText).toMatch(/\d\s*[\/]\s*4/);
+      expect(bodyText).toMatch(/\d\s*[/]\s*4/);
     }
   });
 

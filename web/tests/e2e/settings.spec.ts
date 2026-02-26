@@ -164,15 +164,12 @@ test.describe('Settings Page E2E', () => {
 
       if (themeCount > 0) {
         // 记录初始主题
-        const html = page.locator('html');
-        const initialClass = (await html.getAttribute('class')) || '';
-
         // 点击切换主题
         await themeButton.first().click();
         await page.waitForTimeout(300);
 
         // 验证主题类存在
-        const newClass = (await html.getAttribute('class')) || '';
+        const newClass = (await page.locator('html').getAttribute('class')) || '';
         expect(newClass).toBeDefined();
       }
     });

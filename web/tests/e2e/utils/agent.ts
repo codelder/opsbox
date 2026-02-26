@@ -5,16 +5,12 @@
  * This module centralizes agent-related functionality to ensure consistency across tests.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as net from 'net';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as zlib from 'zlib';
-import { fileURLToPath } from 'url';
 import type { APIRequestContext } from '@playwright/test';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 /**
  * Default timeout for agent readiness (30 seconds)
