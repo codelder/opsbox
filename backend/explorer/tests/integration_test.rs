@@ -3,34 +3,26 @@
 //! Tests for local file system browsing functionality using ORL protocol.
 
 use explorer::service::ExplorerService;
-use opsbox_core::database::{DatabaseConfig, init_pool};
+use opsbox_test_common::database::TestDatabase;
 use tempfile::TempDir;
 use tokio::fs;
 
-async fn create_test_pool() -> (opsbox_core::SqlitePool, TempDir) {
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let db_path = temp_dir.path().join("test.db");
-
-    let config = DatabaseConfig::new(
-        format!("sqlite://{}", db_path.display()),
-        5,
-        30
-    );
-
-    let pool = init_pool(&config).await.expect("Failed to init pool");
-    (pool, temp_dir)
-}
-
 #[tokio::test]
 async fn test_list_local_directory_with_files() {
-    // Setup: Create test pool and temp directory
-    let (pool, _temp_dir) = create_test_pool().await;
-    let service = ExplorerService::new(pool);
+    // Setup: Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
 
     // Create test files
-    let test_dir = TempDir::new().expect("Failed to create test dir");
-    fs::write(test_dir.path().join("file1.txt"), "content1").await.unwrap();
-    fs::write(test_dir.path().join("file2.log"), "content2").await.unwrap();
+    let test_dir = TempDir::new().expect("Failed to create test directory");
+    fs::write(test_dir.path().join("file1.txt"), "content1")
+        .await
+        .expect("Failed to create test file file1.txt");
+    fs::write(test_dir.path().join("file2.log"), "content2")
+        .await
+        .expect("Failed to create test file file2.log");
 
     // Build ORL for local directory
     let orl = format!("orl://local{}", test_dir.path().display());
@@ -40,7 +32,7 @@ async fn test_list_local_directory_with_files() {
 
     // Assert: Should succeed with 2 files
     assert!(result.is_ok(), "List should succeed");
-    let items = result.unwrap();
+    let items = result.expect("Failed to unwrap list result");
     assert_eq!(items.len(), 2, "Should have 2 files");
 
     // Verify file names
@@ -51,11 +43,13 @@ async fn test_list_local_directory_with_files() {
 
 #[tokio::test]
 async fn test_list_local_empty_directory() {
-    // Setup
-    let (pool, _temp_dir) = create_test_pool().await;
-    let service = ExplorerService::new(pool);
+    // Setup: Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
 
-    let test_dir = TempDir::new().expect("Failed to create test dir");
+    let test_dir = TempDir::new().expect("Failed to create test directory");
     let orl = format!("orl://local{}", test_dir.path().display());
 
     // Execute
@@ -63,7 +57,7 @@ async fn test_list_local_empty_directory() {
 
     // Assert
     assert!(result.is_ok(), "List should succeed");
-    let items = result.unwrap();
+    let items = result.expect("Failed to unwrap list result");
     assert_eq!(items.len(), 0, "Empty directory should have 0 items");
 }
 
@@ -72,18 +66,22 @@ async fn test_list_local_empty_directory() {
 async fn test_list_local_with_permission_denied() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Setup
-    let (pool, _temp_dir) = create_test_pool().await;
-    let service = ExplorerService::new(pool);
+    // Setup: Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
 
-    let test_dir = TempDir::new().expect("Failed to create test dir");
+    let test_dir = TempDir::new().expect("Failed to create test directory");
 
     // Create a subdirectory with no read permissions
     let restricted_dir = test_dir.path().join("restricted");
-    fs::create_dir(&restricted_dir).await.unwrap();
+    fs::create_dir(&restricted_dir)
+        .await
+        .expect("Failed to create restricted directory");
     fs::set_permissions(&restricted_dir, PermissionsExt::from_mode(0o000))
         .await
-        .unwrap();
+        .expect("Failed to set restricted permissions");
 
     let orl = format!("orl://local{}", restricted_dir.display());
 
@@ -97,7 +95,7 @@ async fn test_list_local_with_permission_denied() {
 
     // Assert: Should fail with permission error
     assert!(result.is_err(), "Should fail with permission denied");
-    let err_msg = result.unwrap_err();
+    let err_msg = result.expect_err("Should have error for permission denied");
     assert!(
         err_msg.to_lowercase().contains("permission") ||
         err_msg.to_lowercase().contains("denied") ||
