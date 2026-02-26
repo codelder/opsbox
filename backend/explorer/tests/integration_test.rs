@@ -6,6 +6,11 @@ use explorer::service::ExplorerService;
 use opsbox_test_common::database::TestDatabase;
 use tempfile::TempDir;
 use tokio::fs;
+use std::fs::File;
+use std::io::Write;
+use tar::Builder;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 
 #[cfg(feature = "agent-manager")]
 use opsbox_test_common::agent_mock;
@@ -209,4 +214,179 @@ async fn test_list_agent_with_network_error() {
         "Error should indicate network issue: {}",
         err_msg
     );
+}
+
+// ============================================================================
+// Archive Navigation Tests
+// ============================================================================
+
+/// Helper function to create a test tar archive with log files
+async fn create_test_tar_archive(dir: &std::path::Path) -> std::path::PathBuf {
+    let archive_path = dir.join("test.tar");
+
+    // Create test files
+    let file1 = dir.join("file1.log");
+    let file2 = dir.join("file2.log");
+    tokio::fs::write(&file1, "log content 1\n").await.expect("Failed to create file1");
+    tokio::fs::write(&file2, "log content 2\n").await.expect("Failed to create file2");
+
+    // Create tar archive
+    let file = File::create(&archive_path).expect("Failed to create tar file");
+    let mut builder = Builder::new(file);
+    builder
+        .append_path_with_name(&file1, "logs/file1.log")
+        .expect("Failed to add file1 to tar");
+    builder
+        .append_path_with_name(&file2, "logs/file2.log")
+        .expect("Failed to add file2 to tar");
+    builder.finish().expect("Failed to finish tar");
+
+    // Cleanup temp files
+    tokio::fs::remove_file(&file1).await.ok();
+    tokio::fs::remove_file(&file2).await.ok();
+
+    archive_path
+}
+
+/// Helper function to create a test tar.gz archive
+async fn create_test_tar_gz_archive(dir: &std::path::Path) -> std::path::PathBuf {
+    // First create tar
+    let tar_path = create_test_tar_archive(dir).await;
+    let gz_path = dir.join("test.tar.gz");
+
+    // Compress to gz
+    let input = tokio::fs::read(&tar_path)
+        .await
+        .expect("Failed to read tar");
+    let file = File::create(&gz_path).expect("Failed to create gz file");
+    let mut encoder = GzEncoder::new(file, Compression::default());
+    encoder.write_all(&input).expect("Failed to compress");
+    encoder.finish().expect("Failed to finish compression");
+
+    tokio::fs::remove_file(&tar_path).await.ok();
+    gz_path
+}
+
+#[tokio::test]
+async fn test_navigate_tar_archive() {
+    // Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
+
+    // Create test tar archive
+    let test_dir = TempDir::new().expect("Failed to create test dir");
+    let archive_path = create_test_tar_archive(test_dir.path()).await;
+
+    // Build ORL for archive (navigate to logs directory inside archive)
+    let orl = format!(
+        "orl://local{}?entry=logs",
+        archive_path.display()
+    );
+
+    // Execute: List archive contents
+    let result = service.list(&orl).await;
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "List archive should succeed: {:?}",
+        result.err()
+    );
+    let items = result.unwrap();
+
+    // Verify we got files from the archive
+    assert!(items.len() >= 2, "Should have at least 2 files in archive");
+
+    // Verify file names
+    let names: Vec<&str> = items.iter().map(|i| i.name.as_str()).collect();
+    assert!(
+        names.iter().any(|n| n.contains("file1.log")),
+        "Should contain file1.log"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("file2.log")),
+        "Should contain file2.log"
+    );
+}
+
+#[tokio::test]
+async fn test_navigate_tar_gz_archive() {
+    // Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
+
+    // Create test tar.gz archive
+    let test_dir = TempDir::new().expect("Failed to create test dir");
+    let archive_path = create_test_tar_gz_archive(test_dir.path()).await;
+
+    // Build ORL for compressed archive
+    let orl = format!(
+        "orl://local{}?entry=logs",
+        archive_path.display()
+    );
+
+    // Execute: List compressed archive contents
+    let result = service.list(&orl).await;
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "List tar.gz should succeed: {:?}",
+        result.err()
+    );
+    let items = result.unwrap();
+
+    // Verify we got files from the archive
+    assert!(items.len() >= 2, "Should have at least 2 files");
+}
+
+#[tokio::test]
+async fn test_download_archive_entry() {
+    use tokio::io::AsyncReadExt;
+
+    // Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
+
+    // Create test tar archive
+    let test_dir = TempDir::new().expect("Failed to create test dir");
+    let archive_path = create_test_tar_archive(test_dir.path()).await;
+
+    // Build ORL for specific file inside archive
+    let orl = format!(
+        "orl://local{}?entry=logs/file1.log",
+        archive_path.display()
+    );
+
+    // Execute: Download archive entry
+    let result = service.download(&orl).await;
+
+    // Assert
+    assert!(
+        result.is_ok(),
+        "Download archive entry should succeed: {:?}",
+        result.err()
+    );
+
+    let (filename, _size, mut stream) = result.unwrap();
+
+    // Verify filename
+    assert!(
+        filename.contains("file1.log"),
+        "Filename should contain file1.log: {}",
+        filename
+    );
+
+    // Read some content to verify it's accessible
+    let mut content = Vec::new();
+    stream.read_to_end(&mut content).await.expect("Failed to read content");
+
+    // Verify content is not empty
+    assert!(!content.is_empty(), "Downloaded content should not be empty");
 }
