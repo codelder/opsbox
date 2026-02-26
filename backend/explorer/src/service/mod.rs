@@ -772,10 +772,7 @@ mod tests {
     );
 
     // 验证：会编码 '&' 和 '='，且保留 '/'
-    assert_eq!(
-      result,
-      "orl://local/tmp/test.gz?entry=/home/user/file%26name%3D1.txt"
-    );
+    assert_eq!(result, "orl://local/tmp/test.gz?entry=/home/user/file%26name%3D1.txt");
 
     // 验证：后端解析 ORL 时能正确恢复原始 entry 路径
     let parsed = opsbox_core::dfs::OrlParser::parse(&result).expect("ORL should parse");

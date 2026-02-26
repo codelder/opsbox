@@ -112,7 +112,6 @@ impl FsEntryStream {
 
     Ok(Self { rx })
   }
-
 }
 
 #[async_trait]

@@ -22,7 +22,6 @@ docs/
 │
 ├── features/              # 功能文档
 │   ├── agent-tag-api.md                  # Agent 标签 API
-│   ├── agent-tag-management.md           # Agent 标签管理策略
 │   ├── agent-tags.md                     # Agent 标签功能
 │   ├── file-url.md                       # 文件 URL 设计方案
 │   └── s3-profiles.md                    # S3 Profile 管理功能
@@ -39,11 +38,7 @@ docs/
 │   └── memory-management.md              # 内存管理优化（mimalloc）
 │
 ├── testing/               # 测试文档
-│   ├── logging-e2e-test-checklist.md     # 日志 E2E 测试清单
 │   └── test-monitoring-guide.md          # 测试监控指南
-│
-└── archive/               # 历史参考文档
-    └── cpu-tuning-analysis.md            # CPU 调优分析（历史参考）
 ```
 
 ## 📚 文档分类说明
@@ -64,10 +59,7 @@ REST API 接口文档，包括请求/响应格式、错误处理等。
 面向开发者和用户的使用指南，包括开发指南、配置说明、日志管理等。
 
 ### 测试文档 (`testing/`)
-测试相关文档，包括测试清单、测试监控指南等。
-
-### 历史参考 (`archive/`)
-已过时但保留作为历史参考的文档。
+测试相关文档，包括测试监控指南等。
 
 ## 🔗 快速链接
 

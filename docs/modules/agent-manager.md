@@ -73,7 +73,6 @@ cargo run --release
 # [INFO] 配置模块: AgentManager
 # [INFO] 初始化模块数据库: LogSeek
 # [INFO] 初始化模块数据库: AgentManager
-# [INFO] Agent Manager: 暂不需要数据库表
 # [INFO] 注册路由: LogSeek -> /api/v1/logseek
 # [INFO] 注册路由: AgentManager -> /api/v1/agents
 # [INFO] OpsBox 服务启动成功，访问地址: http://127.0.0.1:4000

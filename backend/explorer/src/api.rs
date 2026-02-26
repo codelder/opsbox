@@ -10,8 +10,8 @@ use axum::{
   response::IntoResponse,
   routing::{get, post},
 };
-use opsbox_core::dfs::OrlParser;
 use opsbox_core::SuccessResponse;
+use opsbox_core::dfs::OrlParser;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio_util::io::ReaderStream;
@@ -45,8 +45,7 @@ async fn list_resources(
   State(state): State<Arc<AppState>>,
   Json(payload): Json<ListRequest>,
 ) -> opsbox_core::Result<impl IntoResponse> {
-  OrlParser::parse(&payload.orl)
-    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
+  OrlParser::parse(&payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   // 记录收到的 ORL 请求（截断过长的 ORL 以便于阅读）
   let orl_display = if payload.orl.len() > 100 {
@@ -73,8 +72,7 @@ async fn download_resource(
   State(state): State<Arc<AppState>>,
   Query(payload): Query<ListRequest>,
 ) -> Result<impl IntoResponse, opsbox_core::AppError> {
-  OrlParser::parse(&payload.orl)
-    .map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
+  OrlParser::parse(&payload.orl).map_err(|e| opsbox_core::AppError::bad_request(format!("Invalid ORL: {}", e)))?;
 
   let (filename, size, reader) = state
     .service
