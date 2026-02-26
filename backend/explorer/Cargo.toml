@@ -37,8 +37,10 @@ percent-encoding = "2.3.2"
 tempfile = "3"
 
 [dev-dependencies]
-tar = "0.4"
+tokio-test = "0.4"
 tempfile = "3"
+opsbox-test-common = { path = "../test-common" }
+tar = "0.4"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 flate2 = "1.0"
 

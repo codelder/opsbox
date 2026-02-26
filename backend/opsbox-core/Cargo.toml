@@ -74,5 +74,7 @@ num_cpus = "1.16"
 globset = "0.4"
 
 [dev-dependencies]
-test-log = "0.2"
+tokio-test = "0.4"
+tempfile = "3.10"
 opsbox-test-common = { path = "../test-common" }
+test-log = "0.2"
