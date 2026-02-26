@@ -162,10 +162,9 @@ test.describe('Local Gzip Archive E2E', () => {
     }
 
     // Should return 200 OK with valid JSON body
-    expect(
-      lastStatus,
-      `Expected 200 from /api/v1/explorer/list, got ${lastStatus}. Last body: ${lastBodyText}`
-    ).toBe(200);
+    expect(lastStatus, `Expected 200 from /api/v1/explorer/list, got ${lastStatus}. Last body: ${lastBodyText}`).toBe(
+      200
+    );
     expect(body).toBeTruthy();
     console.log(`API Response body:`, JSON.stringify(body, null, 2));
 
