@@ -78,3 +78,4 @@ tokio-test = "0.4"
 tempfile = "3.10"
 opsbox-test-common = { path = "../test-common" }
 test-log = "0.2"
+zip = "2.2"
