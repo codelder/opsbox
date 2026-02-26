@@ -175,4 +175,62 @@ describe('orl', () => {
       expect(parsed?.entryPath).toBe('/home');
     });
   });
+
+  describe('parseOrl additional cases', () => {
+    it('should parse ORL with archive entry', () => {
+      const orl = 'orl://local/var/log/archive.tar.gz?entry=logs/app.log';
+      const parsed = parseOrl(orl);
+
+      expect(parsed).not.toBeNull();
+      expect(parsed?.endpointType).toBe('local');
+      expect(parsed?.endpointId).toBe('localhost');
+      expect(parsed?.path).toBe('var/log/archive.tar.gz');
+      expect(parsed?.entryPath).toBe('logs/app.log');
+      expect(parsed?.targetType).toBe('archive');
+    });
+
+    it('should parse S3 ORL', () => {
+      const orl = 'orl://myprofile@s3/bucket/path/file.log';
+      const parsed = parseOrl(orl);
+
+      expect(parsed).not.toBeNull();
+      expect(parsed?.endpointType).toBe('s3');
+      expect(parsed?.endpointId).toBe('myprofile');
+      expect(parsed?.path).toBe('bucket/path/file.log');
+      expect(parsed?.targetType).toBe('dir');
+    });
+
+    it('should parse Agent ORL with server address', () => {
+      const orl = 'orl://agent-01@agent.192.168.1.100:4001/var/log/app.log';
+      const parsed = parseOrl(orl);
+
+      expect(parsed).not.toBeNull();
+      expect(parsed?.endpointType).toBe('agent');
+      expect(parsed?.endpointId).toBe('agent-01');
+      expect(parsed?.serverAddr).toBe('192.168.1.100:4001');
+      expect(parsed?.path).toBe('var/log/app.log');
+    });
+  });
+
+  describe('stringifyOrl additional cases', () => {
+    it('should build ORL for local file', () => {
+      const orl = stringifyOrl({
+        endpointType: 'local',
+        endpointId: 'localhost',
+        path: '/var/log/test.log'
+      });
+
+      expect(orl).toBe('orl://local/var/log/test.log');
+    });
+
+    it('should build ORL for S3 resource with profile', () => {
+      const orl = stringifyOrl({
+        endpointType: 's3',
+        endpointId: 'prod-bucket',
+        path: 'logs/2024/app.log'
+      });
+
+      expect(orl).toBe('orl://prod-bucket@s3/logs/2024/app.log');
+    });
+  });
 });

@@ -185,4 +185,70 @@ describe('Search API', () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('buildSearchRequest', () => {
+    it('should build basic search request with query', async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'X-Logseek-SID': 'test-session' })
+      } as Response;
+
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
+
+      await startSearch('error AND level:ERROR');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ q: 'error AND level:ERROR' })
+        })
+      );
+    });
+
+    it('should handle special characters in query', async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        headers: new Headers()
+      } as Response;
+
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
+
+      const specialQuery = '(error OR warning) AND "message content" AND app:nginx';
+      await startSearch(specialQuery);
+
+      const callArgs = globalThis.fetch.mock.calls[0][1];
+      const body = JSON.parse(callArgs.body);
+
+      expect(body.q).toBe(specialQuery);
+      expect(body.q).toContain('OR');
+      expect(body.q).toContain('AND');
+      expect(body.q).toContain('(');
+      expect(body.q).toContain(')');
+      expect(body.q).toContain('"');
+    });
+
+    it('should preserve date qualifiers in query', async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        headers: new Headers()
+      } as Response;
+
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
+
+      const queryWithDates = 'error dt:2024-01-15 fdt:2024-01-01 tdt:2024-01-31';
+      await startSearch(queryWithDates);
+
+      const callArgs = globalThis.fetch.mock.calls[0][1];
+      const body = JSON.parse(callArgs.body);
+
+      expect(body.q).toBe(queryWithDates);
+      expect(body.q).toContain('dt:2024-01-15');
+      expect(body.q).toContain('fdt:2024-01-01');
+      expect(body.q).toContain('tdt:2024-01-31');
+    });
+  });
 });
