@@ -7,7 +7,6 @@ use opsbox_test_common::database::TestDatabase;
 use tempfile::TempDir;
 use tokio::fs;
 use std::fs::File;
-use std::io::Write;
 use tar::Builder;
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -221,16 +220,16 @@ async fn test_list_agent_with_network_error() {
 // ============================================================================
 
 /// Helper function to create a test tar archive with log files
-async fn create_test_tar_archive(dir: &std::path::Path) -> std::path::PathBuf {
+fn create_test_tar_archive(dir: &std::path::Path) -> std::path::PathBuf {
     let archive_path = dir.join("test.tar");
 
-    // Create test files
+    // Create test files (blocking)
     let file1 = dir.join("file1.log");
     let file2 = dir.join("file2.log");
-    tokio::fs::write(&file1, "log content 1\n").await.expect("Failed to create file1");
-    tokio::fs::write(&file2, "log content 2\n").await.expect("Failed to create file2");
+    std::fs::write(&file1, "log content 1\n").expect("Failed to create file1");
+    std::fs::write(&file2, "log content 2\n").expect("Failed to create file2");
 
-    // Create tar archive
+    // Create tar archive (blocking)
     let file = File::create(&archive_path).expect("Failed to create tar file");
     let mut builder = Builder::new(file);
     builder
@@ -241,29 +240,32 @@ async fn create_test_tar_archive(dir: &std::path::Path) -> std::path::PathBuf {
         .expect("Failed to add file2 to tar");
     builder.finish().expect("Failed to finish tar");
 
-    // Cleanup temp files
-    tokio::fs::remove_file(&file1).await.ok();
-    tokio::fs::remove_file(&file2).await.ok();
+    // Cleanup temp files (blocking)
+    std::fs::remove_file(&file1).ok();
+    std::fs::remove_file(&file2).ok();
 
     archive_path
 }
 
 /// Helper function to create a test tar.gz archive
-async fn create_test_tar_gz_archive(dir: &std::path::Path) -> std::path::PathBuf {
-    // First create tar
-    let tar_path = create_test_tar_archive(dir).await;
+fn create_test_tar_gz_archive(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::io::Read;
+
+    // First create tar (blocking)
+    let tar_path = create_test_tar_archive(dir);
     let gz_path = dir.join("test.tar.gz");
 
-    // Compress to gz
-    let input = tokio::fs::read(&tar_path)
-        .await
-        .expect("Failed to read tar");
+    // Compress to gz (blocking)
+    let mut input = File::open(&tar_path).expect("Failed to read tar");
+    let mut tar_data = Vec::new();
+    input.read_to_end(&mut tar_data).expect("Failed to read tar data");
+
     let file = File::create(&gz_path).expect("Failed to create gz file");
     let mut encoder = GzEncoder::new(file, Compression::default());
-    encoder.write_all(&input).expect("Failed to compress");
+    std::io::Write::write_all(&mut encoder, &tar_data).expect("Failed to compress");
     encoder.finish().expect("Failed to finish compression");
 
-    tokio::fs::remove_file(&tar_path).await.ok();
+    std::fs::remove_file(&tar_path).ok();
     gz_path
 }
 
@@ -277,7 +279,7 @@ async fn test_navigate_tar_archive() {
 
     // Create test tar archive
     let test_dir = TempDir::new().expect("Failed to create test dir");
-    let archive_path = create_test_tar_archive(test_dir.path()).await;
+    let archive_path = create_test_tar_archive(test_dir.path());
 
     // Build ORL for archive (navigate to logs directory inside archive)
     let orl = format!(
@@ -321,7 +323,7 @@ async fn test_navigate_tar_gz_archive() {
 
     // Create test tar.gz archive
     let test_dir = TempDir::new().expect("Failed to create test dir");
-    let archive_path = create_test_tar_gz_archive(test_dir.path()).await;
+    let archive_path = create_test_tar_gz_archive(test_dir.path());
 
     // Build ORL for compressed archive
     let orl = format!(
@@ -356,7 +358,7 @@ async fn test_download_archive_entry() {
 
     // Create test tar archive
     let test_dir = TempDir::new().expect("Failed to create test dir");
-    let archive_path = create_test_tar_archive(test_dir.path()).await;
+    let archive_path = create_test_tar_archive(test_dir.path());
 
     // Build ORL for specific file inside archive
     let orl = format!(
@@ -389,4 +391,12 @@ async fn test_download_archive_entry() {
 
     // Verify content is not empty
     assert!(!content.is_empty(), "Downloaded content should not be empty");
+
+    // Verify content matches expected
+    let content_str = String::from_utf8_lossy(&content);
+    assert_eq!(
+        content_str,
+        "log content 1\n",
+        "Downloaded content should match original test data"
+    );
 }
