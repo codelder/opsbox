@@ -19,7 +19,7 @@ impl TestDatabase {
   /// 创建内存数据库
   pub async fn in_memory() -> Result<Self, TestError> {
     let config = DatabaseConfig::new(
-      "sqlite::memory:".to_string(),
+      ":memory:".to_string(),
       crate::constants::TEST_DB_POOL_SIZE,
       crate::constants::TEST_DB_CONNECT_TIMEOUT,
     );

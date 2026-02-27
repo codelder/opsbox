@@ -30,7 +30,9 @@ pub async fn init_pool(config: &DatabaseConfig) -> Result<SqlitePool> {
   tracing::info!("初始化数据库连接池: {}", config.url);
 
   // 解析连接选项
-  let connect_options = if config.url.starts_with("sqlite://") {
+  let connect_options = if config.url == ":memory:" || config.url == "sqlite::memory:" {
+    SqliteConnectOptions::from_str("sqlite::memory:").unwrap()
+  } else if config.url.starts_with("sqlite://") {
     SqliteConnectOptions::from_str(&config.url).map_err(|e| AppError::config(format!("无效的数据库 URL: {}", e)))?
   } else {
     SqliteConnectOptions::new().filename(&config.url)

@@ -111,6 +111,7 @@ export interface LlmBackendUpsertPayload {
   api_key?: string; // openai
   organization?: string; // openai
   project?: string; // openai
+  update_secret?: boolean; // 是否更新密钥（仅更新时不修改密钥时传 false）
 }
 
 export interface LlmBackendListItem {

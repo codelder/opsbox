@@ -170,7 +170,7 @@ describe('orl', () => {
       expect(orl).toBe('orl://local/tmp/test.gz?entry=/home');
 
       // 验证可以正确解析
-      const parsed = parseOrl(orl);
+      const parsed = parseOrl(orl!);
       expect(parsed?.path).toBe('tmp/test.gz');
       expect(parsed?.entryPath).toBe('/home');
     });

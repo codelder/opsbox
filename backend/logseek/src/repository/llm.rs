@@ -171,57 +171,21 @@ pub async fn get_backend(pool: &SqlitePool, name: &str) -> Result<Option<LlmBack
 /// 保存或更新后端
 pub async fn save_backend(pool: &SqlitePool, backend: &LlmBackend, update_secret: bool) -> Result<()> {
   let now = now_secs();
-  let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(1) FROM llm_backends WHERE name = ?")
-    .bind(&backend.name)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| RepositoryError::QueryFailed(format!("检查 LLM 后端存在性失败: {}", e)))?
-    > 0;
 
-  if exists {
-    // 更新
-    if update_secret {
-      sqlx::query(
-        r#"UPDATE llm_backends
-           SET provider = ?, base_url = ?, model = ?, timeout_secs = ?, api_key = ?, organization = ?, project = ?, updated_at = ?
-           WHERE name = ?"#,
-      )
-      .bind(backend.provider.as_str())
-      .bind(&backend.base_url)
-      .bind(&backend.model)
-      .bind(backend.timeout_secs)
-      .bind(&backend.api_key)
-      .bind(&backend.organization)
-      .bind(&backend.project)
-      .bind(now)
-      .bind(&backend.name)
-      .execute(pool)
-      .await
-      .map_err(|e| RepositoryError::QueryFailed(format!("更新 LLM 后端失败: {}", e)))?;
-    } else {
-      sqlx::query(
-        r#"UPDATE llm_backends
-           SET provider = ?, base_url = ?, model = ?, timeout_secs = ?, organization = ?, project = ?, updated_at = ?
-           WHERE name = ?"#,
-      )
-      .bind(backend.provider.as_str())
-      .bind(&backend.base_url)
-      .bind(&backend.model)
-      .bind(backend.timeout_secs)
-      .bind(&backend.organization)
-      .bind(&backend.project)
-      .bind(now)
-      .bind(&backend.name)
-      .execute(pool)
-      .await
-      .map_err(|e| RepositoryError::QueryFailed(format!("更新 LLM 后端失败: {}", e)))?;
-    }
-  } else {
-    // 插入
+  if update_secret {
     sqlx::query(
       r#"INSERT INTO llm_backends
          (name, provider, base_url, model, timeout_secs, api_key, organization, project, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           provider = excluded.provider,
+           base_url = excluded.base_url,
+           model = excluded.model,
+           timeout_secs = excluded.timeout_secs,
+           api_key = excluded.api_key,
+           organization = excluded.organization,
+           project = excluded.project,
+           updated_at = excluded.updated_at"#,
     )
     .bind(&backend.name)
     .bind(backend.provider.as_str())
@@ -229,6 +193,34 @@ pub async fn save_backend(pool: &SqlitePool, backend: &LlmBackend, update_secret
     .bind(&backend.model)
     .bind(backend.timeout_secs)
     .bind(&backend.api_key)
+    .bind(&backend.organization)
+    .bind(&backend.project)
+    .bind(now)
+    .bind(now)
+    .execute(pool)
+    .await
+    .map_err(|e| RepositoryError::QueryFailed(format!("保存 LLM 后端失败: {}", e)))?;
+  } else {
+    // 不更新密钥时，如果已存在则不覆盖密钥字段
+    sqlx::query(
+      r#"INSERT INTO llm_backends
+         (name, provider, base_url, model, timeout_secs, api_key, organization, project, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(name) DO UPDATE SET
+           provider = excluded.provider,
+           base_url = excluded.base_url,
+           model = excluded.model,
+           timeout_secs = excluded.timeout_secs,
+           organization = excluded.organization,
+           project = excluded.project,
+           updated_at = excluded.updated_at"#,
+    )
+    .bind(&backend.name)
+    .bind(backend.provider.as_str())
+    .bind(&backend.base_url)
+    .bind(&backend.model)
+    .bind(backend.timeout_secs)
+    .bind(&backend.api_key) // 这里绑定了当前结构体中的 key，但在 DO UPDATE 中由于没有列出 api_key = excluded.api_key，所以不会覆盖旧值
     .bind(&backend.organization)
     .bind(&backend.project)
     .bind(now)

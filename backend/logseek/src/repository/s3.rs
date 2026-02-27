@@ -56,47 +56,29 @@ pub async fn load_required_s3_settings(pool: &SqlitePool) -> Result<S3Settings> 
 pub async fn save_s3_settings(pool: &SqlitePool, settings: &S3Settings) -> Result<()> {
   info!("保存 S3 配置(default): endpoint={}", settings.endpoint);
 
-  // 注意：移除 bucket 后，save_s3_settings 不再自动验证连接，
-  // 因为没有目标 bucket 无法调用 ListObjects 等接口
-  // verify_s3_settings(settings).await?;
-
   debug!("将 S3 配置写入 s3_profiles(default)");
   let now = std::time::SystemTime::now()
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap()
     .as_secs() as i64;
 
-  // 如果存在则更新，否则插入
-  let existing: Option<(String,)> =
-    sqlx::query_as("SELECT profile_name FROM s3_profiles WHERE profile_name = 'default'")
-      .fetch_optional(pool)
-      .await
-      .map_err(|e| RepositoryError::QueryFailed(format!("查询 S3 Profile 失败: {}", e)))?;
-
-  if existing.is_some() {
-    sqlx::query(
-      "UPDATE s3_profiles SET endpoint = ?, access_key = ?, secret_key = ?, updated_at = ? WHERE profile_name = 'default'",
-    )
-    .bind(&settings.endpoint)
-    .bind(&settings.access_key)
-    .bind(&settings.secret_key)
-    .bind(now)
-    .execute(pool)
-    .await
-    .map_err(|e| RepositoryError::QueryFailed(format!("更新 S3 配置失败: {}", e)))?;
-  } else {
-    sqlx::query(
-      "INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key, created_at, updated_at) VALUES ('default', ?, ?, ?, ?, ?)",
-    )
-    .bind(&settings.endpoint)
-    .bind(&settings.access_key)
-    .bind(&settings.secret_key)
-    .bind(now)
-    .bind(now)
-    .execute(pool)
-    .await
-    .map_err(|e| RepositoryError::QueryFailed(format!("保存 S3 配置失败: {}", e)))?;
-  }
+  sqlx::query(
+    "INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key, created_at, updated_at)
+     VALUES ('default', ?, ?, ?, ?, ?)
+     ON CONFLICT(profile_name) DO UPDATE SET
+       endpoint = excluded.endpoint,
+       access_key = excluded.access_key,
+       secret_key = excluded.secret_key,
+       updated_at = excluded.updated_at",
+  )
+  .bind(&settings.endpoint)
+  .bind(&settings.access_key)
+  .bind(&settings.secret_key)
+  .bind(now)
+  .bind(now)
+  .execute(pool)
+  .await
+  .map_err(|e| RepositoryError::QueryFailed(format!("保存 S3 配置失败: {}", e)))?;
 
   info!("S3 配置保存成功 (profile=default)");
   Ok(())
@@ -195,43 +177,26 @@ pub async fn save_s3_profile(pool: &SqlitePool, profile: &S3Profile) -> Result<(
     .unwrap()
     .as_secs() as i64;
 
-  // 检查是否已存在
-  let existing = load_s3_profile(pool, &profile.profile_name).await?;
+  sqlx::query(
+    "INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(profile_name) DO UPDATE SET
+       endpoint = excluded.endpoint,
+       access_key = excluded.access_key,
+       secret_key = excluded.secret_key,
+       updated_at = excluded.updated_at",
+  )
+  .bind(&profile.profile_name)
+  .bind(&profile.endpoint)
+  .bind(&profile.access_key)
+  .bind(&profile.secret_key)
+  .bind(now)
+  .bind(now)
+  .execute(pool)
+  .await
+  .map_err(|e| RepositoryError::QueryFailed(format!("保存 S3 Profile 失败: {}", e)))?;
 
-  if existing.is_some() {
-    // 更新现有配置
-    sqlx::query(
-      "UPDATE s3_profiles SET endpoint = ?, access_key = ?, secret_key = ?, updated_at = ? WHERE profile_name = ?",
-    )
-    .bind(&profile.endpoint)
-    .bind(&profile.access_key)
-    .bind(&profile.secret_key)
-    .bind(now)
-    .bind(&profile.profile_name)
-    .execute(pool)
-    .await
-    .map_err(|e| RepositoryError::QueryFailed(format!("更新 S3 Profile 失败: {}", e)))?;
-
-    info!("S3 Profile 更新成功: {}", profile.profile_name);
-  } else {
-    // 插入新配置
-    sqlx::query(
-      "INSERT INTO s3_profiles (profile_name, endpoint, access_key, secret_key, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&profile.profile_name)
-    .bind(&profile.endpoint)
-    .bind(&profile.access_key)
-    .bind(&profile.secret_key)
-    .bind(now)
-    .bind(now)
-    .execute(pool)
-    .await
-    .map_err(|e| RepositoryError::QueryFailed(format!("保存 S3 Profile 失败: {}", e)))?;
-
-    info!("S3 Profile 创建成功: {}", profile.profile_name);
-  }
-
+  info!("S3 Profile 保存成功: {}", profile.profile_name);
   Ok(())
 }
 
@@ -252,4 +217,97 @@ pub async fn delete_s3_profile(pool: &SqlitePool, profile_name: &str) -> Result<
 
   info!("S3 Profile 删除成功: {}", profile_name);
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn test_init_schema() {
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    let result = init_schema(&pool).await;
+    assert!(result.is_ok());
+
+    // Verify table was created
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='s3_profiles'")
+      .fetch_one(&pool)
+      .await
+      .unwrap();
+    assert_eq!(count, 1);
+  }
+
+  #[tokio::test]
+  async fn test_save_and_load_settings() {
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    init_schema(&pool).await.unwrap();
+
+    let settings = S3Settings {
+      endpoint: "http://localhost:9000".to_string(),
+      access_key: "test-access".to_string(),
+      secret_key: "test-secret".to_string(),
+    };
+
+    // Save
+    save_s3_settings(&pool, &settings).await.unwrap();
+
+    // Load
+    let loaded = load_s3_settings(&pool).await.unwrap();
+    assert!(loaded.is_some());
+    let loaded = loaded.unwrap();
+    assert_eq!(loaded.endpoint, settings.endpoint);
+    assert_eq!(loaded.access_key, settings.access_key);
+    assert_eq!(loaded.secret_key, settings.secret_key);
+
+    // Update
+    let mut updated = settings.clone();
+    updated.endpoint = "http://localhost:9001".to_string();
+    save_s3_settings(&pool, &updated).await.unwrap();
+
+    // Verify update
+    let loaded = load_s3_settings(&pool).await.unwrap().unwrap();
+    assert_eq!(loaded.endpoint, "http://localhost:9001");
+  }
+
+  #[tokio::test]
+  async fn test_save_and_load_profile() {
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    init_schema(&pool).await.unwrap();
+
+    let profile = S3Profile {
+      profile_name: "test-p".to_string(),
+      endpoint: "http://localhost:9000".to_string(),
+      access_key: "key".to_string(),
+      secret_key: "secret".to_string(),
+    };
+
+    // Save
+    save_s3_profile(&pool, &profile).await.unwrap();
+
+    // Load
+    let loaded = load_s3_profile(&pool, "test-p").await.unwrap();
+    assert!(loaded.is_some());
+    let loaded = loaded.unwrap();
+    assert_eq!(loaded.profile_name, "test-p");
+    assert_eq!(loaded.endpoint, "http://localhost:9000");
+
+    // List
+    let list = list_s3_profiles(&pool).await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].profile_name, "test-p");
+
+    // Delete
+    delete_s3_profile(&pool, "test-p").await.unwrap();
+    let loaded = load_s3_profile(&pool, "test-p").await.unwrap();
+    assert!(loaded.is_none());
+  }
+
+  #[tokio::test]
+  async fn test_delete_default_profile_fails() {
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    init_schema(&pool).await.unwrap();
+
+    let result = delete_s3_profile(&pool, "default").await;
+    assert!(result.is_err());
+  }
 }
