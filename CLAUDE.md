@@ -59,7 +59,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 #### Workspace Members
 - `opsbox-server` - Main binary
-- `opsbox-core` - Shared library
+- `opsbox-core` - Shared library (includes DFS subsystem)
 - `logseek` - Log search module
 - `agent-manager` - Agent management module
 - `explorer` - Resource browser module
@@ -68,7 +68,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 #### Workspace Crates
 - **opsbox-server**: Main binary entry point (`src/main.rs`)
-  - CLI options: `--io-timeout-sec`, `--io-max-retries`, `--bind`, `--port`, `--log-dir`, `--retention-days`
+  - CLI options: `--host`, `--port`, `--addr`, `--daemon`, `--log-level`, `-v`, `--log-dir`, `--log-retention`, `--database-url`, `--io-max-concurrency`, `--io-timeout-sec`, `--io-max-retries`, `--server-id`
   - CLI configuration (`config.rs`)
   - HTTP server composition (`server.rs`)
   - Logging setup (`logging.rs`)
@@ -83,28 +83,30 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
   - Standard responses (`response.rs`)
   - Middleware utilities (`middleware/`)
   - Logging configuration (`logging/`)
-  - ORL protocol (`orl.rs`) - Unified resource identifier scheme
   - Filesystem utilities (`fs/`) - Archive streaming, compression detection
   - Storage abstraction (`storage/`) - S3 repository and utilities
   - Agent client (`agent/`) - HTTP client for agent communication
+  - **DFS subsystem (`dfs/`)** - Distributed FileSystem abstraction layer including ORL parsing
 
 - **logseek**: Log search module with layered architecture:
   - API layer (`routes/`, `api.rs`) - Dual layer pattern for backward compatibility
   - Service layer (`service/`) including:
+    - `search.rs` - Search core module
+    - `search/sink.rs` - Search result sink
+    - `search_executor.rs` - Search orchestration
+    - `search_runner.rs` - Search execution runner
+    - `searchable.rs` - Searchable resource trait
+    - `resource_orl.rs` - Resource ORL handling
     - `encoding.rs` - GBK and multi-encoding detection
     - `entry_stream.rs` - Archive streaming for 25KB+ files
     - `nl2q.rs` - Natural language to query conversion
-    - `search_executor.rs` - Search orchestration (103KB)
-    - `planners.rs` - Planner script management
-    - `profiles.rs` - S3 profile management
-    - `s3.rs` - S3-related service layer
+    - `config.rs` - Source/Endpoint/Target models (includes ORL URL construction utilities)
   - Repository layer (`repository/`) including:
     - `cache.rs` - Search result caching
     - `llm.rs` - LLM backend management
     - `planners.rs` - Planner script persistence
     - `s3.rs` - S3 profile persistence
   - Domain layer (`domain/`) including:
-    - `config.rs` - Source/Endpoint/Target models (includes ORL URL construction utilities)
     - `source_planner/` - Starlark runtime for intelligent source planning
   - Source planners (`planners/`)
   - Utilities (`utils/`)
@@ -333,8 +335,9 @@ cargo test -p logseek --features network-tests
 - `OPENAI_PROJECT` - OpenAI project ID
 
 **IO & Network Configuration:**
-- `OPSBOX_IO_TIMEOUT_SEC` / `LOGSEEK_IO_TIMEOUT_SEC` - IO timeout in seconds (default: 30)
-- `LOGSEEK_IO_MAX_RETRIES` - Maximum IO retry attempts (default: 3)
+- `LOGSEEK_IO_TIMEOUT_SEC` - IO timeout in seconds (default: 60)
+- `LOGSEEK_IO_MAX_RETRIES` - Maximum IO retry attempts (default: 5)
+- `LOGSEEK_IO_MAX_CONCURRENCY` - Maximum IO concurrency (default: 12)
 
 **S3 Proxy Configuration:**
 - `HTTP_PROXY` / `http_proxy` - HTTP proxy URL
@@ -400,6 +403,31 @@ orl://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
 ```
 
 **Note**: The legacy `odfi://` scheme may still appear in some parts of the codebase for compatibility, but new code should use `orl://`.
+
+## DFS Subsystem (Distributed FileSystem)
+
+The DFS (Distributed FileSystem) subsystem is a unified abstraction layer for accessing resources across different storage backends. It provides a consistent interface for local files, S3 buckets, and remote agents.
+
+**Location:** `backend/opsbox-core/src/dfs/`
+
+**Components:**
+- `endpoint.rs` - Endpoint abstraction (Local, S3, Agent)
+- `filesystem.rs` - Filesystem trait definition
+- `orl_parser.rs` - ORL URL parser
+- `path.rs` - Path manipulation utilities
+- `resource.rs` - Resource abstraction
+- `searchable.rs` - Searchable resource trait
+- `impls/` - Backend implementations:
+  - `local.rs` - Local filesystem access
+  - `s3.rs` - S3 object storage
+  - `agent.rs` - Remote agent access
+  - `archive.rs` - Archive file access (tar, zip, etc.)
+
+**Features:**
+- Unified resource access across Local/S3/Agent endpoints
+- Archive deep navigation (tar, tar.gz, gzip, tgz, zip)
+- ORL-based resource addressing
+- Content-type detection
 
 ## API Endpoints
 
@@ -537,6 +565,7 @@ Convert natural language queries to LogSeek query syntax using LLM.
 
 ## Recent Updates
 
+- **DFS Subsystem**: New Distributed FileSystem abstraction layer in `opsbox-core` for unified resource access across Local/S3/Agent endpoints
 - **Test Infrastructure**: 950 passing backend tests with `OPSBOX_NO_PROXY=1` requirement for LLM module
 - **LLM Test Fix**: Fixed `reqwest` proxy detection issues in test environment (macOS System Configuration access failures)
 - **Starlark Source Planning**: Scriptable source planning with intelligent log source selection using Starlark scripts
