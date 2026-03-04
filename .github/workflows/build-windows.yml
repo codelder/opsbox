@@ -1,8 +1,10 @@
 name: Build Windows
 
 on:
-  push:
-    branches: [ main ]
+  # 暂时禁用自动构建，仅支持手动触发
+  # push:
+  #   branches: [ main ]
+  workflow_dispatch:
 
 env:
   RUST_VERSION: '1.90.0'
