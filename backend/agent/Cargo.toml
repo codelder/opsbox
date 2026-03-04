@@ -37,7 +37,7 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 
 # HTTP 客户端
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # 工具
 uuid = { version = "1", features = ["v4"] }
