@@ -182,8 +182,8 @@ async fn test_view_cache_json_agent_integration() {
     .unwrap();
 
   // Call view_cache_json
-  // orl://agent.root/var/log/app.log
-  let file_url = format!("orl://agent.{}/var/log/app.log", agent_id);
+  // orl://id@type/path
+  let file_url = format!("orl://{}@agent/var/log/app.log", agent_id);
 
   let params = ViewParams {
     sid: "sid-agent-view".to_string(),
@@ -275,8 +275,8 @@ async fn test_view_raw_file_agent_integration() {
     .await
     .unwrap();
 
-  // orl://agent.root/var/img/icon.png
-  let file_url = format!("orl://agent.{}/var/img/icon.png", agent_id);
+  // orl://id@type/path
+  let file_url = format!("orl://{}@agent/var/img/icon.png", agent_id);
   let params = ViewParams {
     sid: "sid-agent-raw".to_string(),
     file: file_url,
