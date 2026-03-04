@@ -7,11 +7,11 @@
 ```
 docs/
 ├── architecture/          # 架构设计文档
-│   ├── architecture.md                    # 项目架构复盘分析
+│   ├── architecture.md                    # 项目架构分析
 │   ├── error-handling-architecture.md     # 错误处理架构设计
 │   ├── error-handling-quick-reference.md  # 错误处理快速参考
 │   ├── logging-architecture.md            # 日志系统架构设计
-│   └── module-architecture.md              # 模块化架构设计
+│   └── module-architecture.md             # 模块化架构设计
 │
 ├── api/                   # API 文档
 │   └── logging-api.md                     # 日志配置 API 参考
@@ -22,7 +22,6 @@ docs/
 │
 ├── features/              # 功能文档
 │   ├── agent-tag-api.md                  # Agent 标签 API
-│   ├── agent-tag-management.md           # Agent 标签管理策略
 │   ├── agent-tags.md                     # Agent 标签功能
 │   ├── file-url.md                       # 文件 URL 设计方案
 │   └── s3-profiles.md                    # S3 Profile 管理功能
@@ -32,17 +31,14 @@ docs/
 │   ├── frontend-development.md           # 前端开发指南
 │   ├── logging-configuration.md          # 日志配置和管理指南
 │   ├── query-rag.md                      # 查询语法 RAG 资料
-│   ├── query-syntax.md                    # 查询字符串规范
-│   └── tracing-usage.md                   # Tracing 使用指南
+│   ├── query-syntax.md                   # 查询字符串规范
+│   └── tracing-usage.md                  # Tracing 使用指南
+│
+├── performance/           # 性能文档
+│   └── memory-management.md              # 内存管理优化（mimalloc）
 │
 ├── testing/               # 测试文档
-│   └── logging-e2e-test-checklist.md     # 日志 E2E 测试清单
-│
-├── archive/               # 历史参考文档
-│   └── cpu-tuning-analysis.md            # CPU 调优分析（历史参考）
-│
-└── examples/              # 示例代码
-    └── coordinator_integration_example.rs # Coordinator 集成示例
+│   └── test-monitoring-guide.md          # 测试监控指南
 ```
 
 ## 📚 文档分类说明
@@ -63,13 +59,7 @@ REST API 接口文档，包括请求/响应格式、错误处理等。
 面向开发者和用户的使用指南，包括开发指南、配置说明、日志管理等。
 
 ### 测试文档 (`testing/`)
-测试相关文档，包括测试清单、测试策略等。
-
-### 历史参考 (`archive/`)
-已过时但保留作为历史参考的文档。
-
-### 示例代码 (`examples/`)
-代码示例和集成示例。
+测试相关文档，包括测试监控指南等。
 
 ## 🔗 快速链接
 
@@ -79,7 +69,7 @@ REST API 接口文档，包括请求/响应格式、错误处理等。
 - [CHANGELOG](../CHANGELOG.md)
 
 ### 架构文档
-- [架构复盘分析](architecture/architecture.md)
+- [架构分析](architecture/architecture.md)
 - [模块化架构](architecture/module-architecture.md)
 - [日志系统架构](architecture/logging-architecture.md)
 
@@ -94,9 +84,6 @@ REST API 接口文档，包括请求/响应格式、错误处理等。
 
 ## 📝 文档维护
 
-所有文档都包含版本信息：
-- **文档版本**: v1.0
-- **最后更新**: 2025-11-10
+文档更新时请同步更新最后更新日期。
 
-文档更新时请同步更新版本信息和最后更新日期。
-
+**最后审查**: 2026-02-24

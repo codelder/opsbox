@@ -1,5 +1,6 @@
 use super::lexer::{Token, TokenKind, tokenize};
 use super::{Expr, ParseError, PathFilter, Query, Term};
+use super::{PathPatternRule, build_strict_path_glob, classify_path_pattern};
 use globset::GlobSetBuilder;
 // 标准 regex 引擎直接通过路径使用：regex::Regex
 
@@ -17,41 +18,28 @@ pub fn parse_github_like(input: &str) -> Result<Query, ParseError> {
   let mut code_tokens: Vec<Token> = Vec::new();
   for t in tokens.into_iter() {
     match t.kind {
-      TokenKind::QualifierPath { negative, pattern } => {
-        if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
-          let pat = if pattern.starts_with('/') || pattern.starts_with("**/") {
-            pattern
+      TokenKind::QualifierPath { negative, pattern } => match classify_path_pattern(&pattern) {
+        PathPatternRule::Glob(pat) => {
+          let glob = build_strict_path_glob(&pat).map_err(|_| ParseError::InvalidPathPattern {
+            pattern: pat.clone(),
+            span: Some(t.span),
+          })?;
+          if negative {
+            has_exclude_glob = true;
+            excludes_glob.add(glob);
           } else {
-            format!("**/{}", pattern)
-          };
-
-          // Use strict glob matching
-          let glob_res = globset::GlobBuilder::new(&pat)
-            .literal_separator(true)
-            .build()
-            .map_err(|_| ParseError::InvalidPathPattern {
-              pattern: pat.clone(),
-              span: Some(t.span),
-            });
-
-          match glob_res {
-            Ok(glob) => {
-              if negative {
-                has_exclude_glob = true;
-                excludes_glob.add(glob);
-              } else {
-                has_include_glob = true;
-                includes_glob.add(glob);
-              }
-            }
-            Err(e) => return Err(e),
+            has_include_glob = true;
+            includes_glob.add(glob);
           }
-        } else if negative {
-          exclude_contains.push(pattern);
-        } else {
-          include_contains.push(pattern);
         }
-      }
+        PathPatternRule::Contains(raw) => {
+          if negative {
+            exclude_contains.push(raw);
+          } else {
+            include_contains.push(raw);
+          }
+        }
+      },
       _ => code_tokens.push(t),
     }
   }

@@ -3,8 +3,11 @@
 //! 处理 /search.ndjson 端点，实现多存储源并行搜索
 
 use crate::api::{LogSeekApiError, models::SearchBody};
-use crate::service::search::SearchEvent;
+use crate::query::{KeywordHighlight, Query};
+use crate::repository::cache::{cache as simple_cache, new_sid};
 use crate::service::search_executor::{SearchExecutor, SearchExecutorConfig};
+use crate::service::{ServiceError, search::SearchEvent};
+use crate::utils::renderer::{SearchJsonResult, render_json_chunks};
 use axum::{
   body::Body,
   extract::{Json, State},
@@ -25,7 +28,7 @@ use super::helpers::{s3_max_concurrency, stream_channel_capacity};
 #[serde(tag = "type", rename_all = "lowercase")]
 enum SearchResponse<'a> {
   Result {
-    data: crate::utils::renderer::SearchJsonResult<'a>,
+    data: SearchJsonResult<'a>,
   },
   Error {
     source: String,
@@ -42,7 +45,7 @@ enum SearchResponse<'a> {
 /// 将 SearchEvent 流转换为 NDJSON 字节流
 fn convert_to_ndjson_stream(
   mut rx: mpsc::Receiver<SearchEvent>,
-  highlights: Vec<crate::query::KeywordHighlight>,
+  highlights: Vec<KeywordHighlight>,
 ) -> impl Stream<Item = Result<Bytes, std::io::Error>> {
   async_stream::stream! {
     let mut event_count = 0;
@@ -59,7 +62,7 @@ fn convert_to_ndjson_stream(
 
       let json_vec = match event {
         SearchEvent::Success(res) => {
-          let json_obj = crate::utils::renderer::render_json_chunks(
+          let json_obj = render_json_chunks(
             &res.path,
             res.merged.clone(),
             &res.lines, // Pass ref
@@ -104,12 +107,7 @@ fn build_ndjson_response(
     )
     .header("X-Logseek-SID", sid_header)
     .body(Body::from_stream(stream))
-    .map_err(|e| {
-      LogSeekApiError::Service(crate::service::ServiceError::ProcessingError(format!(
-        "构建 HTTP 响应失败: {}",
-        e
-      )))
-    })
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
 }
 
 /// 搜索处理函数（多存储源并行搜索）
@@ -129,10 +127,18 @@ pub async fn stream_search(
   let cancel_token = tokio_util::sync::CancellationToken::new();
   let token_for_drop = cancel_token.clone();
 
-  let (result_rx, sid) = executor.search(&body.q, ctx, Some(cancel_token)).await?;
+  let sid = new_sid();
 
-  let query = crate::query::Query::parse_github_like(&body.q).unwrap_or_default();
-  let highlights = query.highlights.clone();
+  // 解析查询以获取 highlights（用于前端高亮显示）
+  let highlights = Query::parse_github_like(&body.q)
+    .map(|spec| spec.highlights.clone())
+    .unwrap_or_default();
+
+  // 执行搜索
+  let result_rx = executor.search(&body.q, sid.clone(), ctx, Some(cancel_token)).await?;
+
+  // 缓存搜索关键词，用于后续文件查看高亮
+  simple_cache().put_keywords(&sid, highlights.clone()).await;
 
   let inner_stream = convert_to_ndjson_stream(result_rx, highlights);
   let stream = async_stream::stream! {
@@ -151,12 +157,180 @@ pub async fn delete_search_session(
   axum::extract::Path(sid): axum::extract::Path<String>,
 ) -> Result<HttpResponse<Body>, LogSeekApiError> {
   tracing::info!("[Search] 清理会话缓存: sid={}", sid);
-  crate::repository::cache::cache().remove_sid(&sid).await;
+  simple_cache().remove_sid(&sid).await;
 
-  HttpResponse::builder().status(200).body(Body::empty()).map_err(|e| {
-    LogSeekApiError::Service(crate::service::ServiceError::ProcessingError(format!(
-      "构建响应失败: {}",
-      e
-    )))
-  })
+  HttpResponse::builder()
+    .status(200)
+    .body(Body::empty())
+    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建响应失败: {}", e))))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::service::search::SearchResult;
+  use axum::http::StatusCode;
+  use futures::StreamExt;
+  use tokio::sync::mpsc;
+
+  #[tokio::test]
+  async fn test_convert_to_ndjson_stream() {
+    let (tx, rx) = mpsc::channel(10);
+    let highlights = vec![];
+
+    let mut stream = Box::pin(convert_to_ndjson_stream(rx, highlights));
+
+    // 模拟完成事件
+    tx.send(SearchEvent::Complete {
+      source: "test-source".into(),
+      elapsed_ms: 123,
+    })
+    .await
+    .unwrap();
+
+    if let Some(res) = stream.next().await {
+      let item = res.unwrap();
+      let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+      assert_eq!(json["type"], "complete");
+      assert_eq!(json["source"], "test-source");
+      assert_eq!(json["elapsed_ms"], 123);
+    } else {
+      panic!("Expected item from stream");
+    }
+
+    // 模拟错误事件
+    tx.send(SearchEvent::Error {
+      source: "err-source".into(),
+      message: "error message".into(),
+      recoverable: true,
+    })
+    .await
+    .unwrap();
+
+    if let Some(res) = stream.next().await {
+      let item = res.unwrap();
+      let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+      assert_eq!(json["type"], "error");
+      assert_eq!(json["message"], "error message");
+    }
+  }
+
+  #[tokio::test]
+  async fn test_delete_search_session() {
+    let sid = "test-sid-delete".to_string();
+    let resp = delete_search_session(axum::extract::Path(sid)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+  }
+
+  #[tokio::test]
+  async fn test_convert_to_ndjson_stream_success() {
+    let (tx, rx) = mpsc::channel(10);
+    let highlights = vec![];
+
+    let mut stream = Box::pin(convert_to_ndjson_stream(rx, highlights));
+
+    // 模拟成功事件
+    // 注意：SearchResult 的 new 是私有的或在当前 crate 可见，
+    // 这里我们直接构造结构体（如果字段是 pub 的话）或者检查可见性。
+    // 根据之前的查看，SearchResult 字段是 pub 的。
+    let result = SearchResult {
+      path: "test.log".into(),
+      lines: vec!["match line".into()],
+      merged: vec![(0, 0)],
+      encoding: Some("UTF-8".into()),
+      archive_path: None,
+      source_type: Default::default(),
+    };
+
+    tx.send(SearchEvent::Success(result)).await.unwrap();
+
+    if let Some(res) = stream.next().await {
+      let item = res.unwrap();
+      let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+      assert_eq!(json["type"], "result");
+      assert_eq!(json["data"]["path"], "test.log");
+      assert_eq!(json["data"]["chunks"].as_array().unwrap().len(), 1);
+    } else {
+      panic!("Expected item from stream");
+    }
+  }
+
+  #[test]
+  fn test_search_response_serialization() {
+    let res = SearchResponse::Complete {
+      source: "test".into(),
+      elapsed_ms: 100,
+    };
+    let json = serde_json::to_string(&res).unwrap();
+    assert!(json.contains("\"type\":\"complete\""));
+    assert!(json.contains("\"source\":\"test\""));
+  }
+
+  #[tokio::test]
+  async fn test_build_ndjson_response() {
+    use futures::stream;
+
+    let stream = stream::iter(vec![Ok(Bytes::from(r#"{"type":"complete"}"#))]);
+
+    let response = build_ndjson_response(stream, "test-sid".to_string()).unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+      response.headers().get(CONTENT_TYPE).unwrap(),
+      "application/x-ndjson; charset=utf-8"
+    );
+    assert_eq!(response.headers().get("X-Logseek-SID").unwrap(), "test-sid");
+  }
+
+  #[tokio::test]
+  async fn test_convert_to_ndjson_stream_multiple_events() {
+    let (tx, rx) = mpsc::channel(10);
+    let highlights = vec![];
+
+    let mut stream = Box::pin(convert_to_ndjson_stream(rx, highlights));
+
+    // Send multiple events
+    tx.send(SearchEvent::Complete {
+      source: "source1".into(),
+      elapsed_ms: 100,
+    })
+    .await
+    .unwrap();
+    tx.send(SearchEvent::Complete {
+      source: "source2".into(),
+      elapsed_ms: 200,
+    })
+    .await
+    .unwrap();
+    tx.send(SearchEvent::Error {
+      source: "err".into(),
+      message: "test error".into(),
+      recoverable: true,
+    })
+    .await
+    .unwrap();
+    drop(tx);
+
+    let mut count = 0;
+    while let Some(res) = stream.next().await {
+      let item = res.unwrap();
+      let json: serde_json::Value = serde_json::from_slice(&item).unwrap();
+      assert!(json.get("type").is_some());
+      count += 1;
+    }
+    assert_eq!(count, 3);
+  }
+
+  #[test]
+  fn test_search_response_error_serialization() {
+    let res = SearchResponse::Error {
+      source: "test-source".into(),
+      message: "test error message".into(),
+      recoverable: true,
+    };
+    let json = serde_json::to_string(&res).unwrap();
+    assert!(json.contains("\"type\":\"error\""));
+    assert!(json.contains("\"source\":\"test-source\""));
+    assert!(json.contains("\"message\":\"test error message\""));
+    assert!(json.contains("\"recoverable\":true"));
+  }
 }

@@ -7,8 +7,11 @@ use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
 use tracing::{trace, warn};
 
+// 从 common 模块导入 ArchiveType 和判型函数（P3：解除 fs -> dfs 反向依赖）
+use crate::common::archive::{ArchiveType, detect_gzip_inner_is_tar};
+
 /// 条目来源类型
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EntrySource {
   /// 普通文件（目录遍历或单文件）
   #[default]
@@ -21,14 +24,32 @@ pub enum EntrySource {
   Gz,
 }
 
+impl EntrySource {
+  pub fn label(self) -> &'static str {
+    match self {
+      EntrySource::File => "file",
+      EntrySource::Tar => "tar",
+      EntrySource::TarGz => "tar.gz",
+      EntrySource::Gz => "gz",
+    }
+  }
+
+  pub fn is_compressed(self) -> bool {
+    matches!(self, EntrySource::TarGz | EntrySource::Gz)
+  }
+
+  pub fn is_archive(self) -> bool {
+    matches!(self, EntrySource::Tar | EntrySource::TarGz)
+  }
+}
+
 /// 条目元数据（目录相对路径或归档内路径）
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct EntryMeta {
   pub path: String,
   /// 当条目来自归档内部时，归档文件路径（绝对路径，供上层构造唯一 ID）
   pub container_path: Option<String>,
   pub size: Option<u64>,
-  pub is_compressed: bool,
   /// 条目来源类型
   pub source: EntrySource,
 }
@@ -91,17 +112,6 @@ impl FsEntryStream {
 
     Ok(Self { rx })
   }
-
-  // Legacy capability not supported with jwalk easily,
-  // but we can reimplementation if needed.
-  // For now, assuming new() is the main entry point.
-  pub fn from_read_dir(_rd: tokio::fs::ReadDir, _recursive: bool) -> Self {
-    // Placeholder: Creating a closed stream or erroring if strictly needed.
-    // Given the context, this seems rarely used or can be refactored at callsite.
-    // To avoid breaking compilation, returns empty stream.
-    let (_, rx) = tokio::sync::mpsc::channel(1);
-    Self { rx }
-  }
 }
 
 #[async_trait]
@@ -133,231 +143,96 @@ impl EntryStream for FsEntryStream {
   }
 }
 
-/// tar.gz 条目流（基于 AsyncRead 输入）
-pub struct TarGzEntryStream<R: AsyncRead + Send + Unpin + 'static> {
-  entries: async_tar::Entries<tokio_util::compat::Compat<GzipDecoder<BufReader<R>>>>,
+pub struct TarArchiveEntryStream<R: AsyncRead + Send + Unpin + 'static> {
+  entries: async_tar::Entries<tokio_util::compat::Compat<R>>,
   container_path: Option<String>,
   consecutive_errors: usize,
   next_entry_index: usize,
   last_ok_entry_path: Option<String>,
+  source: EntrySource,
 }
-impl<R: AsyncRead + Send + Unpin + 'static> TarGzEntryStream<R> {
-  pub async fn new(reader: R, container_path: Option<String>) -> io::Result<Self> {
+
+impl<R: AsyncRead + Send + Unpin + 'static> TarArchiveEntryStream<R> {
+  const MAX_CONSECUTIVE_ERRORS: usize = 100;
+
+  fn new(
+    entries: async_tar::Entries<tokio_util::compat::Compat<R>>,
+    container_path: Option<String>,
+    source: EntrySource,
+  ) -> Self {
+    debug_assert!(matches!(source, EntrySource::Tar | EntrySource::TarGz));
+    Self {
+      entries,
+      container_path,
+      consecutive_errors: 0,
+      next_entry_index: 0,
+      last_ok_entry_path: None,
+      source,
+    }
+  }
+}
+
+impl<R: AsyncRead + Send + Unpin + 'static> TarArchiveEntryStream<BufReader<R>> {
+  pub async fn new_tar(reader: R, container_path: Option<String>) -> io::Result<Self> {
+    let br = BufReader::new(reader);
+    let archive = async_tar::Archive::new(br.compat());
+    Ok(Self::new(archive.entries()?, container_path, EntrySource::Tar))
+  }
+}
+
+impl<R: AsyncRead + Send + Unpin + 'static> TarArchiveEntryStream<GzipDecoder<BufReader<R>>> {
+  pub async fn new_tar_gz(reader: R, container_path: Option<String>) -> io::Result<Self> {
     let gz = GzipDecoder::new(BufReader::new(reader));
     let archive = async_tar::Archive::new(gz.compat());
-    let entries = archive.entries()?;
-    Ok(Self {
-      entries,
-      container_path,
-      consecutive_errors: 0,
-      next_entry_index: 0,
-      last_ok_entry_path: None,
-    })
+    Ok(Self::new(archive.entries()?, container_path, EntrySource::TarGz))
   }
-}
-
-impl<D: AsyncRead + Send + Unpin + 'static> TarGzEntryStreamAny<D> {
-  // 为 sniffing 逻辑提供专门的构造器，如果已经有了 decoder
-  pub async fn new_with_decoder(decoder: D, container_path: Option<String>) -> io::Result<Self> {
-    let archive = async_tar::Archive::new(decoder.compat());
-    let entries = archive.entries()?;
-    Ok(Self {
-      entries,
-      container_path,
-      consecutive_errors: 0,
-      next_entry_index: 0,
-      last_ok_entry_path: None,
-    })
-  }
-}
-
-/// 通用的 TarGZ 流，支持任意 Decoder 类型
-pub struct TarGzEntryStreamAny<D: AsyncRead + Send + Unpin + 'static> {
-  entries: async_tar::Entries<tokio_util::compat::Compat<D>>,
-  container_path: Option<String>,
-  consecutive_errors: usize,
-  next_entry_index: usize,
-  last_ok_entry_path: Option<String>,
 }
 
 #[async_trait]
-impl<D: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStreamAny<D> {
+impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarArchiveEntryStream<R> {
   async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
     loop {
-      if self.consecutive_errors > 10 {
-        return Err(io::Error::other("过多的连续 tar 错误"));
+      if self.consecutive_errors >= Self::MAX_CONSECUTIVE_ERRORS {
+        return Err(io::Error::new(
+          io::ErrorKind::InvalidData,
+          format!(
+            "{} 文件损坏严重，连续 {} 个条目读取失败，停止处理",
+            self.source.label(),
+            Self::MAX_CONSECUTIVE_ERRORS
+          ),
+        ));
       }
 
-      let entry = self.entries.next().await;
-      match entry {
+      match self.entries.next().await {
         Some(Ok(entry)) => {
           self.consecutive_errors = 0;
-          self.next_entry_index += 1;
-
-          let entry_path = entry
+          self.next_entry_index = self.next_entry_index.saturating_add(1);
+          let raw = entry
             .path()
+            .ok()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| format!("entry_{}", self.next_entry_index));
-
-          self.last_ok_entry_path = Some(entry_path.clone());
-
-          let size = entry.header().size().ok();
-
+            .unwrap_or_else(|| format!("entry_{}", self.next_entry_index));
+          let path = normalize_archive_entry_path(&raw);
+          self.last_ok_entry_path = Some(path.clone());
           let meta = EntryMeta {
-            path: entry_path,
+            path,
             container_path: self.container_path.clone(),
-            size,
-            is_compressed: false,
-            source: EntrySource::Tar,
+            size: entry.header().size().ok(),
+            source: self.source,
           };
-
-          // 包装 entry 为异步读取器 (async_tar::Entry implements futures::io::AsyncRead)
           return Ok(Some((meta, Box::new(entry.compat()))));
         }
         Some(Err(e)) => {
           self.consecutive_errors += 1;
           warn!(
-            "跳过损坏的 tar 条目: {}, path={:?}, error={}",
-            self.container_path.as_deref().unwrap_or("unknown"),
-            self.last_ok_entry_path,
-            e
-          );
-          continue;
-        }
-        None => return Ok(None),
-      }
-    }
-  }
-}
-
-#[async_trait]
-impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarGzEntryStream<R> {
-  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    const MAX_CONSECUTIVE_ERRORS: usize = 100;
-
-    loop {
-      match self.entries.next().await {
-        Some(Ok(entry)) => {
-          // 成功读取条目，重置错误计数器
-          self.consecutive_errors = 0;
-          self.next_entry_index = self.next_entry_index.saturating_add(1);
-          let raw = entry
-            .path()
-            .ok()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "<unknown>".into());
-          let path = normalize_archive_entry_path(&raw);
-          self.last_ok_entry_path = Some(path.clone());
-          let reader = entry.compat(); // 转为 tokio AsyncRead
-          let meta = EntryMeta {
-            path,
-            container_path: self.container_path.clone(),
-            size: None,
-            is_compressed: true, // tar.gz 内部条目：共享底层解压/读取器，必须串行读取
-            source: EntrySource::TarGz,
-          };
-          return Ok(Some((meta, Box::new(reader))));
-        }
-        Some(Err(e)) => {
-          self.consecutive_errors += 1;
-          // 记录错误但继续处理下一个条目
-          tracing::warn!(
-            "跳过损坏的 tar.gz 条目: {} (next_index={}, last_ok_entry={:?}, 连续错误: {}/{})",
+            "跳过损坏的 {} 条目: {} (next_index={}, last_ok_entry={:?}, 连续错误: {}/{})",
+            self.source.label(),
             e,
             self.next_entry_index,
             self.last_ok_entry_path,
             self.consecutive_errors,
-            MAX_CONSECUTIVE_ERRORS
+            Self::MAX_CONSECUTIVE_ERRORS
           );
-
-          // 如果连续错误超过阈值，停止处理以避免死循环
-          if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-            return Err(io::Error::new(
-              io::ErrorKind::InvalidData,
-              format!(
-                "tar.gz 文件损坏严重，连续 {} 个条目读取失败，停止处理",
-                MAX_CONSECUTIVE_ERRORS
-              ),
-            ));
-          }
-          continue;
-        }
-        None => return Ok(None),
-      }
-    }
-  }
-}
-
-pub struct TarEntryStream<R: AsyncRead + Send + Unpin + 'static> {
-  entries: async_tar::Entries<tokio_util::compat::Compat<BufReader<R>>>,
-  container_path: Option<String>,
-  consecutive_errors: usize,
-  next_entry_index: usize,
-  last_ok_entry_path: Option<String>,
-}
-
-impl<R: AsyncRead + Send + Unpin + 'static> TarEntryStream<R> {
-  pub async fn new(reader: R, container_path: Option<String>) -> io::Result<Self> {
-    let br = BufReader::new(reader);
-    let archive = async_tar::Archive::new(br.compat());
-    let entries = archive.entries()?;
-    Ok(Self {
-      entries,
-      container_path,
-      consecutive_errors: 0,
-      next_entry_index: 0,
-      last_ok_entry_path: None,
-    })
-  }
-}
-
-#[async_trait]
-impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for TarEntryStream<R> {
-  async fn next_entry(&mut self) -> io::Result<Option<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    const MAX_CONSECUTIVE_ERRORS: usize = 100;
-
-    loop {
-      match self.entries.next().await {
-        Some(Ok(entry)) => {
-          // 成功读取条目，重置错误计数器
-          self.consecutive_errors = 0;
-          self.next_entry_index = self.next_entry_index.saturating_add(1);
-          let raw = entry
-            .path()
-            .ok()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "<unknown>".into());
-          let path = normalize_archive_entry_path(&raw);
-          self.last_ok_entry_path = Some(path.clone());
-          let reader = entry.compat();
-          let meta = EntryMeta {
-            path,
-            container_path: self.container_path.clone(),
-            size: None,
-            is_compressed: true,
-            source: EntrySource::Tar,
-          };
-          return Ok(Some((meta, Box::new(reader))));
-        }
-        Some(Err(e)) => {
-          self.consecutive_errors += 1;
-          tracing::warn!(
-            "跳过损坏的 tar 条目: {} (next_index={}, last_ok_entry={:?}, 连续错误: {}/{})",
-            e,
-            self.next_entry_index,
-            self.last_ok_entry_path,
-            self.consecutive_errors,
-            MAX_CONSECUTIVE_ERRORS
-          );
-          if self.consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-            return Err(io::Error::new(
-              io::ErrorKind::InvalidData,
-              format!(
-                "tar 文件损坏严重，连续 {} 个条目读取失败，停止处理",
-                MAX_CONSECUTIVE_ERRORS
-              ),
-            ));
-          }
           continue;
         }
         None => return Ok(None),
@@ -409,13 +284,12 @@ pub struct GzipEntryStream<R: AsyncRead + Send + Unpin + 'static> {
 }
 
 impl<R: AsyncRead + Send + Unpin + 'static> GzipEntryStream<R> {
-  pub fn new(reader: R, path: String, container_path: bool) -> Self {
-    let c_path = if container_path { Some(path.clone()) } else { None };
+  pub fn new(reader: R, path: String, container_path: Option<String>) -> Self {
     Self {
       reader: Some(reader),
       path,
       processed: false,
-      container_path: c_path,
+      container_path,
     }
   }
 }
@@ -432,7 +306,6 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipEntryStream<R> {
         path: self.path.clone(),
         container_path: self.container_path.clone(),
         size: None,
-        is_compressed: true, // 解压后的流，设为 true 以触发 preloading 逻辑
         source: EntrySource::Gz,
       };
       Ok(Some((meta, Box::new(reader))))
@@ -445,7 +318,7 @@ impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for GzipEntryStream<R> {
 // ================= Helpers =================
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ArchiveKind {
+pub enum SniffArchiveKind {
   Tar,
   Gzip,
   Zip,
@@ -471,47 +344,26 @@ pub async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'st
   head.truncate(n);
 
   let kind = sniff_archive_kind(&head, hint_name);
-  warn!(
-    "[DEBUG] sniff_archive_kind: {:?}, hint_name: {:?}, head_len: {}",
-    kind,
-    hint_name,
-    head.len()
-  );
   let prefixed = PrefixedReader::new(head.clone(), reader);
 
   match kind {
-    ArchiveKind::Tar => {
-      let stream = TarEntryStream::new(prefixed, hint_name.map(|s| s.to_string()))
+    SniffArchiveKind::Tar => {
+      let stream = TarArchiveEntryStream::new_tar(prefixed, hint_name.map(|s| s.to_string()))
         .await
         .map_err(|e| format!("读取 tar 失败: {}", e))?;
-      Ok(Box::new(stream))
+      Ok(Box::new(stream) as Box<dyn EntryStream>)
     }
-    ArchiveKind::Gzip => {
-      // 基于预读的 head 进行探测
-      let is_tar = {
-        let mut gz = GzipDecoder::new(std::io::Cursor::new(head.clone()));
-        let mut inner_head = vec![0u8; 512];
-        match gz.read_exact(&mut inner_head).await {
-          Ok(_) => is_tar_header(&inner_head),
-          Err(_) => {
-            // 如果内部数据太少无法嗅探（EOF或解压失败），尝试通过后缀名给予最后的补救建议
-            if let Some(h) = hint_name {
-              let lower = h.to_lowercase();
-              lower.ends_with(".tar.gz") || lower.ends_with(".tgz")
-            } else {
-              false
-            }
-          }
-        }
-      };
+    SniffArchiveKind::Gzip => {
+      // 使用共享 helper 检测内部是否为 tar
+      let is_tar = detect_gzip_inner_is_tar(&head, hint_name);
 
-      let gz = GzipDecoder::new(BufReader::new(prefixed));
       if is_tar {
-        let stream = TarGzEntryStreamAny::new_with_decoder(gz, hint_name.map(|s| s.to_string()))
+        let stream = TarArchiveEntryStream::new_tar_gz(prefixed, hint_name.map(|s| s.to_string()))
           .await
           .map_err(|e| format!("解析 tar.gz 失败: {}", e))?;
-        Ok(Box::new(stream))
+        Ok(Box::new(stream) as Box<dyn EntryStream>)
       } else {
+        let gz = GzipDecoder::new(BufReader::new(prefixed));
         // 走单文件 gzip 逻辑
         let (entry_path, container_path) = if let Some(h) = hint_name {
           let p = std::path::Path::new(h);
@@ -523,40 +375,172 @@ pub async fn create_archive_stream_from_reader<R: AsyncRead + Send + Unpin + 'st
         } else {
           ("<gzip>".to_string(), None)
         };
-        let stream = GzipEntryStream {
-          reader: Some(gz),
-          path: entry_path,
-          processed: false,
-          container_path,
-        };
-        Ok(Box::new(stream))
+        let stream = GzipEntryStream::new(gz, entry_path, container_path);
+        Ok(Box::new(stream) as Box<dyn EntryStream>)
       }
     }
-    ArchiveKind::Zip => Err("ZIP 归档暂不支持".to_string()),
-    ArchiveKind::Unknown => Err("未知归档格式或不支持的归档".to_string()),
+    SniffArchiveKind::Zip => Err("ZIP 归档暂不支持".to_string()),
+    SniffArchiveKind::Unknown => Err("未知归档格式或不支持的归档".to_string()),
   }
 }
 
-pub fn sniff_archive_kind(head: &[u8], path_hint: Option<&str>) -> ArchiveKind {
+pub fn sniff_archive_kind(head: &[u8], path_hint: Option<&str>) -> SniffArchiveKind {
   if head.len() >= 4 {
     let sig = &head[..4];
     if sig == [0x50, 0x4B, 0x03, 0x04] || sig == [0x50, 0x4B, 0x05, 0x06] || sig == [0x50, 0x4B, 0x07, 0x08] {
       trace!("检测到归档类型: Zip, 文件: {}", path_hint.unwrap_or("unknown"));
-      return ArchiveKind::Zip;
+      return SniffArchiveKind::Zip;
     }
   }
   // 优先检查 tar（tar 头在固定位置 257-262，更可靠）
   if head.len() >= 512 && &head[257..257 + 5] == b"ustar" {
     trace!("检测到归档类型: Tar, 文件: {}", path_hint.unwrap_or("unknown"));
-    return ArchiveKind::Tar;
+    return SniffArchiveKind::Tar;
   }
   // 然后检查 gzip（前2字节）
   if head.len() >= 2 && head[0] == 0x1F && head[1] == 0x8B {
     trace!("检测到归档类型: Gzip, 文件: {}", path_hint.unwrap_or("unknown"));
-    return ArchiveKind::Gzip;
+    return SniffArchiveKind::Gzip;
   }
   trace!("检测到归档类型: Unknown, 文件: {}", path_hint.unwrap_or("unknown"));
-  ArchiveKind::Unknown
+  SniffArchiveKind::Unknown
+}
+
+/// 将 ArchiveType 转换为 SniffArchiveKind
+///
+/// 返回 None 表示类型未知，需要回退到 sniff 检测
+fn archive_type_to_sniff_kind(t: ArchiveType) -> Option<SniffArchiveKind> {
+  match t {
+    ArchiveType::Tar => Some(SniffArchiveKind::Tar),
+    ArchiveType::TarGz | ArchiveType::Tgz => Some(SniffArchiveKind::Gzip),
+    ArchiveType::Gz => Some(SniffArchiveKind::Gzip),
+    ArchiveType::Zip => Some(SniffArchiveKind::Zip),
+    ArchiveType::Unknown => None,
+  }
+}
+
+/// 判断 ArchiveType 是否为 tar.gz 类型（需要内部 tar 处理）
+fn is_tar_gz_type(t: ArchiveType) -> bool {
+  t.is_tar_gz()
+}
+
+/// 带已知类型的归档流创建函数
+///
+/// 相比 `create_archive_stream_from_reader`，此函数接受已知的归档类型，
+/// 可以跳过内部的 magic bytes 检测，提高性能。
+///
+/// **安全机制**：先校验后使用
+/// 1. 如果 `known_type` 为 `Unknown`，直接走 auto 路径
+/// 2. 读取头部后，先用 sniff 验证外层类型是否与 `known_type` 一致
+/// 3. 对于 Gzip 类型，额外验证内部是否为 tar
+/// 4. 类型不一致时走 auto 路径（`create_archive_stream_from_reader`）
+/// 5. 类型一致时走 typed 快速路径，失败直接返回错误（不再二次 fallback）
+///
+/// # 参数
+/// - `reader`: 数据源
+/// - `hint_name`: 文件名提示（用于错误信息和路径推导）
+/// - `known_type`: 已知的归档类型（来自外部检测）
+///
+/// # 示例
+/// ```ignore
+/// let archive_type = detect_archive_type(fs, resource).await;
+/// let stream = open_archive_typed(reader, Some("data.tar.gz"), archive_type).await?;
+/// ```
+pub async fn open_archive_typed<R: AsyncRead + Send + Unpin + 'static>(
+  mut reader: R,
+  hint_name: Option<&str>,
+  known_type: ArchiveType,
+) -> Result<Box<dyn EntryStream>, String> {
+  // 1. 如果 known_type 是 Unknown，直接走 auto
+  let Some(expected_kind) = archive_type_to_sniff_kind(known_type) else {
+    trace!("已知类型为 Unknown，走 auto 路径");
+    return create_archive_stream_from_reader(reader, hint_name).await;
+  };
+
+  trace!(
+    "open_archive_typed: 期望类型 {:?} (sniff_kind={:?})",
+    known_type, expected_kind
+  );
+
+  // 2. 读取头部（只读一次）
+  let mut head = vec![0u8; 4096];
+  let mut n = 0;
+  while n < head.len() {
+    match reader.read(&mut head[n..]).await {
+      Ok(0) => break,
+      Ok(len) => n += len,
+      Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+      Err(e) => return Err(format!("读取头部失败: {}", e)),
+    }
+  }
+  head.truncate(n);
+
+  // 3. 先用 sniff 验证外层类型
+  let sniff_kind = sniff_archive_kind(&head, hint_name);
+
+  // 4. 外层类型不一致 → 直接走 auto 路径
+  if sniff_kind != expected_kind {
+    trace!(
+      "外层类型不一致 (期望={:?}, 实际={:?})，走 auto 路径",
+      expected_kind, sniff_kind
+    );
+    return create_archive_stream_from_reader(PrefixedReader::new(head, reader), hint_name).await;
+  }
+
+  // 5. Gzip 特殊处理：二次判定内部是否为 tar
+  if expected_kind == SniffArchiveKind::Gzip {
+    let is_inner_tar = detect_gzip_inner_is_tar(&head, hint_name);
+    let expect_inner_tar = is_tar_gz_type(known_type);
+
+    if is_inner_tar != expect_inner_tar {
+      trace!(
+        "Gzip 内部类型不一致 (期望内部为 tar={}, 实际={})，走 auto 路径",
+        expect_inner_tar, is_inner_tar
+      );
+      return create_archive_stream_from_reader(PrefixedReader::new(head, reader), hint_name).await;
+    }
+  }
+
+  // 6. 类型完全一致 → 走 typed 快速路径
+  let prefixed = PrefixedReader::new(head, reader);
+  match expected_kind {
+    SniffArchiveKind::Tar => {
+      trace!("使用 typed 快速路径: Tar");
+      let stream = TarArchiveEntryStream::new_tar(prefixed, hint_name.map(|s| s.to_string()))
+        .await
+        .map_err(|e| format!("读取 tar 失败: {}", e))?;
+      Ok(Box::new(stream) as Box<dyn EntryStream>)
+    }
+    SniffArchiveKind::Gzip => {
+      if is_tar_gz_type(known_type) {
+        trace!("使用 typed 快速路径: TarGz");
+        let stream = TarArchiveEntryStream::new_tar_gz(prefixed, hint_name.map(|s| s.to_string()))
+          .await
+          .map_err(|e| format!("读取 tar.gz 失败: {}", e))?;
+        Ok(Box::new(stream) as Box<dyn EntryStream>)
+      } else {
+        // 纯 Gzip
+        trace!("使用 typed 快速路径: 纯 Gzip");
+        let gz = GzipDecoder::new(BufReader::new(prefixed));
+        let (entry_path, container_path) = if let Some(h) = hint_name {
+          let p = std::path::Path::new(h);
+          let entry = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| h.to_string());
+          (entry, Some(h.to_string()))
+        } else {
+          ("<gzip>".to_string(), None)
+        };
+        let stream = GzipEntryStream::new(gz, entry_path, container_path);
+        Ok(Box::new(stream) as Box<dyn EntryStream>)
+      }
+    }
+    SniffArchiveKind::Zip => Err("ZIP 归档暂不支持".to_string()),
+    // Unknown 不可达（已在函数开头的 let Some(expected_kind) 处理）
+    // 使用 _ 通配符以通过 Rust 编译器的穷尽性检查
+    _ => unreachable!("Unknown 已在函数开头处理"),
+  }
 }
 
 /// 检测文件类型并返回适当的 Reader 和 Metadata
@@ -575,7 +559,7 @@ pub async fn open_file_with_compression_detection(
 
   // 3. 探测细节逻辑（针对 Gzip 进行内部嗅探）
   match kind {
-    ArchiveKind::Gzip => {
+    SniffArchiveKind::Gzip => {
       // 为了不破坏流状态，我们重新打开一次文件进行 Tar 头部嗅探
       let is_tar = match tokio::fs::File::open(path).await {
         Ok(f) => {
@@ -593,17 +577,16 @@ pub async fn open_file_with_compression_detection(
         // tar.gz 文件：按普通文件处理（扫描场景用户要求不自动展开）
         create_regular_file_reader(path).await
       } else {
-        // 纯 gzip 文件：解压并设为 is_compressed: true
+        // 纯 gzip 文件：解压并标记 source=Gz
         let file = tokio::fs::File::open(path).await?;
         let gz = GzipDecoder::new(BufReader::new(file));
         let meta = EntryMeta {
           path: path.to_string(),
           container_path: None,
           size: None,
-          is_compressed: true,
           source: EntrySource::Gz,
         };
-        Ok((meta, Box::new(gz)))
+        Ok((meta, Box::new(gz) as Box<dyn AsyncRead + Send + Unpin>))
       }
     }
     _ => {
@@ -620,7 +603,6 @@ async fn create_regular_file_reader(path: &str) -> io::Result<(EntryMeta, Box<dy
     path: path.to_string(),
     container_path: None,
     size: None,
-    is_compressed: false,
     source: EntrySource::File,
   };
   Ok((meta, Box::new(reader)))
@@ -677,5 +659,203 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
       }
     }
     std::pin::Pin::new(&mut me.inner).poll_read(cx, buf)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tokio::io::AsyncReadExt;
+
+  #[tokio::test]
+  async fn test_prefixed_reader() {
+    let prefix = vec![1, 2, 3];
+    let inner = std::io::Cursor::new(vec![4, 5, 6]);
+    let mut reader = PrefixedReader::new(prefix, inner);
+    let mut buf = Vec::new();
+    reader.read_to_end(&mut buf).await.unwrap();
+    assert_eq!(buf, vec![1, 2, 3, 4, 5, 6]);
+  }
+
+  #[test]
+  fn test_normalize_archive_entry_path() {
+    assert_eq!(normalize_archive_entry_path("foo/bar"), "foo/bar");
+    assert_eq!(normalize_archive_entry_path("./foo/bar"), "foo/bar");
+    assert_eq!(normalize_archive_entry_path("/foo/bar"), "foo/bar");
+    assert_eq!(normalize_archive_entry_path("///foo/bar"), "foo/bar");
+  }
+
+  #[test]
+  fn test_sniff_archive_kind_tar() {
+    let mut head = vec![0u8; 512];
+    // ustar at 257
+    head[257] = b'u';
+    head[258] = b's';
+    head[259] = b't';
+    head[260] = b'a';
+    head[261] = b'r';
+    assert_eq!(sniff_archive_kind(&head, None), SniffArchiveKind::Tar);
+  }
+
+  #[test]
+  fn test_sniff_archive_kind_gzip() {
+    let head = vec![0x1F, 0x8B, 0x08];
+    assert_eq!(sniff_archive_kind(&head, None), SniffArchiveKind::Gzip);
+  }
+
+  #[test]
+  fn test_sniff_archive_kind_zip() {
+    let head = vec![0x50, 0x4B, 0x03, 0x04];
+    assert_eq!(sniff_archive_kind(&head, None), SniffArchiveKind::Zip);
+  }
+
+  #[test]
+  fn test_entry_source_semantics() {
+    assert_eq!(EntrySource::File.label(), "file");
+    assert_eq!(EntrySource::Tar.label(), "tar");
+    assert_eq!(EntrySource::TarGz.label(), "tar.gz");
+    assert_eq!(EntrySource::Gz.label(), "gz");
+
+    assert!(!EntrySource::File.is_archive());
+    assert!(EntrySource::Tar.is_archive());
+    assert!(EntrySource::TarGz.is_archive());
+    assert!(!EntrySource::Gz.is_archive());
+
+    assert!(!EntrySource::File.is_compressed());
+    assert!(!EntrySource::Tar.is_compressed());
+    assert!(EntrySource::TarGz.is_compressed());
+    assert!(EntrySource::Gz.is_compressed());
+  }
+
+  #[test]
+  fn test_archive_type_to_sniff_kind() {
+    assert_eq!(
+      archive_type_to_sniff_kind(ArchiveType::Tar),
+      Some(SniffArchiveKind::Tar)
+    );
+    assert_eq!(
+      archive_type_to_sniff_kind(ArchiveType::TarGz),
+      Some(SniffArchiveKind::Gzip)
+    );
+    assert_eq!(
+      archive_type_to_sniff_kind(ArchiveType::Tgz),
+      Some(SniffArchiveKind::Gzip)
+    );
+    assert_eq!(
+      archive_type_to_sniff_kind(ArchiveType::Gz),
+      Some(SniffArchiveKind::Gzip)
+    );
+    assert_eq!(
+      archive_type_to_sniff_kind(ArchiveType::Zip),
+      Some(SniffArchiveKind::Zip)
+    );
+    assert_eq!(archive_type_to_sniff_kind(ArchiveType::Unknown), None);
+  }
+
+  #[test]
+  fn test_is_tar_gz_type() {
+    assert!(is_tar_gz_type(ArchiveType::TarGz));
+    assert!(is_tar_gz_type(ArchiveType::Tgz));
+    assert!(!is_tar_gz_type(ArchiveType::Gz));
+    assert!(!is_tar_gz_type(ArchiveType::Tar));
+    assert!(!is_tar_gz_type(ArchiveType::Unknown));
+  }
+
+  #[test]
+  fn test_detect_gzip_inner_is_tar_with_hint() {
+    // 无法解压的 gzip 数据，依赖 hint_name
+    let invalid_gzip = vec![0x1F, 0x8B, 0xFF]; // 无效的 gzip 数据
+
+    // tar.gz 后缀应该返回 true
+    assert!(detect_gzip_inner_is_tar(&invalid_gzip, Some("data.tar.gz")));
+    assert!(detect_gzip_inner_is_tar(&invalid_gzip, Some("data.TGZ")));
+    assert!(detect_gzip_inner_is_tar(&invalid_gzip, Some("DATA.TAR.GZ")));
+
+    // 非 tar.gz 后缀应该返回 false
+    assert!(!detect_gzip_inner_is_tar(&invalid_gzip, Some("data.gz")));
+    assert!(!detect_gzip_inner_is_tar(&invalid_gzip, Some("data.txt")));
+
+    // 无 hint 应该返回 false
+    assert!(!detect_gzip_inner_is_tar(&invalid_gzip, None));
+  }
+
+  #[test]
+  fn test_detect_gzip_inner_is_tar_with_valid_gzip() {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    // 创建包含 tar header 的 gzip 数据
+    let mut tar_header = vec![0u8; 512];
+    tar_header[257] = b'u';
+    tar_header[258] = b's';
+    tar_header[259] = b't';
+    tar_header[260] = b'a';
+    tar_header[261] = b'r';
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&tar_header).unwrap();
+    let gz_data = encoder.finish().unwrap();
+
+    // 应该检测到内部是 tar
+    assert!(detect_gzip_inner_is_tar(&gz_data, None));
+    assert!(detect_gzip_inner_is_tar(&gz_data, Some("data.gz"))); // 即使后缀是 .gz
+
+    // 创建不包含 tar header 的 gzip 数据
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"This is plain text content").unwrap();
+    let plain_gz = encoder.finish().unwrap();
+
+    // 应该检测到内部不是 tar
+    assert!(!detect_gzip_inner_is_tar(&plain_gz, None));
+    assert!(!detect_gzip_inner_is_tar(&plain_gz, Some("data.gz")));
+    // 但如果 hint 说是 tar.gz，应该返回 true（hint 兜底）
+    assert!(detect_gzip_inner_is_tar(&plain_gz, Some("data.tar.gz")));
+  }
+
+  /// 验证 open_archive_typed 对 Unknown 类型的处理
+  #[tokio::test]
+  async fn test_open_archive_typed_unknown_fallback() {
+    // 创建一个简单的 gzip 数据
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(b"test content").unwrap();
+    let gz_data = encoder.finish().unwrap();
+
+    // Unknown 类型应该走 auto 路径，正确检测为 gzip
+    let cursor = std::io::Cursor::new(gz_data.clone());
+    let result = open_archive_typed(cursor, Some("test.gz"), ArchiveType::Unknown).await;
+    assert!(result.is_ok());
+
+    let mut stream = result.unwrap();
+    let meta = stream.next_entry().await.unwrap().unwrap().0;
+    // 应该是纯 gzip，不是 tar.gz
+    assert_eq!(meta.source, EntrySource::Gz);
+  }
+
+  /// 验证 open_archive_typed 在外层类型不匹配时的 auto 路径切换
+  #[tokio::test]
+  async fn test_open_archive_typed_outer_type_mismatch() {
+    // 创建一个 tar 文件
+    let mut tar_data = vec![0u8; 512];
+    tar_data[257] = b'u';
+    tar_data[258] = b's';
+    tar_data[259] = b't';
+    tar_data[260] = b'a';
+    tar_data[261] = b'r';
+
+    // 传入 TarGz 类型，但实际是 Tar → 应该走 auto 路径
+    let cursor = std::io::Cursor::new(tar_data.clone());
+    let result = open_archive_typed(cursor, Some("test.tar"), ArchiveType::TarGz).await;
+    assert!(result.is_ok());
+
+    // auto 路径应该正确检测为 tar
+    let mut stream = result.unwrap();
+    let _first_entry = stream.next_entry().await;
+    // tar 流尝试读取可能失败（数据不完整），但关键是没有 panic
+    // 这里主要验证 auto 路径被触发，而不是 typed 路径直接失败
   }
 }

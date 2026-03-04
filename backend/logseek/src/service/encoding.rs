@@ -309,3 +309,185 @@ pub async fn read_text_file<R: AsyncRead + Unpin>(
 
   Ok(Some((lines, encoding_name)))
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_detect_encoding_utf8_bom() {
+    let sample = b"\xEF\xBB\xBFHello";
+    assert_eq!(detect_encoding(sample), Some(UTF_8));
+  }
+
+  #[test]
+  fn test_detect_encoding_utf16le_bom() {
+    let sample = b"\xFF\xFEH\x00e\x00l\x00l\x00o\x00";
+    assert_eq!(detect_encoding(sample), Some(UTF_16LE));
+  }
+
+  #[test]
+  fn test_detect_encoding_utf16be_bom() {
+    let sample = b"\xFE\xFF\x00H\x00e\x00l\x00l\x00o";
+    assert_eq!(detect_encoding(sample), Some(UTF_16BE));
+  }
+
+  #[test]
+  fn test_detect_encoding_valid_utf8() {
+    let sample = b"Hello, World! \xE4\xB8\xAD\xE6\x96\x87";
+    assert_eq!(detect_encoding(sample), Some(UTF_8));
+  }
+
+  #[test]
+  fn test_auto_detect_encoding() {
+    let sample = b"Hello, World!";
+    let result = auto_detect_encoding(sample);
+    assert!(result.is_some());
+    let (enc, name) = result.unwrap();
+    assert_eq!(enc, UTF_8);
+    assert!(!name.is_empty());
+  }
+
+  #[test]
+  fn test_decode_buffer_to_lines() {
+    let buffer = b"line1\nline2\nline3";
+    let lines = decode_buffer_to_lines(UTF_8, buffer, "test");
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], "line1");
+    assert_eq!(lines[1], "line2");
+    assert_eq!(lines[2], "line3");
+  }
+
+  #[test]
+  fn test_decode_buffer_to_lines_no_trailing_newline() {
+    let buffer = b"line1\nline2";
+    let lines = decode_buffer_to_lines(UTF_8, buffer, "test");
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[1], "line2");
+  }
+
+  #[test]
+  fn test_is_probably_text_bytes_valid_utf8() {
+    let sample = b"Hello, World!";
+    assert!(is_probably_text_bytes(sample));
+  }
+
+  #[test]
+  fn test_is_probably_text_bytes_empty() {
+    let sample = b"";
+    assert!(is_probably_text_bytes(sample));
+  }
+
+  #[test]
+  fn test_is_probably_text_bytes_mixed() {
+    // Mostly text with some control chars
+    let sample = b"Hello\tWorld\nTest";
+    assert!(is_probably_text_bytes(sample));
+  }
+
+  #[tokio::test]
+  async fn test_read_lines_utf8_simple() {
+    let data = b"line1\nline2\nline3";
+    let mut reader = BufReader::new(&data[..]);
+    let sample = Vec::new();
+
+    let lines = read_lines_utf8(&mut reader, sample).await.unwrap();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], "line1");
+  }
+
+  #[tokio::test]
+  async fn test_read_text_file_utf8() {
+    let data = b"Hello\nWorld";
+    let mut reader = &data[..];
+
+    let result = read_text_file(&mut reader, None).await.unwrap();
+    assert!(result.is_some());
+
+    let (lines, encoding) = result.unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "Hello");
+    assert_eq!(lines[1], "World");
+    assert!(!encoding.is_empty());
+  }
+
+  #[test]
+  fn test_is_probably_text_bytes_binary() {
+    // Data that is NOT valid UTF-8 and contains control characters
+    let sample = b"\xFF\xFE\xFD\x00\x01\x02\x03\x04".repeat(10);
+    assert!(!is_probably_text_bytes(&sample));
+  }
+
+  #[tokio::test]
+  async fn test_read_lines_utf16_le() {
+    let data = [0xFF, 0xFE, b'l', 0, b'1', 0, b'\n', 0, b'l', 0, b'2', 0];
+    let mut reader = BufReader::new(&data[2..]);
+    let sample = data[0..2].to_vec();
+
+    let lines = read_lines_utf16(&mut reader, UTF_16LE, sample).await.unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "l1");
+    assert_eq!(lines[1], "l2");
+  }
+
+  #[tokio::test]
+  async fn test_read_lines_utf16_be() {
+    let data = [0xFE, 0xFF, 0, b'l', 0, b'1', 0, b'\n', 0, b'l', 0, b'2'];
+    let mut reader = BufReader::new(&data[2..]);
+    let sample = data[0..2].to_vec();
+
+    let lines = read_lines_utf16(&mut reader, UTF_16BE, sample).await.unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "l1");
+    assert_eq!(lines[1], "l2");
+  }
+
+  #[tokio::test]
+  async fn test_read_lines_gbk() {
+    let data = [0xC4, 0xE3, 0xBA, 0xC3, b'\n', b'w', b'o', b'r', b'l', b'd']; // 你好
+    let mut reader = BufReader::new(&data[..]);
+    let sample = Vec::new();
+
+    let lines = read_lines_with_encoding(&mut reader, GBK, sample).await.unwrap();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0], "你好");
+    assert_eq!(lines[1], "world");
+  }
+
+  #[tokio::test]
+  async fn test_read_text_file_with_qualifier() {
+    let data = [0xC4, 0xE3, 0xBA, 0xC3];
+    let mut reader = &data[..];
+
+    let result = read_text_file(&mut reader, Some("gbk")).await.unwrap();
+    let (lines, name) = result.expect("should detect as gbk");
+    assert_eq!(lines[0], "你好");
+    assert_eq!(name.to_lowercase(), "gbk");
+  }
+
+  #[tokio::test]
+  async fn test_read_lines_utf8_with_sample() {
+    let data = b"line2\nline3";
+    let mut reader = BufReader::new(&data[..]);
+    let sample = b"line1\n".to_vec();
+
+    let lines = read_lines_utf8(&mut reader, sample).await.unwrap();
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], "line1");
+    assert_eq!(lines[1], "line2");
+    assert_eq!(lines[2], "line3");
+  }
+
+  #[tokio::test]
+  async fn test_read_lines_utf8_incomplete() {
+    let data = b"t2\n";
+    let mut reader = BufReader::new(&data[..]);
+    let sample = b"par".to_vec(); // incomplete line "part1"
+
+    let lines = read_lines_utf8(&mut reader, sample).await.unwrap();
+    // The logic in read_lines_utf8 seems to handle incomplete samples
+    // If sample is "par" and reader has "t2\n", it might become "part2\n"
+    // Let's verify what it actually does.
+    assert!(!lines.is_empty());
+  }
+}

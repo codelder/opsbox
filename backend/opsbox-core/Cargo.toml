@@ -31,7 +31,6 @@ libsqlite3-sys = { version = "0.30", features = ["bundled"] }
 
 # Error handling
 thiserror = "2"
-problemdetails = { version = "0.6", features = ["axum"] }
 
 # Logging
 tracing = { workspace = true }
@@ -52,21 +51,31 @@ percent-encoding = "2.3"
 
 # File System & Compression
 async-compression = { version = "0.4", features = ["tokio", "gzip"] }
+flate2 = "1.0"
 jwalk = "0.8"
 async-tar = "0.5"
 tokio-util = { version = "0.7", features = ["compat", "io"] }
 uuid = { version = "1.0", features = ["v4"] }
 
 # AWS SDK for S3
-aws-config = "1.1"
 aws-sdk-s3 = { version = "1.15", features = ["behavior-version-latest"] }
 infer = "0.19"
 regex = "1"
 once_cell = "1.20"
-async_zip = { version = "0.0.18", features = ["tokio"] }
+async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
 tokio-tar = "0.3.1"
+tar = { version = "0.4", features = ["default"] }
 tempfile = "3.24.0"
 lru = "0.16.2"
 futures-lite = "2.6.1"
 tokio-stream = "0.1.17"
+fluent-uri = "0.4.1"
+num_cpus = "1.16"
+globset = "0.4"
 
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.10"
+opsbox-test-common = { path = "../test-common" }
+test-log = "0.2"
+zip = "2.2"

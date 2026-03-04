@@ -303,3 +303,245 @@ impl AppConfig {
     self.log_retention
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Helper function to create a minimal AppConfig for testing
+  fn test_config() -> AppConfig {
+    AppConfig {
+      host: "0.0.0.0".to_string(),
+      port: 4000,
+      addr: None,
+      daemon: false,
+      log_level: None,
+      verbose: 0,
+      log_dir: "/tmp/logs".to_string(),
+      log_retention: 7,
+      database_url: None,
+      io_max_concurrency: None,
+      io_timeout_sec: None,
+      io_max_retries: None,
+      server_id: None,
+      cmd: None,
+      #[cfg(windows)]
+      service_mode: false,
+      #[cfg(windows)]
+      install_service: false,
+      #[cfg(windows)]
+      uninstall_service: false,
+      #[cfg(windows)]
+      start_service: false,
+      #[cfg(windows)]
+      stop_service: false,
+    }
+  }
+
+  /// Test port_parser validates port numbers correctly
+  ///
+  /// 业务场景: 确保 CLI 能够正确验证用户输入的端口号
+  #[test]
+  fn test_port_parser_valid_ports() {
+    assert_eq!(port_parser("80").unwrap(), 80);
+    assert_eq!(port_parser("8080").unwrap(), 8080);
+    assert_eq!(port_parser("65535").unwrap(), 65535);
+    assert_eq!(port_parser("1").unwrap(), 1);
+  }
+
+  /// Test port_parser rejects invalid ports
+  ///
+  /// 业务场景: 防止用户输入无效的端口号导致服务启动失败
+  #[test]
+  fn test_port_parser_invalid_ports() {
+    assert!(port_parser("abc").is_err());
+    assert!(port_parser("").is_err());
+    assert!(port_parser("99999").is_err()); // > u16::MAX
+    assert!(port_parser("-1").is_err());
+    // Note: port 0 is technically valid u16, but usually reserved
+    // We accept it here as the parser doesn't reject it
+    assert_eq!(port_parser("0").unwrap(), 0);
+  }
+
+  /// Test host_parser validates various host formats
+  ///
+  /// 业务场景: 支持 IPv4、IPv6、主机名等多种地址格式
+  #[test]
+  fn test_host_parser_valid_hosts() {
+    // IPv4
+    assert_eq!(host_parser("127.0.0.1").unwrap(), "127.0.0.1");
+    assert_eq!(host_parser("0.0.0.0").unwrap(), "0.0.0.0");
+    assert_eq!(host_parser("192.168.1.1").unwrap(), "192.168.1.1");
+
+    // IPv6
+    assert_eq!(host_parser("::1").unwrap(), "::1");
+    assert_eq!(host_parser("[::1]").unwrap(), "[::1]");
+    assert_eq!(host_parser("2001:db8::1").unwrap(), "2001:db8::1");
+
+    // Hostnames
+    assert_eq!(host_parser("localhost").unwrap(), "localhost");
+    assert_eq!(host_parser("example.com").unwrap(), "example.com");
+  }
+
+  /// Test host_parser rejects empty input
+  #[test]
+  fn test_host_parser_empty() {
+    assert!(host_parser("").is_err());
+    assert!(host_parser("   ").is_err()); // whitespace only
+  }
+
+  /// Test addr_parser validates SocketAddr formats
+  ///
+  /// 业务场景: 支持完整的 HOST:PORT 地址格式
+  #[test]
+  fn test_addr_parser_valid() {
+    let addr = addr_parser("127.0.0.1:8080").unwrap();
+    assert_eq!(addr.ip().to_string(), "127.0.0.1");
+    assert_eq!(addr.port(), 8080);
+
+    let addr = addr_parser("[::1]:9000").unwrap();
+    assert_eq!(addr.port(), 9000);
+  }
+
+  /// Test addr_parser rejects invalid formats
+  #[test]
+  fn test_addr_parser_invalid() {
+    assert!(addr_parser("localhost").is_err()); // missing port
+    assert!(addr_parser(":8080").is_err()); // missing host
+    assert!(addr_parser("127.0.0.1").is_err()); // missing port
+    assert!(addr_parser("").is_err());
+  }
+
+  /// Test AppConfig::get_addr combines host and port correctly
+  #[test]
+  fn test_get_addr_combines_host_port() {
+    let config = AppConfig {
+      host: "127.0.0.1".to_string(),
+      port: 8080,
+      ..test_config()
+    };
+
+    let addr = config.get_addr().unwrap();
+    assert_eq!(addr.ip().to_string(), "127.0.0.1");
+    assert_eq!(addr.port(), 8080);
+  }
+
+  /// Test AppConfig::get_addr prefers explicit addr over host/port
+  #[test]
+  fn test_get_addr_prefers_explicit() {
+    let explicit = "192.168.1.100:9000".parse().unwrap();
+    let config = AppConfig {
+      host: "127.0.0.1".to_string(),
+      port: 8080,
+      addr: Some(explicit),
+      ..test_config()
+    };
+
+    let addr = config.get_addr().unwrap();
+    assert_eq!(addr.ip().to_string(), "192.168.1.100");
+    assert_eq!(addr.port(), 9000);
+  }
+
+  /// Test get_io_max_concurrency returns clamped values
+  ///
+  /// 业务场景: 确保并发数在合理范围内（1-128），防止资源耗尽
+  #[test]
+  fn test_get_io_max_concurrency_clamping() {
+    // Too low - should clamp to 1
+    let config = AppConfig {
+      io_max_concurrency: Some(0),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_max_concurrency(), 1);
+
+    // Normal value
+    let config = AppConfig {
+      io_max_concurrency: Some(50),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_max_concurrency(), 50);
+
+    // Too high - should clamp to 128
+    let config = AppConfig {
+      io_max_concurrency: Some(200),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_max_concurrency(), 128);
+  }
+
+  /// Test get_io_timeout_sec returns clamped values
+  ///
+  /// 业务场景: 确保超时时间在合理范围内（5-300秒）
+  #[test]
+  fn test_get_io_timeout_sec_clamping() {
+    // Too low - should clamp to 5
+    let config = AppConfig {
+      io_timeout_sec: Some(1),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_timeout_sec(), 5);
+
+    // Normal value
+    let config = AppConfig {
+      io_timeout_sec: Some(120),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_timeout_sec(), 120);
+
+    // Too high - should clamp to 300
+    let config = AppConfig {
+      io_timeout_sec: Some(600),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_timeout_sec(), 300);
+  }
+
+  /// Test get_io_max_retries returns clamped values
+  ///
+  /// 业务场景: 确保重试次数在合理范围内（1-20次）
+  #[test]
+  fn test_get_io_max_retries_clamping() {
+    // Too low - should clamp to 1
+    let config = AppConfig {
+      io_max_retries: Some(0),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_max_retries(), 1);
+
+    // Normal value
+    let config = AppConfig {
+      io_max_retries: Some(10),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_max_retries(), 10);
+
+    // Too high - should clamp to 20
+    let config = AppConfig {
+      io_max_retries: Some(50),
+      ..test_config()
+    };
+    assert_eq!(config.get_io_max_retries(), 20);
+  }
+
+  /// Test get_log_retention returns configured value
+  #[test]
+  fn test_get_log_retention() {
+    let config = AppConfig {
+      log_retention: 30,
+      ..test_config()
+    };
+    assert_eq!(config.get_log_retention(), 30);
+  }
+
+  /// Test default values from helper function
+  #[test]
+  fn test_config_defaults() {
+    let config = test_config();
+    assert_eq!(config.host, "0.0.0.0");
+    assert_eq!(config.port, 4000);
+    assert!(!config.daemon);
+    assert_eq!(config.get_io_max_concurrency(), 12); // default
+    assert_eq!(config.get_io_timeout_sec(), 60); // default
+    assert_eq!(config.get_io_max_retries(), 5); // default
+  }
+}

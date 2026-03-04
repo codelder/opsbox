@@ -36,15 +36,12 @@ export interface SearchJsonResult {
   /**
    * 文件 URL 标识符
    *
-   * 支持多种格式：
-   * - 本地文件: `file:///path/to/file.log`
-   * - S3 对象（默认配置）: `s3://bucket/path/to/file`
-   * - S3 对象（指定配置）: `s3://profile:bucket/path/to/file`
-   * - Tar.gz 压缩包内文件: `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
-   * - Tar 压缩包内文件: `tar+file:///path/archive.tar:entry/path`
-   * - 纯 Gzip 压缩文件: `gz+s3://bucket/file.log.gz:file.log`
-   * - 目录内文件: `dir+file:///base/path:relative/file.log`
-   * - Agent 远程文件: `agent://server-01/var/log/app.log`
+   * 支持 ORL (OpsBox Resource Locator) 格式：
+   * - 本地文件: orl://local/path/to/file.log
+   * - Agent 远程文件: orl://agent-01@agent/var/log/app.log
+   * - S3 对象: orl://profile:bucket@s3/path/to/file
+   * - 归档内文件: orl://local/path/to/archive.tar.gz?entry=inner/file.log
+   * - 带通配符过滤: orl://local/var/log/?glob=*.log
    */
   path: string;
   keywords: KeywordInfo[]; // 带类型信息的关键词列表
@@ -114,6 +111,7 @@ export interface LlmBackendUpsertPayload {
   api_key?: string; // openai
   organization?: string; // openai
   project?: string; // openai
+  update_secret?: boolean; // 是否更新密钥（仅更新时不修改密钥时传 false）
 }
 
 export interface LlmBackendListItem {
@@ -157,9 +155,9 @@ export interface ViewParams {
    * 文件 URL 标识符（同 SearchJsonResult.path）
    *
    * 支持的格式示例：
-   * - `file:///var/log/app.log`
-   * - `s3://backupdr/logs/app.log`
-   * - `tar.gz+s3://bucket/archive.tar.gz:logs/app.log`
+   * - `orl://local/var/log/app.log`
+   * - `orl://backupdr:logs-bucket@s3/app.log`
+   * - `orl://local/path/to/archive.tar.gz?entry=logs/app.log`
    */
   file: string;
   start: number; // 起始行号（1-based）

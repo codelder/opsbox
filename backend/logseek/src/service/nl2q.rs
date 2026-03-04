@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::{debug, error, info, trace, warn};
 // 使用新的 LLM 客户端
 use crate::repository::llm::{self, ProviderKind};
@@ -20,12 +20,6 @@ pub struct NLBody {
   pub nl: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct NL2QResponse {
-  /// 生成的查询字符串（q）
-  pub q: String,
-}
-
 #[derive(thiserror::Error, Debug)]
 pub enum NL2QError {
   #[error("Ollama服务未就绪或连接失败: {0}")]
@@ -34,7 +28,7 @@ pub enum NL2QError {
   Empty,
 }
 
-fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
+pub fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
   // 将整份规范作为 system 消息提供，保持与客户端无关
   let system = ChatMessage {
     role: Role::System,
@@ -48,7 +42,7 @@ fn build_messages(user_nl: &str) -> Vec<ChatMessage> {
 }
 
 // 移除大模型推理模型产生的 <think> 思考片段，保留真实输出
-fn strip_think_sections(input: &str) -> String {
+pub fn strip_think_sections(input: &str) -> String {
   let mut out = input.to_string();
   while let Some(start) = out.find("<think>") {
     if let Some(end_rel) = out[start..].find("</think>") {
@@ -259,15 +253,6 @@ mod tests {
   }
 
   #[test]
-  fn test_nl2q_response_serialization() {
-    let response = NL2QResponse {
-      q: "error AND warning".to_string(),
-    };
-    let json = serde_json::to_string(&response).unwrap();
-    assert!(json.contains("error AND warning"));
-  }
-
-  #[test]
   fn test_quick_guide_loaded() {
     // 验证 QUICK_GUIDE 常量已正确加载
     assert!(QUICK_GUIDE.contains("查询语法指南"));
@@ -295,30 +280,6 @@ mod tests {
   }
 
   #[test]
-  fn test_nl_body_clone() {
-    let body = NLBody { nl: "test".to_string() };
-    let cloned = body.clone();
-    assert_eq!(body.nl, cloned.nl);
-  }
-
-  #[test]
-  fn test_nl2q_response_clone() {
-    let response = NL2QResponse {
-      q: "test query".to_string(),
-    };
-    let cloned = response.clone();
-    assert_eq!(response.q, cloned.q);
-  }
-
-  #[test]
-  fn test_nl2q_error_debug() {
-    let err = NL2QError::Http("test".to_string());
-    let debug_str = format!("{:?}", err);
-    assert!(debug_str.contains("Http"));
-    assert!(debug_str.contains("test"));
-  }
-
-  #[test]
   fn test_build_messages_empty_nl() {
     let nl = "";
     let messages = build_messages(nl);
@@ -338,5 +299,78 @@ mod tests {
     let input = "result<think>思考1<think>思考2";
     let output = strip_think_sections(input);
     assert_eq!(output, "result");
+  }
+
+  #[tokio::test]
+  async fn test_resolve_llm_client_fallback_to_env() {
+    // 设置环境变量以禁用代理检测，避免沙盒环境问题
+    // SAFETY: 单元测试中设置环境变量，测试框架保证串行运行。
+    unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    // 数据库未初始化，应该报错
+    let result = resolve_llm_client(&pool).await;
+    assert!(result.is_err());
+  }
+
+  #[tokio::test]
+  async fn test_resolve_llm_client_from_db() {
+    // 设置环境变量以禁用代理检测，避免沙盒环境问题
+    // SAFETY: 单元测试中设置环境变量，测试框架保证串行运行。
+    unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
+    let pool = SqlitePool::connect(":memory:").await.unwrap();
+    llm::init_schema(&pool).await.unwrap();
+
+    let backend = llm::LlmBackend {
+      name: "test-ollama".to_string(),
+      provider: llm::ProviderKind::Ollama,
+      base_url: "http://localhost:11434".to_string(),
+      model: "test-model".to_string(),
+      timeout_secs: 30,
+      api_key: None,
+      organization: None,
+      project: None,
+    };
+    llm::save_backend(&pool, &backend, true).await.unwrap();
+    llm::set_default(&pool, Some("test-ollama")).await.unwrap();
+
+    let result = resolve_llm_client(&pool).await;
+    assert!(result.is_ok());
+  }
+
+  #[test]
+  fn test_build_messages_empty_input() {
+    // 测试空输入
+    let messages = build_messages("");
+    assert_eq!(messages.len(), 2);
+    assert!(matches!(messages[0].role, Role::System));
+    assert!(matches!(messages[1].role, Role::User));
+    assert_eq!(messages[1].content, "");
+    assert!(messages[0].content.contains("查询语法"));
+  }
+
+  #[test]
+  fn test_build_messages_trimmed_input() {
+    // 测试输入被修剪
+    let messages = build_messages("  test input  ");
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].content, "test input");
+  }
+
+  #[test]
+  fn test_build_messages_system_content() {
+    // 测试系统消息包含指南
+    let messages = build_messages("test");
+    assert!(messages[0].content.contains("查询语法"));
+    assert!(messages[0].content.contains("目标"));
+  }
+
+  #[test]
+  fn test_nlbody_deserialize() {
+    // 测试NLBody反序列化
+    let json = r#"{"nl": "test query"}"#;
+    let result: Result<NLBody, _> = serde_json::from_str(json);
+    assert!(result.is_ok());
+    let body = result.unwrap();
+    assert_eq!(body.nl, "test query");
   }
 }

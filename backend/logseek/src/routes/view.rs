@@ -2,24 +2,27 @@
 //!
 //! 处理 /view.cache.json 端点，从缓存中读取文件内容
 
-use crate::agent::SearchService;
 use crate::api::{LogSeekApiError, models::ViewParams};
-use crate::domain::Odfi;
-use crate::domain::config::{Endpoint, Source, Target};
-use crate::domain::{EndpointType, TargetType};
 use crate::repository::{RepositoryError, cache::cache as simple_cache};
 use crate::service::ServiceError;
+use crate::service::encoding::read_text_file;
+use crate::service::entry_stream::create_entry_stream;
 use axum::{
   body::Body,
   extract::{Query, State},
   http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
 };
-use futures::StreamExt;
 use opsbox_core::SqlitePool;
-use serde::Deserialize;
-// use tokio::io::AsyncBufReadExt;
-use crate::service::entry_stream::EntryStreamFactory;
+use opsbox_core::dfs::{Location, OrlParser};
+use serde::{Deserialize, Serialize};
 use tracing::debug;
+
+#[derive(Debug, Serialize)]
+struct AgentRawFileQuery {
+  path: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  entry: Option<String>,
+}
 
 /// 查看缓存中的文件内容
 pub async fn view_cache_json(
@@ -34,30 +37,22 @@ pub async fn view_cache_json(
     params.end
   );
 
-  // 解析 Odfi
-  let file_url: Odfi = match params.file.parse() {
-    Ok(url) => url,
-    Err(e) => {
-      tracing::warn!(
-        "view-parse-error: sid={} file={} error={:?}",
-        params.sid,
-        params.file,
-        e
-      );
-      return Err(LogSeekApiError::Domain(e));
-    }
-  };
+  // 解析 ORL 字符串
+  let resource = OrlParser::parse(&params.file)?;
+
+  // 获取 agent_id（用于后续使用）
+  let agent_id = resource.endpoint.identity.clone();
 
   // 读取 keywords
   let keywords = simple_cache().get_keywords(&params.sid).await.unwrap_or_default();
 
-  debug!("🔍 Server查找缓存: sid={}, file_url={}", params.sid, file_url);
+  debug!("🔍 Server查找缓存: sid={}, file_url={}", params.sid, params.file);
 
   // 1. 尝试从缓存获取
   let cache_result = simple_cache()
     .get_lines_slice(
       &params.sid,
-      &file_url,
+      &params.file, // 使用字符串 key
       params.start.unwrap_or(1),
       params.end.unwrap_or(1000),
     )
@@ -69,7 +64,7 @@ pub async fn view_cache_json(
       debug!(
         "✅ Server缓存命中: sid={}, file_url={}, total={}, slice_len={}",
         params.sid,
-        file_url,
+        params.file,
         v.0,
         v.1.len()
       );
@@ -78,156 +73,70 @@ pub async fn view_cache_json(
     None => {
       debug!(
         "❌ Server缓存未命中，尝试回源读取: sid={}, file_url={}",
-        params.sid, file_url
-      );
-
-      // 构造 Source 配置
-      let source = odfi_to_source(&file_url)
-        .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法解析源信息: {}", e))))?;
-
-      debug!(
-        "✨ 构造 Source 成功: endpoint={:?}, target={:?}",
-        source.endpoint, source.target
+        params.sid, params.file
       );
 
       // 读取所有行
       let mut all_lines: Vec<String> = Vec::new();
       let mut encoding_name = "UTF-8".to_string();
 
-      match &source.endpoint {
-        Endpoint::Agent { agent_id, .. } => {
-          // 检查是否是归档条目
-          let is_archive = matches!(source.target, Target::Archive { .. });
+      match resource.endpoint.location {
+        Location::Remote { .. } => {
+          // 对于 Agent 来源，直接走 file_raw，避免将 archive entry 误转换为文件系统路径
+          let path_str = resource.primary_path.to_string();
+          let entry = resource.archive_context.as_ref().map(|ctx| ctx.inner_path.to_string());
 
-          if is_archive {
-            // 归档条目：使用 EntryStreamFactory 下载归档并读取条目
-            debug!(
-              "🚀 Agent 归档条目：使用 EntryStreamFactory 读取: agent_id={}, path={}",
-              agent_id, file_url.path
-            );
+          debug!(
+            "🚀 准备调用 Agent 读取文件: agent_id={}, path={}, entry={:?}",
+            agent_id, path_str, entry
+          );
 
-            let factory = EntryStreamFactory::new(pool.clone());
-            let mut stream = factory
-              .create_stream(source.clone())
-              .await
-              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
+          let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
+            .await
+            .map_err(|e| {
+              LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
+            })?;
 
-            // 获取要查找的 entry 路径
-            let target_entry = match &source.target {
-              Target::Archive { entry, .. } => entry.clone(),
-              _ => None,
-            };
+          let query = AgentRawFileQuery {
+            path: path_str.clone(),
+            entry,
+          };
 
-            // 读取条目
-            let mut found = false;
-            let mut checked_count = 0;
-            while let Some(entry_res) = stream
-              .next_entry()
-              .await
-              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
-            {
-              let (meta, mut reader) = entry_res;
-              checked_count += 1;
-              tracing::debug!(
-                "归档条目检查 #{}: meta.path={}, target={:?}",
-                checked_count,
-                meta.path,
-                target_entry
-              );
+          let response = client
+            .get_raw_with_query("/api/v1/file_raw", &query)
+            .await
+            .map_err(|e| {
+              LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 原始文件请求失败: {}", e)))
+            })?;
 
-              // 如果指定了 entry 路径，检查是否匹配
-              if let Some(ref target) = target_entry {
-                let meta_path = meta.path.trim_start_matches('/').trim_start_matches("./");
-                let target_path = target.trim_start_matches('/').trim_start_matches("./");
-                if meta_path != target_path {
-                  tracing::debug!("路径不匹配: meta_path={} != target_path={}", meta_path, target_path);
-                  continue;
-                }
-                tracing::debug!("路径匹配成功!");
-              }
+          let bytes = response.bytes().await.map_err(|e| {
+            LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取 Agent 响应失败: {}", e)))
+          })?;
 
-              let result = crate::service::encoding::read_text_file(&mut reader, None)
-                .await
-                .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
+          let mut reader = bytes.as_ref();
+          let result = read_text_file(&mut reader, None)
+            .await
+            .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
 
-              if let Some((lines, encoding)) = result {
-                tracing::debug!("文件编码: {}", encoding);
-                all_lines = lines;
-                encoding_name = encoding;
-                found = true;
-              } else {
-                tracing::warn!("文件被检测为二进制或为空: {}", file_url);
-              }
-              break;
-            }
-
-            if !found && target_entry.is_some() {
-              tracing::warn!(
-                "在归档中未找到指定条目: {:?}, 共检查 {} 个条目",
-                target_entry,
-                checked_count
-              );
-            }
+          if let Some((lines, encoding)) = result {
+            all_lines = lines;
+            encoding_name = encoding;
           } else {
-            // 普通文件：使用 search API 读取
-            debug!(
-              "🚀 准备调用 Agent 读取文件: agent_id={}, path={}",
-              agent_id, file_url.path
+            tracing::warn!(
+              "Agent 文件被检测为二进制或为空: path={} entry={:?}",
+              path_str,
+              query.entry
             );
-
-            let client = crate::agent::create_agent_client_by_id(agent_id.clone())
-              .await
-              .map_err(|e| {
-                LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
-              })?;
-
-            let options = crate::agent::SearchOptions {
-              path_filter: None,
-              target: source.target.clone(),
-              timeout_secs: Some(30),
-              ..Default::default()
-            };
-
-            debug!("📤 发送 Agent 搜索请求: query='/.*/', options={:?}", options);
-
-            let mut stream = client
-              .search("/.*/", 0, options)
-              .await
-              .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 搜索失败: {}", e))))?;
-
-            debug!("📥以此 Agent 搜索流建立成功，开始接收数据...");
-
-            while let Some(item) = stream.next().await {
-              match item {
-                Ok(res) => {
-                  all_lines.extend(res.lines);
-                  if let Some(enc) = res.encoding
-                    && encoding_name == "UTF-8"
-                  {
-                    encoding_name = enc;
-                  }
-                }
-                Err(e) => {
-                  tracing::warn!("Agent 流返回错误: {}", e);
-                }
-              }
-            }
           }
         }
         _ => {
-          // Local/S3 来源：使用 EntryStreamFactory
-          let factory = EntryStreamFactory::new(pool.clone());
-
-          let mut stream = factory
-            .create_stream(source.clone())
+          // Local/S3 来源：使用 create_entry_stream
+          let mut stream = create_entry_stream(&pool, &params.file)
             .await
             .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
           // 获取要查找的 entry 路径（如果有）
-          let target_entry = match &source.target {
-            Target::Archive { entry, .. } => entry.clone(),
-            _ => None,
-          };
+          let target_entry = resource.archive_context.as_ref().map(|c| c.inner_path.to_string());
 
           // 读取条目
           let mut found = false;
@@ -251,7 +160,7 @@ pub async fn view_cache_json(
             }
 
             // 读取匹配条目的内容
-            let result = crate::service::encoding::read_text_file(&mut reader, None)
+            let result = read_text_file(&mut reader, None)
               .await
               .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取文件失败: {}", e))))?;
 
@@ -261,15 +170,13 @@ pub async fn view_cache_json(
               encoding_name = encoding;
               found = true;
             } else {
-              tracing::warn!("文件被检测为二进制或为空: {}", file_url);
+              tracing::warn!("文件被检测为二进制或为空: {}", params.file);
             }
             break; // 找到第一个匹配的条目后停止
           }
 
-          if !found && target_entry.is_some() {
-            tracing::warn!("在归档中未找到指定条目: {:?}, 共检查 {} 个条目", target_entry, checked_count);
-          } else if !found {
-            tracing::warn!("流未返回任何条目: {}", file_url);
+          if !found {
+            tracing::warn!("未找到条目或流为空: {}, 共检查 {} 个条目", params.file, checked_count);
           }
         }
       }
@@ -278,7 +185,7 @@ pub async fn view_cache_json(
       let total = all_lines.len();
       debug!("✅ 回源读取成功: lines={}", total);
       simple_cache()
-        .put_lines(&params.sid, &file_url, &all_lines, encoding_name.clone())
+        .put_lines(&params.sid, &params.file, &all_lines, encoding_name.clone())
         .await;
 
       // 从全量数据中切片返回
@@ -335,102 +242,6 @@ pub async fn view_cache_json(
     .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建 HTTP 响应失败: {}", e))))
 }
 
-/// 辅助函数：将 Odfi 转换为 Source 配置
-fn odfi_to_source(odfi: &Odfi) -> Result<crate::domain::config::Source, String> {
-  let endpoint = match odfi.endpoint_type {
-    EndpointType::Local => {
-      // 本地文件：认为 root 为 /, path 为绝对路径
-      // 注意：odfi.path 通常不带 leading slash 如果是从 pathbuf 转的?
-      // 但 unix 绝对路径应该带 /。
-      // 为安全起见，root 设为 /，path 设为 odfi.path (需确保 odfi.path 是绝对路径或相对于 root)
-      // 如果 odfi.path 包含 /，root=/ 应该没问题。
-      Endpoint::Local { root: "/".to_string() }
-    }
-    EndpointType::S3 => {
-      // S3: Odfi 解析逻辑中，endpoint_id 格式为 "profile:bucket"，path 为 object key
-      if let Some((profile, bucket)) = odfi.endpoint_id.split_once(':') {
-        Endpoint::S3 {
-          profile: profile.to_string(),
-          bucket: bucket.to_string(),
-        }
-      } else {
-        return Err(format!(
-          "Invalid S3 endpoint ID (expected profile:bucket): {}",
-          odfi.endpoint_id
-        ));
-      }
-    }
-    EndpointType::Agent => {
-      Endpoint::Agent {
-        agent_id: odfi.endpoint_id.clone(),
-        subpath: "".to_string(), // 暂时假设无 subpath 限制或由 path 完整指定
-      }
-    }
-  };
-
-  let target = match odfi.endpoint_type {
-    EndpointType::Agent => {
-      // 调试日志
-      tracing::debug!(
-        "odfi_to_source: agent_id={}, path={}, entry_path={:?}, target_type={:?}, is_archive_entry={}",
-        odfi.endpoint_id,
-        odfi.path,
-        odfi.entry_path,
-        odfi.target_type,
-        odfi.is_archive_entry()
-      );
-      // 检查是否是归档内的条目
-      if odfi.is_archive_entry() {
-        // 如果是归档，使用 Archive 目标
-        let path = if !odfi.path.starts_with('/') {
-          format!("/{}", odfi.path)
-        } else {
-          odfi.path.clone()
-        };
-        Target::Archive {
-          path,
-          entry: odfi.entry_path.clone(),
-        }
-      } else {
-        // 普通文件：使用 Files 目标
-        // 确保路径为绝对路径（ODFI 解析可能丢失开头的 /）
-        let path = if !odfi.path.starts_with('/') {
-          format!("/{}", odfi.path)
-        } else {
-          odfi.path.clone()
-        };
-        Target::Files { paths: vec![path] }
-      }
-    }
-    _ => {
-      match odfi.target_type {
-        TargetType::Dir => {
-          // 虽然是 Dir 类型，但如果是 Odfi 指向的具体文件，我们用 Files Target
-          // 这样 EntryStream 就会只读取这个文件
-          Target::Files {
-            paths: vec![odfi.path.clone()],
-          }
-        }
-        TargetType::Archive => {
-          // 如果是归档，path 是归档文件路径（对于 S3 就是 Key）
-          // entry_path 是归档内的文件路径
-          Target::Archive {
-            path: odfi.path.clone(),
-            entry: odfi.entry_path.clone(),
-          }
-        }
-      }
-    }
-  };
-
-  Ok(Source {
-    endpoint,
-    target,
-    display_name: None,
-    filter_glob: None,
-  })
-}
-
 /// 获取会话的文件列表参数
 #[derive(Debug, Deserialize)]
 pub struct FileListParams {
@@ -441,7 +252,7 @@ pub struct FileListParams {
 pub async fn get_file_list_json(Query(params): Query<FileListParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
   tracing::debug!("file-list-request: sid={}", params.sid);
 
-  // 从缓存中获取文件列表
+  // 从缓存中获取文件列表 (keys are now strings)
   let file_urls = match simple_cache().get_file_list(&params.sid).await {
     Some(files) => files,
     None => {
@@ -453,8 +264,8 @@ pub async fn get_file_list_json(Query(params): Query<FileListParams>) -> Result<
     }
   };
 
-  // 转换为字符串列表
-  let files: Vec<String> = file_urls.iter().map(|url| url.to_string()).collect();
+  // 已经是 String 列表
+  let files = file_urls;
 
   tracing::debug!("file-list-found: sid={} count={}", params.sid, files.len());
 
@@ -479,25 +290,14 @@ pub async fn get_file_list_json(Query(params): Query<FileListParams>) -> Result<
 pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpResponse<Body>, LogSeekApiError> {
   tracing::debug!("download-request: sid={} file={}", params.sid, params.file);
 
-  // 解析 Odfi
-  let file_url: Odfi = match params.file.parse() {
-    Ok(url) => url,
-    Err(e) => {
-      tracing::warn!(
-        "download-parse-error: sid={} file={} error={:?}",
-        params.sid,
-        params.file,
-        e
-      );
-      return Err(LogSeekApiError::Domain(e));
-    }
-  };
+  // 验证 ORL
+  let _resource = OrlParser::parse(&params.file)?;
 
   // 从缓存获取完整文件内容
   let (total, lines, _) = match simple_cache()
     .get_lines_slice(
       &params.sid,
-      &file_url,
+      &params.file,
       1,          // 从第1行开始
       usize::MAX, // 到最大行（内部会限制到total）
     )
@@ -507,17 +307,17 @@ pub async fn download_file(Query(params): Query<ViewParams>) -> Result<HttpRespo
       tracing::debug!(
         "✅ 下载缓存命中: sid={}, file_url={}, total={}, lines_len={}",
         params.sid,
-        file_url,
+        params.file,
         v.0,
         v.1.len()
       );
       v
     }
     None => {
-      tracing::debug!("❌ 下载缓存未命中: sid={}, file_url={}", params.sid, file_url);
+      tracing::debug!("❌ 下载缓存未命中: sid={}, file_url={}", params.sid, params.file);
       return Err(LogSeekApiError::Repository(RepositoryError::NotFound(format!(
         "Cache not found or expired for sid={}, file={}",
-        params.sid, file_url
+        params.sid, params.file
       ))));
     }
   };
@@ -552,40 +352,36 @@ pub async fn view_raw_file(
 ) -> Result<HttpResponse<Body>, LogSeekApiError> {
   tracing::debug!("view-raw-request: sid={} file={}", params.sid, params.file);
 
-  // 1. 解析 Odfi
-  let file_url: Odfi = params.file.parse().map_err(LogSeekApiError::Domain)?;
+  // 1. 解析 ORL
+  let resource = OrlParser::parse(&params.file)?;
 
-  // 2. 构造 Source
-  let source = odfi_to_source(&file_url)
-    .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法解析源信息: {}", e))))?;
-
-  // 3. 检查来源类型
-  match source.endpoint {
-    Endpoint::Agent { agent_id, .. } => {
+  // 2. 检查来源类型
+  match resource.endpoint.location {
+    Location::Remote { .. } => {
+      let agent_id = resource.endpoint.identity.clone();
       // 创建 Agent 客户端
-      let client = crate::agent::create_agent_client_by_id(agent_id.clone())
+      let client = crate::agent::create_agent_client_by_id(&pool, agent_id.to_string())
         .await
         .map_err(|e| {
           LogSeekApiError::Service(ServiceError::ProcessingError(format!("无法创建 Agent 客户端: {}", e)))
         })?;
 
-      // 构造请求路径
-      // 注意：odfi_to_source 中将 path 处理为了绝对路径，例如 /Users/...
-      // Agent 的 /api/v1/file_raw 需要 query 参数 path=...
-      // 使用 URL 编码
-      let target_path = if let Target::Files { paths } = source.target {
-        paths.first().cloned().unwrap_or_default()
-      } else {
-        file_url.path.clone()
+      let path_str = resource.primary_path.to_string();
+      let query = AgentRawFileQuery {
+        path: path_str.clone(),
+        entry: resource.archive_context.as_ref().map(|ctx| ctx.inner_path.to_string()),
       };
 
-      let query_path = format!("/api/v1/file_raw?path={}", urlencoding::encode(&target_path));
-
-      tracing::debug!("Agent 原始文件请求: agent_id={}, query={}", agent_id, query_path);
+      tracing::debug!(
+        "Agent 原始文件请求: agent_id={}, path={}, entry={:?}",
+        agent_id,
+        path_str,
+        query.entry
+      );
 
       // 调用 Agent API
       let response = client
-        .get_raw(&query_path)
+        .get_raw_with_query("/api/v1/file_raw", &query)
         .await
         .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("Agent 请求失败: {}", e))))?;
 
@@ -608,9 +404,7 @@ pub async fn view_raw_file(
     }
     _ => {
       // Local / S3
-      let factory = EntryStreamFactory::new(pool);
-      let mut stream = factory
-        .create_stream(source)
+      let mut stream = create_entry_stream(&pool, &params.file)
         .await
         .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
@@ -620,17 +414,39 @@ pub async fn view_raw_file(
         .await
         .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
       {
-        // 猜测 MIME 类型
-        let mime = guess_mime(&meta.path);
+        // 头部嗅探 MIME 类型
+        let mut buf_reader = tokio::io::BufReader::new(reader);
+        let mut head = vec![0u8; 1024]; // 1KB 样本
+        let mut n = 0;
+        use tokio::io::AsyncReadExt;
+
+        // 尽力读取
+        while n < 1024 {
+          let read_n = buf_reader.read(&mut head[n..]).await.unwrap_or(0);
+          if read_n == 0 {
+            break;
+          }
+          n += read_n;
+        }
+        head.truncate(n);
+
+        let kind = opsbox_core::fs::sniff_file_type(&head);
+        let mime = kind.mime_type().to_string(); // Return owned string
+
+        // 重构流
+        let prefixed = opsbox_core::fs::PrefixedReader::new(head, buf_reader);
 
         // 转换为 Stream
-        let stream = tokio_util::io::ReaderStream::new(reader);
+        let stream = tokio_util::io::ReaderStream::new(prefixed);
 
         tracing::debug!("开始流式传输文件: {}, mime={}", meta.path, mime);
 
         HttpResponse::builder()
           .status(200)
-          .header(CONTENT_TYPE, HeaderValue::from_str(mime).unwrap())
+          .header(
+            CONTENT_TYPE,
+            HeaderValue::from_str(&mime).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+          )
           // .header("Cache-Control", "public, max-age=3600") // 可选：添加缓存控制
           .body(Body::from_stream(stream))
           .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("构建响应失败: {}", e))))
@@ -643,27 +459,166 @@ pub async fn view_raw_file(
   }
 }
 
-fn guess_mime(path: &str) -> &'static str {
-  let lower = path.to_lowercase();
-  if lower.ends_with(".png") {
-    "image/png"
-  } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
-    "image/jpeg"
-  } else if lower.ends_with(".gif") {
-    "image/gif"
-  } else if lower.ends_with(".svg") {
-    "image/svg+xml"
-  } else if lower.ends_with(".webp") {
-    "image/webp"
-  } else if lower.ends_with(".bmp") {
-    "image/bmp"
-  } else if lower.ends_with(".ico") {
-    "image/x-icon"
-  } else if lower.ends_with(".tiff") || lower.ends_with(".tif") {
-    "image/tiff"
-  } else if lower.ends_with(".pdf") {
-    "application/pdf"
-  } else {
-    "application/octet-stream"
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::api::models::ViewParams;
+  use crate::repository::cache::cache as simple_cache;
+  use axum::extract::Query;
+  use axum::http::StatusCode;
+
+  /// 测试中的响应体最大读取大小（1MB）
+  const TEST_MAX_BODY_SIZE: usize = 1024 * 1024;
+
+  #[tokio::test]
+  async fn test_view_cache_json_hit() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let sid = "test-sid-hit".to_string();
+    let file = "orl://local/tmp/test.log".to_string();
+    let lines = vec!["line 1".to_string(), "line 2".to_string(), "line 3".to_string()];
+
+    // Populate cache
+    simple_cache().put_lines(&sid, &file, &lines, "UTF-8".to_string()).await;
+
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file.clone(),
+      start: Some(1),
+      end: Some(2),
+    };
+
+    let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Use axum::body::to_bytes to read the response body
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(json["total"], 3);
+    assert_eq!(json["start"], 1);
+    assert_eq!(json["end"], 2);
+    assert_eq!(json["lines"].as_array().unwrap().len(), 2);
+    assert_eq!(json["lines"][0]["no"], 1);
+    assert_eq!(json["lines"][0]["text"], "line 1");
+  }
+
+  #[tokio::test]
+  async fn test_get_file_list_json_success() {
+    let sid = "test-sid-list".to_string();
+    let file1 = "file1".to_string();
+    let file2 = "file2".to_string();
+
+    // Populate cache via put_lines (indirectly creates file list)
+    simple_cache()
+      .put_lines(&sid, &file1, &["line1".to_string()], "UTF-8".to_string())
+      .await;
+    simple_cache()
+      .put_lines(&sid, &file2, &["line2".to_string()], "UTF-8".to_string())
+      .await;
+
+    let params = FileListParams { sid: sid.clone() };
+    let resp = get_file_list_json(Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(json["sid"], sid);
+    assert_eq!(json["count"], 2);
+    let files = json["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert!(files.contains(&serde_json::json!("file1")));
+    assert!(files.contains(&serde_json::json!("file2")));
+  }
+
+  #[tokio::test]
+  async fn test_download_file_success() {
+    let sid = "test-sid-download".to_string();
+    let file = "orl://local/tmp/down.log".to_string();
+    let lines = vec!["hello".to_string(), "world".to_string()];
+
+    simple_cache().put_lines(&sid, &file, &lines, "UTF-8".to_string()).await;
+
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file.clone(),
+      start: None,
+      end: None,
+    };
+
+    let resp = download_file(Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let content = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(content, "hello\nworld");
+  }
+
+  #[tokio::test]
+  async fn test_view_cache_json_miss_local() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("miss.log");
+    std::fs::write(&file_path, "miss content line 1\nline 2").unwrap();
+
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let sid = "test-sid-miss".to_string();
+    let file_url = format!("orl://local{}", file_path.to_str().unwrap());
+
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file_url.clone(),
+      start: None, // Defaults to 1..1000
+      end: None,
+    };
+
+    let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["lines"][0]["text"], "miss content line 1");
+
+    // Verify it was cached
+    let cached = simple_cache().get_lines_slice(&sid, &file_url, 1, 10).await;
+    assert!(cached.is_some());
+    assert_eq!(cached.unwrap().0, 2);
+  }
+
+  #[tokio::test]
+  async fn test_view_raw_file_local() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let file_path = temp_dir.path().join("raw.png");
+    // Write some bytes to trigger sniff
+    let png_header = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    std::fs::write(&file_path, png_header).unwrap();
+
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let file_url = format!("orl://local{}", file_path.to_str().unwrap());
+
+    let params = ViewParams {
+      sid: "any".into(),
+      file: file_url,
+      start: None,
+      end: None,
+    };
+
+    let resp = view_raw_file(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "image/png");
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    assert_eq!(&body_bytes[..8], &png_header);
   }
 }

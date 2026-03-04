@@ -8,7 +8,7 @@ use tokio::time as tokio_time;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::{domain::Odfi, query::KeywordHighlight};
+use crate::query::KeywordHighlight;
 
 #[derive(Debug, Clone)]
 pub struct CompactLines {
@@ -68,7 +68,7 @@ impl CompactLines {
 struct SessionData {
   last_touch: Instant,
   keywords: Vec<KeywordHighlight>,
-  files: HashMap<Odfi, CompactLines>,
+  files: HashMap<String, CompactLines>, // Key changed to String
 }
 
 impl SessionData {
@@ -158,20 +158,15 @@ impl Cache {
                   "缓存清理完成: 移除 {} 个过期会话 ({:.2} MB), 当前活跃: {} 个 ({:.2} MB)",
                   total_removed_count, removed_mb, active_count, active_mb
                 );
-              } else {
-                 tracing::debug!(
-                   "缓存清理检查完成，无过期会话。当前活跃: {} 个 ({:.2} MB)",
-                   active_count, active_mb
-                 );
               }
 
               // 无论是否移除了条目，都尝试触发底层分配器的内存回收
-              // 这对于回收搜索过程中产生的临时内存（如未命中的文件内容）非常重要
               #[cfg(feature = "mimalloc-collect")]
               {
-                // 使用 spawn_blocking 避免阻塞异步运行时线程
                 tokio::task::spawn_blocking(move || {
-                  // 直接调用 libmimalloc-sys 提供的 mi_collect FFI
+                  // SAFETY: mi_collect 是 mimalloc 的 FFI 函数，用于触发内存回收。
+                  // 参数 `true` 表示强制回收。此函数是线程安全的，可以安全调用。
+                  // 参见: https://docs.rs/mimalloc/latest/mimalloc/
                   unsafe {
                     libmimalloc_sys::mi_collect(true);
                   }
@@ -222,7 +217,7 @@ impl Cache {
     None
   }
 
-  pub async fn put_lines(&self, sid: &str, file_url: &Odfi, lines: &[String], encoding: String) {
+  pub async fn put_lines(&self, sid: &str, file_url: &str, lines: &[String], encoding: String) {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -243,15 +238,13 @@ impl Cache {
 
     // 使用 CompactLines 优化存储
     let compact = CompactLines::from_slice(lines, encoding);
-    session.files.insert(file_url.clone(), compact);
-
-    tracing::debug!("🔍 Cache当前会话文件数: {}", session.files.len());
+    session.files.insert(file_url.to_string(), compact);
   }
 
   pub async fn get_lines_slice(
     &self,
     sid: &str,
-    file_url: &Odfi,
+    file_url: &str,
     start: usize,
     end: usize,
   ) -> Option<(usize, Vec<String>, String)> {
@@ -292,7 +285,7 @@ impl Cache {
   }
 
   /// 获取指定会话的所有文件列表
-  pub async fn get_file_list(&self, sid: &str) -> Option<Vec<Odfi>> {
+  pub async fn get_file_list(&self, sid: &str) -> Option<Vec<String>> {
     Self::start_cleaner_once();
     let mut sessions = self.sessions.write().await;
 
@@ -304,7 +297,7 @@ impl Cache {
       }
 
       session.last_touch = Instant::now();
-      let files: Vec<Odfi> = session.files.keys().cloned().collect();
+      let files: Vec<String> = session.files.keys().cloned().collect();
       return Some(files);
     }
 
@@ -349,17 +342,11 @@ mod tests {
   async fn test_cache_put_and_get_file_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "test-file.log",
-      None,
-    );
+    let file_url = "orl://local/test-file.log";
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
-    let result = c.get_lines_slice(&sid, &file_url, 1, 2).await;
+    c.put_lines(&sid, file_url, &lines, "UTF-8".to_string()).await;
+    let result = c.get_lines_slice(&sid, file_url, 1, 2).await;
 
     assert!(result.is_some());
     let (total, slice, encoding) = result.unwrap();
@@ -371,14 +358,8 @@ mod tests {
   #[tokio::test]
   async fn test_cache_get_file_lines_missing() {
     let c = cache();
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "non-existent-file.log",
-      None,
-    );
-    let result = c.get_lines_slice("non-existent-sid", &file_url, 1, 10).await;
+    let file_url = "orl://local/non-existent-file.log";
+    let result = c.get_lines_slice("non-existent-sid", file_url, 1, 10).await;
     assert_eq!(result, None);
   }
 
@@ -416,32 +397,20 @@ mod tests {
   async fn test_cache_multiple_files_same_sid() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url1 = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "file1.log",
-      None,
-    );
-    let file_url2 = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "file2.log",
-      None,
-    );
+    let file_url1 = "orl://local/file1.log";
+    let file_url2 = "orl://local/file2.log";
 
-    c.put_lines(&sid, &file_url1, &["a".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, file_url1, &["a".to_string()], "UTF-8".to_string())
       .await;
-    c.put_lines(&sid, &file_url2, &["b".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, file_url2, &["b".to_string()], "UTF-8".to_string())
       .await;
 
     let result1 = c
-      .get_lines_slice(&sid, &file_url1, 1, 1)
+      .get_lines_slice(&sid, file_url1, 1, 1)
       .await
       .map(|(_, lines, _)| lines);
     let result2 = c
-      .get_lines_slice(&sid, &file_url2, 1, 1)
+      .get_lines_slice(&sid, file_url2, 1, 1)
       .await
       .map(|(_, lines, _)| lines);
 
@@ -454,25 +423,19 @@ mod tests {
     let c = cache();
     let sid1 = format!("test-sid-1-{}", Uuid::new_v4());
     let sid2 = format!("test-sid-2-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "shared-file.log",
-      None,
-    );
+    let file_url = "orl://local/shared-file.log";
 
-    c.put_lines(&sid1, &file_url, &["content1".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid1, file_url, &["content1".to_string()], "UTF-8".to_string())
       .await;
-    c.put_lines(&sid2, &file_url, &["content2".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid2, file_url, &["content2".to_string()], "UTF-8".to_string())
       .await;
 
     let result1 = c
-      .get_lines_slice(&sid1, &file_url, 1, 1)
+      .get_lines_slice(&sid1, file_url, 1, 1)
       .await
       .map(|(_, lines, _)| lines);
     let result2 = c
-      .get_lines_slice(&sid2, &file_url, 1, 1)
+      .get_lines_slice(&sid2, file_url, 1, 1)
       .await
       .map(|(_, lines, _)| lines);
 
@@ -484,19 +447,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "test-file.log",
-      None,
-    );
+    let file_url = "orl://local/test-file.log";
     let lines: Vec<String> = (1..=10).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
+    c.put_lines(&sid, file_url, &lines, "UTF-8".to_string()).await;
 
     // 获取第 3-5 行 (1-based indexing)
-    let result = c.get_lines_slice(&sid, &file_url, 3, 5).await;
+    let result = c.get_lines_slice(&sid, file_url, 3, 5).await;
 
     assert!(result.is_some());
     let (total, slice, _) = result.unwrap();
@@ -510,19 +467,13 @@ mod tests {
   async fn test_cache_get_file_lines_slice_out_of_bounds() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "test-file.log",
-      None,
-    );
+    let file_url = "orl://local/test-file.log";
     let lines = vec!["line 1".to_string(), "line 2".to_string()];
 
-    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
+    c.put_lines(&sid, file_url, &lines, "UTF-8".to_string()).await;
 
     // 请求超出范围的行
-    let result = c.get_lines_slice(&sid, &file_url, 1, 100).await;
+    let result = c.get_lines_slice(&sid, file_url, 1, 100).await;
 
     assert!(result.is_some());
     let (total, slice, _) = result.unwrap();
@@ -632,32 +583,26 @@ mod tests {
   async fn test_cache_get_lines_slice_boundary_conditions() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "test-file.log",
-      None,
-    );
+    let file_url = "orl://local/test-file.log";
     let lines: Vec<String> = (1..=5).map(|i| format!("line {}", i)).collect();
 
-    c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
+    c.put_lines(&sid, file_url, &lines, "UTF-8".to_string()).await;
 
     // 测试边界条件：start=0（应该被调整为1）
-    let result = c.get_lines_slice(&sid, &file_url, 0, 2).await;
+    let result = c.get_lines_slice(&sid, file_url, 0, 2).await;
     assert!(result.is_some());
     let (_, slice, _) = result.unwrap();
     assert_eq!(slice[0], "line 1");
 
     // 测试边界条件：end > total（应该被限制）
-    let result = c.get_lines_slice(&sid, &file_url, 1, 1000).await;
+    let result = c.get_lines_slice(&sid, file_url, 1, 1000).await;
     assert!(result.is_some());
     let (total, slice, _) = result.unwrap();
     assert_eq!(total, 5);
     assert_eq!(slice.len(), 5);
 
     // 测试边界条件：start > end（应该返回空或最小范围）
-    let result = c.get_lines_slice(&sid, &file_url, 3, 2).await;
+    let result = c.get_lines_slice(&sid, file_url, 3, 2).await;
     assert!(result.is_some());
     let (_, slice, _) = result.unwrap();
     // start 会被调整，应该至少返回一行
@@ -680,18 +625,12 @@ mod tests {
   async fn test_cache_empty_lines() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "empty-file.log",
-      None,
-    );
+    let file_url = "orl://local/empty-file.log";
 
     // 存储空行列表
-    c.put_lines(&sid, &file_url, &[], "UTF-8".to_string()).await;
+    c.put_lines(&sid, file_url, &[], "UTF-8".to_string()).await;
 
-    let result = c.get_lines_slice(&sid, &file_url, 1, 10).await;
+    let result = c.get_lines_slice(&sid, file_url, 1, 10).await;
     // 空文件应该返回 None 或空结果
     // 根据实现，可能需要调整断言
     if let Some((total, slice, _)) = result {
@@ -732,18 +671,12 @@ mod tests {
   async fn test_cache_special_characters_in_file_id() {
     let c = cache();
     let sid = format!("test-sid-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "path/to/file-with-特殊字符.log",
-      None,
-    );
+    let file_url = "orl://local/path/to/file-with-特殊字符.log";
 
-    c.put_lines(&sid, &file_url, &["line 1".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, file_url, &["line 1".to_string()], "UTF-8".to_string())
       .await;
 
-    let result = c.get_lines_slice(&sid, &file_url, 1, 1).await;
+    let result = c.get_lines_slice(&sid, file_url, 1, 1).await;
     assert!(result.is_some());
   }
 
@@ -751,28 +684,22 @@ mod tests {
   async fn test_cache_remove_sid() {
     let c = cache();
     let sid = format!("test-sid-remove-{}", Uuid::new_v4());
-    let file_url = Odfi::new(
-      crate::domain::EndpointType::Local,
-      "localhost",
-      crate::domain::TargetType::Dir,
-      "test-file.log",
-      None,
-    );
+    let file_url = "orl://local/test-file.log";
 
     c.put_keywords(&sid, vec![KeywordHighlight::Literal("test".to_string())])
       .await;
-    c.put_lines(&sid, &file_url, &["line 1".to_string()], "UTF-8".to_string())
+    c.put_lines(&sid, file_url, &["line 1".to_string()], "UTF-8".to_string())
       .await;
 
     // Verify existence
     assert!(c.get_keywords(&sid).await.is_some());
-    assert!(c.get_lines_slice(&sid, &file_url, 1, 1).await.is_some());
+    assert!(c.get_lines_slice(&sid, file_url, 1, 1).await.is_some());
 
     // Remove
     c.remove_sid(&sid).await;
 
     // Verify removal
     assert!(c.get_keywords(&sid).await.is_none());
-    assert!(c.get_lines_slice(&sid, &file_url, 1, 1).await.is_none());
+    assert!(c.get_lines_slice(&sid, file_url, 1, 1).await.is_none());
   }
 }

@@ -6,9 +6,11 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tracing::{trace, warn};
 
 use opsbox_core::SqlitePool;
-use opsbox_core::fs::{
-  EntrySource, EntryStream, FsEntryStream, MultiFileEntryStream, create_archive_stream_from_reader,
-};
+use opsbox_core::dfs::archive::{ArchiveType, detect_archive_type};
+use opsbox_core::dfs::{Location, OpbxFileSystem, OrlParser, Resource, ResourcePath, SearchConfig, Streamable};
+use opsbox_core::fs::{EntryStream, PrefixedReader};
+
+use crate::query::PathFilter;
 
 use super::search::{SearchEvent, SearchProcessor};
 
@@ -31,10 +33,6 @@ fn entry_concurrency() -> usize {
   default.clamp(1, 128)
 }
 
-// 已删除 try_resolve_minio_local_path 函数
-// 原因：MinIO 使用 Erasure Coding，数据被分片存储，无法直接通过 bucket/key 映射到文件系统路径
-// 即使在同一台机器上，也必须通过 S3 API 访问，以确保数据一致性和安全性
-
 /// 预读结果：小文件完整内容，或大文件的已读取部分
 enum PreloadResult {
   /// 小文件：完整内容已读取
@@ -43,69 +41,16 @@ enum PreloadResult {
   Partial(Vec<u8>),
 }
 
-/// 组合 Reader：先读取 prefix，然后读取 inner
-/// 用于处理预读时已读取的部分内容
-struct ChainedReader<R> {
-  prefix: std::io::Cursor<Vec<u8>>,
-  inner: R,
-  prefix_done: bool,
-}
-
-// 确保 ChainedReader 实现 Unpin（如果 R 是 Unpin 的）
-impl<R: Unpin> Unpin for ChainedReader<R> {}
-
-impl<R: AsyncRead + Unpin> ChainedReader<R> {
-  fn new(prefix: Vec<u8>, inner: R) -> Self {
-    Self {
-      prefix: std::io::Cursor::new(prefix),
-      inner,
-      prefix_done: false,
-    }
-  }
-}
-
-impl<R: AsyncRead + Unpin> AsyncRead for ChainedReader<R> {
-  fn poll_read(
-    mut self: std::pin::Pin<&mut Self>,
-    cx: &mut std::task::Context<'_>,
-    buf: &mut tokio::io::ReadBuf<'_>,
-  ) -> std::task::Poll<io::Result<()>> {
-    // 先读取 prefix 部分
-    if !self.prefix_done {
-      let pos = self.prefix.position() as usize;
-      let prefix_len = self.prefix.get_ref().len();
-      if pos < prefix_len {
-        let remaining = prefix_len - pos;
-        let to_read = remaining.min(buf.remaining());
-        if to_read > 0 {
-          let mut temp = vec![0u8; to_read];
-          match std::io::Read::read(&mut self.prefix, &mut temp) {
-            Ok(n) if n > 0 => {
-              buf.put_slice(&temp[..n]);
-              return std::task::Poll::Ready(Ok(()));
-            }
-            Ok(_) => {
-              self.prefix_done = true;
-            }
-            Err(e) => return std::task::Poll::Ready(Err(e)),
-          }
-        }
-      }
-      self.prefix_done = true;
-    }
-
-    // prefix 读取完毕，继续读取 inner
-    std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
-  }
-}
+/// 预读缓冲区默认大小（64KB）
+const DEFAULT_PRELOAD_BUFFER_SIZE: usize = 64 * 1024;
 
 /// 预读文件条目到内存
 /// 返回：
 /// - Complete(content): 文件完全读取（小文件）
 /// - Partial(content): 文件太大，只读取了部分（reader 已被部分消费）
 async fn preload_entry(reader: &mut (dyn AsyncRead + Send + Unpin), max_size: usize) -> io::Result<PreloadResult> {
-  let mut buffer = Vec::with_capacity(64 * 1024); // 64KB 初始容量
-  let mut temp = vec![0u8; 64 * 1024];
+  let mut buffer = Vec::with_capacity(DEFAULT_PRELOAD_BUFFER_SIZE);
+  let mut temp = vec![0u8; DEFAULT_PRELOAD_BUFFER_SIZE];
 
   loop {
     let n = reader.read(&mut temp).await?;
@@ -126,9 +71,9 @@ async fn preload_entry(reader: &mut (dyn AsyncRead + Send + Unpin), max_size: us
 pub struct EntryStreamProcessor {
   processor: Arc<SearchProcessor>,
   content_timeout: Duration,
-  // 额外路径过滤器（可选），与用户查询中的 path: 规则做 AND
-  extra_path_filter: Option<crate::query::PathFilter>,
-  cancel_token: Option<tokio_util::sync::CancellationToken>,
+  // 额外路径过滤器列表，所有过滤器必须同时满足（AND 逻辑）
+  extra_path_filters: Vec<PathFilter>,
+  cancel_token: Option<std::sync::Arc<tokio_util::sync::CancellationToken>>,
   // 基础路径（可选）：如果设置，过滤时将先去除该前缀（用于支持相对路径 glob）
   base_path: Option<PathBuf>,
 }
@@ -138,14 +83,14 @@ impl EntryStreamProcessor {
     Self {
       processor,
       content_timeout: Duration::from_secs(60),
-      extra_path_filter: None,
+      extra_path_filters: Vec::new(),
       cancel_token: None,
       base_path: None,
     }
   }
 
   /// 设置取消令牌
-  pub fn with_cancel_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+  pub fn with_cancel_token(mut self, token: std::sync::Arc<tokio_util::sync::CancellationToken>) -> Self {
     self.cancel_token = Some(token);
     self
   }
@@ -156,15 +101,9 @@ impl EntryStreamProcessor {
     self
   }
 
-  /// 设置额外路径过滤器（与用户 path: 规则做 AND）
-  pub fn with_extra_path_filter(mut self, filter: crate::query::PathFilter) -> Self {
-    self.extra_path_filter = Some(filter);
-    self
-  }
-
-  #[allow(dead_code)]
-  pub fn with_content_timeout(mut self, timeout: Duration) -> Self {
-    self.content_timeout = timeout;
+  /// 添加额外路径过滤器（多个过滤器之间是 AND 关系）
+  pub fn with_extra_path_filter(mut self, filter: PathFilter) -> Self {
+    self.extra_path_filters.push(filter);
     self
   }
 
@@ -208,40 +147,70 @@ impl EntryStreamProcessor {
 
       // 路径过滤（仅在主循环进行，任务内无需再次判断）
       // 对于目录类型，使用 base_path 进行相对路径转换以支持相对 glob 匹配
-      let path_to_check_p = if let Some(base) = &self.base_path {
+      let path_str: String = if let Some(base) = &self.base_path {
         let path_obj = std::path::Path::new(&meta.path);
-        match path_obj.strip_prefix(base) {
-          Ok(p) => p,
-          Err(_) => {
-            // 尝试 canonicalize 后的路径
-            if let Ok(canon_path) = std::fs::canonicalize(path_obj)
-              && let Ok(canon_base) = std::fs::canonicalize(base)
-              && let Ok(_p) = canon_path.strip_prefix(&canon_base)
-            {
-              // 路径匹配成功，继续使用原路径
-              path_obj
-            } else {
-              path_obj
+        if let Ok(p) = path_obj.strip_prefix(base) {
+          // 可能得到形如 "./file.log" 的相对路径；对 strict glob（literal_separator=true）来说这会导致 "*.log" 不匹配。
+          let mut out = std::path::PathBuf::new();
+          let mut leading = true;
+          for c in p.components() {
+            match c {
+              std::path::Component::CurDir if leading => continue,
+              _ => {
+                leading = false;
+                out.push(c.as_os_str());
+              }
             }
           }
+          out.to_string_lossy().into_owned()
+        } else if let (Ok(canon_path), Ok(canon_base)) = (std::fs::canonicalize(path_obj), std::fs::canonicalize(base))
+        {
+          // canonicalize 后如果能 strip_prefix，则必须使用相对路径进行匹配，
+          // 否则在 strict glob（literal_separator=true）下，像 "*.log" 这类模式会因为包含分隔符而无法匹配绝对路径。
+          if let Ok(p) = canon_path.strip_prefix(&canon_base) {
+            let mut out = std::path::PathBuf::new();
+            let mut leading = true;
+            for c in p.components() {
+              match c {
+                std::path::Component::CurDir if leading => continue,
+                _ => {
+                  leading = false;
+                  out.push(c.as_os_str());
+                }
+              }
+            }
+            out.to_string_lossy().into_owned()
+          } else {
+            path_obj.to_string_lossy().into_owned()
+          }
+        } else {
+          path_obj.to_string_lossy().into_owned()
         }
       } else {
-        std::path::Path::new(&meta.path)
+        std::path::Path::new(&meta.path).to_string_lossy().into_owned()
       };
 
-      let path_str = path_to_check_p.to_string_lossy();
-      if !self
-        .processor
-        .should_process_path_with(&path_str, self.extra_path_filter.as_ref())
-      {
-        trace!("路径不匹配，跳过: {}", &meta.path);
+      // 检查所有额外过滤器 (AND 逻辑)
+      let mut matched = true;
+      for filter in &self.extra_path_filters {
+        if !self.processor.should_process_path_with(&path_str, Some(filter)) {
+          matched = false;
+          break;
+        }
+      }
+
+      if !matched {
+        trace!(
+          "路径不匹配 (extra filters)，跳过: meta.path={} path_str_for_filter={}",
+          &meta.path, &path_str
+        );
         continue;
       }
 
-      if meta.is_compressed || meta.source == EntrySource::Tar || meta.source == EntrySource::TarGz {
+      if meta.source.is_archive() || meta.source.is_compressed() {
         // tar.gz 等共享底层读取器的来源：必须保证串行读取，但可以预读小文件到内存后并发处理
-        // 优化：对于小文件（< 10MB），预读到内存后允许并发处理，充分利用多核 CPU
-        const MAX_PRELOAD_SIZE: usize = 10 * 1024 * 1024; // 10MB
+        // 优化：对于文件（< 120MB），预读到内存后允许并发处理，充分利用多核 CPU
+        const MAX_PRELOAD_SIZE: usize = 120 * 1024 * 1024;
 
         // 尝试预读文件到内存
         match preload_entry(&mut reader, MAX_PRELOAD_SIZE).await {
@@ -300,8 +269,8 @@ impl EntryStreamProcessor {
               let _ = handle; // 等待所有并发任务完成
             }
 
-            // 使用 ChainedReader 组合已读取的部分和剩余的 reader
-            let combined_reader = ChainedReader::new(prefix, reader);
+            // 使用 PrefixedReader 组合已读取的部分和剩余的 reader
+            let combined_reader = PrefixedReader::new(prefix, reader);
             let container_path = meta.container_path.clone();
 
             // 串行处理大文件（大文件必须串行，因为 reader 已被部分消费）
@@ -389,281 +358,19 @@ impl EntryStreamProcessor {
   }
 }
 
-/// 条目流工厂：根据 SourceConfig 构造 Box<dyn EntryStream>
-pub struct EntryStreamFactory {
-  db_pool: SqlitePool,
-}
-
-impl EntryStreamFactory {
-  pub fn new(db_pool: SqlitePool) -> Self {
-    Self { db_pool }
-  }
-
-  /// 从来源配置创建条目流（不含 Agent）
-  ///
-  /// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz/zip；zip 暂不支持）
-  /// - S3: Archive（自动探测；zip 暂不支持）
-  pub async fn create_stream(&self, source: crate::domain::config::Source) -> Result<Box<dyn EntryStream>, String> {
-    use crate::domain::config::{Endpoint, Target};
-    match (&source.endpoint, &source.target) {
-      (Endpoint::Local { root }, Target::Dir { path, recursive }) => {
-        let joined = if path == "." {
-          root.clone()
-        } else {
-          format!("{}/{}", root, path)
-        };
-        // 使用 FsEntryStream 并尊重 recursive 标志
-        let stream = FsEntryStream::new(PathBuf::from(joined), *recursive)
-          .await
-          .map_err(|e| format!("无法读取目录: {}", e))?;
-        Ok(Box::new(stream) as Box<dyn EntryStream>)
-      }
-      (Endpoint::Local { root }, Target::Files { paths }) => {
-        let files: Vec<String> = paths
-          .iter()
-          .map(|p| {
-            if p.starts_with('/') {
-              p.clone()
-            } else {
-              format!("{}/{}", root, p)
-            }
-          })
-          .collect();
-        Ok(Box::new(MultiFileEntryStream::new(files)) as Box<dyn EntryStream>)
-      }
-      (Endpoint::Local { root }, Target::Archive { path, entry: _entry }) => {
-        let full = if path.starts_with('/') {
-          path.clone()
-        } else {
-          format!("{}/{}", root, path)
-        };
-        let file = tokio::fs::File::open(&full)
-          .await
-          .map_err(|e| format!("无法打开归档文件 {}: {}", full, e))?;
-        create_archive_stream_from_reader(file, Some(&full)).await
-      }
-      (Endpoint::S3 { profile, bucket }, Target::Archive { path, entry: _entry }) => {
-        // 加载 Profile
-        let profile_row = crate::repository::s3::load_s3_profile(&self.db_pool, profile)
-          .await
-          .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
-          .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
-
-        // 注意：虽然 MinIO 数据存储在本地文件系统，但由于使用 Erasure Coding
-        // 数据会被分片存储，无法直接通过 bucket/key 映射到文件系统路径
-        // 因此必须通过 S3 API 访问，即使在同一台机器上
-
-        // 构造读取器（S3 API 路径）
-        let reader = {
-          use crate::utils::storage::{ReaderProvider as _, S3ReaderProvider, get_or_create_s3_client};
-          let _ = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
-            .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
-
-          let provider = S3ReaderProvider::new(
-            &profile_row.endpoint,
-            &profile_row.access_key,
-            &profile_row.secret_key,
-            bucket,
-            path,
-          );
-          provider
-            .open()
-            .await
-            .map_err(|e| format!("打开 S3 对象失败: {:?}", e))?
-        };
-        create_archive_stream_from_reader(reader, Some(path)).await
-      }
-      (Endpoint::S3 { profile, bucket }, Target::Files { paths }) => {
-        // 加载 Profile
-        let profile_row = crate::repository::s3::load_s3_profile(&self.db_pool, profile)
-          .await
-          .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
-          .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
-
-        // 构造 S3 客户端
-        use crate::utils::storage::{ReaderProvider as _, S3ReaderProvider, get_or_create_s3_client};
-        let _ = get_or_create_s3_client(&profile_row.endpoint, &profile_row.access_key, &profile_row.secret_key)
-          .map_err(|e| format!("创建 S3 客户端失败: {:?}", e))?;
-
-        if let Some(path) = paths.first() {
-          let provider = S3ReaderProvider::new(
-            &profile_row.endpoint,
-            &profile_row.access_key,
-            &profile_row.secret_key,
-            bucket,
-            path,
-          );
-          let reader = provider
-            .open()
-            .await
-            .map_err(|e| format!("打开 S3 对象失败: {:?}", e))?;
-
-          Ok(Box::new(S3FileEntryStream {
-            reader: Some(reader),
-            path: path.clone(),
-          }) as Box<dyn EntryStream>)
-        } else {
-          Err("S3 文件列表为空".to_string())
-        }
-      }
-      (Endpoint::S3 { .. }, _) => Err("S3 仅支持 archive/files 目标".to_string()),
-      (Endpoint::Agent { agent_id, .. }, Target::Archive { path, entry: _entry }) => {
-        // Agent 归档：从 Agent 下载归档文件，然后创建归档流
-        let client = crate::agent::create_agent_client_by_id(agent_id.clone())
-          .await
-          .map_err(|e| format!("无法创建 Agent 客户端: {}", e))?;
-
-        // 下载归档文件
-        let url = format!("/api/v1/file_raw?path={}", urlencoding::encode(path));
-        tracing::debug!("从 Agent 下载归档: agent_id={}, path={}", agent_id, path);
-
-        let response = client
-          .get_raw(&url)
-          .await
-          .map_err(|e| format!("从 Agent 下载归档失败: {}", e))?;
-
-        // 将响应转换为字节流
-        use futures_util::TryStreamExt;
-        let bytes_stream = response.bytes_stream().map_err(std::io::Error::other);
-
-        // 使用 StreamReader 将字节流转换为 AsyncRead
-        let reader = tokio_util::io::StreamReader::new(bytes_stream);
-
-        // 创建归档流
-        create_archive_stream_from_reader(reader, Some(path)).await
-      }
-      (Endpoint::Agent { .. }, _) => Err("Agent 来源请通过远程 SearchService 处理".to_string()),
-    }
-  }
-}
-
-/// S3 单文件流（临时定义，建议移至 opsbox_core）
-pub struct S3FileEntryStream<R> {
-  reader: Option<R>,
-  path: String,
-}
-
-#[async_trait::async_trait]
-impl<R: AsyncRead + Send + Unpin + 'static> EntryStream for S3FileEntryStream<R> {
-  async fn next_entry(
-    &mut self,
-  ) -> io::Result<Option<(opsbox_core::fs::EntryMeta, Box<dyn AsyncRead + Send + Unpin>)>> {
-    if let Some(reader) = self.reader.take() {
-      let meta = opsbox_core::fs::EntryMeta {
-        path: self.path.clone(),
-        container_path: None,
-        size: None,
-        is_compressed: false,
-        source: opsbox_core::fs::EntrySource::File,
-      };
-      Ok(Some((meta, Box::new(reader))))
-    } else {
-      Ok(None)
-    }
-  }
-}
-
-/// 构建本地来源条目流（单文件/目录/归档，支持 target 提示）
-///
-/// 根据 target 类型优先使用明确处理，否则自动检测路径类型
-pub async fn build_local_entry_stream(
-  root_or_file: &str,
-  target: Option<crate::domain::config::Target>,
-) -> Result<Box<dyn EntryStream>, String> {
-  use crate::domain::config::Target;
-
-  // 根据 target 类型进行精确处理（与 Server 端对齐）
-  if let Some(target) = target {
-    match target {
-      Target::Files { paths } => {
-        // Files 类型：直接使用 MultiFileEntryStream，与 Server 端一致
-        return Ok(Box::new(MultiFileEntryStream::new(paths)) as Box<dyn EntryStream>);
-      }
-      Target::Dir { path, recursive } => {
-        // Dir 类型：直接使用 FsEntryStream，与 Server 端一致
-        // path 为 "." 时使用 root_or_file 作为根目录
-        let dir_path = if path == "." {
-          PathBuf::from(root_or_file)
-        } else {
-          PathBuf::from(root_or_file).join(path)
-        };
-        let stream = FsEntryStream::new(dir_path, recursive)
-          .await
-          .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
-        return Ok(Box::new(stream) as Box<dyn EntryStream>);
-      }
-      Target::Archive { path, entry: _entry } => {
-        // Archive 类型：处理归档文件
-        // 如果 root_or_file 本身已经是归档文件（通过扩展名判断），直接使用它
-        // 否则拼接 path（适用于 root_or_file 是目录的情况）
-        let archive_path = {
-          let root_path = PathBuf::from(root_or_file);
-          let root_lower = root_or_file.to_lowercase();
-          if root_lower.ends_with(".tar")
-            || root_lower.ends_with(".tar.gz")
-            || root_lower.ends_with(".tgz")
-            || root_lower.ends_with(".gz")
-          {
-            // root_or_file 本身就是归档文件，直接使用
-            root_path
-          } else {
-            // root_or_file 是目录，需要拼接 path
-            root_path.join(path)
-          }
-        };
-        let file = tokio::fs::File::open(&archive_path)
-          .await
-          .map_err(|e| format!("无法打开归档文件 {}: {}", archive_path.display(), e))?;
-        return create_archive_stream_from_reader(file, Some(&archive_path.to_string_lossy())).await;
-      }
-    }
-  }
-
-  // 自动检测路径类型（当 target 为 None 时）
-  // 先检查是否为归档文件（基于扩展名）
-  let lower = root_or_file.to_lowercase();
-  if lower.ends_with(".tar")
-    || lower.ends_with(".tar.gz")
-    || lower.ends_with(".tgz")
-    || lower.ends_with(".gz")
-    || lower.ends_with(".zip")
-  {
-    let file = tokio::fs::File::open(root_or_file)
-      .await
-      .map_err(|e| format!("无法打开归档文件 {}: {}", root_or_file, e))?;
-    return create_archive_stream_from_reader(file, Some(root_or_file)).await;
-  }
-
-  // 通过 metadata 检测文件或目录
-  match tokio::fs::metadata(root_or_file).await {
-    Ok(meta) if meta.is_file() => {
-      Ok(Box::new(MultiFileEntryStream::new(vec![root_or_file.to_string()])) as Box<dyn EntryStream>)
-    }
-    Ok(meta) if meta.is_dir() => {
-      // 默认递归（与 Server 端 Target::Dir 的默认行为一致）
-      let stream = FsEntryStream::new(PathBuf::from(root_or_file), true)
-        .await
-        .map_err(|e| format!("无法读取目录 {}: {}", root_or_file, e))?;
-      Ok(Box::new(stream) as Box<dyn EntryStream>)
-    }
-    Ok(_) => Err(format!("不支持的文件类型: {}", root_or_file)),
-    Err(e) => Err(format!("无法访问路径 {}: {}", root_or_file, e)),
-  }
-}
-
 /// 通用条目流处理函数（支持基于回调的结果处理）
 ///
 /// 提供统一的条目流处理方式，可被 Server 和 Agent 复用，避免重复实现核心处理逻辑。
 /// 事件通过回调函数返回，调用方可灵活处理（发送到 channel、生成消息等）。
 pub async fn process_entry_stream_with_callback<F>(
   stream: Box<dyn EntryStream>,
-  processor: Arc<crate::service::search::SearchProcessor>,
-  extra_path_filter: Option<crate::query::PathFilter>,
-  cancel_token: Option<tokio_util::sync::CancellationToken>,
+  processor: Arc<SearchProcessor>,
+  extra_path_filter: Option<PathFilter>,
+  cancel_token: Option<std::sync::Arc<tokio_util::sync::CancellationToken>>,
   mut result_callback: F,
 ) -> Result<(usize, usize), String>
 where
-  F: FnMut(crate::service::search::SearchEvent) -> bool + Send,
+  F: FnMut(SearchEvent) -> bool + Send,
 {
   // 创建条目流处理器
   let mut stream_processor = EntryStreamProcessor::new(processor);
@@ -702,51 +409,369 @@ where
   Ok((processed_count, matched_count))
 }
 
+/// 从 Resource 创建条目流（DFS 版本）
+///
+/// 根据 Resource 的 endpoint 类型创建对应的条目流：
+/// - Local: Dir/Files/Archive（自动探测 tar/tar.gz/gz）
+/// - S3: Archive（自动探测）
+/// - Agent: 不支持，应由调用方处理
+pub async fn create_entry_stream_from_resource(
+  db_pool: &SqlitePool,
+  resource: &Resource,
+) -> Result<Box<dyn EntryStream>, String> {
+  let path = resource.primary_path.to_string();
+  let search_config = SearchConfig::default();
+
+  match &resource.endpoint.location {
+    Location::Local => {
+      use opsbox_core::dfs::LocalFileSystem;
+      use std::path::PathBuf;
+
+      // 确定根目录
+      let path_buf = PathBuf::from(&path);
+      let (root, relative_path) = if path_buf.is_dir() {
+        (path_buf.clone(), ResourcePath::parse(""))
+      } else if path_buf.exists() {
+        let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
+        let file_name = path_buf
+          .file_name()
+          .map(|n| n.to_string_lossy().to_string())
+          .unwrap_or_default();
+        (parent, ResourcePath::parse(&file_name))
+      } else {
+        let parent = path_buf.parent().unwrap_or(&path_buf).to_path_buf();
+        (parent, ResourcePath::parse(""))
+      };
+
+      let fs = LocalFileSystem::new(root).map_err(|e| format!("创建本地文件系统失败: {}", e))?;
+
+      fs.as_entry_stream(&relative_path, true, &search_config)
+        .await
+        .map_err(|e| format!("创建条目流失败: {}", e))
+    }
+    Location::Cloud => {
+      use opsbox_core::dfs::{S3Config, S3Storage};
+
+      let profile = &resource.endpoint.identity;
+
+      // 加载 Profile
+      let profile_row = crate::repository::s3::load_s3_profile(db_pool, profile)
+        .await
+        .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+        .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
+
+      // 创建 S3Config
+      let s3_config = S3Config::new(
+        profile.clone(),
+        profile_row.endpoint.clone(),
+        profile_row.access_key.clone(),
+        profile_row.secret_key.clone(),
+      );
+
+      // 提取 bucket 名称
+      let (bucket_name, object_key) = path
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or((path.trim_start_matches('/'), ""));
+
+      let s3_config = s3_config.with_bucket(bucket_name.to_string());
+
+      let s3_storage = S3Storage::new(s3_config).map_err(|e| format!("创建 S3 存储失败: {}", e))?;
+
+      let resource_path = ResourcePath::parse(object_key);
+      s3_storage
+        .as_entry_stream(&resource_path, true, &search_config)
+        .await
+        .map_err(|e| format!("创建条目流失败: {}", e))
+    }
+    Location::Remote { .. } => Err("Agent 类型应由调用方处理，不支持 create_entry_stream_from_resource".to_string()),
+  }
+}
+
+/// 从 Resource 创建用于搜索的条目流（含已知归档类型直通）
+///
+/// - 非归档资源：走标准 `create_entry_stream_from_resource`
+/// - 归档资源：按 `archive_context.archive_type` 直接打开归档流，避免重复探测
+pub async fn create_search_entry_stream_from_resource(
+  db_pool: &SqlitePool,
+  resource: &Resource,
+) -> Result<Box<dyn EntryStream>, String> {
+  if !resource.is_archive() {
+    return create_entry_stream_from_resource(db_pool, resource).await;
+  }
+
+  let path = resource.primary_path.to_string();
+  let archive_type = resource
+    .archive_context
+    .as_ref()
+    .and_then(|ctx| ctx.archive_type)
+    .unwrap_or(ArchiveType::Unknown);
+
+  match &resource.endpoint.location {
+    Location::Local => {
+      let file = tokio::fs::File::open(&path)
+        .await
+        .map_err(|e| format!("打开归档文件失败: {}", e))?;
+
+      opsbox_core::fs::open_archive_typed(file, Some(&path), archive_type)
+        .await
+        .map_err(|e| format!("创建归档流失败: {}", e))
+    }
+    Location::Cloud => {
+      use opsbox_core::dfs::{OpbxFileSystem, S3Config, S3Storage};
+
+      let profile = &resource.endpoint.identity;
+      let profile_row = crate::repository::s3::load_s3_profile(db_pool, profile)
+        .await
+        .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+        .ok_or_else(|| format!("S3 Profile 不存在: {}", profile))?;
+
+      let s3_config = S3Config::new(
+        profile.clone(),
+        profile_row.endpoint.clone(),
+        profile_row.access_key.clone(),
+        profile_row.secret_key.clone(),
+      );
+
+      let (bucket_name, object_key) = path
+        .trim_start_matches('/')
+        .split_once('/')
+        .unwrap_or((path.trim_start_matches('/'), ""));
+
+      let s3_storage = S3Storage::new(s3_config.with_bucket(bucket_name.to_string()))
+        .map_err(|e| format!("创建 S3 存储失败: {}", e))?;
+
+      let reader = s3_storage
+        .open_read(&ResourcePath::parse(object_key))
+        .await
+        .map_err(|e| format!("打开 S3 文件失败: {}", e))?;
+
+      opsbox_core::fs::open_archive_typed(reader, Some(&path), archive_type)
+        .await
+        .map_err(|e| format!("创建归档流失败: {}", e))
+    }
+    Location::Remote { .. } => {
+      Err("Agent 类型应由调用方处理，不支持 create_search_entry_stream_from_resource".to_string())
+    }
+  }
+}
+
+/// 对资源执行轻量归档预检测，成功时返回归档类型
+///
+/// 该函数仅用于分发前标注 `archive_context`，失败时返回 `None`。
+pub async fn detect_archive_type_for_resource(db_pool: &SqlitePool, resource: &Resource) -> Option<ArchiveType> {
+  async fn create_fs_for_detection(
+    db_pool: &SqlitePool,
+    resource: &Resource,
+  ) -> Result<Box<dyn OpbxFileSystem>, String> {
+    use opsbox_core::dfs::{LocalFileSystem, S3Config, S3Storage};
+
+    match &resource.endpoint.location {
+      Location::Local => {
+        let path_str = resource.primary_path.to_string();
+        let root = if path_str.starts_with('/') {
+          std::path::PathBuf::from("/")
+        } else {
+          std::path::PathBuf::from(".")
+        };
+        LocalFileSystem::new(root)
+          .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
+          .map_err(|e| format!("创建本地文件系统失败: {}", e))
+      }
+      Location::Cloud => {
+        let profile = crate::repository::s3::load_s3_profile(db_pool, &resource.endpoint.identity)
+          .await
+          .map_err(|e| format!("加载 S3 Profile 失败: {:?}", e))?
+          .ok_or_else(|| format!("S3 Profile 不存在: {}", resource.endpoint.identity))?;
+
+        let mut s3_config = S3Config::new(
+          resource.endpoint.identity.clone(),
+          profile.endpoint,
+          profile.access_key,
+          profile.secret_key,
+        );
+
+        if let Some(ref bucket) = resource.endpoint.bucket {
+          s3_config.bucket = Some(bucket.clone());
+        } else {
+          let path_segments = resource.primary_path.segments();
+          if !path_segments.is_empty() && !path_segments[0].is_empty() {
+            s3_config.bucket = Some(path_segments[0].clone());
+          }
+        }
+
+        S3Storage::new(s3_config)
+          .map(|fs| Box::new(fs) as Box<dyn OpbxFileSystem>)
+          .map_err(|e| format!("创建 S3 存储失败: {}", e))
+      }
+      Location::Remote { .. } => Err("Agent 不支持归档预检测".to_string()),
+    }
+  }
+
+  match create_fs_for_detection(db_pool, resource).await {
+    Ok(fs) => detect_archive_type(fs.as_ref(), resource).await,
+    Err(err) => {
+      trace!("[EntryStream] 归档预检测跳过: {}", err);
+      None
+    }
+  }
+}
+
+/// 从 ORL 字符串创建条目流（兼容旧接口）
+///
+/// 解析 ORL 字符串并创建对应的条目流
+pub async fn create_entry_stream(db_pool: &SqlitePool, orl_str: &str) -> Result<Box<dyn EntryStream>, String> {
+  let resource = OrlParser::parse(orl_str).map_err(|e| format!("解析 ORL 失败: {}", e))?;
+
+  create_entry_stream_from_resource(db_pool, &resource).await
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::fs::File;
-  use std::io::Write;
-  use tempfile::tempdir;
 
-  #[tokio::test]
-  async fn test_build_local_entry_stream() {
-    let dir = tempdir().unwrap();
-    let file_path = dir.path().join("test.log");
-    let mut file = File::create(&file_path).unwrap();
-    writeln!(file, "hello").unwrap();
-
-    // 测试文件路径
-    let stream_res = build_local_entry_stream(&file_path.to_string_lossy(), None).await;
-    assert!(stream_res.is_ok(), "文件路径应该能正常创建流: {:?}", stream_res.err());
-
-    // 测试目录路径
-    let stream_res = build_local_entry_stream(&dir.path().to_string_lossy(), None).await;
-    assert!(stream_res.is_ok(), "目录路径应该能正常创建流: {:?}", stream_res.err());
+  #[test]
+  fn test_entry_concurrency_default() {
+    let conc = entry_concurrency();
+    assert!(conc >= 1);
+    assert!(conc <= 128);
   }
 
   #[tokio::test]
-  async fn test_build_local_entry_stream_with_target() {
-    let dir = tempdir().unwrap();
-    let file_path = dir.path().join("test.log");
-    let mut file = File::create(&file_path).unwrap();
-    writeln!(file, "hello").unwrap();
+  async fn test_preload_entry_small() {
+    let content = b"hello world";
+    let mut reader = &content[..];
+    // max size larger than content
+    let res = preload_entry(&mut reader, 100).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => assert_eq!(c, content),
+      PreloadResult::Partial(_) => panic!("should be complete"),
+    }
+  }
 
-    use crate::domain::config::Target;
+  #[tokio::test]
+  async fn test_preload_entry_large() {
+    // Create content slightly larger than our max check, but smaller than the chunk size (64KB)
+    let content = [0u8; 100];
+    let mut reader = &content[..];
+    // max size smaller than content
+    let res = preload_entry(&mut reader, 50).await.expect("preload failed");
+    match res {
+      PreloadResult::Partial(c) => {
+        // It reads in chunks of 64KB. So the first read will read all 100 bytes.
+        // Then buffer.len() is 100. 100 > 50. Returns Partial(100 bytes).
+        assert_eq!(c.len(), 100);
+      }
+      PreloadResult::Complete(_) => panic!("should be partial"),
+    }
+  }
 
-    // 测试 Target::Files
-    let target = Target::Files {
-      paths: vec![file_path.to_string_lossy().to_string()],
-    };
-    let stream_res = build_local_entry_stream(&file_path.to_string_lossy(), Some(target)).await;
-    assert!(stream_res.is_ok(), "Target::Files 应该能正常创建流");
+  #[test]
+  fn test_entry_concurrency_env_var_valid() {
+    // 测试环境变量解析 - 有效值
+    // SAFETY: 单元测试中修改环境变量，测试后恢复。测试框架保证串行运行。
+    unsafe {
+      let original = std::env::var("ENTRY_CONCURRENCY").ok();
 
-    // 测试 Target::Dir
-    let target = Target::Dir {
-      path: ".".to_string(),
-      recursive: true,
-    };
-    let stream_res = build_local_entry_stream(&dir.path().to_string_lossy(), Some(target)).await;
-    assert!(stream_res.is_ok(), "Target::Dir 应该能正常创建流");
+      // 测试有效值
+      std::env::set_var("ENTRY_CONCURRENCY", "64");
+      let conc = entry_concurrency();
+      assert_eq!(conc, 64);
+
+      // 测试边界值
+      std::env::set_var("ENTRY_CONCURRENCY", "1");
+      let conc = entry_concurrency();
+      assert_eq!(conc, 1);
+
+      std::env::set_var("ENTRY_CONCURRENCY", "128");
+      let conc = entry_concurrency();
+      assert_eq!(conc, 128);
+
+      // 恢复原始值
+      if let Some(val) = original {
+        std::env::set_var("ENTRY_CONCURRENCY", val);
+      } else {
+        std::env::remove_var("ENTRY_CONCURRENCY");
+      }
+    }
+  }
+
+  #[test]
+  fn test_entry_concurrency_env_var_invalid() {
+    // 测试无效环境变量值应使用默认值
+    // SAFETY: 单元测试中修改环境变量，测试后恢复。测试框架保证串行运行。
+    unsafe {
+      let original = std::env::var("ENTRY_CONCURRENCY").ok();
+
+      // 测试无效值（非数字）
+      std::env::set_var("ENTRY_CONCURRENCY", "not-a-number");
+      let conc = entry_concurrency();
+      // 无效值应回退到默认计算
+      assert!((1..=128).contains(&conc));
+
+      // 测试超出范围的值
+      std::env::set_var("ENTRY_CONCURRENCY", "0"); // 小于最小值
+      let conc = entry_concurrency();
+      assert_eq!(conc, 1); // 被clamp到1
+
+      std::env::set_var("ENTRY_CONCURRENCY", "999"); // 大于最大值
+      let conc = entry_concurrency();
+      assert_eq!(conc, 128); // 被clamp到128
+
+      // 恢复原始值
+      if let Some(val) = original {
+        std::env::set_var("ENTRY_CONCURRENCY", val);
+      } else {
+        std::env::remove_var("ENTRY_CONCURRENCY");
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn test_preload_entry_empty() {
+    // 测试空文件
+    let content: [u8; 0] = [];
+    let mut reader = &content[..];
+    let res = preload_entry(&mut reader, 100).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => {
+        assert!(c.is_empty());
+      }
+      PreloadResult::Partial(_) => panic!("empty file should be complete"),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_preload_entry_exact_boundary() {
+    // 测试正好达到max_size边界的情况
+    // 注意：函数以64KB块读取，所以测试需要小心
+
+    // 创建正好64KB的内容（块的边界）
+    let content = vec![0u8; 64 * 1024]; // 64KB
+    let mut reader = &content[..];
+
+    // max_size设为64KB，应该返回Complete（因为buffer.len() == max_size，不是>）
+    let res = preload_entry(&mut reader, 64 * 1024).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => {
+        assert_eq!(c.len(), 64 * 1024);
+      }
+      PreloadResult::Partial(_) => panic!("exact size should be complete"),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_preload_entry_single_byte() {
+    // 测试单字节文件
+    let content = [42u8];
+    let mut reader = &content[..];
+    let res = preload_entry(&mut reader, 100).await.expect("preload failed");
+    match res {
+      PreloadResult::Complete(c) => {
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0], 42);
+      }
+      PreloadResult::Partial(_) => panic!("single byte should be complete"),
+    }
   }
 }

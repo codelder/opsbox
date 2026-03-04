@@ -1,6 +1,6 @@
-# LogSeek 项目架构复盘分析（最新版）
+# OpsBox 项目架构分析
 
-> **重要更新**: Agent 和 Local 功能已实现并使用 ✅
+> **状态**: 生产可用 - Local/S3/Agent 全部实现并使用 ✅
 
 ## 📊 项目规模统计
 
@@ -25,8 +25,7 @@ pub trait SearchService   // Push 模式（远程 Agent 搜索）
 // EntryStream 实现类型
 - FsEntryStream           ← 文件系统目录流（DFS遍历，支持递归）✅
 - MultiFileEntryStream    ← 文件列表流（支持单文件或多文件）✅
-- TarGzEntryStream        ← tar.gz 归档流 ✅
-- TarEntryStream          ← tar 归档流（未压缩）✅
+- TarArchiveEntryStream   ← 统一 tar/tar.gz 归档流（`new_tar` / `new_tar_gz`）✅
 - GzipEntryStream         ← 单个 gzip 文件流 ✅
 
 // 存储源支持
@@ -117,7 +116,7 @@ view_file("tar.gz+s3://prod:logs/archive.tar.gz:app.log", 1, 100)
 - 现状：使用统一的 `Source` 模型（Endpoint + Target + Filter），位于 `domain/config.rs`
 - EntryStreamFactory：统一创建 Local/S3/TarGz 的 EntryStream
   - Local：通过 `build_local_entry_stream()` 创建 `FsEntryStream`
-  - S3：支持 tar.gz 对象展开为 `TarGzEntryStream`
+  - S3：支持 tar.gz 对象展开为 `TarArchiveEntryStream::new_tar_gz(...)`
   - TarGz：自动探测压缩格式并创建对应流
 - Agent：在 `routes/search.rs` 中直接构造 `AgentClient` 并调用其 `SearchService`，实现远程搜索
 - 规划器：通过 Starlark 脚本动态生成 Source 配置，支持 Local/Agent/S3 混合数据源
@@ -359,48 +358,6 @@ let io_concurrency = load_setting(&pool, "search.s3.max_concurrency")
 
 ---
 
-#### 1.3 完善前端 FileUrl 支持
-```typescript
-// web/src/lib/modules/logseek/utils/fileUrl.ts
-
-export function parseFileUrl(url: string): FileUrlInfo {
-    // ✅ 已实现 S3 解析
-    // ⏳ 需要添加: Local 解析
-    // ⏳ 需要添加: Agent 解析
-    
-    if (url.startsWith('file://')) {
-        return { type: 'local', path: url.slice(7) };
-    }
-    
-    if (url.startsWith('agent://')) {
-        const [agentId, ...pathParts] = url.slice(8).split('/');
-        return { 
-            type: 'agent', 
-            agentId, 
-            path: '/' + pathParts.join('/') 
-        };
-    }
-    
-    // ... S3, TarEntry 解析
-}
-
-// 显示文件来源图标
-export function getFileSourceIcon(url: string): string {
-    const info = parseFileUrl(url);
-    switch (info.type) {
-        case 'local': return '📁';
-        case 's3': return '☁️';
-        case 'agent': return '🖥️';
-        case 'tar-entry': return '📦';
-    }
-}
-```
-
-**TODO**:
-- [ ] 完善 fileUrl.ts 解析
-- [ ] 在搜索结果中显示来源图标
-- [ ] 添加按存储源过滤功能
-
 ---
 
 ### 第二优先级：代码组织优化 ⚙️
@@ -564,40 +521,9 @@ metrics.files_processed.inc_by(stats.processed as u64);
 
 ---
 
-## 📝 附录：完整的实现检查清单
-
-### Agent 功能实现清单
-- [x] Agent Server API 规范设计 ✅
-- [x] Agent Server 实现（独立进程）✅
-- [x] Agent Client 健康检查实现 ✅
-- [x] Agent Client 搜索调用实现 ✅
-- [x] 在搜索路由中集成使用 ✅
-- [ ] Agent 认证机制（可选）
-- [x] Agent 管理界面（注册、状态监控）✅ - 通过 agent-manager 模块
-- [ ] Agent 故障转移策略（可选）
-
-### Local 功能实现清单
-- [x] FsEntryStream 实现 ✅
-- [x] 递归目录遍历 ✅
-- [x] 通过 EntryStreamFactory 统一创建 ✅
-- [x] 在搜索路由中集成使用 ✅
-- [ ] 文件名模式过滤（可选增强）
-- [ ] 大目录优化（可选增强）
-- [ ] 软链接处理（可选增强）
-- [ ] Local 源配置界面（可选）
-
-### 前端增强清单
-- [ ] FileUrl 完整解析
-- [ ] 存储源图标显示
-- [ ] 按存储源过滤
-- [ ] 存储源状态监控
-- [ ] Agent 管理界面
-
----
-
 ## 🔗 相关文档
 
-- [存储抽象层设计](./docs/STORAGE_ABSTRACTION.md)
-- [FileUrl 设计](./docs/FILE_URL_DESIGN.md)
-- [S3 Profile 功能](./docs/S3_PROFILE_FEATURE.md)
-- [统一搜索](./UNIFIED_SEARCH.md)
+- [FileUrl 设计](../features/file-url.md)
+- [S3 Profile 功能](../features/s3-profiles.md)
+- [Agent API 规范](../modules/agent-api-spec.md)
+- [模块化架构](module-architecture.md)

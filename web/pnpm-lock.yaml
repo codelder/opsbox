@@ -35,6 +35,9 @@ importers:
       tailwind-variants:
         specifier: ^3.2.2
         version: 3.2.2(tailwind-merge@3.4.0)(tailwindcss@4.1.17)
+      uri-js:
+        specifier: ^4.4.1
+        version: 4.4.1
     devDependencies:
       '@eslint/compat':
         specifier: ^1.2.5

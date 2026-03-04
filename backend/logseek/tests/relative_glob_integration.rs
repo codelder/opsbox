@@ -1,4 +1,3 @@
-use logseek::domain::config::Target;
 use logseek::query::Query;
 use logseek::service::entry_stream::EntryStreamProcessor;
 use logseek::service::search::SearchProcessor;
@@ -46,16 +45,11 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 
     // 构建本地流（递归）
-    let path_str = root.to_string_lossy().to_string();
-    let mut estream = logseek::service::entry_stream::build_local_entry_stream(
-      &path_str,
-      Some(Target::Dir {
-        path: ".".to_string(),
-        recursive: true,
-      }),
-    )
-    .await
-    .expect("构建流失败");
+    let mut estream = Box::new(
+      opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(root), true)
+        .await
+        .expect("构建流失败"),
+    );
 
     tokio::spawn(async move {
       let _ = stream_processor.process_stream(&mut *estream, tx).await;
@@ -94,16 +88,11 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 
-    let path_str = root.to_string_lossy().to_string();
-    let mut estream = logseek::service::entry_stream::build_local_entry_stream(
-      &path_str,
-      Some(Target::Dir {
-        path: ".".to_string(),
-        recursive: true,
-      }),
-    )
-    .await
-    .expect("构建流失败");
+    let mut estream = Box::new(
+      opsbox_core::fs::FsEntryStream::new(std::path::PathBuf::from(root), true)
+        .await
+        .expect("构建流失败"),
+    );
 
     tokio::spawn(async move {
       let _ = stream_processor.process_stream(&mut *estream, tx).await;

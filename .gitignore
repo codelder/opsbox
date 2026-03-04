@@ -58,6 +58,9 @@ web/build/
 web/dist/
 web/coverage/
 web/playwright-report/
+lcov.info
+*.profraw
+*.profdata
 web/.playwright/
 web/test-results/
 web/vite.config.js.timestamp-*
@@ -66,3 +69,9 @@ web/vite.config.ts.timestamp-*
 # 本地开发数据库（不要提交）
 *.db
 dist/
+web/tests/e2e/temp_*
+
+# SQLite temporary files
+sqlite::memory:*
+*wal
+*shm

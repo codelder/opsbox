@@ -8,10 +8,11 @@
 //! - 日志系统
 
 pub mod agent;
+pub mod common;
 pub mod database;
+pub mod dfs;
 pub mod error;
 pub mod fs;
-pub mod odfs;
 pub mod repository;
 pub mod storage;
 
@@ -19,14 +20,13 @@ pub mod llm;
 pub mod logging;
 pub mod middleware;
 pub mod module;
-pub mod odfi;
 pub mod response;
 
 // 重新导出常用类型
 pub use database::{DatabaseConfig, health_check, init_pool, run_migration};
 pub use error::{AppError, Result};
 pub use logging::{
-  LogConfig, LogError, LogLevel, ReloadHandle,
+  LogConfig, LogError, LogLevel, ReloadHandle, UpdateLogLevelRequest, UpdateRetentionRequest,
   repository::{LogConfigModel, LogConfigRepository, LogConfigResponse},
 };
 pub use module::{Module, get_all_modules};

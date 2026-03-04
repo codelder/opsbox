@@ -1,1 +1,0 @@
-use url::Url; fn main() { let u = Url::parse("odfi://local/foo bar"); println!("{:?}", u); }

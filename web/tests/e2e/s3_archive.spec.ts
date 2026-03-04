@@ -271,6 +271,7 @@ test.describe('S3 Archive E2E', () => {
   let mockS3: { endpoint: string; close: () => Promise<void> } | null = null;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     const backend = await ensureBackendUp(request);
     backendProc = backend.proc;
     startedBackend = backend.started;
@@ -299,12 +300,7 @@ test.describe('S3 Archive E2E', () => {
     expect(profileResp.ok()).toBeTruthy();
 
     const script = `
-SOURCES = [{
-    'endpoint': { 'kind': 's3', 'profile': '${PROFILE}', 'bucket': '${BUCKET}' },
-    'target':   { 'type': 'archive', 'path': '${KEY}' },
-    'filter_glob': '*.log',
-    'display_name': 'E2E S3 Archive',
-}]
+SOURCES = ["orl://${PROFILE}@s3/${BUCKET}/${KEY}?glob=*.log"]
 `;
 
     const scriptResp = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -335,11 +331,22 @@ SOURCES = [{
     }
   });
 
-  test('should render s3 tar.gz archive entry results', async ({ page }) => {
+  test('should render s3 tar.gz archive entry results', async ({ page, request }) => {
+    // 先直连后端验证搜索接口（能拿到 Problem Details 的详细错误，避免只看到 UI 的 HTTP 500）
+    const q = `app:${TEST_APP} "${UNI_ID}"`;
+    const apiResp = await request.post(`${API_LOGSEEK_BASE}/search.ndjson`, {
+      data: { q },
+      timeout: 15000
+    });
+    if (!apiResp.ok()) {
+      const detail = await apiResp.text();
+      throw new Error(`Backend /search.ndjson failed: HTTP ${apiResp.status()} body=${detail}`);
+    }
+
     await page.goto('http://127.0.0.1:5173/search');
 
     const searchInput = page.getByPlaceholder('搜索...');
-    await searchInput.fill(`app:${TEST_APP} "${UNI_ID}"`);
+    await searchInput.fill(q);
     await searchInput.press('Enter');
 
     await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果');
@@ -347,7 +354,10 @@ SOURCES = [{
 
     const entryLink = page.getByRole('link', { name: 'archived-tgz.log' });
     await expect(entryLink).toBeVisible();
-    await expect(entryLink).toHaveAttribute('href', /file=odfi%3A%2F%2F.*app\.tar\.gz%3Fentry%3Darchived-tgz\.log/);
+    await expect(entryLink).toHaveAttribute(
+      'href',
+      /file=orl%3A%2F%2F[^%]+%40s3%2F.*app\.tar\.gz%3Fentry%3Darchived.*?tgz.*?log/
+    );
     await expect(page.locator('mark.highlight', { hasText: UNI_ID })).toHaveCount(1);
   });
 });

@@ -538,14 +538,16 @@ for await (const event of agent.search(
 
 ```mermaid
 sequenceDiagram
-    participant Admin
-    participant Server
     participant Agent
+    participant Server
 
-    Admin->>Server: POST /api/agents (添加 Agent)
-    Server->>Agent: GET /health (验证可达性)
-    Agent-->>Server: 200 OK (健康信息)
-    Server->>Admin: 200 OK (注册成功)
+    Agent->>Server: POST /api/v1/agents/register (上报信息与监听端口)
+    Server-->>Agent: 201 Created (注册成功并记录端点)
+    
+    loop 保持心跳
+        Agent->>Server: POST /api/v1/agents/{id}/heartbeat
+        Server-->>Agent: 200 OK (更新在线状态)
+    end
 ```
 
 ### 搜索流程

@@ -15,6 +15,26 @@ use std::fmt as stdfmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use thiserror::Error;
+
+// ========================================
+// 共享的日志 API 请求/响应类型
+// ========================================
+
+/// 更新日志级别请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateLogLevelRequest {
+  /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
+  pub level: String,
+}
+
+/// 更新日志保留数量请求
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRetentionRequest {
+  /// 保留数量（天）
+  pub retention_count: usize,
+}
+
+// ========================================
 use tracing::Level;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::filter::LevelFilter;
@@ -390,5 +410,22 @@ mod tests {
     assert!(!config.enable_console);
     assert!(config.enable_file);
     assert_eq!(config.file_prefix, "custom");
+  }
+
+  #[tokio::test]
+  async fn test_init_and_reload() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let config = LogConfig {
+      level: LogLevel::Info,
+      log_dir: temp_dir.path().to_path_buf(),
+      enable_console: false,
+      enable_file: true,
+      file_prefix: "test-init".to_string(),
+      ..Default::default()
+    };
+
+    let handle = init(config).expect("Init failed");
+    handle.update_level(LogLevel::Debug).expect("Reload failed");
+    assert!(temp_dir.path().exists());
   }
 }

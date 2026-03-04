@@ -56,7 +56,6 @@
     // If same file, no need to reload everything
     if (newFile === file && newSid === sid && imageUrl) return;
 
-    const fileChanged = newFile !== file;
     file = newFile;
     sid = newSid;
 
@@ -96,14 +95,14 @@
       const lastSlash = cleanFile.lastIndexOf('/');
       if (lastSlash === -1) return;
 
-      const parentOdfi = cleanFile.substring(0, lastSlash + 1);
+      const parentOrl = cleanFile.substring(0, lastSlash + 1);
 
       // Only fetch if parent directory actually changed or list is empty
       const currentParent =
         peerImages.length > 0 ? peerImages[0].path.substring(0, peerImages[0].path.lastIndexOf('/') + 1) : null;
 
-      if (!currentParent || currentParent !== parentOdfi) {
-        const items = await listResources(parentOdfi);
+      if (!currentParent || currentParent !== parentOrl) {
+        const items = await listResources(parentOrl);
         // Sort numerically for better user experience
         peerImages = items
           .filter(isImageFile)
@@ -460,7 +459,7 @@
         class="no-scrollbar flex h-32 items-center gap-4 overflow-x-auto overflow-y-hidden px-4 py-3"
         style="scrollbar-width: none; -ms-overflow-style: none;"
       >
-        {#each peerImages as item, i}
+        {#each peerImages as item, i (item.path)}
           <button
             class="relative h-24 w-40 shrink-0 overflow-hidden rounded-lg border-2 transition-all hover:scale-105 active:scale-95 {i ===
             currentIndex

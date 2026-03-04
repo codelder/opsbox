@@ -146,3 +146,124 @@ pub async fn heartbeat_loop(config: Arc<AgentConfig>, shutdown: Arc<Notify>) {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use axum::{Router, http::StatusCode, routing::post};
+  use tokio::net::TcpListener;
+
+  #[tokio::test]
+  async fn test_register_to_server_success() {
+    // 1. 启动一个简单的 Mock Server
+    let app = Router::new().route("/api/v1/agents/register", post(|| async { StatusCode::OK }));
+
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+      Ok(l) => l,
+      Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+        // Skip test in sandboxed environments where port binding is not permitted
+        return;
+      }
+      Err(e) => panic!("Failed to bind to test address: {}", e),
+    };
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+      axum::serve(listener, app).await.unwrap();
+    });
+
+    // 2. 准备配置
+    let config = AgentConfig {
+      agent_id: "test-agent".into(),
+      agent_name: "TestAgent".into(),
+      server_endpoint: format!("http://{}", addr),
+      search_roots: vec!["/tmp".into()],
+      listen_port: 8080,
+      enable_heartbeat: true,
+      heartbeat_interval_secs: 1,
+      worker_threads: None,
+      log_dir: std::path::PathBuf::from("/tmp"),
+      log_retention: 7,
+      reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
+    };
+
+    // 3. 执行注册
+    let result = register_to_server(&config).await;
+    assert!(result.is_ok());
+  }
+
+  #[tokio::test]
+  async fn test_register_to_server_fail() {
+    let app = Router::new().route(
+      "/api/v1/agents/register",
+      post(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+    );
+
+    let listener = match TcpListener::bind("127.0.0.1:0").await {
+      Ok(l) => l,
+      Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+        // Skip test in sandboxed environments where port binding is not permitted
+        return;
+      }
+      Err(e) => panic!("Failed to bind to test address: {}", e),
+    };
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+      axum::serve(listener, app).await.unwrap();
+    });
+
+    let config = AgentConfig {
+      agent_id: "test-agent".into(),
+      agent_name: "TestAgent".into(),
+      server_endpoint: format!("http://{}", addr),
+      search_roots: vec![],
+      listen_port: 8080,
+      enable_heartbeat: false,
+      heartbeat_interval_secs: 1,
+      worker_threads: None,
+      log_dir: std::path::PathBuf::from("/tmp"),
+      log_retention: 7,
+      reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
+    };
+
+    let result = register_to_server(&config).await;
+    assert!(result.is_err());
+  }
+
+  #[tokio::test]
+  async fn test_heartbeat_loop_can_stop() {
+    let config = Arc::new(AgentConfig {
+      agent_id: "test-agent".into(),
+      agent_name: "TestAgent".into(),
+      server_endpoint: "http://127.0.0.1:1".to_string(), // 无效地址，产生错误但我们也希望能停止
+      search_roots: vec![],
+      listen_port: 8080,
+      enable_heartbeat: true,
+      heartbeat_interval_secs: 1,
+      worker_threads: None,
+      log_dir: std::path::PathBuf::from("/tmp"),
+      log_retention: 7,
+      reload_handle: None,
+      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
+    });
+
+    let shutdown = Arc::new(Notify::new());
+    let shutdown_clone = shutdown.clone();
+
+    let handle = tokio::spawn(async move {
+      heartbeat_loop(config, shutdown_clone).await;
+    });
+
+    // 触发关闭
+    shutdown.notify_one();
+
+    // 等待循环退出
+    tokio::time::timeout(Duration::from_secs(2), handle)
+      .await
+      .unwrap()
+      .unwrap();
+  }
+}

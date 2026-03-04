@@ -6,34 +6,52 @@
 
 ### 后端 (`backend/`)
 
-**Monorepo 结构，包含三个 crate：**
+**Monorepo 结构，包含多个 crate：**
 
 - **opsbox-server** (主程序，输出二进制名 `opsbox-server`)
   - 模块化结构：config、logging、daemon、server
   - 内嵌前端静态资源
   - SQLite 数据库管理
   - 监听 127.0.0.1:4000
-  
+
 - **opsbox-core** (共享库)
   - 统一错误处理 (RFC 7807 Problem Details)
   - 数据库连接池管理
   - 标准响应格式封装
-  
+  - ORL 协议 (`orl://`) - 统一的跨端点资源定位符
+
 - **logseek** (日志检索模块)
-  - 分层架构：api、service、repository、utils
-  - 支持本地文件系统和 S3/MinIO
+  - 分层架构：api、service、repository、domain、utils
+  - 支持本地文件系统、S3/MinIO 和远程 Agent
   - NDJSON 流式搜索
-  - 自然语言转查询（基于本地 Ollama）
+  - 自然语言转查询（基于 Ollama/OpenAI）
+  - Starlark 脚本化源规划
+
+- **explorer** (分布式资源浏览器模块)
+  - 统一浏览 Local、S3、Agent 端点
+  - 支持归档文件内浏览（tar、tar.gz、zip 等）
+  - 文件下载功能
+  - 内容类型自动检测
+
+- **agent-manager** (代理管理模块)
+  - 代理注册、健康监控和标签管理
+  - 基于标签的代理组织和过滤
+  - 代理日志配置代理
+
+- **agent** (独立代理二进制)
+  - 远程日志访问代理
+  - 支持与主服务器通信
 
 ### 前端 (`web/`)
 
 - **SvelteKit** SPA (使用 adapter-static)
-- **模块化架构** (`src/lib/modules/logseek/`)
-  - types/: TypeScript 类型定义
-  - api/: 后端 API 客户端封装
-  - utils/: 文本处理工具
-  - composables/: Svelte 5 Runes 状态管理
+- **模块化架构** (`src/lib/modules/`)
+  - `logseek/`: 日志搜索相关组件和 API 客户端
+  - `explorer/`: 分布式资源浏览器 UI 和 API 客户端
+  - `agent/`: 代理管理相关组件和 API 客户端
 - **Vite** 开发服务器（代理 /api 到后端）
+- **TailwindCSS 4.0** 样式框架
+- **Maple Mono NF CN** 字体系统（5 种字重嵌入）
 
 ## 快速开始
 
@@ -79,9 +97,26 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 ### 日志搜索
 
 - GitHub 风格的查询语法（AND/OR/NOT、正则、短语）
-- 本地文件系统和 S3/MinIO 支持
+- 支持本地文件系统、S3/MinIO 和远程 Agent
 - NDJSON 流式结果返回
 - 上下文窗口和关键词高亮
+- Starlark 脚本化源规划
+- 自然语言转查询（基于 Ollama/OpenAI）
+
+### 分布式资源浏览器
+
+- 统一浏览 Local、S3、Agent 端点
+- 支持归档文件内浏览（tar、tar.gz、zip 等）
+- 文件下载功能
+- 内容类型自动检测
+- 隐藏文件计数和目录子项统计
+
+### 代理管理
+
+- 代理注册、健康监控和心跳机制
+- 基于标签的代理组织和过滤
+- 完整的标签 CRUD 操作（添加/移除/清空）
+- 代理日志配置代理（级别、保留策略）
 
 ### 对象存储设置（S3 Profiles）
 
@@ -89,12 +124,11 @@ cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 - 首次启动会自动迁移旧的单一 S3 设置到 `default` profile
 - 保留 `/settings/s3` 端点以兼容旧前端，推荐使用 Profiles 管理
 
-### AI 查询生成
+### ORL 协议（统一资源定位）
 
-- 将自然语言转换为查询字符串
-- 依赖本地 Ollama (默认 http://127.0.0.1:11434)
-- 默认模型：qwen3:8b
-- 环境变量配置：`OLLAMA_BASE_URL`、`OLLAMA_MODEL`
+- `orl://` 协议统一标识 Local、Agent、S3 资源
+- 支持归档文件内条目访问（`?entry=` 参数）
+- 向后兼容旧的 `odfi://` 格式
 
 ## 配置
 
@@ -197,19 +231,28 @@ pnpm --dir web test
 
 ### 后端
 
-- Rust 1.90.0
+- Rust 1.90.0 (2024 edition)
 - Axum (HTTP 框架)
 - SQLite + sqlx (数据库)
 - tokio (异步运行时)
-- ollama-rs (AI 集成)
+- tracing (结构化日志系统)
+- starlark (脚本化源规划)
+- grep (字节级正则搜索)
+- fluent-uri (RFC 3986 URI 解析)
+- async_zip + tokio-tar (异步归档支持)
+- aws-sdk-s3 (S3 存储支持)
 
 ### 前端
 
-- SvelteKit (框架)
+- SvelteKit 2.22 (框架)
 - Svelte 5 (UI 库，Runes API)
 - TypeScript (类型系统)
-- TailwindCSS (样式)
-- Vite (构建工具)
+- TailwindCSS 4.0 (样式框架，使用 @tailwindcss/vite 插件)
+- Vite 7.0 (构建工具)
+- @tanstack/svelte-virtual (虚拟滚动)
+- lucide-svelte (图标库)
+- bits-ui (UI 组件)
+- Maple Mono NF CN 字体系统（5 种字重嵌入）
 
 ## License
 

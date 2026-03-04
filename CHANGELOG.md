@@ -85,6 +85,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - [docs/guides/tracing-usage.md](docs/guides/tracing-usage.md) - Tracing 使用指南
   - [docs/api/logging-api.md](docs/api/logging-api.md) - API 文档
 
+### Added - ORL协议和资源浏览器
+
+#### 核心功能
+- **ORL协议演进**: 从 `odfi://` 协议迁移到 `orl://` (OpsBox Resource Locator) 协议
+  - 使用 RFC 3986 兼容的 `fluent-uri` 解析器
+  - 统一 Local、Agent、S3 端点资源标识
+  - 支持归档文件内条目访问 (`?entry=` 参数)
+  - 向后兼容旧的 `odfi://` 格式
+
+- **分布式资源浏览器**: 新增 explorer 模块
+  - 统一浏览 Local、S3、Agent 端点资源
+  - 支持归档文件内浏览 (tar、tar.gz、zip 等)
+  - 文件下载功能 (`POST /api/v1/explorer/download`)
+  - 内容类型自动检测 (MIME types)
+  - 隐藏文件计数和目录子项统计
+
+- **代理管理增强**: agent-manager 模块改进
+  - 完整的标签 CRUD 操作 (添加/移除/清空)
+  - 基于标签的代理过滤和组织
+  - 代理日志配置代理功能
+
+#### 技术改进
+- **SearchExecutor 重构**: 简化 EntryStream 创建，提高搜索性能
+- **相对路径 glob 过滤**: 支持相对路径的 glob 模式过滤
+- **增强归档支持**: 添加 async_zip 和 tokio-tar 依赖，支持 ZIP 归档
+- **测试基础设施**: 完整的 E2E 测试套件修复，增加超时时间
+- **内存优化**: mimalloc 分配器优化和显式内存回收
+
+#### REST API
+- **Explorer 模块 API**:
+  - `POST /api/v1/explorer/list` - 列出资源
+  - `POST /api/v1/explorer/download` - 下载文件
+
 ### Changed
 
 #### 依赖更新

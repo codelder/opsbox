@@ -13,6 +13,11 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+// 从 opsbox-core 复用共享的日志 API 类型
+pub use opsbox_core::logging::repository::LogConfigResponse;
+pub use opsbox_core::logging::{UpdateLogLevelRequest, UpdateRetentionRequest};
+pub use opsbox_core::response::SuccessResponse;
+
 /// 查询参数
 #[derive(Debug, Deserialize)]
 pub struct AgentQuery {
@@ -49,46 +54,38 @@ pub struct RemoveTagRequest {
   pub value: String,
 }
 
-/// 日志配置响应
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct LogConfigResponse {
-  /// 日志级别
-  pub level: String,
-  /// 日志保留数量（天）
-  pub retention_count: usize,
-  /// 日志目录
-  pub log_dir: String,
+// SuccessResponse 已在上面重新导出
+
+/// 处理 Agent 标签操作的通用宏
+macro_rules! handle_agent_operation {
+    ($manager:expr, $operation:expr, $success_msg:expr) => {
+        match $operation {
+            Ok(_) => Ok(Json(serde_json::json!({"message": $success_msg}))),
+            Err(e) => {
+                tracing::error!("操作失败: {}", e);
+                Err(StatusCode::NOT_FOUND)
+            }
+        }
+    };
 }
 
-/// 更新日志级别请求
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct UpdateLogLevelRequest {
-  /// 日志级别: "error" | "warn" | "info" | "debug" | "trace"
-  pub level: String,
-}
+/// 从 Agent 信息中提取连接端点 (host 和 port)
+fn extract_agent_endpoint(agent: &AgentInfo) -> Result<(String, u16), (StatusCode, String)> {
+  let host = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "host")
+    .map(|t| t.value.clone())
+    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
 
-/// 更新保留数量请求
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct UpdateRetentionRequest {
-  /// 保留数量（天）
-  pub retention_count: usize,
-}
+  let port = agent
+    .tags
+    .iter()
+    .find(|t| t.key == "listen_port")
+    .and_then(|t| t.value.parse::<u16>().ok())
+    .unwrap_or(4001);
 
-/// 通用成功响应
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-pub struct SuccessResponse {
-  pub message: String,
-}
-
-/// 构造禁用代理的 HTTP 客户端，保证访问本地 Agent 时不会被系统代理劫持
-fn build_agent_http_client() -> Result<reqwest::Client, (StatusCode, String)> {
-  reqwest::Client::builder().no_proxy().build().map_err(|e| {
-    tracing::error!("创建 Agent HTTP 客户端失败: {}", e);
-    (
-      StatusCode::INTERNAL_SERVER_ERROR,
-      format!("创建 HTTP 客户端失败: {}", e),
-    )
-  })
+  Ok((host, port))
 }
 
 /// 创建 Agent 管理路由
@@ -247,13 +244,11 @@ async fn set_agent_tags(
   Path(agent_id): Path<String>,
   Json(req): Json<SetTagsRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  match manager.set_agent_tags(&agent_id, req.tags).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签设置成功"}))),
-    Err(e) => {
-      tracing::error!("设置标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(
+    manager,
+    manager.set_agent_tags(&agent_id, req.tags).await,
+    "标签设置成功"
+  )
 }
 
 /// 获取 Agent 标签
@@ -274,13 +269,7 @@ async fn add_agent_tag(
   Json(req): Json<AddTagRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
   let tag = AgentTag::new(req.key, req.value);
-  match manager.add_agent_tag(&agent_id, tag).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签添加成功"}))),
-    Err(e) => {
-      tracing::error!("添加标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(manager, manager.add_agent_tag(&agent_id, tag).await, "标签添加成功")
 }
 
 /// 移除 Agent 标签
@@ -289,13 +278,11 @@ async fn remove_agent_tag(
   Path(agent_id): Path<String>,
   Json(req): Json<RemoveTagRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  match manager.remove_agent_tag(&agent_id, &req.key, &req.value).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签移除成功"}))),
-    Err(e) => {
-      tracing::error!("移除标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(
+    manager,
+    manager.remove_agent_tag(&agent_id, &req.key, &req.value).await,
+    "标签移除成功"
+  )
 }
 
 /// 清空 Agent 标签
@@ -303,13 +290,7 @@ async fn clear_agent_tags(
   State(manager): State<Arc<AgentManager>>,
   Path(agent_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-  match manager.clear_agent_tags(&agent_id).await {
-    Ok(_) => Ok(Json(serde_json::json!({"message": "标签清空成功"}))),
-    Err(e) => {
-      tracing::error!("清空标签失败: {}", e);
-      Err(StatusCode::NOT_FOUND)
-    }
-  }
+  handle_agent_operation!(manager, manager.clear_agent_tags(&agent_id).await, "标签清空成功")
 }
 
 /// 代理获取 Agent 日志配置
@@ -324,27 +305,15 @@ async fn proxy_agent_log_config(
     .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
 
   // 2. 从标签中提取 host 和 port
-  let host = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "host")
-    .map(|t| t.value.clone())
-    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
-
-  let port = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "listen_port")
-    .and_then(|t| t.value.parse::<u16>().ok())
-    .unwrap_or(4001);
+  let (host, port) = extract_agent_endpoint(&agent)?;
 
   // 3. 构造 Agent API URL
   let url = format!("http://{}:{}/api/v1/log/config", host, port);
 
   tracing::debug!("代理请求 Agent 日志配置: agent_id={}, url={}", agent_id, url);
 
-  // 4. 转发请求
-  let client = build_agent_http_client()?;
+  // 4. 转发请求（使用缓存的 HTTP 客户端）
+  let client = manager.http_client();
   let response = client
     .get(&url)
     .timeout(std::time::Duration::from_secs(10))
@@ -375,7 +344,7 @@ async fn proxy_agent_log_level(
   State(manager): State<Arc<AgentManager>>,
   Path(agent_id): Path<String>,
   Json(req): Json<UpdateLogLevelRequest>,
-) -> Result<Json<SuccessResponse>, (StatusCode, String)> {
+) -> Result<Json<SuccessResponse<()>>, (StatusCode, String)> {
   // 1. 获取 Agent 信息（包含 host 和 listen_port 标签）
   let agent = manager
     .get_agent(&agent_id)
@@ -383,19 +352,7 @@ async fn proxy_agent_log_level(
     .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
 
   // 2. 从标签中提取 host 和 port
-  let host = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "host")
-    .map(|t| t.value.clone())
-    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
-
-  let port = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "listen_port")
-    .and_then(|t| t.value.parse::<u16>().ok())
-    .unwrap_or(4001);
+  let (host, port) = extract_agent_endpoint(&agent)?;
 
   // 3. 构造 Agent API URL
   let url = format!("http://{}:{}/api/v1/log/level", host, port);
@@ -407,8 +364,8 @@ async fn proxy_agent_log_level(
     url
   );
 
-  // 4. 转发请求
-  let client = build_agent_http_client()?;
+  // 4. 转发请求（使用缓存的 HTTP 客户端）
+  let client = manager.http_client();
   let response = client
     .put(&url)
     .json(&req)
@@ -427,7 +384,7 @@ async fn proxy_agent_log_level(
     return Err((StatusCode::BAD_GATEWAY, format!("Agent 返回错误: {}", status)));
   }
 
-  let result = response.json::<SuccessResponse>().await.map_err(|e| {
+  let result = response.json::<SuccessResponse<()>>().await.map_err(|e| {
     tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
     (StatusCode::INTERNAL_SERVER_ERROR, format!("解析响应失败: {}", e))
   })?;
@@ -441,7 +398,7 @@ async fn proxy_agent_log_retention(
   State(manager): State<Arc<AgentManager>>,
   Path(agent_id): Path<String>,
   Json(req): Json<UpdateRetentionRequest>,
-) -> Result<Json<SuccessResponse>, (StatusCode, String)> {
+) -> Result<Json<SuccessResponse<()>>, (StatusCode, String)> {
   // 1. 获取 Agent 信息（包含 host 和 listen_port 标签）
   let agent = manager
     .get_agent(&agent_id)
@@ -449,19 +406,7 @@ async fn proxy_agent_log_retention(
     .ok_or_else(|| (StatusCode::NOT_FOUND, format!("Agent {} 不存在", agent_id)))?;
 
   // 2. 从标签中提取 host 和 port
-  let host = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "host")
-    .map(|t| t.value.clone())
-    .ok_or_else(|| (StatusCode::INTERNAL_SERVER_ERROR, "Agent 缺少 host 标签".to_string()))?;
-
-  let port = agent
-    .tags
-    .iter()
-    .find(|t| t.key == "listen_port")
-    .and_then(|t| t.value.parse::<u16>().ok())
-    .unwrap_or(4001);
+  let (host, port) = extract_agent_endpoint(&agent)?;
 
   // 3. 构造 Agent API URL
   let url = format!("http://{}:{}/api/v1/log/retention", host, port);
@@ -473,8 +418,8 @@ async fn proxy_agent_log_retention(
     url
   );
 
-  // 4. 转发请求
-  let client = build_agent_http_client()?;
+  // 4. 转发请求（使用缓存的 HTTP 客户端）
+  let client = manager.http_client();
   let response = client
     .put(&url)
     .json(&req)
@@ -493,7 +438,7 @@ async fn proxy_agent_log_retention(
     return Err((StatusCode::BAD_GATEWAY, format!("Agent 返回错误: {}", status)));
   }
 
-  let result = response.json::<SuccessResponse>().await.map_err(|e| {
+  let result = response.json::<SuccessResponse<()>>().await.map_err(|e| {
     tracing::error!("解析 Agent {} 响应失败: {}", agent_id, e);
     (StatusCode::INTERNAL_SERVER_ERROR, format!("解析响应失败: {}", e))
   })?;
@@ -547,5 +492,119 @@ mod tests {
     let response = app.oneshot(req).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
+  }
+
+  #[tokio::test]
+  async fn test_agent_routes_full_flow() {
+    let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let manager = Arc::new(AgentManager::new(pool).await.unwrap());
+    let app = create_routes(manager.clone());
+
+    // 1. Register
+    let agent_id = "agent-full-flow";
+    let agent_info = serde_json::json!({
+        "id": agent_id,
+        "name": "Full Flow Agent",
+        "version": "1.0.0",
+        "hostname": "localhost",
+        "tags": [],
+        "search_roots": ["/logs"],
+        "last_heartbeat": 0,
+        "status": {"type": "Online"},
+        "listen_port": 4001
+    });
+
+    let mut req = axum::http::Request::builder()
+      .method("POST")
+      .uri("/register")
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(serde_json::to_string(&agent_info).unwrap()))
+      .unwrap();
+    req
+      .extensions_mut()
+      .insert(axum::extract::connect_info::ConnectInfo::<std::net::SocketAddr>(
+        "127.0.0.1:12345".parse().unwrap(),
+      ));
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // 2. Heartbeat
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri(format!("/{}/heartbeat", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 3. Get Agent
+    let req = axum::http::Request::builder()
+      .method("GET")
+      .uri(format!("/{}", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 4. List Agents
+    let req = axum::http::Request::builder()
+      .method("GET")
+      .uri("/")
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 5. Tag Management
+    // Add Tag
+    let req = axum::http::Request::builder()
+      .method("POST")
+      .uri(format!("/{}/tags/add", agent_id))
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        serde_json::json!({"key": "env", "value": "test"}).to_string(),
+      ))
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // List Tags
+    let req = axum::http::Request::builder()
+      .method("GET")
+      .uri("/tags")
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Remove Tag
+    let req = axum::http::Request::builder()
+      .method("DELETE")
+      .uri(format!("/{}/tags/remove", agent_id))
+      .header("content-type", "application/json")
+      .body(axum::body::Body::from(
+        serde_json::json!({"key": "env", "value": "test"}).to_string(),
+      ))
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Clear Tags
+    let req = axum::http::Request::builder()
+      .method("DELETE")
+      .uri(format!("/{}/tags/clear", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 6. Unregister
+    let req = axum::http::Request::builder()
+      .method("DELETE")
+      .uri(format!("/{}", agent_id))
+      .body(axum::body::Body::empty())
+      .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
   }
 }

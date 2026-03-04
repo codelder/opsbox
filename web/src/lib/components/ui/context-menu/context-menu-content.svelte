@@ -1,7 +1,6 @@
 <script lang="ts">
   import { ContextMenu as ContextMenuPrimitive } from 'bits-ui';
   import { cn } from '$lib/utils.js';
-  import { fade } from 'svelte/transition';
 
   let { ref = $bindable(null), class: className, ...restProps }: ContextMenuPrimitive.ContentProps = $props();
 </script>

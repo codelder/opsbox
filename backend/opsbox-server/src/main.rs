@@ -17,10 +17,10 @@ extern crate explorer;
 // 模块声明
 mod config;
 mod daemon;
-mod log_routes;
 mod logging;
-mod network;
-mod server;
+
+use opsbox_server::network;
+use opsbox_server::server;
 
 #[cfg(windows)]
 mod daemon_windows;
@@ -223,6 +223,8 @@ fn handle_daemon_mode(config: &AppConfig) {
 ///
 /// 将命令行参数转换为环境变量，供各模块在 configure() 中读取
 pub(crate) fn setup_module_env_vars(config: &AppConfig) {
+  // SAFETY: 此函数在主线程启动早期、多线程开始前调用，此时没有任何并发访问环境变量的风险。
+  // 所有模块的 configure() 都在此时完成后才会读取这些环境变量。
   unsafe {
     // LogSeek 模块配置
     std::env::set_var(

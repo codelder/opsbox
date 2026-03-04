@@ -3,20 +3,14 @@
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
   import { Button } from '$lib/components/ui/button';
-  import { Input } from '$lib/components/ui/input';
   import { Separator } from '$lib/components/ui/separator';
-  import { type ResourceItem, type Odfi, listResources } from '$lib/modules/explorer';
+  import { type ResourceItem, listResources } from '$lib/modules/explorer';
   import {
-    Folder,
-    File,
     ArrowLeft,
     RefreshCw,
-    Home,
     Download,
     Server,
-    HardDrive,
     Cloud,
-    ChevronRight,
     ChevronDown,
     Monitor,
     LayoutList,
@@ -27,6 +21,7 @@
     ExternalLink,
     Copy,
     Info,
+    Folder,
     Music,
     Film,
     Image,
@@ -37,17 +32,28 @@
     Terminal
   } from 'lucide-svelte';
   import { ContextMenu } from 'bits-ui';
-  import { cn } from '$lib/utils';
   import { isTextFile, isImageFile, isArchiveFile, truncateMiddle } from '$lib/modules/explorer/utils';
   import errorIcon from '$lib/assets/error.svg';
   import errorDarkIcon from '$lib/assets/error-dark.svg';
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type IconComponent = any;
+
+  interface SidebarItem {
+    key?: string;
+    label?: string;
+    name: string;
+    path: string;
+    icon?: IconComponent;
+    colorClass?: string;
+  }
+
   // State
-  let currentOdfiStr = $state('');
+  let currentOrlStr = $state('');
   let items: ResourceItem[] = $state([]);
   let loading = $state(false);
   let error: string | null = $state(null);
-  let urlOdfi = page.url.searchParams.get('odfi');
+  let urlOrl = page.url.searchParams.get('orl');
   let viewMode = $state<'table' | 'grid'>('grid');
   let showHidden = $state(false);
 
@@ -58,10 +64,7 @@
   });
 
   // Sidebar State
-  let expandedSections = $state({
-    s3: false,
-    agent: false
-  });
+
   let sidebarData = $state({
     s3: [] as ResourceItem[],
     agent: [] as ResourceItem[]
@@ -94,24 +97,24 @@
     }
   }
 
-  // Derived active state from ODFI
+  // Derived active state from ORL
   let activeType = $derived.by(() => {
-    if (currentOdfiStr.startsWith('odfi://local')) return 'local';
-    if (currentOdfiStr.startsWith('odfi://s3')) return 's3';
-    if (currentOdfiStr.includes('@agent') || currentOdfiStr.startsWith('odfi://agent')) return 'agent';
+    if (currentOrlStr.startsWith('orl://local')) return 'local';
+    if (currentOrlStr.startsWith('orl://s3')) return 's3';
+    if (currentOrlStr.includes('@agent') || currentOrlStr.startsWith('orl://agent')) return 'agent';
     return null;
   });
 
   // Identify current agent name or S3 profile name
   let activeId = $derived.by(() => {
     if (activeType === 'agent') {
-      // Extract from odfi://id@agent...
-      const match = currentOdfiStr.match(/odfi:\/\/([^@]+)@agent/);
+      // Extract from orl://id@agent...
+      const match = currentOrlStr.match(/orl:\/\/([^@]+)@agent/);
       return match ? match[1] : null;
     }
     if (activeType === 's3') {
-      // Extract profile from odfi://profile@s3...
-      const match = currentOdfiStr.match(/odfi:\/\/([^@]+)@s3/);
+      // Extract profile from orl://profile@s3...
+      const match = currentOrlStr.match(/orl:\/\/([^@]+)@s3/);
       return match ? match[1] : null;
     }
     return null;
@@ -119,13 +122,13 @@
 
   // Initial load
   onMount(() => {
-    if (urlOdfi) {
-      currentOdfiStr = urlOdfi;
-      loadResources(urlOdfi);
+    if (urlOrl) {
+      currentOrlStr = urlOrl;
+      loadResources(urlOrl);
     } else {
       // Default to local root
-      currentOdfiStr = 'odfi://local/';
-      loadResources(currentOdfiStr);
+      currentOrlStr = 'orl://local/';
+      loadResources(currentOrlStr);
     }
 
     // Preload sidebar data
@@ -136,8 +139,8 @@
   async function loadSidebarData(section: 's3' | 'agent') {
     sidebarLoading[section] = true;
     try {
-      const rootOdfi = section === 's3' ? 'odfi://s3/' : 'odfi://agent/';
-      sidebarData[section] = await listResources(rootOdfi);
+      const rootOrl = section === 's3' ? 'orl://s3/' : 'orl://agent/';
+      sidebarData[section] = await listResources(rootOrl);
     } catch (e) {
       console.error(`Failed to load sidebar ${section}`, e);
     } finally {
@@ -145,14 +148,15 @@
     }
   }
 
-  async function loadResources(odfi: string): Promise<boolean> {
+  async function loadResources(orl: string): Promise<boolean> {
     loading = true;
     error = null;
+    console.log('[Explorer] Loading resources for ORL:', orl);
     try {
-      items = await listResources(odfi);
+      items = await listResources(orl);
       return true;
-    } catch (e: any) {
-      error = e.message;
+    } catch (e) {
+      error = (e as Error).message;
       items = [];
       return false;
     } finally {
@@ -160,31 +164,22 @@
     }
   }
 
-  async function toggleSection(section: 's3' | 'agent') {
-    expandedSections[section] = !expandedSections[section];
+  async function handleNavigate(newOrl: string): Promise<boolean> {
+    currentOrlStr = newOrl;
+    // Update URL without triggering SvelteKit navigation
+    const baseUrl = window.location.origin + window.location.pathname;
 
-    // Load if expanding and empty
-    if (expandedSections[section] && sidebarData[section].length === 0) {
-      sidebarLoading[section] = true;
-      try {
-        const rootOdfi = section === 's3' ? 'odfi://s3/' : 'odfi://agent/';
-        sidebarData[section] = await listResources(rootOdfi);
-      } catch (e) {
-        console.error(`Failed to load sidebar ${section}`, e);
-      } finally {
-        sidebarLoading[section] = false;
-      }
-    }
-  }
+    // 统一对 ORL 进行编码
+    // 后端现在返回未编码的路径（如 ?entry=/home），前端负责统一编码
+    // 这样可以避免双重编码问题（%2F → %252F）
+    const encodedOrl = encodeURIComponent(newOrl);
 
-  async function handleNavigate(newOdfi: string): Promise<boolean> {
-    currentOdfiStr = newOdfi;
-    // Update URL without reload
-    const url = new URL(window.location.href);
-    url.searchParams.set('odfi', newOdfi);
-    // Remove title query if present to clean up
-    goto(url.toString(), { keepFocus: true, noScroll: true });
-    return await loadResources(newOdfi);
+    const newUrl = `${baseUrl}?orl=${encodedOrl}`;
+    // 使用 goto 替代 replaceState，确保页面正确更新
+    // { noScroll: true } 避免滚动影响用户体验
+    // eslint-disable-next-line svelte/no-navigation-without-resolve
+    await goto(newUrl, { noScroll: true, keepFocus: true });
+    return await loadResources(newOrl);
   }
 
   let selectedItem: ResourceItem | null = $state(null);
@@ -193,21 +188,39 @@
     selectedItem = item;
   }
 
+  // 辅助函数：为 URL 查询参数编码 ORL
+  // 后端现在返回未编码的 ORL（如 ?entry=/home），前端负责统一编码
+  function encodeOrlForQueryParam(orl: string): string {
+    return encodeURIComponent(orl);
+  }
+
   function handleRowDoubleClick(item: ResourceItem) {
+    console.log('[Explorer] Double-clicked item:', {
+      name: item.name,
+      type: item.type,
+      path: item.path.substring(0, 100) + (item.path.length > 100 ? '...' : '')
+    });
+    console.log('[Explorer] Current ORL:', currentOrlStr);
+
     if (item.type === 'dir' || item.type === 'linkdir') {
+      console.log('[Explorer] Processing as directory');
+      console.log('[Explorer] Will navigate to:', item.path);
       handleNavigate(item.path);
     } else if (isArchiveFile(item)) {
+      console.log('[Explorer] Processing as archive');
       // For archives, we navigate directly - backend auto-detects archive files
       // and lists their contents when path points to an archive file
       handleNavigate(item.path);
     } else if (isTextFile(item)) {
-      const url = `/view?sid=explorer&file=${encodeURIComponent(item.path)}`;
+      console.log('[Explorer] Opening text file in /view');
+      const url = `/view?sid=explorer&file=${encodeOrlForQueryParam(item.path)}`;
       window.open(url, '_blank');
     } else if (isImageFile(item)) {
-      const url = `/image-view?sid=explorer&file=${encodeURIComponent(item.path)}`;
+      console.log('[Explorer] Opening image file in /image-view');
+      const url = `/image-view?sid=explorer&file=${encodeOrlForQueryParam(item.path)}`;
       window.open(url, '_blank');
     } else {
-      console.log('File double-clicked:', item.path);
+      console.log('[Explorer] Unhandled file type:', item.type, 'for file:', item.name);
     }
   }
 
@@ -221,7 +234,7 @@
 
   function handleDownload(item: ResourceItem) {
     if (!item.path) return;
-    const url = `/api/v1/explorer/download?odfi=${encodeURIComponent(item.path)}`;
+    const url = `/api/v1/explorer/download?orl=${encodeURIComponent(item.path)}`;
     const a = document.createElement('a');
     a.href = url;
     a.download = '';
@@ -232,13 +245,14 @@
 
   async function goUp() {
     try {
-      let urlStr = currentOdfiStr;
+      let urlStr = currentOrlStr;
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity
       const url = new URL(urlStr);
 
-      // Check if we are inside an archive
+      // Check if we are inside an archive (using ?entry= query parameter)
       const entry = url.searchParams.get('entry');
       if (entry) {
-        const entryParts = entry.split('/').filter((p) => p);
+        const entryParts = entry.split('/').filter((p: string) => p);
         if (entryParts.length > 1) {
           entryParts.pop();
           url.searchParams.set('entry', entryParts.join('/'));
@@ -250,32 +264,36 @@
       }
 
       // Normal path navigation
-      const pathParts = url.pathname.split('/').filter((p) => p);
+      const pathParts = url.pathname.split('/').filter((p: string) => p);
       if (pathParts.length > 0) {
         pathParts.pop();
         url.pathname = '/' + pathParts.join('/');
 
-        const targetOdfi = url.toString();
-        const success = await handleNavigate(targetOdfi);
+        // 清除归档相关参数，避免回退到普通目录时携带 target=archive
+        url.searchParams.delete('target');
+        url.searchParams.delete('entry');
+
+        const targetOrl = url.toString();
+        const success = await handleNavigate(targetOrl);
 
         // If navigation failed (e.g. 404/Access Denied) and we are in Agent mode,
         // it likely means we went up to a directory not in search_roots.
         // Fallback to Agent Root to show list of search roots.
         if (!success && activeType === 'agent' && activeId) {
-          const rootOdfi = `odfi://${activeId}@agent/`;
+          const rootOrl = `orl://${activeId}@agent/`;
           // Only redirect if we aren't already trying to go to root
-          if (targetOdfi !== rootOdfi) {
+          if (targetOrl !== rootOrl) {
             console.log('Navigation failed in Agent, falling back to root');
-            handleNavigate(rootOdfi);
+            handleNavigate(rootOrl);
           }
         }
       }
     } catch (e) {
-      console.error('Failed to parse ODFI for parent navigation', e);
-      if (currentOdfiStr.includes('/')) {
-        const parts = currentOdfiStr.split('/');
+      console.error('Failed to parse ORL for parent navigation', e);
+      if (currentOrlStr.includes('/')) {
+        const parts = currentOrlStr.split('/');
         parts.pop();
-        handleNavigate(parts.join('/') || 'odfi://local/');
+        handleNavigate(parts.join('/') || 'orl://local/');
       }
     }
   }
@@ -291,7 +309,7 @@
     return `${bytes.toFixed(1)} ${units[i]}`;
   }
 
-  function getFileIcon(item: ResourceItem): any {
+  function getFileIcon(item: ResourceItem): IconComponent | null {
     if (item.mime_type) {
       if (item.mime_type.startsWith('image/')) return Image;
       if (item.mime_type.startsWith('video/')) return Film;
@@ -375,12 +393,12 @@
         <h3 class="mb-3 text-sm font-light tracking-wider text-foreground uppercase opacity-70">Explorer</h3>
         <Separator class="mb-4" />
 
-        {#snippet renderLevel(items: any[], depth: number)}
+        {#snippet renderLevel(items: SidebarItem[], depth: number)}
           <div class="space-y-0.5">
-            {#each items as item}
+            {#each items as item (item.path)}
               {@const isActive =
                 (depth === 0 && activeType === item.key) ||
-                (depth === 1 && (activeId === item.name || currentOdfiStr.startsWith(item.path)))}
+                (depth === 1 && (activeId === item.name || currentOrlStr.startsWith(item.path)))}
               <button
                 class="group flex w-full items-center rounded-md px-2 py-1.5 text-sm transition-colors {isActive
                   ? 'bg-primary/10 text-primary'
@@ -408,13 +426,14 @@
               {@const children = sidebarData[activeRoot.key as 's3' | 'agent']}
               {#if children && children.length > 0}
                 <Separator class="my-3" />
-                {@render renderLevel(
-                  children.map((c) => ({
-                    ...c,
-                    colorClass: activeRoot.key === 's3' ? 'bg-blue-500' : 'bg-green-500'
-                  })),
-                  1
+                {@const mappedChildren = children.map(
+                  (c) =>
+                    ({
+                      ...c,
+                      colorClass: activeRoot.key === 's3' ? 'bg-blue-500' : 'bg-green-500'
+                    }) as SidebarItem
                 )}
+                {@render renderLevel(mappedChildren, 1)}
               {:else if sidebarLoading[activeRoot.key as 's3' | 'agent']}
                 <div class="mt-4 animate-pulse px-2 py-1 text-xs text-muted-foreground">Loading...</div>
               {:else}
@@ -428,9 +447,9 @@
 
         {@render renderLevel(
           [
-            { key: 'local', label: 'Local Machine', path: 'odfi://local/', icon: Monitor },
-            { key: 'agent', label: 'Remote Agents', path: 'odfi://agent/', icon: Server },
-            { key: 's3', label: 'S3 Storage', path: 'odfi://s3/', icon: Cloud }
+            { key: 'local', label: 'Local Machine', name: 'local', path: 'orl://local/', icon: Monitor },
+            { key: 'agent', label: 'Remote Agents', name: 'agent', path: 'orl://agent/', icon: Server },
+            { key: 's3', label: 'S3 Storage', name: 's3', path: 'orl://s3/', icon: Cloud }
           ],
           0
         )}
@@ -438,7 +457,7 @@
     </div>
   </aside>
 
-  {#snippet macOSFolder(className = 'h-16 w-16', hasFiles = true, icon: any = null)}
+  {#snippet macOSFolder(className = 'h-16 w-16', hasFiles = true, icon: IconComponent | null = null)}
     <div class="relative {className} flex items-center justify-center">
       <svg viewBox="0 0 100 88" class="h-full w-full drop-shadow-sm">
         <defs>
@@ -519,7 +538,7 @@
     </div>
   {/snippet}
 
-  {#snippet macOSFile(className = 'h-16 w-16', icon: any = null, isText: boolean = false)}
+  {#snippet macOSFile(className = 'h-16 w-16', icon: IconComponent | null = null, isText: boolean = false)}
     <div class="relative {className} flex items-center justify-center">
       <div class="relative h-full w-[76%]">
         <!-- Unified SVG for perfect alignment and realistic shadows -->
@@ -620,7 +639,7 @@
 
           <!-- Zipper Track -->
           <g transform="translate(37, 24)">
-            {#each Array(10) as _, i}
+            {#each Array.from({ length: 10 }).map((_, i) => i) as i (i)}
               <rect x={i % 2 === 0 ? 0 : 5} y={i * 4} width="3" height="1.6" fill="#94a3b8" rx="0.3" />
             {/each}
           </g>
@@ -668,7 +687,7 @@
           onSelect={() => copyToClipboard(item.path)}
         >
           <Link class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
-          <span>复制 ODFI 路径</span>
+          <span>复制 ORL 路径</span>
         </ContextMenu.Item>
 
         <ContextMenu.Item
@@ -704,7 +723,7 @@
         <!-- macOS Style Tags Row -->
         <div class="flex items-center justify-between px-3 py-2">
           <div class="flex w-full justify-between px-1">
-            {#each [{ color: '#ff5f57', label: '红色' }, { color: '#febc2e', label: '橙色' }, { color: '#fedd34', label: '黄色' }, { color: '#28c840', label: '绿色' }, { color: '#4a90e2', label: '蓝色' }, { color: '#a370f7', label: '紫色' }, { color: '#8e8e93', label: '灰色' }] as tag}
+            {#each [{ color: '#ff5f57', label: '红色' }, { color: '#febc2e', label: '橙色' }, { color: '#fedd34', label: '黄色' }, { color: '#28c840', label: '绿色' }, { color: '#4a90e2', label: '蓝色' }, { color: '#a370f7', label: '紫色' }, { color: '#8e8e93', label: '灰色' }] as tag (tag.color)}
               <button
                 class="h-[18px] w-[18px] rounded-full ring-1 ring-black/5 transition-transform hover:scale-110 active:scale-90 dark:ring-white/10"
                 style="background-color: {tag.color}"
@@ -723,7 +742,7 @@
     >
       <ContextMenu.Item
         class="flex h-8 cursor-pointer items-center rounded-md px-2 py-0 text-sm transition-colors outline-none data-highlighted:bg-[#007aff] data-highlighted:text-white"
-        onSelect={() => loadResources(currentOdfiStr)}
+        onSelect={() => loadResources(currentOrlStr)}
       >
         <RefreshCw class="mr-3 h-3.5 w-3.5 opacity-50 dark:opacity-60" />
         <span>刷新</span>
@@ -732,22 +751,23 @@
   {/snippet}
 
   <!-- Main Content -->
-  <div class="flex flex-1 flex-col overflow-hidden bg-background">
+  <main data-testid="explorer-container" class="flex flex-1 flex-col overflow-hidden bg-background">
     <!-- Toolbar -->
     <div class="flex items-center space-x-2 border-b border-border/40 p-4 dark:border-gray-700/50">
-      <Button variant="ghost" size="icon" onclick={goUp} disabled={loading}>
+      <Button variant="ghost" size="icon" onclick={goUp} disabled={loading} title="后退">
         <ArrowLeft class="h-4 w-4" />
       </Button>
-      <Button variant="ghost" size="icon" onclick={() => loadResources(currentOdfiStr)} disabled={loading}>
+      <Button variant="ghost" size="icon" onclick={() => loadResources(currentOrlStr)} disabled={loading} title="刷新">
         <RefreshCw class="h-4 w-4 {loading ? 'animate-spin' : ''}" />
       </Button>
       <div
         class="flex flex-1 items-center rounded-md border border-border/40 bg-muted/50 px-3 py-1.5 focus-within:ring-1 focus-within:ring-ring dark:border-gray-700/50"
       >
         <input
+          id="orl-input"
           class="w-full flex-1 border-none bg-transparent font-mono text-sm font-light outline-none"
-          bind:value={currentOdfiStr}
-          onkeydown={(e) => e.key === 'Enter' && handleNavigate(currentOdfiStr)}
+          bind:value={currentOrlStr}
+          onkeydown={(e) => e.key === 'Enter' && handleNavigate(currentOrlStr)}
         />
       </div>
 
@@ -787,6 +807,7 @@
 
     <!-- Content Area -->
     <div
+      data-testid="explorer-content"
       class="relative flex-1 overflow-auto p-4"
       onclick={() => (selectedItem = null)}
       role="button"
@@ -823,7 +844,7 @@
                 <div class="w-full flex-1 space-y-6 text-left">
                   <div>
                     <h3 class="text-2xl font-normal text-foreground">资源列举失败</h3>
-                    <p class="mt-2 text-muted-foreground">在访问指定的 ODFI 路径时发生了错误。</p>
+                    <p class="mt-2 text-muted-foreground">在访问指定的 ORL 路径时发生了错误。</p>
                   </div>
 
                   <!-- Error Details Box -->
@@ -855,7 +876,7 @@
                       </summary>
                       <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
                         <ul class="ml-2 list-inside list-disc space-y-1">
-                          <li>检查 ODFI 语法是否正确</li>
+                          <li>检查 ORL 语法是否正确</li>
                           <li>确保远程代理 (Agent) 处于在线状态</li>
                           <li>如果是 S3，请检查子账户是否有对应 Bucket 的权限 (ListBuckets/ListObjects)</li>
                           <li>检查网络连接是否正常</li>
@@ -868,7 +889,7 @@
                       <Button
                         variant="default"
                         size="sm"
-                        onclick={() => loadResources(currentOdfiStr)}
+                        onclick={() => loadResources(currentOrlStr)}
                         disabled={loading}
                       >
                         <RefreshCw class="mr-2 h-4 w-4 {loading ? 'animate-spin' : ''}" />
@@ -907,7 +928,7 @@
                       <td class="w-full p-8 text-center text-muted-foreground"> This directory is empty. </td>
                     </tr>
                   {/if}
-                  {#each displayedItems as item}
+                  {#each displayedItems as item (item.path)}
                     <ContextMenu.Root>
                       <ContextMenu.Trigger
                         class="pointer-events-auto flex w-full cursor-pointer border-t border-border/40 hover:bg-muted/50 dark:border-gray-700/50"
@@ -921,18 +942,27 @@
                             }}
                             oncontextmenu={(e) => {
                               handleRowClick(item);
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               (props as any).oncontextmenu?.(e);
                             }}
                             ondblclick={() => handleRowDoubleClick(item)}
                           >
                             <td class="flex w-14 flex-0 items-center justify-center p-2">
                               {#if item.type === 'dir'}
-                                {@render macOSFolder('h-5 w-5', !!item.has_children)}
+                                {@render macOSFolder(
+                                  'h-5 w-5',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkdir'}
-                                {@render macOSFolder('h-5 w-5', !!item.has_children, Link)}
+                                {@render macOSFolder(
+                                  'h-5 w-5',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkfile'}
                                 {@render macOSFile('h-5 w-5', Link, isTextFile(item))}
-                              {:else if getFileIcon(item) === FileArchive}
+                              {:else if (getFileIcon(item) as IconComponent) === FileArchive}
                                 {@render macOSArchive('h-5 w-5', item.name)}
                               {:else}
                                 {@render macOSFile('h-5 w-5', getFileIcon(item), isTextFile(item))}
@@ -967,7 +997,7 @@
                 {#if displayedItems.length === 0 && !loading}
                   <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
                 {/if}
-                {#each displayedItems as item}
+                {#each displayedItems as item (item.path)}
                   <div class="flex flex-col items-center gap-0">
                     <ContextMenu.Root>
                       <ContextMenu.Trigger>
@@ -984,6 +1014,7 @@
                             }}
                             oncontextmenu={(e) => {
                               handleRowClick(item);
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               (props as any).oncontextmenu?.(e);
                             }}
                             ondblclick={() => handleRowDoubleClick(item)}
@@ -992,12 +1023,20 @@
                           >
                             <div class="transition-transform group-hover/icon:scale-105">
                               {#if item.type === 'dir'}
-                                {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children)}
+                                {@render macOSFolder(
+                                  'h-[70px] w-[70px]',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkdir'}
-                                {@render macOSFolder('h-[70px] w-[70px]', !!item.has_children, Link)}
+                                {@render macOSFolder(
+                                  'h-[70px] w-[70px]',
+                                  !!item.has_children,
+                                  (getFileIcon(item) as IconComponent) || Folder
+                                )}
                               {:else if item.type === 'linkfile'}
                                 {@render macOSFile('h-[62px] w-[62px]', Link, isTextFile(item))}
-                              {:else if getFileIcon(item) === FileArchive}
+                              {:else if (getFileIcon(item) as IconComponent) === FileArchive}
                                 {@render macOSArchive('h-[62px] w-[62px]', item.name)}
                               {:else}
                                 {@render macOSFile('h-[62px] w-[62px]', getFileIcon(item), isTextFile(item))}
@@ -1017,6 +1056,7 @@
                             class="flex flex-col items-center"
                             oncontextmenu={(e) => {
                               handleRowClick(item);
+                              // eslint-disable-next-line @typescript-eslint/no-explicit-any
                               (props as any).oncontextmenu?.(e);
                             }}
                           >
@@ -1060,5 +1100,5 @@
         {/if}
       </div>
     </div>
-  </div>
+  </main>
 </div>

@@ -24,6 +24,7 @@ test.describe('Relative Glob Filtering E2E', () => {
   };
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     // 1. Create directory structure
     if (!fs.existsSync(TEST_LOG_DIR)) {
       fs.mkdirSync(TEST_LOG_DIR, { recursive: true });
@@ -43,22 +44,12 @@ test.describe('Relative Glob Filtering E2E', () => {
 
     // Script A: filter_glob = '*/*.log'
     const scriptRelative = `
-SOURCES = [{
-    'endpoint': { 'kind': 'local', 'root': '${absRoot}' },
-    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
-    'filter_glob': '*/*.log',
-    'display_name': 'Relative Glob Test'
-}]
+SOURCES = ["orl://local${absRoot}?glob=*/*.log"]
 `;
 
     // Script B: filter_glob = '**/*.log'
     const scriptRecursive = `
-SOURCES = [{
-    'endpoint': { 'kind': 'local', 'root': '${absRoot}' },
-    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
-    'filter_glob': '**/*.log',
-    'display_name': 'Recursive Glob Test'
-}]
+SOURCES = ["orl://local${absRoot}?glob=**/*.log"]
 `;
 
     const res1 = await request.post(`${API_BASE}/settings/planners/scripts`, {

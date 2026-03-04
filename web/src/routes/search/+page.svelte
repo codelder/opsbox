@@ -25,7 +25,7 @@
     Database,
     CircleCheckBig
   } from 'lucide-svelte';
-  import { parseOdfi, stringifyOdfi } from '$lib/utils/odfi';
+  import { parseOrl, stringifyOrl } from '$lib/utils/orl';
   import { Badge } from '$lib/components/ui/badge';
   import { Separator } from '$lib/components/ui/separator';
 
@@ -65,7 +65,7 @@
         children: new Map(),
         type: 'endpoint_type',
         icon: Cloud,
-        url: 'odfi://s3'
+        url: 'orl://s3'
       },
       Agent: {
         key: 'Agent',
@@ -75,7 +75,7 @@
         children: new Map(),
         type: 'endpoint_type',
         icon: Server,
-        url: 'odfi://agent'
+        url: 'orl://agent'
       },
       Local: {
         key: 'Local',
@@ -85,12 +85,12 @@
         children: new Map(),
         type: 'endpoint_type',
         icon: HardDrive,
-        url: 'odfi://local'
+        url: 'orl://local'
       }
     };
 
     for (const res of searchStore.results) {
-      const parsed = parseOdfi(res.path);
+      const parsed = parseOrl(res.path);
       if (!parsed) continue;
 
       // 1. Endpoint Type
@@ -112,7 +112,7 @@
           children: new Map(),
           type: 'endpoint_id',
           icon: typeKey === 'S3' ? Database : typeKey === 'Agent' ? Server : HardDrive,
-          url: stringifyOdfi({
+          url: stringifyOrl({
             endpointId: parsed.endpointId,
             endpointType: parsed.endpointType,
             serverAddr: parsed.serverAddr,
@@ -141,8 +141,7 @@
 
         let child = currentParent.children.get(segment);
         if (!child) {
-          const nodeTargetType = isArchiveFile ? 'archive' : 'dir';
-          const nodeUrl = stringifyOdfi({
+          const nodeUrl = stringifyOrl({
             endpointId: parsed.endpointId,
             endpointType: parsed.endpointType,
             serverAddr: parsed.serverAddr,
@@ -176,7 +175,7 @@
 
           let child = currentParent.children.get(segment);
           if (!child) {
-            const nodeUrl = stringifyOdfi({
+            const nodeUrl = stringifyOrl({
               endpointId: parsed.endpointId,
               endpointType: parsed.endpointType,
               serverAddr: parsed.serverAddr,
@@ -222,7 +221,7 @@
     if (selectedPath.length === 0) return searchStore.results;
 
     return searchStore.results.filter((res) => {
-      const parsed = parseOdfi(res.path);
+      const parsed = parseOrl(res.path);
       if (!parsed) return false;
 
       // 1. Check Endpoint Type

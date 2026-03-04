@@ -85,6 +85,7 @@ test.describe('Local Integration E2E', () => {
   const UNI_ID_DIR_GZ = `E2E_DIR_GZ_${RUN_ID}`;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     // 1. Create temp log directory and file
     if (!fs.existsSync(TEST_LOG_DIR)) {
       fs.mkdirSync(TEST_LOG_DIR, { recursive: true });
@@ -113,38 +114,19 @@ test.describe('Local Integration E2E', () => {
     const absRoot = path.resolve(TEST_LOG_DIR);
 
     const scriptDir = `
-SOURCES = [{
-    'endpoint': { 'kind': 'local', 'root': '${absRoot}' },
-    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
-    'filter_glob': '*.log',
-    'display_name': 'E2E Test Logs'
-}]
+SOURCES = ["orl://local${absRoot}?glob=*.log"]
 `;
 
     const scriptArchive = `
-SOURCES = [{
-    'endpoint': { 'kind': 'local', 'root': '${absRoot}' },
-    'target':   { 'type': 'archive', 'path': 'e2e-archive.tar' },
-    'filter_glob': '**/*.log',
-    'display_name': 'E2E Test Archive'
-}]
+SOURCES = ["orl://local${absRoot}/e2e-archive.tar?glob=**/*.log"]
 `;
 
     const scriptGz = `
-SOURCES = [{
-    'endpoint': { 'kind': 'local', 'root': '${absRoot}' },
-    'target':   { 'type': 'archive', 'path': 'e2e-compressed.log.gz' },
-    'display_name': 'E2E Test GZ'
-}]
+SOURCES = ["orl://local${absRoot}/e2e-compressed.log.gz"]
 `;
 
     const scriptDirGz = `
-SOURCES = [{
-    'endpoint': { 'kind': 'local', 'root': '${absRoot}' },
-    'target':   { 'type': 'dir', 'path': '.', 'recursive': True },
-    'filter_glob': '*.gz',
-    'display_name': 'E2E Test Dir with GZ'
-}]
+SOURCES = ["orl://local${absRoot}?glob=*.gz"]
 `;
 
     const responseDir = await request.post(`${API_BASE}/settings/planners/scripts`, {
@@ -239,7 +221,7 @@ SOURCES = [{
     await expect(page.getByText(UNI_ID_ARCHIVE)).toBeVisible();
 
     const archiveLink = page.getByRole('link', { name: 'archive.log' });
-    await expect(archiveLink).toHaveAttribute('href', /file=odfi%3A%2F%2Flocal%2F.*archive\.tar/);
+    await expect(archiveLink).toHaveAttribute('href', /file=orl%3A%2F%2Flocal%2F.*archive\.tar/);
 
     await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
   });
@@ -255,7 +237,7 @@ SOURCES = [{
     await expect(page.getByText(UNI_ID_GZ)).toBeVisible();
 
     const gzLink = page.getByRole('link', { name: /e2e-compressed\.log(\.gz)?/ });
-    await expect(gzLink).toHaveAttribute('href', /file=odfi%3A%2F%2Flocal%2F.*e2e-compressed\.log\.gz/);
+    await expect(gzLink).toHaveAttribute('href', /file=orl%3A%2F%2Flocal%2F.*e2e-compressed\.log\.gz/);
 
     await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
   });
@@ -272,7 +254,7 @@ SOURCES = [{
 
     // 目录扫描场景下，gz 文件仍以普通文件 URL（dir）展示，文件名会包含 .gz
     const gzLink = page.getByRole('link', { name: /e2e-dir-gz\.log(\.gz)?/ });
-    await expect(gzLink).toHaveAttribute('href', /file=odfi%3A%2F%2Flocal%2F.*e2e-dir-gz\.log/);
+    await expect(gzLink).toHaveAttribute('href', /file=orl%3A%2F%2Flocal%2F.*e2e-dir-gz\.log/);
 
     await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
   });

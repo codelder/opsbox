@@ -17,7 +17,7 @@ describe('Search API', () => {
         ok: true,
         status: 200,
         headers: new Headers({ 'X-Logseek-SID': 'test-session-id' })
-      } as Response;
+      } as unknown as Response;
 
       globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
 
@@ -40,7 +40,7 @@ describe('Search API', () => {
         ok: false,
         status: 500,
         headers: new Headers()
-      } as Response;
+      } as unknown as Response;
 
       globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
 
@@ -58,7 +58,7 @@ describe('Search API', () => {
         ok: false,
         status: 404,
         headers: new Headers()
-      } as Response;
+      } as unknown as Response;
 
       globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
 
@@ -70,7 +70,7 @@ describe('Search API', () => {
         ok: true,
         status: 200,
         headers: new Headers()
-      } as Response;
+      } as unknown as Response;
 
       globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
 
@@ -90,7 +90,7 @@ describe('Search API', () => {
     it('应该从响应头中提取会话 ID', () => {
       const mockResponse = {
         headers: new Headers({ 'X-Logseek-SID': 'session-123' })
-      } as Response;
+      } as unknown as Response;
 
       const sessionId = extractSessionId(mockResponse);
 
@@ -100,7 +100,7 @@ describe('Search API', () => {
     it('应该返回空字符串当会话 ID 不存在', () => {
       const mockResponse = {
         headers: new Headers()
-      } as Response;
+      } as unknown as Response;
 
       const sessionId = extractSessionId(mockResponse);
 
@@ -111,7 +111,7 @@ describe('Search API', () => {
       // Headers 对象在某些环境中可能区分大小写
       const mockResponse = {
         headers: new Headers({ 'x-logseek-sid': 'session-456' })
-      } as Response;
+      } as unknown as Response;
 
       const sessionId = extractSessionId(mockResponse);
 
@@ -126,7 +126,7 @@ describe('Search API', () => {
         ok: true,
         status: 200,
         headers: new Headers({ 'X-Logseek-SID': 'unified-session-id' })
-      } as Response;
+      } as unknown as Response;
 
       globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
 
@@ -149,7 +149,7 @@ describe('Search API', () => {
         ok: false,
         status: 503,
         headers: new Headers()
-      } as Response;
+      } as unknown as Response;
 
       globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
 
@@ -167,13 +167,13 @@ describe('Search API', () => {
         ok: true,
         status: 200,
         headers: new Headers({ 'X-Logseek-SID': 'session-1' })
-      } as Response;
+      } as unknown as Response;
 
       const mockResponse2 = {
         ok: true,
         status: 200,
         headers: new Headers({ 'X-Logseek-SID': 'session-2' })
-      } as Response;
+      } as unknown as Response;
 
       globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse1).mockResolvedValueOnce(mockResponse2);
 
@@ -183,6 +183,72 @@ describe('Search API', () => {
       expect(extractSessionId(response1)).toBe('session-1');
       expect(extractSessionId(response2)).toBe('session-2');
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('buildSearchRequest', () => {
+    it('should build basic search request with query', async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'X-Logseek-SID': 'test-session' })
+      } as unknown as Response;
+
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
+
+      await startSearch('error AND level:ERROR');
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ q: 'error AND level:ERROR' })
+        })
+      );
+    });
+
+    it('should handle special characters in query', async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        headers: new Headers()
+      } as unknown as Response;
+
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
+
+      const specialQuery = '(error OR warning) AND "message content" AND app:nginx';
+      await startSearch(specialQuery);
+
+      const callArgs = (globalThis.fetch as any).mock.calls[0][1];
+      const body = JSON.parse(callArgs.body);
+
+      expect(body.q).toBe(specialQuery);
+      expect(body.q).toContain('OR');
+      expect(body.q).toContain('AND');
+      expect(body.q).toContain('(');
+      expect(body.q).toContain(')');
+      expect(body.q).toContain('"');
+    });
+
+    it('should preserve date qualifiers in query', async () => {
+      const mockResponse = {
+        ok: true,
+        status: 200,
+        headers: new Headers()
+      } as unknown as Response;
+
+      globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
+
+      const queryWithDates = 'error dt:2024-01-15 fdt:2024-01-01 tdt:2024-01-31';
+      await startSearch(queryWithDates);
+
+      const callArgs = (globalThis.fetch as any).mock.calls[0][1];
+      const body = JSON.parse(callArgs.body);
+
+      expect(body.q).toBe(queryWithDates);
+      expect(body.q).toContain('dt:2024-01-15');
+      expect(body.q).toContain('fdt:2024-01-01');
+      expect(body.q).toContain('tdt:2024-01-31');
     });
   });
 });

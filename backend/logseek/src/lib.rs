@@ -26,6 +26,9 @@ pub mod domain;
 // 工具层
 pub mod utils;
 
+// 测试工具（在测试和集成测试中可用）
+pub mod test_utils;
+
 // 查询解析器
 pub mod query;
 

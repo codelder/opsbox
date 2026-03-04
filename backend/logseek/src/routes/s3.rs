@@ -47,3 +47,45 @@ pub async fn save_s3_settings(
   s3::save_s3_settings(&pool, &settings).await?;
   Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::repository::s3::init_schema;
+
+  async fn setup_test_db() -> SqlitePool {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    init_schema(&pool).await.unwrap();
+    pool
+  }
+
+  #[tokio::test]
+  async fn test_s3_settings_routes() {
+    let pool = setup_test_db().await;
+
+    // 1. Initial get - should be default/configured=false
+    let resp = get_s3_settings(State(pool.clone()), Query(S3Query { verify: None }))
+      .await
+      .unwrap();
+    assert!(!resp.configured);
+
+    // 2. Save settings
+    let payload = S3SettingsPayload {
+      endpoint: "http://minio:9000".to_string(),
+      access_key: "ak".to_string(),
+      secret_key: "sk".to_string(),
+      configured: true,
+      connection_error: None,
+    };
+    save_s3_settings(State(pool.clone()), Json(payload.clone()))
+      .await
+      .unwrap();
+
+    // 3. Get again - should be configured=true
+    let resp = get_s3_settings(State(pool.clone()), Query(S3Query { verify: None }))
+      .await
+      .unwrap();
+    assert!(resp.configured);
+    assert_eq!(resp.endpoint, "http://minio:9000");
+  }
+}

@@ -30,3 +30,26 @@ impl From<sqlx::Error> for RepositoryError {
     Self::Database(format!("数据库错误: {}", err))
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_repository_error_display() {
+    let err = RepositoryError::QueryFailed("SQL syntax error".to_string());
+    assert_eq!(err.to_string(), "查询失败: SQL syntax error");
+
+    let err = RepositoryError::StorageError("S3 connection failed".to_string());
+    assert_eq!(err.to_string(), "对象存储错误: S3 connection failed");
+
+    let err = RepositoryError::NotFound("User ID 123".to_string());
+    assert_eq!(err.to_string(), "资源不存在: User ID 123");
+
+    let err = RepositoryError::CacheFailed("Redis timeout".to_string());
+    assert_eq!(err.to_string(), "缓存操作失败: Redis timeout");
+
+    let err = RepositoryError::Database("Connection pool exhausted".to_string());
+    assert_eq!(err.to_string(), "数据库错误: Connection pool exhausted");
+  }
+}

@@ -1,0 +1,33 @@
+//! DFS (Distributed File System) 模块
+//!
+//! 这个模块实现了 OpsBox 分布式文件系统的核心领域模型，包括：
+//!
+//! - **基础维度**: Location, StorageBackend, AccessMethod
+//! - **端点概念**: Endpoint
+//! - **路径抽象**: ResourcePath
+//! - **归档概念**: ArchiveType, ArchiveContext
+//! - **资源概念**: Resource
+//! - **文件系统抽象**: OpbxFileSystem trait
+
+//! - **文件系统实现**: LocalFileSystem
+//! - **ORL 解析**: OrlParser
+//! - **流式能力**: Streamable trait
+
+pub mod archive;
+pub mod endpoint;
+pub mod filesystem;
+pub mod impls;
+pub mod orl_parser;
+pub mod path;
+pub mod resource;
+pub mod searchable;
+
+// 重新导出核心类型
+pub use archive::{ArchiveContext, ArchiveType};
+pub use endpoint::{AccessMethod, Endpoint, Location, StorageBackend};
+pub use filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem};
+pub use impls::{AgentClient, AgentProxyFS, ArchiveFileSystem, LocalFileSystem, S3Config, S3Storage};
+pub use orl_parser::{OrlParseError, OrlParser, build_orl, build_orl_from_resource};
+pub use path::ResourcePath;
+pub use resource::Resource;
+pub use searchable::{SearchConfig, Streamable};

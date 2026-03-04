@@ -3,7 +3,6 @@ use std::{fs, path::PathBuf};
 use opsbox_core::SqlitePool;
 
 use crate::{
-  domain::config::Source,
   domain::source_planner::{DateRange, PlanResult},
   service::ServiceError,
 };
@@ -68,10 +67,15 @@ pub async fn plan_with_starlark_with_script(
 
   // 2) 预取上下文（Agent 列表与 S3 Profiles 列表）
   // 列出在线 Agent 及其标签，供脚本按标签自行筛选
-  let agents_info = if let Some(mgr) = agent_manager::get_global_agent_manager() {
-    mgr.list_online_agents().await
-  } else {
-    vec![]
+  let agents_info = {
+    use agent_manager::repository::AgentRepository;
+    let repo = AgentRepository::new(pool.clone());
+    // 获取所有 Agent，然后过滤在线的（使用 90 秒超时，与 AgentManager 默认值一致）
+    let all_agents = repo.list_agents().await.unwrap_or_default();
+    all_agents
+      .into_iter()
+      .filter(|a| a.is_online(90)) // 心跳超时：90秒
+      .collect::<Vec<_>>()
   };
   let s3_profiles = crate::repository::s3::list_s3_profiles(pool).await?;
 
@@ -207,26 +211,29 @@ pub async fn plan_with_starlark_with_script(
     crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("Starlark 未导出 SOURCES".to_string()))
   })?;
 
-  // 转为 JSON，再转为 Source
+  // 转为 List，遍历解析为 Resource (使用 DFS OrlParser)
   let list = starlark::values::list::ListRef::from_value(sources_val).ok_or_else(|| {
     crate::api::LogSeekApiError::Service(ServiceError::ProcessingError("SOURCES 不是列表类型".to_string()))
   })?;
 
-  let mut sources: Vec<Source> = Vec::new();
-  for i in 0..list.len() {
-    let Some(v) = list.get(i) else {
-      continue;
-    };
-    let j = starlark_to_json(*v).map_err(|e| crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(e)))?;
-    tracing::trace!("[Planner] RAW SOURCE[{}] JSON: {}", i, j);
-    let cfg: Source = serde_json::from_value(j.clone()).map_err(|e| {
+  let mut sources: Vec<opsbox_core::dfs::Resource> = Vec::with_capacity(list.len());
+  for (i, v) in list.iter().enumerate() {
+    let orl_str = v.unpack_str().ok_or_else(|| {
       crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
-        "解析 Source 失败: {}; JSON={}",
-        e, j
+        "SOURCES[{}] 不是字符串类型 (期望 ORL)",
+        i
       )))
     })?;
-    log_script_source(i, &cfg);
-    sources.push(cfg);
+
+    let resource = opsbox_core::dfs::OrlParser::parse(orl_str).map_err(|e| {
+      crate::api::LogSeekApiError::Service(ServiceError::ProcessingError(format!(
+        "解析 ORL 失败: {}; URL={}",
+        e, orl_str
+      )))
+    })?;
+
+    tracing::debug!("[Planner] 来源[{}]: {:?}", i, resource);
+    sources.push(resource);
   }
 
   tracing::info!("[Planner] 脚本生成来源总数: {}", sources.len());
@@ -344,88 +351,89 @@ fn esc_single(s: &str) -> String {
   s.replace('\'', "\\'")
 }
 
-/// 将 Starlark 值转为 serde_json::Value（仅支持脚本生成的字面量结构）
-fn starlark_to_json(v: starlark::values::Value) -> Result<serde_json::Value, String> {
-  use starlark::values::{ValueLike, dict::DictRef, list::ListRef, none::NoneType};
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use chrono::NaiveDate;
 
-  if let Some(b) = v.unpack_bool() {
-    return Ok(serde_json::Value::Bool(b));
-  }
-  if let Some(i) = v.unpack_i32() {
-    return Ok(serde_json::Value::Number(i.into()));
-  }
-  // 使用 unpack_str 获取原始字符串，避免多余引号
-  if let Some(s) = v.unpack_str() {
-    return Ok(serde_json::Value::String(s.to_owned()));
-  }
-  if v.downcast_ref::<NoneType>().is_some() {
-    return Ok(serde_json::Value::Null);
-  }
-  if let Some(l) = ListRef::from_value(v) {
-    let mut arr = Vec::with_capacity(l.len());
-    for i in 0..l.len() {
-      let Some(it) = l.get(i) else {
-        continue;
-      };
-      arr.push(starlark_to_json(*it)?);
-    }
-    return Ok(serde_json::Value::Array(arr));
-  }
-  if let Some(d) = DictRef::from_value(v) {
-    let mut map = serde_json::Map::new();
-    for (k, v) in d.iter() {
-      let ks = k.unpack_str().ok_or_else(|| "字典键必须是字符串".to_string())?;
-      map.insert(ks.to_string(), starlark_to_json(v)?);
-    }
-    return Ok(serde_json::Value::Object(map));
-  }
-  Err(format!("不支持的 Starlark 值类型: {:?}", v))
-}
+  #[test]
+  fn test_parse_date_directives() {
+    let today = NaiveDate::from_ymd_opt(2024, 1, 10).unwrap();
 
-/// 日志输出用户脚本返回的来源（新结构）
-fn log_script_source(idx: usize, src: &Source) {
-  use crate::domain::config::{Endpoint, Target};
-  match (&src.endpoint, &src.target) {
-    (Endpoint::S3 { profile, bucket }, Target::Archive { path, .. }) => {
-      tracing::debug!(
-        "[Planner] 来源[{}] s3 profile={} bucket={} archive={}",
-        idx,
-        profile,
-        bucket,
-        path
-      );
-    }
-    (Endpoint::Agent { agent_id, subpath }, tgt) => {
-      let scope = match tgt {
-        Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
-        Target::Files { paths } => format!("Files count={}", paths.len()),
-        Target::Archive { path, .. } => format!("Archive path={}", path),
-      };
-      tracing::debug!(
-        "[Planner] 来源[{}] agent id={} subpath={} scope={} filter_glob={}",
-        idx,
-        agent_id,
-        subpath,
-        scope,
-        src.filter_glob.as_deref().unwrap_or("<none>")
-      );
-    }
-    (Endpoint::Local { root }, tgt) => {
-      let scope = match tgt {
-        Target::Dir { path, recursive } => format!("Dir path={} recursive={}", path, recursive),
-        Target::Files { paths } => format!("Files count={}", paths.len()),
-        Target::Archive { path, .. } => format!("Archive path={}", path),
-      };
-      tracing::debug!(
-        "[Planner] 来源[{}] local root={} scope={} filter_glob={}",
-        idx,
-        root,
-        scope,
-        src.filter_glob.as_deref().unwrap_or("<none>")
-      );
-    }
-    (Endpoint::S3 { .. }, _) => {
-      tracing::warn!("[Planner] S3 目前仅支持 target=archive（tar/tar.gz/gz；zip 暂不支持）");
-    }
+    // 单个日期
+    let (q, range) = parse_date_directives_from_query("error dt:20240101", today);
+    assert_eq!(q, "error");
+    assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+    assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+
+    // 日期范围
+    let (q, range) = parse_date_directives_from_query("fdt:20240101 tdt:20240105 warn", today);
+    assert_eq!(q, "warn");
+    assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+    assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 5).unwrap());
+
+    // 默认日期（今天）
+    let (q, range) = parse_date_directives_from_query("info", today);
+    assert_eq!(q, "info");
+    assert_eq!(range.start, today);
+    assert_eq!(range.end, today);
+  }
+
+  #[test]
+  fn test_esc_single() {
+    assert_eq!(esc_single("a'b"), "a\\'b");
+    assert_eq!(esc_single("a\\b"), "a\\\\b");
+    assert_eq!(esc_single("a'\\b"), "a\\'\\\\b");
+  }
+
+  #[tokio::test]
+  async fn test_plan_with_starlark_with_script_basic() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::init_schema(&pool).await.unwrap();
+    let query = "error";
+    let script = r#"
+SOURCES = ["orl://local/tmp/log"]
+print("hello world")
+"#;
+    let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script))
+      .await
+      .unwrap();
+    assert_eq!(res.sources.len(), 1);
+    assert_eq!(res.sources[0].primary_path.to_string(), "/tmp/log");
+    assert!(res.debug_logs.contains(&"hello world".to_string()));
+  }
+
+  #[tokio::test]
+  async fn test_plan_with_starlark_with_script_cleaned_query_override() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::init_schema(&pool).await.unwrap();
+    let query = "error";
+    let script = r#"
+SOURCES = []
+CLEANED_QUERY = "overridden"
+"#;
+    let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script))
+      .await
+      .unwrap();
+    assert_eq!(res.cleaned_query, "overridden");
+  }
+
+  #[tokio::test]
+  async fn test_plan_with_starlark_with_script_context_vars() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::init_schema(&pool).await.unwrap();
+    let query = "fdt:20240101 tdt:20240102 error";
+    let script = r#"
+# 验证 DATES 注入
+if len(DATES) == 2:
+    SOURCES = ["orl://local/" + DATES[0]["yyyymmdd"]]
+else:
+    SOURCES = []
+"#;
+    let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script))
+      .await
+      .unwrap();
+    assert_eq!(res.sources.len(), 1);
+    assert_eq!(res.sources[0].primary_path.to_string(), "/20240101");
   }
 }

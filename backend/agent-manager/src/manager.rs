@@ -6,6 +6,7 @@ use crate::models::{AgentInfo, AgentStatus, AgentTag};
 use crate::repository::AgentRepository;
 use sqlx::sqlite::SqlitePool;
 use std::sync::Arc;
+use tracing;
 
 /// Agent 管理器
 pub struct AgentManager {
@@ -14,6 +15,9 @@ pub struct AgentManager {
 
   /// 心跳超时时间（秒）
   heartbeat_timeout: i64,
+
+  /// 缓存的重用 HTTP 客户端（避免重复构建）
+  http_client: reqwest::Client,
 }
 
 impl AgentManager {
@@ -27,10 +31,22 @@ impl AgentManager {
       .await
       .map_err(|e| format!("数据库表初始化失败: {}", e))?;
 
+    // 构建可重用的 HTTP 客户端（禁用代理，避免本地请求被劫持）
+    let http_client = reqwest::Client::builder()
+      .no_proxy()
+      .build()
+      .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
     Ok(Self {
       repository: Arc::new(repository),
       heartbeat_timeout: 90, // 90秒未心跳则视为离线
+      http_client,
     })
+  }
+
+  /// 获取可重用的 HTTP 客户端
+  pub fn http_client(&self) -> &reqwest::Client {
+    &self.http_client
   }
 
   /// 注册 Agent
@@ -39,11 +55,12 @@ impl AgentManager {
     info.update_heartbeat();
 
     tracing::info!(
-      "注册 Agent: id={}, name={}, hostname={}, tags={:?}",
+      "注册 Agent: id={}, name={}, hostname={}, tags={:?}, last_heartbeat={}",
       info.id,
       info.name,
       info.hostname,
-      info.tags.iter().map(|t| t.to_string()).collect::<Vec<_>>()
+      info.tags.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+      info.last_heartbeat
     );
 
     self
@@ -150,8 +167,8 @@ impl AgentManager {
 
   /// 内部：根据最后心跳动态计算并修正状态
   fn apply_dynamic_status(&self, mut agent: AgentInfo) -> AgentInfo {
-    // 超时则一律视为离线
-    if !agent.is_online(self.heartbeat_timeout) {
+    // 超时则一律视为离线（不记录详细日志）
+    if !agent.check_online_status(self.heartbeat_timeout, false) {
       agent.status = AgentStatus::Offline;
       return agent;
     }
@@ -188,10 +205,26 @@ impl AgentManager {
   /// 获取在线 Agent（动态过滤）
   pub async fn list_online_agents(&self) -> Vec<AgentInfo> {
     let list = self.list_agents().await;
-    list
+    tracing::info!(
+      "AgentManager::list_online_agents: total {} agents, heartbeat_timeout={}",
+      list.len(),
+      self.heartbeat_timeout
+    );
+
+    let online_agents: Vec<AgentInfo> = list
       .into_iter()
-      .filter(|a| a.is_online(self.heartbeat_timeout))
-      .collect()
+      .filter(|a| a.check_online_status(self.heartbeat_timeout, true))
+      .collect();
+
+    tracing::info!(
+      "AgentManager::list_online_agents: returning {} online agents",
+      online_agents.len()
+    );
+    for agent in &online_agents {
+      tracing::info!("  Online agent: id={}, name={}", agent.id, agent.name);
+    }
+
+    online_agents
   }
 
   /// 按标签筛选 Agent（动态状态）

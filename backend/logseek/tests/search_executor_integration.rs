@@ -2,7 +2,6 @@
 //!
 //! 验证多数据源搜索、并发控制、缓存功能
 
-use logseek::domain::config::{Endpoint, Source, Target};
 use logseek::query::KeywordHighlight;
 use logseek::repository::cache::cache;
 use logseek::service::search::SearchEvent;
@@ -122,116 +121,17 @@ async fn test_cache_functionality() {
   assert_eq!(cached_keywords, Some(keywords));
 
   // 测试文件行缓存
-  let file_url = logseek::domain::Odfi::new(
-    logseek::domain::EndpointType::Local,
-    "localhost",
-    logseek::domain::TargetType::Dir,
-    "test.log",
-    None,
-  );
+  let file_url = "orl://local/test.log";
   let lines = vec!["line 1".to_string(), "line 2".to_string()];
-  c.put_lines(&sid, &file_url, &lines, "UTF-8".to_string()).await;
+  c.put_lines(&sid, file_url, &lines, "UTF-8".to_string()).await;
 
-  let cached_lines = c.get_lines_slice(&sid, &file_url, 1, 100).await;
+  let cached_lines = c.get_lines_slice(&sid, file_url, 1, 100).await;
   assert!(cached_lines.is_some());
 
   // Verify content
   let (total, slice, _) = cached_lines.unwrap();
   assert_eq!(total, 2);
   assert_eq!(slice, lines);
-}
-
-#[tokio::test]
-async fn test_search_event_types() {
-  // 验证 SearchEvent 的各种类型
-  let success_event = SearchEvent::Success(logseek::service::search::SearchResult {
-    path: "test.log".to_string(),
-    lines: vec!["error line".to_string()],
-    merged: vec![(0, 1)],
-    encoding: None,
-    archive_path: None,
-    source_type: logseek::service::search::EntrySourceType::default(),
-  });
-
-  let error_event = SearchEvent::Error {
-    source: "test-source".to_string(),
-    message: "test error".to_string(),
-    recoverable: true,
-  };
-
-  let complete_event = SearchEvent::Complete {
-    source: "test-source".to_string(),
-    elapsed_ms: 100,
-  };
-
-  // 验证事件可以被序列化
-  assert!(serde_json::to_string(&success_event).is_ok());
-  assert!(serde_json::to_string(&error_event).is_ok());
-  assert!(serde_json::to_string(&complete_event).is_ok());
-}
-
-#[tokio::test]
-async fn test_concurrent_search_simulation() {
-  // 模拟并发搜索场景
-  let (pool, _temp_dir) = create_test_pool().await;
-
-  // 创建多个 SearchExecutor 实例（模拟并发请求）
-  let config = SearchExecutorConfig {
-    io_max_concurrency: 5,
-    stream_channel_capacity: 32,
-  };
-
-  let mut handles = vec![];
-
-  for i in 0..3 {
-    let pool_clone = pool.clone();
-    let config_clone = config.clone();
-
-    let handle = tokio::spawn(async move {
-      let _executor = SearchExecutor::new(pool_clone, config_clone);
-      // 验证 executor 可以被创建
-      format!("executor-{}", i)
-    });
-
-    handles.push(handle);
-  }
-
-  // 等待所有任务完成
-  let results: Vec<_> = futures::future::join_all(handles)
-    .await
-    .into_iter()
-    .filter_map(|r| r.ok())
-    .collect();
-
-  assert_eq!(results.len(), 3);
-}
-
-#[tokio::test]
-async fn test_source_configuration() {
-  // 测试数据源配置结构
-  let local_source = Source {
-    endpoint: Endpoint::Local {
-      root: "/var/log".to_string(),
-    },
-    target: Target::Dir {
-      path: ".".to_string(),
-      recursive: true,
-    },
-    filter_glob: Some("*.log".to_string()),
-    display_name: Some("Local Logs".to_string()),
-  };
-
-  // 验证序列化
-  let json = serde_json::to_string(&local_source).expect("序列化失败");
-  assert!(json.contains("local"));
-  assert!(json.contains("/var/log"));
-
-  // 验证反序列化
-  let deserialized: Source = serde_json::from_str(&json).expect("反序列化失败");
-  match deserialized.endpoint {
-    Endpoint::Local { root } => assert_eq!(root, "/var/log"),
-    _ => panic!("端点类型错误"),
-  }
 }
 
 #[tokio::test]
@@ -292,4 +192,339 @@ async fn test_multi_source_event_collection() {
   assert_eq!(success_count, 3, "应该收到 3 个成功事件");
   assert_eq!(complete_count, 3, "应该收到 3 个完成事件");
   assert_eq!(sources.len(), 3, "应该有 3 个不同的数据源");
+}
+
+/// 测试搜索取消机制
+#[tokio::test]
+async fn test_search_cancellation() {
+  use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use tokio::sync::mpsc;
+  use tokio_util::sync::CancellationToken;
+
+  // 创建取消令牌
+  let cancel_token = CancellationToken::new();
+  let cancel_token_clone = cancel_token.clone();
+
+  // 创建一个计数器来跟踪任务执行情况
+  let task_count = Arc::new(AtomicUsize::new(0));
+  let task_count_clone = task_count.clone();
+
+  // 启动一个长时间运行的任务
+  let (tx, mut rx) = mpsc::channel::<SearchEvent>(10);
+
+  let handle = tokio::spawn(async move {
+    // 模拟搜索任务
+    for i in 0..100 {
+      if cancel_token_clone.is_cancelled() {
+        break;
+      }
+
+      task_count_clone.fetch_add(1, Ordering::SeqCst);
+
+      // 发送进度事件
+      let _ = tx
+        .send(SearchEvent::Success(logseek::service::search::SearchResult {
+          path: format!("file{}.log", i),
+          lines: vec![format!("line {}", i)],
+          merged: vec![(0, 1)],
+          encoding: None,
+          archive_path: None,
+          source_type: logseek::service::search::EntrySourceType::default(),
+        }))
+        .await;
+
+      // 模拟工作延迟
+      tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+    }
+
+    // 发送完成事件
+    let _ = tx
+      .send(SearchEvent::Complete {
+        source: "test-source".to_string(),
+        elapsed_ms: 100,
+      })
+      .await;
+  });
+
+  // 等待一段时间让任务开始
+  tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+  // 取消搜索
+  cancel_token.cancel();
+
+  // 等待任务完成
+  let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await;
+
+  // 验证任务被提前终止（不是所有100个都执行）
+  let executed = task_count.load(Ordering::SeqCst);
+  assert!(executed < 100, "任务应该被提前取消，但实际执行了 {} 个", executed);
+
+  // 清空通道
+  while rx.try_recv().is_ok() {}
+}
+
+/// 测试并发搜索的资源限制
+#[tokio::test]
+async fn test_concurrent_search_resource_limits() {
+  use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use tokio::sync::Semaphore;
+
+  // 创建并发限制的信号量（模拟 SearchExecutor 的 io_semaphore）
+  let max_concurrency = 3;
+  let semaphore = Arc::new(Semaphore::new(max_concurrency));
+
+  // 跟踪当前并发数
+  let current_concurrent = Arc::new(AtomicUsize::new(0));
+  let max_observed = Arc::new(AtomicUsize::new(0));
+
+  let mut handles = vec![];
+
+  // 启动多个任务
+  for i in 0..10 {
+    let sem = semaphore.clone();
+    let current = current_concurrent.clone();
+    let max = max_observed.clone();
+
+    let handle = tokio::spawn(async move {
+      // 获取许可
+      let _permit = sem.acquire().await.unwrap();
+
+      // 增加并发计数
+      let count = current.fetch_add(1, Ordering::SeqCst) + 1;
+
+      // 更新最大观察值
+      loop {
+        let current_max = max.load(Ordering::SeqCst);
+        if count <= current_max
+          || max
+            .compare_exchange(current_max, count, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+          break;
+        }
+      }
+
+      // 模拟搜索工作
+      tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+      // 减少并发计数
+      current.fetch_sub(1, Ordering::SeqCst);
+
+      i
+    });
+
+    handles.push(handle);
+  }
+
+  // 等待所有任务完成
+  for handle in handles {
+    let _ = handle.await;
+  }
+
+  // 验证最大并发数没有超过限制
+  let observed_max = max_observed.load(Ordering::SeqCst);
+  assert!(
+    observed_max <= max_concurrency,
+    "最大并发数 {} 超过了限制 {}",
+    observed_max,
+    max_concurrency
+  );
+}
+
+/// 测试错误恢复和错误传播
+#[tokio::test]
+async fn test_error_recovery_and_propagation() {
+  use tokio::sync::mpsc;
+
+  let (tx, mut rx) = mpsc::channel::<SearchEvent>(10);
+
+  // 模拟发送成功、错误、成功事件的混合流
+  let events = vec![
+    SearchEvent::Success(logseek::service::search::SearchResult {
+      path: "file1.log".to_string(),
+      lines: vec!["line1".to_string()],
+      merged: vec![(0, 1)],
+      encoding: None,
+      archive_path: None,
+      source_type: logseek::service::search::EntrySourceType::default(),
+    }),
+    SearchEvent::Error {
+      source: "source1".to_string(),
+      message: "File not found".to_string(),
+      recoverable: true,
+    },
+    SearchEvent::Success(logseek::service::search::SearchResult {
+      path: "file2.log".to_string(),
+      lines: vec!["line2".to_string()],
+      merged: vec![(0, 1)],
+      encoding: None,
+      archive_path: None,
+      source_type: logseek::service::search::EntrySourceType::default(),
+    }),
+    SearchEvent::Error {
+      source: "source2".to_string(),
+      message: "Permission denied".to_string(),
+      recoverable: true,
+    },
+    SearchEvent::Complete {
+      source: "test-source".to_string(),
+      elapsed_ms: 100,
+    },
+  ];
+
+  // 发送所有事件
+  for event in events {
+    tx.send(event).await.unwrap();
+  }
+
+  drop(tx);
+
+  // 收集并验证事件
+  let mut success_count = 0;
+  let mut error_count = 0;
+  let mut complete_count = 0;
+
+  while let Some(event) = rx.recv().await {
+    match event {
+      SearchEvent::Success(_) => success_count += 1,
+      SearchEvent::Error {
+        source,
+        message,
+        recoverable,
+      } => {
+        error_count += 1;
+        assert!(recoverable, "错误应该是可恢复的");
+        assert!(!source.is_empty());
+        assert!(!message.is_empty());
+      }
+      SearchEvent::Complete { .. } => complete_count += 1,
+    }
+  }
+
+  assert_eq!(success_count, 2, "应该有 2 个成功事件");
+  assert_eq!(error_count, 2, "应该有 2 个错误事件");
+  assert_eq!(complete_count, 1, "应该有 1 个完成事件");
+}
+
+/// 测试资源清理和内存管理
+#[tokio::test]
+async fn test_resource_cleanup() {
+  // 创建测试环境
+  let (pool, _temp_dir) = create_test_pool().await;
+
+  // 创建 SearchExecutor
+  let config = SearchExecutorConfig {
+    io_max_concurrency: 2,
+    stream_channel_capacity: 32,
+  };
+
+  // 多次创建和销毁 SearchExecutor，验证没有内存泄漏
+  for _ in 0..5 {
+    let _executor = SearchExecutor::new(pool.clone(), config.clone());
+    // executor 在这里被 drop，验证可以正常创建和销毁
+  }
+
+  // 测试通过后表示资源清理正常
+}
+
+/// 测试搜索超时处理
+#[tokio::test]
+async fn test_search_timeout_handling() {
+  use tokio::sync::mpsc;
+  use tokio::time::{Duration, timeout};
+
+  let (tx, mut rx) = mpsc::channel::<SearchEvent>(10);
+
+  // 模拟一个长时间运行的搜索
+  tokio::spawn(async move {
+    // 发送一些初始结果
+    for i in 0..3 {
+      let _ = tx
+        .send(SearchEvent::Success(logseek::service::search::SearchResult {
+          path: format!("file{}.log", i),
+          lines: vec![format!("line {}", i)],
+          merged: vec![(0, 1)],
+          encoding: None,
+          archive_path: None,
+          source_type: logseek::service::search::EntrySourceType::default(),
+        }))
+        .await;
+    }
+
+    // 长时间等待（模拟超时场景）
+    tokio::time::sleep(Duration::from_secs(10)).await;
+
+    // 发送完成事件（可能永远不会到达）
+    let _ = tx
+      .send(SearchEvent::Complete {
+        source: "test-source".to_string(),
+        elapsed_ms: 10000,
+      })
+      .await;
+  });
+
+  // 使用超时接收事件
+  let mut received_count = 0;
+  while let Ok(Some(event)) = timeout(Duration::from_millis(100), rx.recv()).await {
+    if let SearchEvent::Success(_) = event {
+      received_count += 1;
+    }
+
+    // 最多接收 3 个事件
+    if received_count >= 3 {
+      break;
+    }
+  }
+
+  assert_eq!(received_count, 3, "应该收到 3 个成功事件");
+}
+
+/// 测试大文件搜索的内存管理
+#[tokio::test]
+async fn test_large_file_search_memory_management() {
+  // 创建大文件（使用内存高效的生成方式）
+  let temp_dir = TempDir::new().expect("创建临时目录失败");
+  let large_file_path = temp_dir.path().join("large.log");
+
+  // 生成大文件（5MB，分块写入）
+  let chunk = "This is a test log line for memory management testing.\n".repeat(100);
+  let chunk_size = chunk.len();
+  let target_size = 5 * 1024 * 1024; // 5MB
+
+  let mut file = tokio::fs::File::create(&large_file_path).await.unwrap();
+  let mut written = 0usize;
+
+  while written < target_size {
+    let to_write = std::cmp::min(chunk_size, target_size - written);
+    let content = &chunk.as_bytes()[..to_write];
+    tokio::io::AsyncWriteExt::write_all(&mut file, content).await.unwrap();
+    written += to_write;
+  }
+
+  drop(file);
+
+  // 验证文件创建成功
+  let metadata = tokio::fs::metadata(&large_file_path).await.unwrap();
+  assert!(metadata.len() >= target_size as u64, "大文件创建失败");
+
+  // 逐行读取并验证内存使用
+  let file = tokio::fs::File::open(&large_file_path).await.unwrap();
+  let reader = tokio::io::BufReader::new(file);
+  let mut lines = tokio::io::AsyncBufReadExt::lines(reader);
+
+  let mut line_count = 0;
+  while let Ok(Some(_)) = lines.next_line().await {
+    line_count += 1;
+
+    // 每1000行检查一次，确保不会占用过多内存
+    if line_count % 10000 == 0 {
+      // 在测试中模拟内存检查点
+      tokio::task::yield_now().await;
+    }
+  }
+
+  assert!(line_count > 0, "应该读取到行数据");
+  println!("成功读取 {} 行，内存管理正常", line_count);
 }

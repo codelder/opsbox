@@ -92,6 +92,20 @@ jobs:
             --release \
             --all-features
 
+      - name: Run ignored tests (slow)
+        run: |
+          set -euxo pipefail
+          export CARGO_TARGET_DIR="${PWD}/backend/target-musl"
+          export OPENSSL_STATIC=1
+
+          # 运行被忽略的测试（性能和安全测试）
+          cargo test \
+            --manifest-path backend/Cargo.toml \
+            --target x86_64-unknown-linux-musl \
+            --release \
+            --all-features \
+            -- --ignored
+
       - name: Build backend
         run: |
           set -euxo pipefail

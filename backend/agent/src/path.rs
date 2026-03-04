@@ -2,7 +2,6 @@
 //!
 //! 提供路径解析、白名单校验和路径过滤功能
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
 use logseek::domain::config::Target as ConfigTarget;
 use std::collections::HashSet;
 use std::path::{Path as StdPath, PathBuf};
@@ -26,40 +25,48 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
   let mut resolved_paths = Vec::new();
   let canon_roots = canonicalize_roots(&config.search_roots);
 
-  let rel_as_path = PathBuf::from(relative_path);
-  // 绝对路径：必须位于某个白名单根目录下
-  if rel_as_path.is_absolute() {
-    if rel_as_path.exists() && rel_as_path.is_dir() {
-      let cand_c = canonicalize_existing(&rel_as_path)?;
-      if !is_under_any_root(&cand_c, &canon_roots) {
-        return Err(format!("目录不在白名单中: {}", cand_c.display()));
-      }
-      resolved_paths.push(cand_c);
-    }
-  } else {
-    // 相对路径：对每个白名单根进行拼接，并校验规范化后仍在该根下
+  // 1. First, if it's absolute (or looks like one), try as-is
+  let rel_as_path = std::path::Path::new(relative_path);
+
+  if rel_as_path.is_absolute()
+    && rel_as_path.exists()
+    && let Ok(cand_c) = canonicalize_existing(rel_as_path)
+    && is_under_any_root(&cand_c, &canon_roots)
+  {
+    resolved_paths.push(cand_c);
+  }
+
+  // 2. If no paths resolved yet, or even if they did, try treating it as relative to roots
+  // Strip leading slash if present for relative join
+  let normalized_path = relative_path.strip_prefix('/').unwrap_or(relative_path);
+
+  // Only try relative resolution if normalized_path is not empty (or we want to list roots)
+  if !normalized_path.is_empty() {
     for root in &config.search_roots {
       let root_path = PathBuf::from(root);
-      let full_path = root_path.join(relative_path);
-      if full_path.exists() && full_path.is_dir() {
-        let cand_c = canonicalize_existing(&full_path)?;
-        let root_c = canonicalize_existing(&root_path)?;
-        if cand_c.starts_with(&root_c) {
-          resolved_paths.push(cand_c);
-          continue;
-        }
+      let full_path = root_path.join(normalized_path);
+
+      if full_path.exists()
+        && let Ok(cand_c) = canonicalize_existing(&full_path)
+        && let Ok(root_c) = canonicalize_existing(&root_path)
+        && cand_c.starts_with(&root_c)
+        && !resolved_paths.contains(&cand_c)
+      {
+        resolved_paths.push(cand_c);
       }
+
       // 尝试在一级子目录下拼接（兼容原先的"模糊子目录"逻辑）
       if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
           if entry.path().is_dir() {
-            let sub_path = entry.path().join(relative_path);
-            if sub_path.exists() && sub_path.is_dir() {
-              let cand_c = canonicalize_existing(&sub_path)?;
-              let root_c = canonicalize_existing(&root_path)?;
-              if cand_c.starts_with(&root_c) {
-                resolved_paths.push(cand_c);
-              }
+            let sub_path = entry.path().join(normalized_path);
+            if sub_path.exists()
+              && let Ok(cand_c) = canonicalize_existing(&sub_path)
+              && let Ok(root_c) = canonicalize_existing(&root_path)
+              && cand_c.starts_with(&root_c)
+              && !resolved_paths.contains(&cand_c)
+            {
+              resolved_paths.push(cand_c);
             }
           }
         }
@@ -68,7 +75,7 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
   }
 
   if resolved_paths.is_empty() {
-    Err(format!("未找到目录: {}", relative_path))
+    Err(format!("未找到路径: {}", relative_path))
   } else {
     Ok(resolved_paths)
   }
@@ -184,52 +191,6 @@ pub fn get_available_subdirs(config: &AgentConfig) -> Vec<String> {
   subdirs
 }
 
-/// 应用路径过滤器
-#[allow(dead_code)]
-pub fn apply_path_filter(paths: &[PathBuf], filter: &str) -> Result<Vec<PathBuf>, String> {
-  let glob = Glob::new(filter).map_err(|e| format!("路径过滤器语法错误: {}", e))?;
-
-  let glob_set = GlobSetBuilder::new()
-    .add(glob)
-    .build()
-    .map_err(|e| format!("构建路径过滤器失败: {}", e))?;
-
-  let mut filtered_paths = Vec::new();
-
-  for path in paths {
-    if path.is_file() {
-      if glob_set.is_match(path) {
-        filtered_paths.push(path.clone());
-      }
-    } else if path.is_dir() {
-      // 递归查找匹配的文件
-      find_matching_files(path, &glob_set, &mut filtered_paths)?;
-    }
-  }
-
-  Ok(filtered_paths)
-}
-
-/// 在目录中递归查找匹配的文件
-#[allow(dead_code)]
-fn find_matching_files(dir: &StdPath, glob_set: &GlobSet, results: &mut Vec<PathBuf>) -> Result<(), String> {
-  if let Ok(entries) = std::fs::read_dir(dir) {
-    for entry in entries.flatten() {
-      let path = entry.path();
-
-      if path.is_file() {
-        if glob_set.is_match(&path) {
-          results.push(path);
-        }
-      } else if path.is_dir() {
-        find_matching_files(&path, glob_set, results)?;
-      }
-    }
-  }
-
-  Ok(())
-}
-
 /// 规范化（canonicalize）已有路径，返回去除符号链接与 .. 的绝对路径
 pub fn canonicalize_existing(path: &StdPath) -> Result<PathBuf, String> {
   std::fs::canonicalize(path).map_err(|e| format!("路径规范化失败: {}: {}", path.display(), e))
@@ -249,4 +210,170 @@ pub fn canonicalize_roots(roots: &[String]) -> Vec<PathBuf> {
 /// 判断规范化后的 path 是否位于任一规范化后的根目录之下
 pub fn is_under_any_root(path: &StdPath, canon_roots: &[PathBuf]) -> bool {
   canon_roots.iter().any(|root| path.starts_with(root))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::path::PathBuf;
+
+  #[test]
+  fn test_is_under_any_root_basic() {
+    let roots = vec![PathBuf::from("/var/log"), PathBuf::from("/tmp")];
+    assert!(is_under_any_root(&PathBuf::from("/var/log/app"), &roots));
+    assert!(is_under_any_root(&PathBuf::from("/tmp/file"), &roots));
+    assert!(!is_under_any_root(&PathBuf::from("/etc/config"), &roots));
+  }
+
+  #[test]
+  fn test_is_under_any_root_empty_roots() {
+    let roots: Vec<PathBuf> = vec![];
+    assert!(!is_under_any_root(&PathBuf::from("/any/path"), &roots));
+  }
+
+  #[test]
+  fn test_canonicalize_roots_empty() {
+    let roots: Vec<String> = vec![];
+    let result = canonicalize_roots(&roots);
+    assert!(result.is_empty());
+  }
+
+  #[test]
+  fn test_canonicalize_roots_nonexistent() {
+    let roots = vec!["/nonexistent/path/12345".to_string()];
+    let result = canonicalize_roots(&roots);
+    assert!(result.is_empty());
+  }
+
+  #[test]
+  fn test_resolve_target_paths_dir_with_subdir() {
+    use crate::config::AgentConfig;
+    use std::sync::{Arc, Mutex};
+
+    // 测试 Target::Dir { path: "subdir" } 场景
+    // 验证 resolve_target_paths 返回的是完整的解析后路径
+    // 这是针对 P1 回归的关键测试
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+
+    // 创建目录结构: root/app/logs/
+    let app_dir = root.join("app");
+    let logs_dir = app_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+
+    // 创建配置（只设置必要的字段）
+    let config = AgentConfig {
+      agent_id: "test-agent".to_string(),
+      agent_name: "Test Agent".to_string(),
+      server_endpoint: "http://127.0.0.1:4000".to_string(),
+      search_roots: vec![root.to_string_lossy().to_string()],
+      listen_port: 4001,
+      enable_heartbeat: false,
+      heartbeat_interval_secs: 30,
+      worker_threads: None,
+      log_dir: std::path::PathBuf::from("/tmp"),
+      log_retention: 7,
+      reload_handle: None,
+      current_log_level: Arc::new(Mutex::new("info".to_string())),
+    };
+
+    // 测试 1: 使用子目录名 "app" 应该返回完整路径
+    // 关键点：返回的路径应该已经是完整的 /path/to/root/app
+    // 调用方（search.rs）不应该再拼接 "app"
+    let target = ConfigTarget::Dir {
+      path: "app".to_string(),
+      recursive: true,
+    };
+    let result = resolve_target_paths(&config, &target).unwrap();
+    assert!(!result.is_empty(), "Should resolve 'app' subdirectory");
+    // 返回的路径应该是 /path/to/root/app，而不是 /path/to/root
+    for resolved_path in &result {
+      // 关键断言：解析后的路径应该以 "/app" 结尾
+      assert!(
+        resolved_path.ends_with("app"),
+        "Expected path ending with 'app', got: {:?}",
+        resolved_path
+      );
+      // 验证路径存在
+      assert!(
+        resolved_path.exists(),
+        "Resolved path should exist: {:?}",
+        resolved_path
+      );
+      // 验证是目录
+      assert!(
+        resolved_path.is_dir(),
+        "Resolved path should be a directory: {:?}",
+        resolved_path
+      );
+    }
+
+    // 测试 2: 使用嵌套子目录 "app/logs" 应该返回完整路径
+    let target = ConfigTarget::Dir {
+      path: "app/logs".to_string(),
+      recursive: true,
+    };
+    let result = resolve_target_paths(&config, &target).unwrap();
+    assert!(!result.is_empty(), "Should resolve 'app/logs' subdirectory");
+    // 返回的路径应该是 /path/to/root/app/logs
+    for resolved_path in &result {
+      assert!(
+        resolved_path.ends_with("logs"),
+        "Expected path ending with 'logs', got: {:?}",
+        resolved_path
+      );
+      // 验证路径存在
+      assert!(
+        resolved_path.exists(),
+        "Resolved path should exist: {:?}",
+        resolved_path
+      );
+    }
+  }
+
+  #[test]
+  fn test_resolve_target_paths_files() {
+    use crate::config::AgentConfig;
+    use std::sync::{Arc, Mutex};
+
+    // 测试 Target::Files 场景
+    let temp_dir = tempfile::tempdir().unwrap();
+    let root = temp_dir.path();
+
+    // 创建测试文件
+    let file1 = root.join("test1.log");
+    let file2 = root.join("test2.log");
+    std::fs::write(&file1, "content1").unwrap();
+    std::fs::write(&file2, "content2").unwrap();
+
+    let config = AgentConfig {
+      agent_id: "test-agent".to_string(),
+      agent_name: "Test Agent".to_string(),
+      server_endpoint: "http://127.0.0.1:4000".to_string(),
+      search_roots: vec![root.to_string_lossy().to_string()],
+      listen_port: 4001,
+      enable_heartbeat: false,
+      heartbeat_interval_secs: 30,
+      worker_threads: None,
+      log_dir: std::path::PathBuf::from("/tmp"),
+      log_retention: 7,
+      reload_handle: None,
+      current_log_level: Arc::new(Mutex::new("info".to_string())),
+    };
+
+    // 使用绝对路径
+    let target = ConfigTarget::Files {
+      paths: vec![file1.to_string_lossy().to_string(), file2.to_string_lossy().to_string()],
+    };
+    let result = resolve_target_paths(&config, &target).unwrap();
+    assert_eq!(result.len(), 2);
+
+    // 使用相对路径
+    let target = ConfigTarget::Files {
+      paths: vec!["test1.log".to_string()],
+    };
+    let result = resolve_target_paths(&config, &target).unwrap();
+    assert_eq!(result.len(), 1);
+    assert!(result[0].ends_with("test1.log"));
+  }
 }

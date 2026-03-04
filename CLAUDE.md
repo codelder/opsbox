@@ -12,7 +12,7 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **Frontend**: SvelteKit 2.22 with TypeScript, TailwindCSS 4.0 (`@tailwindcss/vite` plugin)
 - **Database**: SQLite with automatic schema management
 - **Build Tools**:
-  - Rust: Cargo workspace
+  - Rust: Cargo workspace (resolver v3)
   - Node.js: pnpm 10.23.0, Vite 7.0
 - **Font System**: Maple Mono NF CN (5 font weights, ~31MB embedded)
 - **Version**: 0.1.1
@@ -21,12 +21,25 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - `starlark = "0.13"` - Scriptable source planning
 - `chrono-tz = "0.8"` - Timezone support (Beijing)
 - `chardetng = "0.1"` - Character encoding detection
-- `grep = "0.3"` - Byte-level regex search
+- `grep-regex = "0.1"` - Byte-level regex search (split into grep-regex, grep-searcher, grep-matcher)
+- `grep-searcher = "0.1"` - Search functionality
+- `grep-matcher = "0.1"` - Pattern matching
 - `urlencoding = "2.1.3"` - URL encoding
+- `fluent-uri = "0.4.1"` - RFC 3986 compliant URI parsing
+- `async_zip = "0.0.18"` - Async ZIP archive support
+- `tokio-tar = "0.3.1"` - Async TAR archive support
+- `async-tar = "0.5.1"` - Additional TAR support
+- `reqwest = "0.12"` - HTTP client (used for LLM and agent communication)
+- `encoding_rs = "0.8"` - Text encoding conversion (GBK support)
+- `lru = "0.16.2"` - LRU cache implementation
+- `futures-lite = "2.6.1"` - Stream utilities
+- `tokio-stream = "0.1.17"` - Stream handling
+- `aws-sdk-s3 = "1.15"` - AWS S3 SDK
 
 **Key Frontend Dependencies:**
 - `@tanstack/svelte-virtual = "^3.13.12"` - Virtual scrolling
 - `lucide-svelte = "^0.554.0"` - Icons
+- `@tabler/icons-svelte = "3.35"` - Additional icon set
 - `marked = "^17.0.0"` - Markdown rendering
 - `bits-ui = "^2.14.4"` - UI components
 - `mode-watcher = "^1.1.0"` - Dark mode watcher
@@ -35,17 +48,27 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 - **Monorepo Structure**: Rust backend (`backend/`) + SvelteKit frontend (`web/`)
 - **Modular Design**: Uses `opsbox-core` inventory system for automatic module discovery
-- **ODFI Protocol**: Unified resource identifier scheme for cross-endpoint resource addressing
+- **ORL Protocol**: Unified resource identifier scheme for cross-endpoint resource addressing (evolved from ODFI, uses `orl://` scheme)
 - **Current Modules**:
   - `logseek`: Log search module supporting local files, S3/MinIO, and archives
-  - `explorer`: Distributed file/resource browser across Local, S3, and Agent endpoints
+  - `explorer`: Distributed file/resource browser across Local, S3, and Agent endpoints with file download support
   - `agent-manager`: Agent registry and management module
 - **Embedded Frontend**: Static assets compiled into binary via `rust-embed`
 
 ### Backend Structure (`backend/`)
 
+#### Workspace Members
+- `opsbox-server` - Main binary
+- `opsbox-core` - Shared library (includes DFS subsystem)
+- `logseek` - Log search module
+- `agent-manager` - Agent management module
+- `explorer` - Resource browser module
+- `agent` - Standalone agent binary
+- `test-common` - Shared test utilities
+
 #### Workspace Crates
 - **opsbox-server**: Main binary entry point (`src/main.rs`)
+  - CLI options: `--host`, `--port`, `--addr`, `--daemon`, `--log-level`, `-v`, `--log-dir`, `--log-retention`, `--database-url`, `--io-max-concurrency`, `--io-timeout-sec`, `--io-max-retries`, `--server-id`
   - CLI configuration (`config.rs`)
   - HTTP server composition (`server.rs`)
   - Logging setup (`logging.rs`)
@@ -60,29 +83,30 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
   - Standard responses (`response.rs`)
   - Middleware utilities (`middleware/`)
   - Logging configuration (`logging/`)
-  - ODFI protocol (`odfi.rs`) - Unified resource identifier scheme
   - Filesystem utilities (`fs/`) - Archive streaming, compression detection
   - Storage abstraction (`storage/`) - S3 repository and utilities
   - Agent client (`agent/`) - HTTP client for agent communication
+  - **DFS subsystem (`dfs/`)** - Distributed FileSystem abstraction layer including ORL parsing
 
 - **logseek**: Log search module with layered architecture:
   - API layer (`routes/`, `api.rs`) - Dual layer pattern for backward compatibility
   - Service layer (`service/`) including:
+    - `search.rs` - Search core module
+    - `search/sink.rs` - Search result sink
+    - `search_executor.rs` - Search orchestration
+    - `search_runner.rs` - Search execution runner
+    - `searchable.rs` - Searchable resource trait
+    - `resource_orl.rs` - Resource ORL handling
     - `encoding.rs` - GBK and multi-encoding detection
     - `entry_stream.rs` - Archive streaming for 25KB+ files
     - `nl2q.rs` - Natural language to query conversion
-    - `search_executor.rs` - Search orchestration (103KB)
-    - `planners.rs` - Planner script management
-    - `profiles.rs` - S3 profile management
-    - `s3.rs` - S3-related service layer
+    - `config.rs` - Source/Endpoint/Target models (includes ORL URL construction utilities)
   - Repository layer (`repository/`) including:
     - `cache.rs` - Search result caching
     - `llm.rs` - LLM backend management
     - `planners.rs` - Planner script persistence
     - `s3.rs` - S3 profile persistence
   - Domain layer (`domain/`) including:
-    - `config.rs` - Source/Endpoint/Target models
-    - `odfi_builder.rs` - ODFI URL construction
     - `source_planner/` - Starlark runtime for intelligent source planning
   - Source planners (`planners/`)
   - Utilities (`utils/`)
@@ -92,8 +116,9 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 
 - **explorer**: Distributed resource browser module:
   - Resource listing API (`routes.rs`) - POST `/api/v1/explorer/list`
+  - File download API - POST `/api/v1/explorer/download`
   - Unified browsing across Local, S3, and Agent endpoints
-  - Archive navigation (tar, tar.gz, gzip, tgz)
+  - Archive navigation (tar, tar.gz, gzip, tgz, zip)
   - Auto-detection of archive files
   - Content-based file type detection via MIME types
   - Hidden file counting and metadata
@@ -144,6 +169,54 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **File download**: Integrated download functionality with backend cache support
 - **UI Features**: macOS-style aesthetics, context menus, dark mode support
 
+## Test Coverage
+
+### Backend (Rust)
+- **Total Tests**: 1,031 tests (99.7% pass rate)
+- **Coverage Tool**: `cargo-llvm-cov`
+- **Test Requirements**: Requires `OPSBOX_NO_PROXY=1` for LLM module tests
+- **Coverage Status**: Comprehensive unit and integration tests across all modules
+- **Estimated Coverage**: ~75-80% overall
+
+#### Test Distribution by Module
+| Module | Unit Tests | Integration Tests | Total |
+|--------|------------|-------------------|-------|
+| logseek | 413 | 55 | 468 |
+| opsbox-core | 73 | 206 | 279 |
+| agent | 10 | 144 | 154 |
+| explorer | 17 | 9 | 26 |
+| agent-manager | 11 | 11 | 22 |
+| opsbox-server | 27 | - | 27 |
+| test-common | 20 | - | 20 |
+
+### Frontend (TypeScript/Svelte)
+- **Total Tests**: 95 tests (100% pass rate)
+- **Server Tests**: 55 passing (Node.js environment)
+- **Browser Tests**: 40 passing (Chromium environment)
+- **Coverage Thresholds**: Set to 70% lines/functions/statements, 60% branches
+- **Current Coverage**: 14.85% overall
+
+#### High Coverage Areas (>80%)
+- **ORL Utils**: 92.77% lines, 81.08% branches
+- **Highlight Utils**: 83.33% lines, 83.33% branches
+- **Explorer API**: 88.57% lines
+- **UI Components**: 84-100% (alert, badge, button, card, input, label, switch)
+
+**Note**: Overall frontend coverage is low due to untested route components and composables. Key utilities and API clients have excellent coverage (>80%).
+
+### Recent Test Additions (2026-02-27)
+
+**Iteration 1 - High Risk Areas:**
+- **Explorer Integration Tests**: 9 new tests (local files, agent files, archive navigation)
+- **DFS Integration Tests**: 5 new tests (archive combinations)
+- **Frontend API Client Tests**: 8 new tests (Explorer API)
+- **UI Component Tests**: 21 new tests (Agent Management, Server Log Settings)
+
+**Coverage Improvements:**
+- Explorer: 0 → 9 integration tests
+- DFS (opsbox-core): 0 → 5 integration tests
+- Frontend: 55 → 95 tests (+40 tests)
+
 ## Development Guidelines
 
 ### When Making Changes
@@ -171,15 +244,16 @@ OpsBox is a modular log search and analysis platform built with Rust backend and
 - **API Prefixes**: Each module has its own prefix (`/api/v1/logseek`, `/api/v1/agents`, `/api/v1/explorer`)
 - **Database**: Single SQLite file (`$HOME/.opsbox/opsbox.db`) shared across modules
 - **LLM Integration**: Configurable via environment variables (`LLM_PROVIDER`, `OLLAMA_BASE_URL`, etc.) and database-persistent backends
+  - **Proxy Detection**: `reqwest` automatically detects system proxy settings; use `OPSBOX_NO_PROXY=1` to disable (required for testing on macOS)
 - **S3 Profiles**: Multiple S3 configurations managed via profiles API
 - **Agent Communication**: HTTP-based with health monitoring and tags
 - **Query Qualifiers**:
   - `app:<appname>` - Select planner script by application name for intelligent source planning
   - `dt:/fdt:/tdt:` - Date/time directives for time-range filtering in queries
-- **ODFI Protocol**: Unified resource identifiers in format `odfi://[id]@[type][.server_addr]/[path]?entry=[entry_path]`
-  - Local: `odfi://local/var/log/nginx/access.log`
-  - Agent: `odfi://web-01@agent/app/logs/error.log`
-  - S3 Archive: `odfi://prod@s3/logs/2023/10/data.tar.gz?entry=internal/service.log`
+- **ORL Protocol**: Unified resource identifiers in format `orl://[id]@[type][.server_addr]/[path]?entry=[entry_path]` (evolved from ODFI)
+  - Local: `orl://local/var/log/nginx/access.log`
+  - Agent: `orl://web-01@agent/app/logs/error.log`
+  - S3 Archive: `orl://prod@s3/logs/2023/10/data.tar.gz?entry=internal/service.log`
 
 ### Build and Test Commands
 
@@ -197,14 +271,42 @@ pnpm --dir web dev
 pnpm --dir web build  # Builds to backend/opsbox-server/static
 cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
 
-# Testing
-cargo test --manifest-path backend/Cargo.toml
+# Testing (backend requires OPSBOX_NO_PROXY=1 for LLM tests)
+OPSBOX_NO_PROXY=1 cargo test --manifest-path backend/Cargo.toml
 pnpm --dir web test
 
 # Frontend testing with specific environments
 pnpm --dir web test:unit  # Run all tests
 pnpm --dir web test:unit --run --project=client  # Browser tests only
 pnpm --dir web test:unit --run --project=server  # Node.js tests only
+
+# Backend code coverage (requires cargo-llvm-cov)
+OPSBOX_NO_PROXY=1 cargo llvm-cov --manifest-path backend/Cargo.toml --workspace --lcov
+```
+
+### Build Options and Feature Flags
+
+**Module Features:**
+```bash
+# Default build (includes all modules)
+cargo build --manifest-path backend/Cargo.toml -p opsbox-server
+
+# Build specific modules only
+cargo build -p opsbox-server --no-default-features -F logseek,agent-manager
+
+# Available features:
+# - logseek: Log search module (with mimalloc-collect for memory collection)
+# - agent-manager: Agent registry and management
+# - explorer: Distributed file/resource browser
+```
+
+**LogSeek Sub-features:**
+```bash
+# Enable mimalloc memory collection on cache cleanup
+cargo build -p logseek --features mimalloc-collect
+
+# Enable network-dependent tests
+cargo test -p logseek --features network-tests
 ```
 
 ### Configuration Priority
@@ -214,8 +316,51 @@ pnpm --dir web test:unit --run --project=server  # Node.js tests only
 3. Database settings (for persistent config)
 4. Default values (lowest priority)
 
+### Environment Variables
+
+**Testing:**
+- `OPSBOX_NO_PROXY=1` - Disable `reqwest` system proxy detection (required for LLM tests on macOS)
+- `CI=1` - CI environment indicator (also disables proxy detection)
+
+**LLM Configuration:**
+- `LLM_PROVIDER` - LLM provider (`ollama` or `openai`, default: `ollama`)
+- `OLLAMA_BASE_URL` - Ollama server URL (default: `http://127.0.0.1:11434`)
+- `OLLAMA_MODEL` - Default Ollama model (default: `qwen3:8b`)
+- `OLLAMA_TIMEOUT_SECS` - Ollama request timeout in seconds
+- `OPENAI_API_KEY` - OpenAI API key (required for OpenAI provider)
+- `OPENAI_BASE_URL` - OpenAI-compatible API URL (default: `https://api.openai.com`)
+- `OPENAI_MODEL` - Default OpenAI model (default: `gpt-4o-mini`)
+- `OPENAI_TIMEOUT_SECS` - OpenAI request timeout in seconds
+- `OPENAI_ORG` - OpenAI organization ID
+- `OPENAI_PROJECT` - OpenAI project ID
+
+**IO & Network Configuration:**
+- `LOGSEEK_IO_TIMEOUT_SEC` - IO timeout in seconds (default: 60)
+- `LOGSEEK_IO_MAX_RETRIES` - Maximum IO retry attempts (default: 5)
+- `LOGSEEK_IO_MAX_CONCURRENCY` - Maximum IO concurrency (default: 12)
+
+**S3 Proxy Configuration:**
+- `HTTP_PROXY` / `http_proxy` - HTTP proxy URL
+- `HTTPS_PROXY` / `https_proxy` - HTTPS proxy URL
+- `ALL_PROXY` / `all_proxy` - All traffic proxy URL
+- `NO_PROXY` / `no_proxy` - Comma-separated list of proxy bypass hosts
+
+**Database & Server:**
+- `OPSBOX_DATABASE_URL` / `DATABASE_URL` - Custom database path
+- `LOGSEEK_SERVER_ID` - Unique server identifier
+- `LOG_DIR` - Custom log directory path
+- `LOG_RETENTION` - Log retention period in days
+
+**Development Server:**
+- `VITE_HOST` - Vite dev server host (default: `0.0.0.0`)
+- `BACKEND_PORT` - Backend API port for proxy (default: `4000`)
+
+**Claude Code Integration:**
+- `CLAUDECODE` / `CLAUDE_CODE_ENTRYPOINT` - Detects running in Claude Code (affects sandbox behavior)
+
 ### Important Notes
 
+- **LLM Testing**: Backend tests require `OPSBOX_NO_PROXY=1` environment variable to prevent `reqwest` from accessing macOS System Configuration (causes NULL object errors in test environment)
 - **Frontend embedding**: After UI changes, rebuild backend to update embedded assets
 - **Module registration**: New modules must implement `Module` trait and use `register_module!` macro
 - **Database migrations**: Handled automatically, but schema changes require `init_schema` updates
@@ -224,20 +369,21 @@ pnpm --dir web test:unit --run --project=server  # Node.js tests only
 - **Font system**: Uses Maple Mono NF CN font family (5 weights: ExtraLight, Regular, Medium, SemiBold, Bold)
 - **Large file handling**: Virtual scrolling and chunked loading implemented for files > 1000 lines
 - **File download**: Full file download with backend cache support via `/view/download` endpoint
-- **Archive support**: Tar, tar.gz, gzip, tgz with auto-detection and deep navigation
+- **Archive support**: Tar, tar.gz, gzip, tgz, zip with auto-detection and deep navigation
 - **Encoding detection**: GBK and multi-encoding support using `chardetng` and `encoding_rs`
 - **Testing configuration**: Dual test environments (browser + Node.js) with Playwright for browser tests
 - **Development server**: Vite dev server configured for external access (0.0.0.0:5173)
 - **Memory management**: `mimalloc` as global allocator with explicit memory collection on cache cleanup
+- **ORL protocol**: Use `orl://` scheme for resource identifiers (migrated from `odfi://` with backward compatibility)
 
-## ODFI Protocol
+## ORL Protocol (OpsBox Resource Locator)
 
-The ODFI (OpsBox Distributed File Identifier) protocol provides a unified URI scheme for addressing resources across different storage backends.
+The ORL protocol provides a unified URI scheme for addressing resources across different storage backends. It evolved from the earlier ODFI (OpsBox Distributed File Identifier) protocol and uses the `orl://` scheme.
 
 ### Format
 
 ```
-odfi://[id]@[type][.server_addr]/[path]?entry=[entry_path]
+orl://[id]@[type][.server_addr]/[path]?entry=[entry_path]
 ```
 
 ### Components
@@ -251,10 +397,37 @@ odfi://[id]@[type][.server_addr]/[path]?entry=[entry_path]
 ### Examples
 
 ```
-odfi://local/var/log/nginx/access.log
-odfi://web-01@agent.192.168.1.100:4001/app/logs/error.log
-odfi://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
+orl://local/var/log/nginx/access.log
+orl://web-01@agent.192.168.1.100:4001/app/logs/error.log
+orl://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
 ```
+
+**Note**: The legacy `odfi://` scheme may still appear in some parts of the codebase for compatibility, but new code should use `orl://`.
+
+## DFS Subsystem (Distributed FileSystem)
+
+The DFS (Distributed FileSystem) subsystem is a unified abstraction layer for accessing resources across different storage backends. It provides a consistent interface for local files, S3 buckets, and remote agents.
+
+**Location:** `backend/opsbox-core/src/dfs/`
+
+**Components:**
+- `endpoint.rs` - Endpoint abstraction (Local, S3, Agent)
+- `filesystem.rs` - Filesystem trait definition
+- `orl_parser.rs` - ORL URL parser
+- `path.rs` - Path manipulation utilities
+- `resource.rs` - Resource abstraction
+- `searchable.rs` - Searchable resource trait
+- `impls/` - Backend implementations:
+  - `local.rs` - Local filesystem access
+  - `s3.rs` - S3 object storage
+  - `agent.rs` - Remote agent access
+  - `archive.rs` - Archive file access (tar, zip, etc.)
+
+**Features:**
+- Unified resource access across Local/S3/Agent endpoints
+- Archive deep navigation (tar, tar.gz, gzip, tgz, zip)
+- ORL-based resource addressing
+- Content-type detection
 
 ## API Endpoints
 
@@ -332,12 +505,18 @@ odfi://prod@s3/bucket/logs/2023/10/data.tar.gz?entry=internal/service.log
 ### Explorer Module (`/api/v1/explorer`)
 
 - `POST /api/v1/explorer/list` - List resources (Local/S3/Agent)
+- `GET /api/v1/explorer/download?orl=...` - Download file via query parameter
+- POST method is not supported (use GET with query param)
 
 ### System Log Routes (`/api/v1/log`)
 
 - `GET /api/v1/log/config` - Get log configuration
 - `PUT /api/v1/log/level` - Set log level
 - `PUT /api/v1/log/retention` - Set log retention
+
+### Health Check
+
+- `GET /healthy` - Health check endpoint (returns "ok")
 
 ## Source Planning with Starlark
 
@@ -386,6 +565,9 @@ Convert natural language queries to LogSeek query syntax using LLM.
 
 ## Recent Updates
 
+- **DFS Subsystem**: New Distributed FileSystem abstraction layer in `opsbox-core` for unified resource access across Local/S3/Agent endpoints
+- **Test Infrastructure**: 950 passing backend tests with `OPSBOX_NO_PROXY=1` requirement for LLM module
+- **LLM Test Fix**: Fixed `reqwest` proxy detection issues in test environment (macOS System Configuration access failures)
 - **Starlark Source Planning**: Scriptable source planning with intelligent log source selection using Starlark scripts
 - **NL2Q (Natural Language to Query)**: Convert natural language queries to LogSeek syntax using LLM
 - **Search Session Management**: Support for cancelling running searches via session IDs
@@ -395,7 +577,7 @@ Convert natural language queries to LogSeek query syntax using LLM.
 - **Agent Tag Management**: Full tag CRUD operations (add/remove/clear) for agent organization
 - **System Log Routes**: API endpoints for configuring server log level and retention
 - **Explorer module**: Distributed file/resource browser supporting Local, S3, and Agent endpoints
-- **ODFI protocol**: Unified resource identifier scheme for cross-endpoint addressing
+- **ORL protocol**: Unified resource identifier scheme for cross-endpoint addressing (evolved from ODFI, uses `orl://` scheme)
 - **Archive browsing**: Deep navigation into tar, tar.gz, gzip, tgz archives with auto-detection
 - **S3 archive support**: Browse and view files inside S3-hosted archives
 - **Encoding detection**: GBK and multi-encoding support with automatic detection
@@ -409,6 +591,13 @@ Convert natural language queries to LogSeek query syntax using LLM.
 - **Virtual scrolling**: Performance optimization via `@tanstack/svelte-virtual`
 - **File download functionality**: Full file download with backend cache support
 - **Settings reorganization**: Moved settings and theme toggle to individual pages
+- **SearchExecutor refactor**: Overhauled SearchExecutor and simplified EntryStream creation for better performance
+- **Relative path glob filtering**: Support for relative path glob patterns in search queries
+- **Enhanced archive support**: Added async ZIP archive support with `async_zip` and `tokio-tar` dependencies
+- **Test infrastructure improvements**: Full E2E test suite fixes, increased timeouts, and test coverage analysis
+- **ORL protocol migration**: Transition from ODFI (`odfi://`) to ORL (`orl://`) scheme with backward compatibility
+- **Explorer file download**: Complete file download implementation for the distributed resource browser
+- **Performance optimizations**: Memory management improvements and search cancellation enhancements
 
 ## Common Tasks
 
@@ -433,3 +622,70 @@ Convert natural language queries to LogSeek query syntax using LLM.
 1. Add CLI argument in `opsbox-server/src/config.rs`
 2. Add environment variable support in module's `configure()` method
 3. Update documentation in README.md if user-facing
+
+## Troubleshooting
+
+### Backend Tests Fail with "Attempted to create a NULL object"
+
+**Symptom:** LLM tests fail with `system-configuration` library errors on macOS
+
+**Cause:** `reqwest` tries to access macOS System Configuration for proxy detection in test environment
+
+**Solution:** Set `OPSBOX_NO_PROXY=1` environment variable
+```bash
+OPSBOX_NO_PROXY=1 cargo test --manifest-path backend/Cargo.toml
+```
+
+### Frontend Browser Tests Fail with "EPERM: operation not permitted"
+
+**Symptom:** Vitest browser tests fail with port permission errors
+
+**Cause:** Port 63315 (or similar) is already in use or requires elevated permissions
+
+**Solution:**
+1. Kill processes using the port: `lsof -ti:63315 | xargs kill -9`
+2. Or run server tests only: `pnpm test:unit --run --project=server`
+
+### Agent Connection Refused
+
+**Symptom:** Cannot connect to registered agents
+
+**Cause:** Agent's `host` and `listen_port` tags not set correctly
+
+**Solution:**
+1. Check agent registration includes correct IP/port
+2. Verify agent's `listen_port` tag matches actual listening port
+3. Check network connectivity between server and agent
+
+### Database Locked Errors
+
+**Symptom:** SQLite database is locked errors
+
+**Cause:** Multiple processes trying to write to database simultaneously
+
+**Solution:**
+1. Ensure only one opsbox-server instance is running
+2. Check for orphaned connections: `lsof | grep opsbox.db`
+3. Delete wal/shm files if needed: `rm ~/.opsbox/opsbox.db-wal ~/.opsbox/opsbox.db-shm`
+
+### S3 Connection Timeout
+
+**Symptom:** S3 operations timeout
+
+**Cause:** Network issues or incorrect proxy configuration
+
+**Solution:**
+1. Disable proxy: `OPSBOX_NO_PROXY=1`
+2. Or set correct proxy: `HTTP_PROXY=http://proxy:8080`
+3. Increase timeout: `OPSBOX_IO_TIMEOUT_SEC=60`
+
+### High Memory Usage
+
+**Symptom:** Memory usage grows over time
+
+**Cause:** LRU cache not being cleaned up
+
+**Solution:**
+1. Build with mimalloc collection: `cargo build --features mimalloc-collect`
+2. Manually trigger cache cleanup via API
+3. Adjust cache size in source code if needed

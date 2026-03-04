@@ -238,6 +238,14 @@ impl AgentConfig {
     #[cfg(windows)]
     let hostname = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string());
 
+    let last_heartbeat = chrono::Utc::now().timestamp();
+    tracing::info!(
+      "AgentConfig::to_agent_info: id={}, last_heartbeat={}, enable_heartbeat={}",
+      self.agent_id,
+      last_heartbeat,
+      self.enable_heartbeat
+    );
+
     AgentInfo {
       id: self.agent_id.clone(),
       name: self.agent_name.clone(),
@@ -245,8 +253,104 @@ impl AgentConfig {
       hostname,
       tags: vec![],
       search_roots: self.search_roots.clone(),
-      last_heartbeat: chrono::Utc::now().timestamp(),
+      last_heartbeat,
       status: AgentStatus::Online,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn create_test_args() -> Args {
+    Args {
+      cmd: None,
+      agent_id: "test-agent".to_string(),
+      agent_name: "Test Agent".to_string(),
+      server_endpoint: "http://localhost:4000".to_string(),
+      search_roots: "/var/log, /tmp".to_string(),
+      listen_port: 3000,
+      enable_heartbeat: true,
+      no_heartbeat: false,
+      heartbeat_interval: 30,
+      worker_threads: None,
+      log_dir: "/tmp/logs".to_string(),
+      log_retention: 7,
+      #[cfg(windows)]
+      service_mode: false,
+      #[cfg(windows)]
+      install_service: false,
+      #[cfg(windows)]
+      uninstall_service: false,
+      #[cfg(windows)]
+      start_service: false,
+      #[cfg(windows)]
+      stop_service: false,
+    }
+  }
+
+  #[test]
+  fn test_config_from_args() {
+    let args = create_test_args();
+    let config = AgentConfig::from_args(args);
+
+    assert_eq!(config.agent_id, "test-agent");
+    assert_eq!(config.search_roots, vec!["/var/log", "/tmp"]);
+    assert_eq!(config.listen_port, 3000);
+    assert!(config.enable_heartbeat);
+  }
+
+  #[test]
+  fn test_config_heartbeat_logic() {
+    let mut args = create_test_args();
+    args.enable_heartbeat = true;
+    args.no_heartbeat = true;
+
+    let config = AgentConfig::from_args(args);
+    // no_heartbeat overrides enable_heartbeat (logic is: enable && !no_heartbeat)
+    assert!(!config.enable_heartbeat);
+  }
+
+  #[test]
+  fn test_get_worker_threads_explicit() {
+    let mut args = create_test_args();
+    args.worker_threads = Some(4);
+    let config = AgentConfig::from_args(args);
+    assert_eq!(config.get_worker_threads(), 4);
+  }
+
+  #[test]
+  fn test_get_worker_threads_clamping() {
+    let mut args = create_test_args();
+    args.worker_threads = Some(100);
+    let config = AgentConfig::from_args(args);
+    assert_eq!(config.get_worker_threads(), 16); // Clamped to 16
+
+    let mut args2 = create_test_args();
+    args2.worker_threads = Some(0);
+    let config2 = AgentConfig::from_args(args2);
+    assert_eq!(config2.get_worker_threads(), 1); // Clamped to 1
+  }
+
+  #[test]
+  fn test_get_worker_threads_default() {
+    let args = create_test_args();
+    let config = AgentConfig::from_args(args);
+    let threads = config.get_worker_threads();
+    assert!((1..=16).contains(&threads));
+  }
+
+  #[test]
+  fn test_to_agent_info() {
+    let args = create_test_args();
+    let config = AgentConfig::from_args(args);
+    let info = config.to_agent_info();
+
+    assert_eq!(info.id, "test-agent");
+    assert_eq!(info.name, "Test Agent");
+    assert_eq!(info.search_roots, vec!["/var/log", "/tmp"]);
+    assert_eq!(info.status, AgentStatus::Online);
+    assert!(!info.version.is_empty());
   }
 }

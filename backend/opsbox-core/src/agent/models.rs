@@ -136,6 +136,31 @@ impl AgentInfo {
   pub fn remove_tag_key(&mut self, key: &str) {
     self.tags.retain(|tag| tag.key != key);
   }
+
+  /// 统一的在线状态检查方法，支持详细日志记录
+  pub fn check_online_status(&self, timeout_secs: i64, verbose: bool) -> bool {
+    let is_online = self.is_online(timeout_secs);
+
+    if verbose && !is_online {
+      let now = chrono::Utc::now().timestamp();
+      tracing::info!(
+        "Agent offline: id={}, last_heartbeat={}, age={}s (timeout={}s)",
+        self.id,
+        self.last_heartbeat,
+        now - self.last_heartbeat,
+        timeout_secs
+      );
+    }
+
+    is_online
+  }
+
+  /// 获取 Agent 基础 URL（用于 API 调用）
+  pub fn get_base_url(&self) -> String {
+    let host = self.get_tag_value("host").unwrap_or(&self.hostname);
+    let port = self.get_tag_value("listen_port").unwrap_or("3976");
+    format!("http://{}:{}", host, port)
+  }
 }
 
 /// Agent 文件列表请求
@@ -143,6 +168,8 @@ impl AgentInfo {
 pub struct AgentListRequest {
   /// 请求列举的目录路径
   pub path: String,
+  /// 归档内路径（可选，用于浏览归档内容）
+  pub entry: Option<String>,
 }
 
 /// Agent 文件条目
@@ -173,4 +200,111 @@ pub struct AgentFileItem {
 pub struct AgentListResponse {
   /// 文件列表
   pub items: Vec<AgentFileItem>,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn test_agent_tag_new() {
+    let tag = AgentTag::new("env".to_string(), "prod".to_string());
+    assert_eq!(tag.key, "env");
+    assert_eq!(tag.value, "prod");
+  }
+
+  #[test]
+  fn test_agent_tag_from_string() {
+    let tag = AgentTag::from_string("env=production").unwrap();
+    assert_eq!(tag.key, "env");
+    assert_eq!(tag.value, "production");
+
+    let tag = AgentTag::from_string(" key = value ").unwrap();
+    assert_eq!(tag.key, "key");
+    assert_eq!(tag.value, "value");
+
+    assert!(AgentTag::from_string("invalid").is_none());
+  }
+
+  #[test]
+  fn test_agent_tag_display() {
+    let tag = AgentTag::new("env".to_string(), "prod".to_string());
+    assert_eq!(tag.to_string(), "env=prod");
+  }
+
+  #[test]
+  fn test_agent_status_display() {
+    assert_eq!(AgentStatus::Online.to_string(), "Online");
+    assert_eq!(AgentStatus::Offline.to_string(), "Offline");
+    assert_eq!(AgentStatus::Busy { tasks: 3 }.to_string(), "Busy");
+  }
+
+  #[test]
+  fn test_agent_status_serialization() {
+    let status = AgentStatus::Online;
+    let json = serde_json::to_string(&status).unwrap();
+    assert!(json.contains("Online"));
+
+    let status = AgentStatus::Busy { tasks: 5 };
+    let json = serde_json::to_string(&status).unwrap();
+    assert!(json.contains("Busy"));
+    assert!(json.contains("5"));
+  }
+
+  #[test]
+  fn test_agent_list_request_serialization() {
+    let req = AgentListRequest {
+      path: "/var/log".to_string(),
+      entry: None,
+    };
+    let json = serde_json::to_string(&req).unwrap();
+    assert!(json.contains("/var/log"));
+
+    let deserialized: AgentListRequest = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.path, "/var/log");
+    assert!(deserialized.entry.is_none());
+  }
+
+  #[test]
+  fn test_agent_file_item_serialization() {
+    let item = AgentFileItem {
+      name: "test.log".to_string(),
+      path: "/var/log/test.log".to_string(),
+      is_dir: false,
+      is_symlink: false,
+      size: Some(1024),
+      modified: Some(1234567890),
+      child_count: None,
+      hidden_child_count: None,
+      mime_type: Some("text/plain".to_string()),
+    };
+
+    let json = serde_json::to_string(&item).unwrap();
+    assert!(json.contains("test.log"));
+    assert!(json.contains("1024"));
+
+    let deserialized: AgentFileItem = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized.name, "test.log");
+    assert_eq!(deserialized.size, Some(1024));
+  }
+
+  #[test]
+  fn test_agent_list_response() {
+    let response = AgentListResponse {
+      items: vec![AgentFileItem {
+        name: "file1.log".to_string(),
+        path: "/var/log/file1.log".to_string(),
+        is_dir: false,
+        is_symlink: false,
+        size: Some(100),
+        modified: None,
+        child_count: None,
+        hidden_child_count: None,
+        mime_type: None,
+      }],
+    };
+
+    assert_eq!(response.items.len(), 1);
+    assert_eq!(response.items[0].name, "file1.log");
+  }
 }

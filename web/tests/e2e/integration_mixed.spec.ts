@@ -42,11 +42,12 @@ function findServerCommand(): { command: string; args: string[]; cwd: string } {
 }
 
 function findAgentCommand(): { command: string; argsPrefix: string[]; cwd: string } {
-  const candidate = path.join(backendDir, 'target', 'release', 'opsbox-agent');
-  if (fs.existsSync(candidate)) {
-    return { command: candidate, argsPrefix: [], cwd: backendDir };
-  }
-  return { command: 'cargo', argsPrefix: ['run', '-p', 'opsbox-agent', '--'], cwd: backendDir };
+  // 不使用预编译二进制：避免 workspace 依赖（如 logseek）变更后，旧二进制导致 e2e 结果不一致。
+  return {
+    command: 'cargo',
+    argsPrefix: ['run', '--release', '-p', 'opsbox-agent', '--'],
+    cwd: backendDir
+  };
 }
 
 async function ensureBackendUp(request: APIRequestContext) {
@@ -322,6 +323,7 @@ test.describe('Mixed Sources Integration E2E', () => {
   let mockS3: { endpoint: string; close: () => Promise<void> } | null = null;
 
   test.beforeAll(async ({ request }) => {
+    test.setTimeout(120000);
     const backend = await ensureBackendUp(request);
     backendProc = backend.proc;
     startedBackend = backend.started;
@@ -443,8 +445,9 @@ test.describe('Mixed Sources Integration E2E', () => {
     agentProc.stdout.on('data', (d) => process.stdout.write(d));
     agentProc.stderr.on('data', (d) => process.stderr.write(d));
 
-    await waitForHttpOk(request, `http://127.0.0.1:${agentPort}/health`, 15000);
-    await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 15000);
+    // opsbox-agent 通过 `cargo run --release` 启动时，首次编译可能较慢（尤其是依赖 AWS SDK 时）
+    await waitForHttpOk(request, `http://127.0.0.1:${agentPort}/health`, 120000);
+    await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 60000);
 
     // 当前后端支持的组合：
     // - Local: dir / files / archive
@@ -452,46 +455,13 @@ test.describe('Mixed Sources Integration E2E', () => {
     // - S3: archive（暂不支持 dir/files，EntryStreamFactory 会直接报错）
     const script = `
 SOURCES = [
-  {
-    'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
-    'target':   { 'type': 'dir', 'path': 'dir', 'recursive': True },
-    'filter_glob': '**/*.log',
-    'display_name': 'Local Dir'
-  },
-  {
-    'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
-    'target':   { 'type': 'files', 'paths': ['local-files.log'] },
-    'display_name': 'Local Files'
-  },
-  {
-    'endpoint': { 'kind': 'local', 'root': '${LOCAL_ROOT_DIR}' },
-    'target':   { 'type': 'archive', 'path': 'local-archive.tar.gz' },
-    'filter_glob': '**/*.log',
-    'display_name': 'Local Archive'
-  },
-  {
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
-    'target':   { 'type': 'dir', 'path': 'dir', 'recursive': True },
-    'filter_glob': '**/*.log',
-    'display_name': 'Agent Dir'
-  },
-  {
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
-    'target':   { 'type': 'files', 'paths': ['agent-files.log'] },
-    'display_name': 'Agent Files'
-  },
-  {
-    'endpoint': { 'kind': 'agent', 'agent_id': '${AGENT_ID}', 'subpath': '${AGENT_LOGS_SUBPATH}' },
-    'target':   { 'type': 'archive', 'path': 'agent-archive.tar.gz' },
-    'filter_glob': '**/*.log',
-    'display_name': 'Agent Archive'
-  },
-  {
-    'endpoint': { 'kind': 's3', 'profile': '${PROFILE}', 'bucket': '${BUCKET}' },
-    'target':   { 'type': 'archive', 'path': '${S3_ARCHIVE_KEY}' },
-    'filter_glob': '**/*.log',
-    'display_name': 'S3 Archive'
-  },
+  "orl://local${LOCAL_DIR_SUBDIR}?glob=**/*.log",
+  "orl://local${LOCAL_FILES_FILE}",
+  "orl://local${LOCAL_ARCHIVE_FILE}?glob=**/*.log",
+  "orl://${AGENT_ID}@agent${AGENT_DIR_SUBDIR}?glob=**/*.log",
+  "orl://${AGENT_ID}@agent${AGENT_FILES_FILE}",
+  "orl://${AGENT_ID}@agent${AGENT_ARCHIVE_FILE}?glob=**/*.log",
+  "orl://${PROFILE}@s3/${BUCKET}/${S3_ARCHIVE_KEY}?glob=**/*.log"
 ]
 `;
 
@@ -548,5 +518,40 @@ SOURCES = [
     await expect(page.getByRole('link', { name: 'local-dir.log' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'agent-dir.log' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'archived-s3.log' })).toBeVisible();
+  });
+
+  test('should filter results using path qualifiers across mixed sources', async ({ page }) => {
+    await page.goto('http://127.0.0.1:5173/search');
+    const searchInput = page.getByPlaceholder('搜索...');
+
+    // 1. Filter by specific file pattern (Include) using path:
+    // Both Local and Agent have a file ending in 'dir.log' ('local-dir.log', 'agent-dir.log')
+    // and others do not ('local-files.log', 'agent-files.log').
+    // Query: path:*dir.log
+    await searchInput.fill(`app:${APP} "${MARKER}" path:*dir.log`);
+    await searchInput.press('Enter');
+
+    // Expected: local-dir.log and agent-dir.log.
+    // Total 2 results.
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('2 个结果', { timeout: 15000 });
+    await expect(page.getByRole('link', { name: 'local-dir.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'agent-dir.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'local-files.log' })).toBeHidden();
+    await expect(page.getByRole('link', { name: 'archived-s3.log' })).toBeHidden();
+
+    // 2. Exclude Agent files using -path:
+    // Query: -path:**/*agent*
+    // Filter out any path containing "agent".
+    // Agent files: agent-dir.log, agent-files.log, internal/agent-archived.log
+    // Local files: local-dir.log, local-files.log, internal/local-archived.log
+    // S3: archived-s3.log
+    await searchInput.fill(`app:${APP} "${MARKER}" -path:**/*agent*`);
+    await searchInput.press('Enter');
+
+    // Expected: 7 Total - 3 Agent = 4 Results (3 Local + 1 S3)
+    await expect(page.locator('.text-lg.font-semibold')).toContainText('4 个结果', { timeout: 15000 });
+    await expect(page.getByRole('link', { name: 'local-files.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'archived-s3.log' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'agent-files.log' })).toBeHidden();
   });
 });
