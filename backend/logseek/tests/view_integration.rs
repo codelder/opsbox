@@ -59,6 +59,12 @@ async fn spawn_mock_agent() -> (String, u16) {
             .header("content-type", "image/png")
             .body(Body::from(vec![0x89, 0x50, 0x4E, 0x47])) // Fake PNG header
             .unwrap()
+        } else if params.path == "/var/log/app.log" {
+          // For view_cache_json test, return two lines
+          axum::response::Response::builder()
+            .header("content-type", "text/plain")
+            .body(Body::from("agent line 1\nagent line 2"))
+            .unwrap()
         } else {
           axum::response::Response::builder()
             .header("content-type", "text/plain")
