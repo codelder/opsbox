@@ -43,7 +43,7 @@ jobs:
 
       - name: Install Playwright browsers
         shell: bash
-        run: pnpm --dir web exec playwright install --with-deps chromium
+        run: pnpm --dir web exec playwright install chromium
 
       - name: Run frontend tests
         shell: bash
