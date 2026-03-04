@@ -79,12 +79,12 @@ jobs:
           set -euxo pipefail
           # 安装编译工具链和 musl 工具链
           sudo apt-get update -y
-          sudo apt-get install -y build-essential musl-tools pkg-config
-          
+          sudo apt-get install -y build-essential musl-tools pkg-config libssl-dev
+
           # 设置编译环境
           export CARGO_TARGET_DIR="${PWD}/backend/target-musl"
           export OPENSSL_STATIC=1
-          
+
           # 运行测试（使用 release 模式，与后续构建共享编译产物）
           cargo test \
             --manifest-path backend/Cargo.toml \
