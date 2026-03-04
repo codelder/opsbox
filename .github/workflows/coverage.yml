@@ -41,9 +41,12 @@ jobs:
         run: pnpm --dir web build
 
       - name: Generate coverage report
+        env:
+          OPSBOX_NO_PROXY: "1"
         run: |
           mkdir -p coverage-reports
           cargo tarpaulin \
+            --manifest-path backend/Cargo.toml \
             --out Html \
             --out Xml \
             --out Lcov \
