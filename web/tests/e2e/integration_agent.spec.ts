@@ -255,6 +255,9 @@ test.describe('Agent Integration E2E', () => {
   const TEST_MULTI_GZ_1 = path.join(TEST_LOGS_DIR, 'multi-1.log.gz');
   const TEST_MULTI_GZ_2 = path.join(TEST_LOGS_DIR, 'multi-2.log.gz');
   const TEST_AGENT_LOG_DIR = path.join(TEST_ROOT_DIR, 'agent_runtime_logs');
+  const AGENT_LOG_CONTENT = `2025-01-01 12:00:00 [INFO] agent result ${UNI_ID_AGENT}`;
+  const AGENT_ARCHIVE_LOG_CONTENT = `2025-01-01 12:00:00 [INFO] agent archive result ${UNI_ID_AGENT_ARCHIVE}`;
+  const AGENT_TARGZ_LOG_CONTENT = `2025-01-01 12:00:00 [INFO] agent tar.gz result ${UNI_ID_AGENT_TARGZ}`;
 
   let backendProc: ChildProcessWithoutNullStreams | null = null;
   let webProc: ChildProcessWithoutNullStreams | null = null;
@@ -275,17 +278,17 @@ test.describe('Agent Integration E2E', () => {
 
     fs.mkdirSync(TEST_LOGS_DIR, { recursive: true });
     fs.mkdirSync(TEST_AGENT_LOG_DIR, { recursive: true });
-    fs.writeFileSync(TEST_LOG_FILE, `2025-01-01 12:00:00 [INFO] agent result ${UNI_ID_AGENT}\n`);
+    fs.writeFileSync(TEST_LOG_FILE, `${AGENT_LOG_CONTENT}\n`);
     writeTarFile(TEST_ARCHIVE_FILE, [
       {
         name: 'internal/archived.log',
-        content: `2025-01-01 12:00:00 [INFO] agent archive result ${UNI_ID_AGENT_ARCHIVE}\n`
+        content: `${AGENT_ARCHIVE_LOG_CONTENT}\n`
       }
     ]);
     writeTarGzFile(TEST_TARGZ_FILE, [
       {
         name: 'internal/archived-tgz.log',
-        content: `2025-01-01 12:00:00 [INFO] agent tar.gz result ${UNI_ID_AGENT_TARGZ}\n`
+        content: `${AGENT_TARGZ_LOG_CONTENT}\n`
       }
     ]);
     writeGzFile(TEST_MULTI_GZ_1, `2025-01-01 12:00:00 [INFO] gz 1 ${UNI_ID_AGENT_DIR_MULTI_GZ}\n`);
@@ -471,7 +474,8 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*/*.log"]
 
     await viewPage.waitForURL(/\/view\?/);
     await expect(viewPage.getByRole('heading', { name: 'agent.log' })).toBeVisible({ timeout: 10000 });
-    await expect(viewPage.locator('.code-content').getByText(UNI_ID_AGENT)).toBeVisible({ timeout: 10000 });
+    await expect(viewPage.locator('.code-content')).toContainText(AGENT_LOG_CONTENT, { timeout: 10000 });
+    await expect(viewPage.locator('body')).not.toContainText('暂无内容');
 
     await viewPage.close();
   });
@@ -511,7 +515,8 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*/*.log"]
 
     await viewPage.waitForURL(/\/view\?/);
     await expect(viewPage.getByRole('heading', { name: 'archived.log' })).toBeVisible({ timeout: 10000 });
-    await expect(viewPage.locator('.code-content').getByText(UNI_ID_AGENT_ARCHIVE)).toBeVisible({ timeout: 10000 });
+    await expect(viewPage.locator('.code-content')).toContainText(AGENT_ARCHIVE_LOG_CONTENT, { timeout: 10000 });
+    await expect(viewPage.locator('body')).not.toContainText('暂无内容');
 
     await viewPage.close();
   });
@@ -551,7 +556,8 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*/*.log"]
 
     await viewPage.waitForURL(/\/view\?/);
     await expect(viewPage.getByRole('heading', { name: 'archived-tgz.log' })).toBeVisible({ timeout: 10000 });
-    await expect(viewPage.locator('.code-content').getByText(UNI_ID_AGENT_TARGZ)).toBeVisible({ timeout: 10000 });
+    await expect(viewPage.locator('.code-content')).toContainText(AGENT_TARGZ_LOG_CONTENT, { timeout: 10000 });
+    await expect(viewPage.locator('body')).not.toContainText('暂无内容');
 
     await viewPage.close();
   });

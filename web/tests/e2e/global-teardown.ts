@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { getE2EDatabaseArtifacts } from './e2e-env';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -139,10 +140,27 @@ function cleanupTempDirectories(forceAll = false): { cleaned: number; size: numb
   return { cleaned: cleanedDirs, size: cleanedSize };
 }
 
+function cleanupE2EDatabase(): number {
+  let removed = 0;
+
+  for (const dbPath of getE2EDatabaseArtifacts()) {
+    try {
+      if (!fs.existsSync(dbPath)) continue;
+      fs.rmSync(dbPath, { force: true });
+      removed++;
+      console.log(`[Cleanup] Removed database artifact: ${path.basename(dbPath)}`);
+    } catch (e) {
+      console.error(`[Cleanup] Failed to remove database artifact ${path.basename(dbPath)}:`, (e as Error).message);
+    }
+  }
+
+  return removed;
+}
+
 /**
  * Full cleanup routine - can be called at startup or teardown
  */
-export function performCleanup(forceAll = false): void {
+export function performCleanup(forceAll = false, cleanupDatabase = true): void {
   console.log('\n[Cleanup] Starting...');
 
   // 1. Kill orphaned processes
@@ -151,10 +169,17 @@ export function performCleanup(forceAll = false): void {
   // 2. Clean temp directories
   const { cleaned, size } = cleanupTempDirectories(forceAll);
 
+  // 3. Remove the dedicated e2e database artifacts
+  const removedDbArtifacts = cleanupDatabase ? cleanupE2EDatabase() : 0;
+
   if (cleaned > 0) {
     console.log(`[Cleanup] Cleaned ${cleaned} temp directories, freed ${formatBytes(size)}`);
   } else {
     console.log('[Cleanup] No temp directories to clean');
+  }
+
+  if (removedDbArtifacts > 0) {
+    console.log(`[Cleanup] Removed ${removedDbArtifacts} e2e database artifact(s)`);
   }
 
   console.log('[Cleanup] Completed\n');
@@ -171,11 +196,16 @@ async function globalTeardown() {
 
   // Clean temp directories
   const { cleaned, size } = cleanupTempDirectories(false);
+  const removedDbArtifacts = cleanupE2EDatabase();
 
   if (cleaned > 0) {
     console.log(`[Global Teardown] Cleaned ${cleaned} temp directories, freed ${formatBytes(size)}`);
   } else {
     console.log('[Global Teardown] No temp directories to clean');
+  }
+
+  if (removedDbArtifacts > 0) {
+    console.log(`[Global Teardown] Removed ${removedDbArtifacts} e2e database artifact(s)`);
   }
 
   console.log('[Global Teardown] Completed\n');

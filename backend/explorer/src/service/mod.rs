@@ -11,12 +11,13 @@ use crate::domain::{ResourceItem, ResourceType};
 use opsbox_core::SqlitePool;
 use opsbox_core::dfs::{
   endpoint::{Location, StorageBackend},
-  filesystem::{DirEntry, OpbxFileSystem},
+  filesystem::{DirEntry, MemoryReader, OpbxFileSystem},
   impls::{LocalFileSystem, S3Config, S3Storage},
   orl_parser::OrlParser,
   path::ResourcePath,
   resource::Resource,
 };
+use opsbox_core::fs::normalize_archive_entry_path;
 use opsbox_core::repository::s3::load_s3_profile;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 
@@ -38,7 +39,7 @@ use std::sync::Arc;
 
 // 用于归档文件系统的临时文件处理
 use tempfile;
-use tokio::io::{AsyncRead, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 
 // ORL 的 entry 查询值编码集合：
 // 保留 '/' 以兼容前端整串 ORL 编码流程，避免在 view 链路出现 %252F。
@@ -51,6 +52,17 @@ const ORL_ENTRY_ENCODE_SET: &AsciiSet = &CONTROLS
   .add(b'%')
   .add(b'?')
   .add(b'+');
+
+// ZIP 远端下载优先走内存缓冲，超过阈值再回退临时文件。
+const ZIP_IN_MEMORY_THRESHOLD_BYTES: usize = 800 * 1024 * 1024;
+
+enum ZipArchiveSource {
+  InMemory(Vec<u8>),
+  TempFile {
+    path: PathBuf,
+    file: tempfile::NamedTempFile,
+  },
+}
 
 /// Explorer Service - 使用 DFS 模块进行文件系统操作
 pub struct ExplorerService {
@@ -259,43 +271,160 @@ impl ExplorerService {
 
   /// 下载归档内的文件
   ///
-  /// 参考 ODFS 的实现方式：
-  /// - 本地文件：直接使用文件路径，无需复制
-  /// - 内存数据源（S3）：流式复制到临时文件
-  /// - 远程文件（Agent）：流式复制到临时文件
-  /// - 无大小限制，使用流式处理
+  /// 实现方式：
+  /// - 本地文件：直接使用文件路径，通过 ArchiveFileSystem 读取
+  /// - 远程文件（S3/Agent）：
+  ///   - Tar/TarGz/Gz：流式提取目标 entry
+  ///   - Zip：小文件内存提取，超阈值回退到临时文件（Zip 读取需要 Seek）
   async fn download_archive(
     &self,
     resource: &Resource,
     ctx: &opsbox_core::dfs::archive::ArchiveContext,
   ) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
-    use opsbox_core::dfs::impls::ArchiveFileSystem;
-
     // 获取归档类型
     let archive_type = ctx
       .archive_type
       .ok_or_else(|| "Archive type not specified".to_string())?;
 
     // 根据资源类型选择处理方式
-    let (archive_path, temp_file) = match resource.endpoint.location {
+    match resource.endpoint.location {
       opsbox_core::dfs::endpoint::Location::Local => {
-        // 本地文件：直接使用原始文件路径，无需复制
+        // 本地文件：直接使用原始文件路径，无需流式处理
+        use opsbox_core::dfs::impls::ArchiveFileSystem;
+
         let file_path = resource.primary_path.to_string();
-        (std::path::PathBuf::from(file_path), None)
+        let archive_path = std::path::PathBuf::from(file_path);
+
+        // 获取归档文件的父目录作为 LocalFileSystem 的根
+        let archive_dir = archive_path
+          .parent()
+          .ok_or_else(|| "Failed to get archive parent directory".to_string())?;
+
+        // 创建归档文件系统
+        let local_fs =
+          LocalFileSystem::new(archive_dir.to_path_buf()).map_err(|e| format!("Failed to create local FS: {}", e))?;
+
+        let archive_fs = ArchiveFileSystem::with_path(local_fs, archive_type, archive_path);
+
+        // 使用归档内路径获取元数据和打开文件
+        let meta = archive_fs.metadata(&ctx.inner_path).await.map_err(|e| {
+          let error_str = e.to_string();
+          if error_str.contains("numeric field did not have utf-8") {
+            "无法解析归档文件：文件可能损坏或使用了不兼容的格式".to_string()
+          } else {
+            format!("Failed to get metadata: {}", error_str)
+          }
+        })?;
+
+        let dfs_reader = archive_fs.open_read(&ctx.inner_path).await.map_err(|e| {
+          let error_str = e.to_string();
+          if error_str.contains("numeric field did not have utf-8") {
+            "无法读取归档内文件：文件可能损坏".to_string()
+          } else {
+            format!("Failed to open file: {}", error_str)
+          }
+        })?;
+
+        // 获取文件名
+        let name = ctx
+          .inner_path
+          .segments()
+          .last()
+          .cloned()
+          .unwrap_or_else(|| "download".to_string());
+
+        Ok((name, Some(meta.size), dfs_reader))
       }
       _ => {
-        // 远程文件或内存数据源：需要流式复制到临时文件
+        // 远程文件或内存数据源：优先走流式提取；
+        // ZIP 因需要 Seek，回退到临时文件路径。
+        // 获取远程 reader
+        let base_fs = self.create_fs_for_resource(resource).await?;
+        let reader = base_fs
+          .open_read(&resource.primary_path)
+          .await
+          .map_err(|e| format!("Failed to open archive file: {}", e))?;
+
+        // 归档文件名（用于类型推断提示）
+        let path_str = resource.primary_path.to_string();
+
+        let (size, entry_reader) = self
+          .download_archive_entry_from_reader(
+            reader,
+            Some(&path_str),
+            archive_type,
+            &ctx.inner_path,
+          )
+          .await?;
+
+        // 获取文件名
+        let name = ctx
+          .inner_path
+          .segments()
+          .last()
+          .cloned()
+          .unwrap_or_else(|| "download".to_string());
+
+        Ok((name, size, entry_reader))
+      }
+    }
+  }
+
+  async fn download_archive_entry_from_reader(
+    &self,
+    reader: Pin<Box<dyn AsyncRead + Send + Unpin>>,
+    hint_name: Option<&str>,
+    archive_type: opsbox_core::dfs::archive::ArchiveType,
+    inner_path: &ResourcePath,
+  ) -> Result<(Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
+    use opsbox_core::dfs::archive::ArchiveType;
+
+    if archive_type == ArchiveType::Zip {
+      let source = self
+        .spool_zip_archive(reader, ZIP_IN_MEMORY_THRESHOLD_BYTES)
+        .await?;
+      return match source {
+        ZipArchiveSource::InMemory(data) => self.open_zip_entry_from_memory(data, inner_path).await,
+        ZipArchiveSource::TempFile { path, file } => self.open_zip_entry_from_temp_file(path, file, inner_path).await,
+      };
+    }
+
+    use opsbox_core::fs::extract_archive_entry;
+    let (meta, entry_reader) = extract_archive_entry(
+      reader,
+      hint_name,
+      archive_type,
+      &inner_path.to_string(),
+    )
+    .await
+    .map_err(|e| format!("Failed to extract archive entry: {}", e))?;
+
+    Ok((meta.size, Pin::from(entry_reader)))
+  }
+
+  async fn spool_zip_archive(
+    &self,
+    mut reader: Pin<Box<dyn AsyncRead + Send + Unpin>>,
+    threshold_bytes: usize,
+  ) -> Result<ZipArchiveSource, String> {
+    let mut in_memory = Vec::with_capacity(64 * 1024);
+    let mut chunk = [0u8; 64 * 1024];
+
+    loop {
+      let n = reader
+        .read(&mut chunk)
+        .await
+        .map_err(|e| format!("Failed to read ZIP archive data: {}", e))?;
+      if n == 0 {
+        break;
+      }
+
+      if in_memory.len() + n > threshold_bytes {
         let temp_file_result = tokio::task::spawn_blocking(tempfile::NamedTempFile::new)
           .await
           .map_err(|e| format!("Failed to spawn blocking task: {}", e))?;
         let temp_file = temp_file_result.map_err(|e| format!("Failed to create temp file: {}", e))?;
         let temp_path = temp_file.path().to_path_buf();
-
-        let base_fs = self.create_fs_for_resource(resource).await?;
-        let mut reader = base_fs
-          .open_read(&resource.primary_path)
-          .await
-          .map_err(|e| format!("Failed to open archive file: {}", e))?;
 
         let mut dst = tokio::fs::File::from_std(
           temp_file
@@ -304,64 +433,116 @@ impl ExplorerService {
             .map_err(|e| format!("Failed to clone temp file: {}", e))?,
         );
 
-        // DFS 现在统一使用 tokio::io::AsyncRead，直接使用 tokio::io::copy
+        if !in_memory.is_empty() {
+          dst
+            .write_all(&in_memory)
+            .await
+            .map_err(|e| format!("Failed to write buffered ZIP data to temp file: {}", e))?;
+
+          // 释放内存缓冲，避免在后续 copy 期间占用峰值内存
+          in_memory.clear();
+          in_memory.shrink_to_fit();
+        }
+
+        dst
+          .write_all(&chunk[..n])
+          .await
+          .map_err(|e| format!("Failed to write ZIP chunk to temp file: {}", e))?;
+
         tokio::io::copy(&mut reader, &mut dst)
           .await
-          .map_err(|e| format!("Failed to copy archive data: {}", e))?;
+          .map_err(|e| format!("Failed to copy ZIP archive data: {}", e))?;
 
         dst
           .flush()
           .await
           .map_err(|e| format!("Failed to flush temp file: {}", e))?;
 
-        (temp_path, Some(temp_file))
+        return Ok(ZipArchiveSource::TempFile {
+          path: temp_path,
+          file: temp_file,
+        });
       }
-    };
 
-    // 获取归档文件的父目录作为 LocalFileSystem 的根
-    let archive_dir = archive_path
+      in_memory.extend_from_slice(&chunk[..n]);
+    }
+
+    Ok(ZipArchiveSource::InMemory(in_memory))
+  }
+
+  async fn open_zip_entry_from_memory(
+    &self,
+    archive_data: Vec<u8>,
+    inner_path: &ResourcePath,
+  ) -> Result<(Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
+    use async_zip::base::read::mem::ZipFileReader;
+    use futures_util::io::AsyncReadExt as FuturesAsyncReadExt;
+
+    let zip_reader = ZipFileReader::new(archive_data)
+      .await
+      .map_err(|e| format!("Failed to parse ZIP archive in memory: {}", e))?;
+
+    let target = normalize_archive_entry_path(&inner_path.to_string());
+    let entry_index = zip_reader
+      .file()
+      .entries()
+      .iter()
+      .position(|entry| {
+        entry
+          .filename()
+          .as_str()
+          .ok()
+          .map(normalize_archive_entry_path)
+          .as_deref()
+          == Some(target.as_str())
+      })
+      .ok_or_else(|| format!("Entry '{}' not found in ZIP archive", inner_path))?;
+
+    let size = zip_reader
+      .file()
+      .entries()
+      .get(entry_index)
+      .map(|entry| entry.uncompressed_size());
+
+    let mut entry_reader = zip_reader
+      .reader_with_entry(entry_index)
+      .await
+      .map_err(|e| format!("Failed to create ZIP entry reader from memory: {}", e))?;
+    let mut entry_data = Vec::new();
+    FuturesAsyncReadExt::read_to_end(&mut entry_reader, &mut entry_data)
+      .await
+      .map_err(|e| format!("Failed to read ZIP archive entry from memory: {}", e))?;
+
+    let tokio_reader: Pin<Box<dyn AsyncRead + Send + Unpin>> = Box::pin(MemoryReader::new(entry_data));
+    Ok((size, tokio_reader))
+  }
+
+  async fn open_zip_entry_from_temp_file(
+    &self,
+    temp_path: PathBuf,
+    temp_file: tempfile::NamedTempFile,
+    inner_path: &ResourcePath,
+  ) -> Result<(Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
+    use opsbox_core::dfs::archive::ArchiveType;
+    use opsbox_core::dfs::impls::ArchiveFileSystem;
+
+    let archive_dir = temp_path
       .parent()
       .ok_or_else(|| "Failed to get archive parent directory".to_string())?;
 
-    // 创建归档文件系统
-    let local_fs =
-      LocalFileSystem::new(archive_dir.to_path_buf()).map_err(|e| format!("Failed to create local FS: {}", e))?;
+    let local_fs = LocalFileSystem::new(archive_dir.to_path_buf()).map_err(|e| format!("Failed to create local FS: {}", e))?;
+    let archive_fs = ArchiveFileSystem::with_temp_file(local_fs, ArchiveType::Zip, temp_path, temp_file);
 
-    let archive_fs = if let Some(tf) = temp_file {
-      ArchiveFileSystem::with_temp_file(local_fs, archive_type, archive_path, tf)
-    } else {
-      ArchiveFileSystem::with_path(local_fs, archive_type, archive_path)
-    };
-
-    // 使用归档内路径获取元数据和打开文件
-    let meta = archive_fs.metadata(&ctx.inner_path).await.map_err(|e| {
+    let meta = archive_fs.metadata(inner_path).await.map_err(|e| {
       let error_str = e.to_string();
-      if error_str.contains("numeric field did not have utf-8") {
-        "无法解析归档文件：文件可能损坏或使用了不兼容的格式".to_string()
-      } else {
-        format!("Failed to get metadata: {}", error_str)
-      }
+      format!("Failed to get metadata from ZIP archive: {}", error_str)
+    })?;
+    let dfs_reader = archive_fs.open_read(inner_path).await.map_err(|e| {
+      let error_str = e.to_string();
+      format!("Failed to open ZIP archive entry: {}", error_str)
     })?;
 
-    let dfs_reader = archive_fs.open_read(&ctx.inner_path).await.map_err(|e| {
-      let error_str = e.to_string();
-      if error_str.contains("numeric field did not have utf-8") {
-        "无法读取归档内文件：文件可能损坏".to_string()
-      } else {
-        format!("Failed to open file: {}", error_str)
-      }
-    })?;
-
-    // 获取文件名
-    let name = ctx
-      .inner_path
-      .segments()
-      .last()
-      .cloned()
-      .unwrap_or_else(|| "download".to_string());
-
-    // DFS 现在直接返回 tokio::io::AsyncRead，无需适配器
-    Ok((name, Some(meta.size), dfs_reader))
+    Ok((Some(meta.size), dfs_reader))
   }
 
   /// 自动检测归档类型（基于文件内容 magic bytes）
@@ -737,6 +918,8 @@ impl ExplorerService {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use opsbox_test_common::archive_utils::{ArchiveFormat, ArchiveGenerator};
+  use tokio::io::AsyncReadExt;
 
   #[tokio::test]
   async fn test_explorer_service_list_local_not_found() {
@@ -782,5 +965,111 @@ mod tests {
       .map(|ctx| ctx.inner_path.to_string())
       .unwrap_or_default();
     assert_eq!(parsed_entry, entry_path);
+  }
+
+  #[tokio::test]
+  async fn test_download_archive_entry_from_reader_tar_gz_streaming() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    let mut archive_gen = ArchiveGenerator::new().unwrap();
+    let archive_path = archive_gen.create_tar_gz_archive("remote.tar.gz").await.unwrap();
+    let archive_bytes = tokio::fs::read(&archive_path).await.unwrap();
+
+    let reader: Pin<Box<dyn AsyncRead + Send + Unpin>> = Box::pin(std::io::Cursor::new(archive_bytes));
+    let inner_path = ResourcePath::parse("/logs/app1.log");
+
+    let (size, mut entry_reader) = service
+      .download_archive_entry_from_reader(
+        reader,
+        Some("remote.tar.gz"),
+        opsbox_core::dfs::archive::ArchiveType::TarGz,
+        &inner_path,
+      )
+      .await
+      .unwrap();
+
+    assert!(size.unwrap_or(0) > 0);
+
+    let mut content = String::new();
+    entry_reader.read_to_string(&mut content).await.unwrap();
+    assert!(content.contains("Test error in tar"));
+  }
+
+  #[tokio::test]
+  async fn test_spool_zip_archive_uses_memory_for_small_archive() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    let mut archive_gen = ArchiveGenerator::new().unwrap();
+    let archive_path = archive_gen.create_zip_archive("small.zip").await.unwrap();
+    let archive_bytes = tokio::fs::read(&archive_path).await.unwrap();
+
+    let reader: Pin<Box<dyn AsyncRead + Send + Unpin>> = Box::pin(std::io::Cursor::new(archive_bytes.clone()));
+    let source = service
+      .spool_zip_archive(reader, ZIP_IN_MEMORY_THRESHOLD_BYTES)
+      .await
+      .unwrap();
+
+    match source {
+      ZipArchiveSource::InMemory(data) => assert_eq!(data.len(), archive_bytes.len()),
+      ZipArchiveSource::TempFile { .. } => panic!("Small ZIP should use in-memory buffering"),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_spool_zip_archive_falls_back_to_temp_file_for_large_archive() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    // 用较小阈值验证回退逻辑，避免测试构造超大数据。
+    let test_threshold = 64 * 1024;
+    let mut archive_gen = ArchiveGenerator::new().unwrap();
+    let files = vec![("logs/large.log".to_string(), "x".repeat(test_threshold + 1024))];
+    let archive_path = archive_gen
+      .create_custom_archive("large.zip", files, ArchiveFormat::Zip)
+      .await
+      .unwrap();
+    let archive_bytes = tokio::fs::read(&archive_path).await.unwrap();
+
+    let reader: Pin<Box<dyn AsyncRead + Send + Unpin>> = Box::pin(std::io::Cursor::new(archive_bytes));
+    let source = service
+      .spool_zip_archive(reader, test_threshold)
+      .await
+      .unwrap();
+
+    match source {
+      ZipArchiveSource::TempFile { path, file: _ } => assert!(path.exists(), "Temp file path should exist"),
+      ZipArchiveSource::InMemory(_) => panic!("Large ZIP should fall back to temp file"),
+    }
+  }
+
+  #[tokio::test]
+  async fn test_download_archive_entry_from_reader_zip() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let service = ExplorerService::new(pool);
+
+    let mut archive_gen = ArchiveGenerator::new().unwrap();
+    let archive_path = archive_gen.create_zip_archive("remote.zip").await.unwrap();
+    let archive_bytes = tokio::fs::read(&archive_path).await.unwrap();
+
+    let reader: Pin<Box<dyn AsyncRead + Send + Unpin>> = Box::pin(std::io::Cursor::new(archive_bytes));
+    let inner_path = ResourcePath::parse("/logs/app1.log");
+
+    let (size, mut entry_reader) = service
+      .download_archive_entry_from_reader(
+        reader,
+        Some("remote.zip"),
+        opsbox_core::dfs::archive::ArchiveType::Zip,
+        &inner_path,
+      )
+      .await
+      .unwrap();
+
+    assert!(size.unwrap_or(0) > 0);
+
+    let mut content = String::new();
+    entry_reader.read_to_string(&mut content).await.unwrap();
+    assert!(content.contains("Test error in zip"));
   }
 }

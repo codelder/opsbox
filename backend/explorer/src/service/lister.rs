@@ -65,11 +65,6 @@ impl ResourceLister {
     }
   }
 
-  /// 使用自定义配置创建实例
-  pub fn with_config(config: ListerConfig) -> Self {
-    Self { config }
-  }
-
   /// 列出本地目录内容
   ///
   /// # Arguments
@@ -289,11 +284,6 @@ impl ResourceLister {
     infer_archive_from_path(&path.to_string_lossy())
   }
 
-  /// 从路径字符串检测归档类型
-  pub fn detect_archive_type_from_path(&self, path: &str) -> Option<ArchiveType> {
-    infer_archive_from_path(path)
-  }
-
   /// 将 DirEntry 映射为 LocalEntry
   fn map_to_local_entry(&self, entry: DirEntry) -> LocalEntry {
     let mime_type = if self.config.mime_detection && !entry.metadata.is_dir {
@@ -446,75 +436,6 @@ impl ResourceLister {
 
     // 转换为 LocalEntry
     Ok(entries.into_iter().map(|e| self.map_to_local_entry(e)).collect())
-  }
-
-  /// 下载归档内文件（使用已有的 reader）
-  pub async fn download_archive_entry_from_reader(
-    &self,
-    mut reader: Pin<Box<dyn AsyncRead + Send + Unpin>>,
-    entry_path: &str,
-    archive_type: ArchiveType,
-  ) -> Result<(String, Option<u64>, Pin<Box<dyn AsyncRead + Send + Unpin>>), String> {
-    // 创建临时文件
-    let temp_file = tokio::task::spawn_blocking(tempfile::NamedTempFile::new)
-      .await
-      .map_err(|e| format!("Failed to spawn blocking task: {}", e))?
-      .map_err(|e| format!("Failed to create temp file: {}", e))?;
-
-    let temp_path = temp_file.path().to_path_buf();
-
-    // 将 reader 内容写入临时文件
-    let mut dst = tokio::fs::File::from_std(
-      temp_file
-        .as_file()
-        .try_clone()
-        .map_err(|e| format!("Failed to clone temp file: {}", e))?,
-    );
-
-    tokio::io::copy(&mut reader, &mut dst)
-      .await
-      .map_err(|e| format!("Failed to copy archive data: {}", e))?;
-
-    dst
-      .flush()
-      .await
-      .map_err(|e| format!("Failed to flush temp file: {}", e))?;
-
-    // 获取归档文件的父目录作为 LocalFileSystem 的根
-    let archive_dir = temp_path
-      .parent()
-      .ok_or_else(|| "Failed to get archive parent directory".to_string())?;
-
-    // 创建本地文件系统
-    let local_fs =
-      LocalFileSystem::new(archive_dir.to_path_buf()).map_err(|e| format!("Failed to create local FS: {}", e))?;
-
-    // 创建归档文件系统（使用临时文件）
-    let archive_fs = ArchiveFileSystem::with_temp_file(local_fs, archive_type, temp_path, temp_file);
-
-    // 解析归档内路径
-    let entry_resource_path = ResourcePath::parse(entry_path);
-
-    // 获取元数据
-    let meta = archive_fs
-      .metadata(&entry_resource_path)
-      .await
-      .map_err(|e| format!("Failed to get metadata: {}", e))?;
-
-    // 打开文件
-    let dfs_reader = archive_fs
-      .open_read(&entry_resource_path)
-      .await
-      .map_err(|e| format!("Failed to open file: {}", e))?;
-
-    // 获取文件名
-    let name = entry_resource_path
-      .segments()
-      .last()
-      .cloned()
-      .unwrap_or_else(|| "download".to_string());
-
-    Ok((name, Some(meta.size), dfs_reader))
   }
 }
 

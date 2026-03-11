@@ -6,7 +6,7 @@ use crate::api::{LogSeekApiError, models::ViewParams};
 use crate::repository::{RepositoryError, cache::cache as simple_cache};
 use crate::service::ServiceError;
 use crate::service::encoding::read_text_file;
-use crate::service::entry_stream::create_entry_stream;
+use crate::service::entry_stream::create_search_entry_stream_from_resource;
 use axum::{
   body::Body,
   extract::{Query, State},
@@ -130,8 +130,8 @@ pub async fn view_cache_json(
           }
         }
         _ => {
-          // Local/S3 来源：使用 create_entry_stream
-          let mut stream = create_entry_stream(&pool, &params.file)
+          // Local/S3 来源：archive entry 必须走 archive-aware 流，否则会把 .gz/.tar 等当普通文件处理。
+          let mut stream = create_search_entry_stream_from_resource(&pool, &resource)
             .await
             .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
@@ -404,16 +404,30 @@ pub async fn view_raw_file(
     }
     _ => {
       // Local / S3
-      let mut stream = create_entry_stream(&pool, &params.file)
+      let mut stream = create_search_entry_stream_from_resource(&pool, &resource)
         .await
         .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("创建流失败: {}", e))))?;
 
-      // 读取第一个条目
-      if let Some((meta, reader)) = stream
+      let target_entry = resource.archive_context.as_ref().map(|ctx| ctx.inner_path.to_string());
+      let mut selected: Option<(opsbox_core::fs::EntryMeta, Box<dyn tokio::io::AsyncRead + Send + Unpin>)> = None;
+
+      while let Some((meta, reader)) = stream
         .next_entry()
         .await
         .map_err(|e| LogSeekApiError::Service(ServiceError::ProcessingError(format!("读取流失败: {}", e))))?
       {
+        if let Some(ref target) = target_entry {
+          let meta_path = meta.path.trim_start_matches('/').trim_start_matches("./");
+          let target_path = target.trim_start_matches('/').trim_start_matches("./");
+          if meta_path != target_path {
+            continue;
+          }
+        }
+        selected = Some((meta, reader));
+        break;
+      }
+
+      if let Some((meta, reader)) = selected {
         // 头部嗅探 MIME 类型
         let mut buf_reader = tokio::io::BufReader::new(reader);
         let mut head = vec![0u8; 1024]; // 1KB 样本
@@ -466,9 +480,35 @@ mod tests {
   use crate::repository::cache::cache as simple_cache;
   use axum::extract::Query;
   use axum::http::StatusCode;
+  use flate2::{Compression, write::GzEncoder};
+  use std::io::Write;
+  use tar::{Builder, Header};
 
   /// 测试中的响应体最大读取大小（1MB）
   const TEST_MAX_BODY_SIZE: usize = 1024 * 1024;
+
+  fn create_test_gzip_file(file_path: &std::path::Path, content: &str) {
+    let file = std::fs::File::create(file_path).unwrap();
+    let mut encoder = GzEncoder::new(file, Compression::default());
+    encoder.write_all(content.as_bytes()).unwrap();
+    encoder.finish().unwrap();
+  }
+
+  fn create_test_tar_gz_file(file_path: &std::path::Path, entry_name: &str, content: &str) {
+    let file = std::fs::File::create(file_path).unwrap();
+    let encoder = GzEncoder::new(file, Compression::default());
+    let mut builder = Builder::new(encoder);
+
+    let mut header = Header::new_gnu();
+    header.set_path(entry_name).unwrap();
+    header.set_size(content.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    builder.append(&header, content.as_bytes()).unwrap();
+
+    let encoder = builder.into_inner().unwrap();
+    encoder.finish().unwrap();
+  }
 
   #[tokio::test]
   async fn test_view_cache_json_hit() {
@@ -620,5 +660,147 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(&body_bytes[..8], &png_header);
+  }
+
+  #[tokio::test]
+  async fn test_view_cache_json_local_gzip_entry() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let gzip_path = temp_dir.path().join("sample.log.gz");
+    let original_content = "gzip line 1\ngzip line 2\n";
+    create_test_gzip_file(&gzip_path, original_content);
+
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let sid = "test-sid-gzip-entry".to_string();
+    let file_url = format!(
+      "orl://local{}?entry=/sample.log",
+      gzip_path.to_str().unwrap()
+    );
+
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file_url.clone(),
+      start: None,
+      end: None,
+    };
+
+    let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["lines"][0]["text"], "gzip line 1");
+    assert_eq!(json["lines"][1]["text"], "gzip line 2");
+
+    let cached = simple_cache().get_lines_slice(&sid, &file_url, 1, 10).await;
+    assert!(cached.is_some());
+    assert_eq!(cached.unwrap().0, 2);
+  }
+
+  #[tokio::test]
+  async fn test_view_raw_file_local_gzip_entry() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let gzip_path = temp_dir.path().join("sample.log.gz");
+    let original_content = "gzip raw line 1\ngzip raw line 2\n";
+    create_test_gzip_file(&gzip_path, original_content);
+
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let file_url = format!(
+      "orl://local{}?entry=/sample.log",
+      gzip_path.to_str().unwrap()
+    );
+
+    let params = ViewParams {
+      sid: "test-sid-gzip-raw".into(),
+      file: file_url,
+      start: None,
+      end: None,
+    };
+
+    let resp = view_raw_file(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain");
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let content = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(content, original_content);
+  }
+
+  #[tokio::test]
+  async fn test_view_cache_json_local_tar_gz_entry() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("sample.tar.gz");
+    let entry_name = "internal/app.log";
+    let original_content = "tar.gz line 1\ntar.gz line 2\n";
+    create_test_tar_gz_file(&archive_path, entry_name, original_content);
+
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let sid = "test-sid-targz-entry".to_string();
+    let file_url = format!(
+      "orl://local{}?entry={}",
+      archive_path.to_str().unwrap(),
+      entry_name
+    );
+
+    let params = ViewParams {
+      sid: sid.clone(),
+      file: file_url.clone(),
+      start: None,
+      end: None,
+    };
+
+    let resp = view_cache_json(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["lines"][0]["text"], "tar.gz line 1");
+    assert_eq!(json["lines"][1]["text"], "tar.gz line 2");
+
+    let cached = simple_cache().get_lines_slice(&sid, &file_url, 1, 10).await;
+    assert!(cached.is_some());
+    assert_eq!(cached.unwrap().0, 2);
+  }
+
+  #[tokio::test]
+  async fn test_view_raw_file_local_tar_gz_entry() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let archive_path = temp_dir.path().join("sample.tar.gz");
+    let entry_name = "internal/app.log";
+    let original_content = "tar.gz raw line 1\ntar.gz raw line 2\n";
+    create_test_tar_gz_file(&archive_path, entry_name, original_content);
+
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    let file_url = format!(
+      "orl://local{}?entry={}",
+      archive_path.to_str().unwrap(),
+      entry_name
+    );
+
+    let params = ViewParams {
+      sid: "test-sid-targz-raw".into(),
+      file: file_url,
+      start: None,
+      end: None,
+    };
+
+    let resp = view_raw_file(State(pool), Query(params)).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.headers().get(CONTENT_TYPE).unwrap(), "text/plain");
+
+    let body_bytes = axum::body::to_bytes(resp.into_body(), TEST_MAX_BODY_SIZE)
+      .await
+      .unwrap();
+    let content = String::from_utf8(body_bytes.to_vec()).unwrap();
+    assert_eq!(content, original_content);
   }
 }

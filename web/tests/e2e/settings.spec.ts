@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Settings Page E2E', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/settings');
-    await page.waitForLoadState('networkidle');
+    await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
   });
 
   test.describe('Page Layout', () => {
@@ -225,10 +225,11 @@ test.describe('Settings Page E2E', () => {
 
       if (count > 0) {
         await settingsButton.first().click();
-        await page.waitForLoadState('networkidle');
+        await page.waitForURL(/\/settings(?:\?|$)/);
 
         // 应该导航到设置页面
         expect(page.url()).toContain('/settings');
+        await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
       }
     });
   });

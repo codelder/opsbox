@@ -523,23 +523,4 @@ impl AgentRepository {
     let values = rows.into_iter().map(|row| row.get::<String, _>("tag_value")).collect();
     Ok(values)
   }
-
-  /// 清理离线 Agent（超过心跳超时时间）
-  pub async fn cleanup_offline_agents(&self, heartbeat_timeout: i64) -> Result<usize, sqlx::Error> {
-    let cutoff_time = Utc::now().timestamp() - heartbeat_timeout;
-
-    let result = sqlx::query(
-      r#"
-            UPDATE agents 
-            SET status = 'Offline', updated_at = ?
-            WHERE last_heartbeat < ? AND status = 'Online'
-            "#,
-    )
-    .bind(Utc::now().timestamp())
-    .bind(cutoff_time)
-    .execute(&self.pool)
-    .await?;
-
-    Ok(result.rows_affected() as usize)
-  }
 }

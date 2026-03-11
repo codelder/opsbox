@@ -42,6 +42,8 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   const MARKER_TAR = `E2E_ARCHIVE_TAR_${RUN_ID}`;
   const MARKER_TARGZ = `E2E_ARCHIVE_TARGZ_${RUN_ID}`;
+  const TAR_ROOT_LOG_CONTENT = `2025-01-01 10:00:00 [INFO] root log ${MARKER_TAR}`;
+  const TARGZ_SERVICE_LOG_CONTENT = `2025-01-01 11:01:00 [INFO] service log ${MARKER_TARGZ}`;
 
   let agentProc: ChildProcessWithoutNullStreams | null = null;
   let agentPort: number | null = null;
@@ -56,14 +58,14 @@ test.describe('Agent Archive Explorer E2E', () => {
 
     // Create tar archive with nested directory
     writeTarFile(path.join(TEST_LOGS_DIR, 'test.tar'), [
-      { name: 'root.log', content: `2025-01-01 10:00:00 [INFO] root log ${MARKER_TAR}\n` },
+      { name: 'root.log', content: `${TAR_ROOT_LOG_CONTENT}\n` },
       { name: 'subdir/nested.log', content: `2025-01-01 10:01:00 [INFO] nested log ${MARKER_TAR}\n` }
     ]);
 
     // Create tar.gz archive with nested directory
     writeTarGzFile(path.join(TEST_LOGS_DIR, 'test.tar.gz'), [
       { name: 'app.log', content: `2025-01-01 11:00:00 [INFO] app log ${MARKER_TARGZ}\n` },
-      { name: 'internal/service.log', content: `2025-01-01 11:01:00 [INFO] service log ${MARKER_TARGZ}\n` }
+      { name: 'internal/service.log', content: `${TARGZ_SERVICE_LOG_CONTENT}\n` }
     ]);
 
     // Create tgz archive (same format as tar.gz)
@@ -255,12 +257,15 @@ test.describe('Agent Archive Explorer E2E', () => {
     } else {
       // Alternative: double-click to view, then check if content is accessible
       await page.keyboard.press('Escape'); // Close context menu
-      await page.getByRole('button', { name: 'root.log', exact: true }).dblclick();
-      await page.waitForLoadState('networkidle');
-
-      // Should navigate to view page or show file content
-      // At minimum, verify no error occurred
-      await expect(page.locator('body')).not.toContainText(/500|404|Error|错误/i);
+      const [viewPage] = await Promise.all([
+        page.waitForEvent('popup'),
+        page.getByRole('button', { name: 'root.log', exact: true }).dblclick()
+      ]);
+      await viewPage.waitForURL(/\/view\?/);
+      await expect(viewPage.getByRole('heading', { name: 'root.log' })).toBeVisible({ timeout: 10000 });
+      await expect(viewPage.locator('.code-content')).toContainText(TAR_ROOT_LOG_CONTENT, { timeout: 10000 });
+      await expect(viewPage.locator('body')).not.toContainText('暂无内容');
+      await viewPage.close();
     }
   });
 
@@ -274,13 +279,15 @@ test.describe('Agent Archive Explorer E2E', () => {
     await expect(page.getByText('service.log')).toBeVisible({ timeout: 5000 });
 
     // Double-click to view (use exact match for file button)
-    await page.getByRole('button', { name: 'service.log', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-
-    // Should navigate to view page or show content without error
-    // Note: The behavior might differ - could go to view page or stay on explorer
-    // The key is that no error should occur
-    await expect(page.locator('body')).not.toContainText(/500|404|Error|错误/i);
+    const [viewPage] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.getByRole('button', { name: 'service.log', exact: true }).dblclick()
+    ]);
+    await viewPage.waitForURL(/\/view\?/);
+    await expect(viewPage.getByRole('heading', { name: 'service.log' })).toBeVisible({ timeout: 10000 });
+    await expect(viewPage.locator('.code-content')).toContainText(TARGZ_SERVICE_LOG_CONTENT, { timeout: 10000 });
+    await expect(viewPage.locator('body')).not.toContainText('暂无内容');
+    await viewPage.close();
   });
 
   test('should support zip archive on agent (if available)', async ({ page }) => {
@@ -319,11 +326,9 @@ test.describe('Agent Archive Explorer E2E', () => {
     // Verify page loads without the "缺少 sid 参数" error
     await expect(page.locator('body')).not.toContainText('缺少 sid 参数');
 
-    // The view page should either show file content or an appropriate message
-    // Since we're viewing an archive entry from an agent, it should work if backend supports it
-    const bodyText = (await page.locator('body').textContent()) || '';
-    const hasNoFatalError = !bodyText.includes('500') && !bodyText.includes('404');
-    expect(hasNoFatalError).toBeTruthy();
+    await expect(page.getByRole('heading', { name: 'service.log' })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.code-content')).toContainText(TARGZ_SERVICE_LOG_CONTENT, { timeout: 10000 });
+    await expect(page.locator('body')).not.toContainText('暂无内容');
   });
 
   test('should navigate up from archive entry to archive root', async ({ page }) => {

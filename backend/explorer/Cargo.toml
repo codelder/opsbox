@@ -33,6 +33,7 @@ inventory = "0.3"
 async-trait = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
 futures-util = "0.3"
+async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
 percent-encoding = "2.3.2"
 tempfile = "3"
 
@@ -43,4 +44,3 @@ opsbox-test-common = { path = "../test-common" }
 tar = "0.4"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 flate2 = "1.0"
-

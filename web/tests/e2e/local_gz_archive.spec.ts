@@ -15,6 +15,10 @@ test.describe('Local Gzip Archive E2E', () => {
 
   const RUN_ID = Date.now();
   const TEST_ROOT_DIR = path.join(__dirname, `temp_gz_${RUN_ID}`);
+  const ORIGINAL_LOG_CONTENT =
+    '2024-01-01 12:00:00 [INFO] Application started\n' +
+    '2024-01-01 12:01:00 [DEBUG] Processing request\n' +
+    '2024-01-01 12:02:00 [INFO] Request completed\n';
 
   test.beforeAll(async () => {
     test.setTimeout(60000);
@@ -23,10 +27,7 @@ test.describe('Local Gzip Archive E2E', () => {
 
     // Create a test log file
     const testLogFile = path.join(TEST_ROOT_DIR, 'app_tranTime.log');
-    fs.writeFileSync(
-      testLogFile,
-      '2024-01-01 12:00:00 [INFO] Application started\n2024-01-01 12:01:00 [DEBUG] Processing request\n2024-01-01 12:02:00 [INFO] Request completed\n'
-    );
+    fs.writeFileSync(testLogFile, ORIGINAL_LOG_CONTENT);
 
     // Create a gzip compressed version using system gzip command
     const gzFile = path.join(TEST_ROOT_DIR, 'app_tranTime.log.gz');
@@ -265,13 +266,15 @@ test.describe('Local Gzip Archive E2E', () => {
     expect(fileParam).toContain('%3Fentry%3D%2F');
     expect(fileParam).not.toContain('%3Fentry%3D%252F');
 
-    // Verify the page shows file content, not an error message
+    // Verify the page shows the same content as the original uncompressed file.
     const pageText = (await newPage.locator('body').textContent()) || '';
     console.log(`Page content preview: ${pageText.substring(0, 500)}`);
+    const originalLines = ORIGINAL_LOG_CONTENT.trim().split('\n');
 
-    // The page should contain our test log content
-    // Note: The exact format depends on how the view page displays content
     expect(pageText).toBeDefined();
+    for (const line of originalLines) {
+      await expect(newPage.locator('body')).toContainText(line);
+    }
 
     // Check that we don't have the double-encoding error message
     expect(pageText).not.toContain('未找到条目或流为空');

@@ -158,6 +158,71 @@ fn format_error_source_display(resource: &Resource) -> String {
   }
 }
 
+/// 查询限定词解析结果
+#[derive(Debug, Clone)]
+pub struct QueryQualifiers {
+  /// 应用标识（来自 app:xxx）
+  pub app: Option<String>,
+  /// 编码（来自 encoding:xxx）
+  pub encoding: Option<String>,
+  /// 路径包含过滤（来自 path:xxx）
+  pub path_includes: Vec<String>,
+  /// 路径排除过滤（来自 -path:xxx）
+  pub path_excludes: Vec<String>,
+  /// 移除限定词后的查询文本
+  pub cleaned_query: String,
+}
+
+/// 解析查询中的限定词
+///
+/// 从查询字符串中提取 app:、encoding:、path:、-path: 限定词，
+/// 返回解析结果和清理后的查询文本。
+///
+/// 这个函数被搜索入口和脚本测试接口共用，确保行为一致。
+pub fn parse_query_qualifiers(query: &str) -> QueryQualifiers {
+  let mut app: Option<String> = None;
+  let mut encoding: Option<String> = None;
+  let mut path_includes: Vec<String> = Vec::new();
+  let mut path_excludes: Vec<String> = Vec::new();
+  let mut tokens: Vec<&str> = Vec::new();
+
+  for t in query.split_whitespace() {
+    if let Some(rest) = t.strip_prefix("app:")
+      && !rest.is_empty()
+    {
+      app = Some(rest.to_string());
+      continue;
+    }
+    if let Some(rest) = t.strip_prefix("encoding:")
+      && !rest.is_empty()
+    {
+      encoding = Some(rest.to_string());
+      continue;
+    }
+    if let Some(rest) = t.strip_prefix("path:")
+      && !rest.is_empty()
+    {
+      path_includes.push(rest.to_string());
+      continue;
+    }
+    if let Some(rest) = t.strip_prefix("-path:")
+      && !rest.is_empty()
+    {
+      path_excludes.push(rest.to_string());
+      continue;
+    }
+    tokens.push(t);
+  }
+
+  QueryQualifiers {
+    app,
+    encoding,
+    path_includes,
+    path_excludes,
+    cleaned_query: tokens.join(" "),
+  }
+}
+
 #[derive(Clone)]
 pub struct SearchExecutor {
   pool: SqlitePool,
@@ -177,50 +242,17 @@ impl SearchExecutor {
 
   /// 规划搜索
   pub async fn plan(&self, query: &str, context_lines: usize) -> Result<(Vec<Resource>, SearchRequest), ServiceError> {
-    let mut app: Option<String> = None;
-    let mut encoding: Option<String> = None;
-    let mut path_includes: Vec<String> = Vec::new();
-    let mut path_excludes: Vec<String> = Vec::new();
-    let mut tokens: Vec<&str> = Vec::new();
+    let qualifiers = parse_query_qualifiers(query);
 
-    for t in query.split_whitespace() {
-      if let Some(rest) = t.strip_prefix("app:")
-        && !rest.is_empty()
-      {
-        app = Some(rest.to_string());
-        continue;
-      }
-      if let Some(rest) = t.strip_prefix("encoding:")
-        && !rest.is_empty()
-      {
-        encoding = Some(rest.to_string());
-        continue;
-      }
-      if let Some(rest) = t.strip_prefix("path:")
-        && !rest.is_empty()
-      {
-        path_includes.push(rest.to_string());
-        continue;
-      }
-      if let Some(rest) = t.strip_prefix("-path:")
-        && !rest.is_empty()
-      {
-        path_excludes.push(rest.to_string());
-        continue;
-      }
-      tokens.push(t);
-    }
-    let cleaned_before_plan = tokens.join(" ");
-
-    let plan = source_planner::plan_with_starlark(&self.pool, app.as_deref(), &cleaned_before_plan)
+    let plan = source_planner::plan_with_starlark(&self.pool, qualifiers.app.as_deref(), &qualifiers.cleaned_query)
       .await
       .map_err(|e| ServiceError::ProcessingError(format!("规划器执行失败: {}", e)))?;
 
     let request = SearchRequest {
       query: plan.cleaned_query,
-      encoding,
-      path_includes,
-      path_excludes,
+      encoding: qualifiers.encoding,
+      path_includes: qualifiers.path_includes,
+      path_excludes: qualifiers.path_excludes,
       context_lines,
     };
 

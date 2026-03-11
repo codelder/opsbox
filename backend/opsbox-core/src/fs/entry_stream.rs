@@ -617,7 +617,7 @@ pub struct PrefixedReader<R> {
   inner: R,
 }
 
-fn normalize_archive_entry_path(s: &str) -> String {
+pub fn normalize_archive_entry_path(s: &str) -> String {
   let mut t = s;
   // 去掉前导的 '/' 或 './'
   loop {
@@ -660,6 +660,69 @@ impl<R: AsyncRead + Unpin> AsyncRead for PrefixedReader<R> {
     }
     std::pin::Pin::new(&mut me.inner).poll_read(cx, buf)
   }
+}
+
+/// 从归档流中提取指定 entry（流式处理，无需临时文件）
+///
+/// 复用 `open_archive_typed` 的流式归档处理逻辑，
+/// 遍历条目流，找到目标 entry 后返回其 reader。
+///
+/// # Arguments
+/// * `reader` - 归档数据流（AsyncRead）
+/// * `hint_name` - 归档文件名（用于类型检测）
+/// * `archive_type` - 已知的归档类型
+/// * `target_entry_path` - 目标 entry 路径
+///
+/// # Returns
+/// * `Ok((EntryMeta, Box<dyn AsyncRead + Send + Unpin>))` - 找到的 entry 元数据和 reader
+/// * `Err(String)` - 未找到或读取失败
+///
+/// # Example
+/// ```ignore
+/// let reader = s3_storage.open_read(&path).await?;
+/// let (meta, entry_reader) = extract_archive_entry(
+///   reader,
+///   Some("archive.tar.gz"),
+///   ArchiveType::TarGz,
+///   "logs/app.log"
+/// ).await?;
+/// ```
+pub async fn extract_archive_entry<R: AsyncRead + Send + Unpin + 'static>(
+  reader: R,
+  hint_name: Option<&str>,
+  archive_type: ArchiveType,
+  target_entry_path: &str,
+) -> Result<(EntryMeta, Box<dyn AsyncRead + Send + Unpin>), String> {
+  // 使用 open_archive_typed 打开归档流（复用流式处理逻辑）
+  let mut stream = open_archive_typed(reader, hint_name, archive_type).await?;
+
+  // 标准化目标路径（去除前导 ./ 和 /）
+  let target = normalize_archive_entry_path(target_entry_path);
+
+  trace!(
+    "extract_archive_entry: 开始流式遍历归档，查找目标 entry: {}",
+    target
+  );
+
+  // 遍历条目流，查找目标 entry
+  while let Some((meta, entry_reader)) = stream
+    .next_entry()
+    .await
+    .map_err(|e| format!("读取归档条目失败: {}", e))?
+  {
+    let current = normalize_archive_entry_path(&meta.path);
+
+    trace!("extract_archive_entry: 检查条目 {} (目标: {})", current, target);
+
+    if current == target {
+      trace!("extract_archive_entry: 找到目标 entry: {}", meta.path);
+      return Ok((meta, entry_reader));
+    }
+
+    // 未匹配的条目，继续遍历（entry_reader 会被自动 drop）
+  }
+
+  Err(format!("Entry '{}' not found in archive", target_entry_path))
 }
 
 #[cfg(test)]

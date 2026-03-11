@@ -46,7 +46,7 @@ pub struct PlannerGetResponse {
 pub struct PlannerTestPayload {
   /// 业务标识（app:xxx）
   pub app: String,
-  /// 完整查询 q（包含可选 app:/dt:/fdt:/tdt: 等）
+  /// 完整查询 q（可选包含 encoding:/path:/-path:/dt:/fdt:/tdt: 等限定词，会被预处理剥离）
   pub q: String,
   /// 可选的脚本内容（用于测试未保存的脚本）
   #[serde(default)]
@@ -55,7 +55,7 @@ pub struct PlannerTestPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlannerTestResponse {
-  /// 清理后的查询（移除了 app:/dt:/fdt:/tdt: 等）
+  /// 清理后的查询（移除了 app:/encoding:/path:/-path: 等限定词；dt:/fdt:/tdt: 由 planner 处理）
   pub cleaned_query: String,
   /// 规划出的来源列表（ORL 字符串）
   pub sources: Vec<String>,
@@ -128,6 +128,11 @@ pub async fn get_readme_md() -> Result<Response<Body>, LogSeekApiError> {
 
 /// 测试脚本：输入完整 q，返回清理后的查询与来源列表
 /// 如果提供了 script 参数，使用该脚本内容进行测试（用于测试未保存的脚本）
+///
+/// 查询预处理与搜索入口保持一致：
+/// - app 由表单字段指定，查询中的 app: 限定词会被剥离
+/// - encoding:/path:/-path: 限定词会被剥离（不传给 planner）
+/// - dt:/fdt:/tdt: 限定词由 planner 内部处理
 pub async fn test_script(
   State(pool): State<SqlitePool>,
   Json(body): Json<PlannerTestPayload>,
@@ -137,14 +142,23 @@ pub async fn test_script(
       "app 不能为空".to_string(),
     )));
   }
+
+  // 使用与搜索入口相同的查询预处理逻辑
+  let qualifiers = crate::service::search_executor::parse_query_qualifiers(&body.q);
+
   // 使用内部实现，支持传入脚本内容
   let plan = if let Some(script_content) = &body.script {
     // 使用传入的脚本内容进行测试
-    crate::domain::source_planner::plan_with_starlark_with_script(&pool, Some(&body.app), &body.q, Some(script_content))
-      .await?
+    crate::domain::source_planner::plan_with_starlark_with_script(
+      &pool,
+      Some(&body.app), // 使用表单字段指定的 app，不使用查询中的 app:
+      &qualifiers.cleaned_query,
+      Some(script_content),
+    )
+    .await?
   } else {
     // 使用已保存的脚本
-    crate::domain::source_planner::plan_with_starlark(&pool, Some(&body.app), &body.q).await?
+    crate::domain::source_planner::plan_with_starlark(&pool, Some(&body.app), &qualifiers.cleaned_query).await?
   };
 
   // 将 Resource 转换为 ORL 字符串

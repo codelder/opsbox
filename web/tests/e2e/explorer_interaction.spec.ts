@@ -25,13 +25,14 @@ test.describe('Explorer Interaction E2E', () => {
   const TEST_DIR = path.join(__dirname, `temp_explorer_interaction_${RUN_ID}`);
   const LOGS_DIR = path.join(TEST_DIR, 'logs');
   const NESTED_DIR = path.join(LOGS_DIR, 'nested');
+  const APP_LOG_CONTENT = 'Application log content';
 
   test.beforeAll(async () => {
     // 创建测试目录结构
     fs.mkdirSync(NESTED_DIR, { recursive: true });
 
     // 创建文件
-    fs.writeFileSync(path.join(LOGS_DIR, 'app.log'), 'Application log content\n');
+    fs.writeFileSync(path.join(LOGS_DIR, 'app.log'), `${APP_LOG_CONTENT}\n`);
     fs.writeFileSync(path.join(LOGS_DIR, 'error.log'), 'Error log content\n');
     fs.writeFileSync(path.join(NESTED_DIR, 'nested.log'), 'Nested log content\n');
     fs.writeFileSync(path.join(TEST_DIR, '.hidden_file'), 'Hidden file content\n');
@@ -175,6 +176,9 @@ test.describe('Explorer Interaction E2E', () => {
 
     // 验证新页面 URL
     await expect(newPage).toHaveURL(/\/view\?/);
+    await expect(newPage.getByRole('heading', { name: 'app.log' })).toBeVisible({ timeout: 10000 });
+    await expect(newPage.locator('.code-content')).toContainText(APP_LOG_CONTENT, { timeout: 10000 });
+    await expect(newPage.locator('body')).not.toContainText('暂无内容');
   });
 
   test('should navigate back using back button', async ({ page }) => {

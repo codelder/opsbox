@@ -1774,6 +1774,7 @@ version = "0.1.1"
 dependencies = [
  "agent-manager",
  "async-trait",
+ "async_zip",
  "axum",
  "flate2",
  "futures-util",

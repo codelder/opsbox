@@ -9,18 +9,25 @@ use crate::{
 
 /// 通过 Starlark 脚本调度的存储源规划运行时
 ///
-/// 约定：
-/// - 按 app 名称加载脚本：优先 $HOME/.opsbox/planners/<app>.star；不存在则回退到内置资源 backend/logseek/src/planners/<app>.star
-/// - 运行前注入以下全局变量（脚本可直接使用）：
-///   - CLEANED_QUERY: str （移除了 dt:/fdt:/tdt: 的查询）
-///   - DATE_RANGE: dict {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
-///   - TODAY: "YYYY-MM-DD"（北京时区）
-///   - DATES: list[dict]，按日期范围展开的每日对象，每项 {"iso": "YYYY-MM-DD", "yyyymmdd": "YYYYMMDD", "next_yyyymmdd": "YYYYMMDD"}
-///   - AGENTS: list[dict]，每项 {"id": str, "tags": dict[str,str]}
-///   - S3_PROFILES: list[dict]（非敏感字段），每项 {"profile_name": str, "endpoint": str, "bucket": str}
-/// - 脚本需导出：
-///   - SOURCES: list[dict]  每项为 Source 形状的字典（endpoint+target 新结构）
-///   - 可选 CLEANED_QUERY: str 若未覆盖，则沿用全局 CLEANED_QUERY
+/// ## 脚本加载顺序
+/// 1. 传入的脚本内容（用于测试）
+/// 2. 数据库（通过 UI/API 保存的脚本）
+/// 3. 用户目录 `$HOME/.opsbox/planners/<app>.star`
+/// 4. 找不到则报错
+///
+/// ## 运行时注入变量（只读）
+/// - CLEANED_QUERY: str （移除了 dt:/fdt:/tdt:/app:/encoding:/path: 等指令的查询）
+/// - TODAY: str "YYYY-MM-DD"（北京时区）
+/// - DATE_RANGE: dict {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
+/// - DATES: list[dict]，按日期范围展开的每日对象，每项 {"iso": "YYYY-MM-DD", "yyyymmdd": "YYYYMMDD", "next_yyyymmdd": "YYYYMMDD"}
+/// - AGENTS: list[dict]，当前在线的 Agent（心跳 90 秒内），每项 {"id": str, "tags": dict[str,str]}
+/// - S3_PROFILES: list[dict]（非敏感字段），每项 {"profile_name": str, "endpoint": str}
+///   - 注意：不包含 bucket 字段，bucket 需要在 ORL 中指定
+///
+/// ## 脚本输出要求
+/// - SOURCES: list[str] ORL 字符串列表（不是字典）
+/// - 可选 CLEANED_QUERY: str 若未覆盖，则沿用全局 CLEANED_QUERY
+/// - 可选：使用 print() 输出调试日志，会收集到 PlanResult.debug_logs
 pub async fn plan_with_starlark(
   pool: &SqlitePool,
   app: Option<&str>,

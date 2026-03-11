@@ -1,10 +1,14 @@
 /// <reference types="node" />
 import { defineConfig, devices } from '@playwright/test';
 import { fileURLToPath } from 'url';
+import { E2E_DATABASE_PATH, getE2EDatabaseArtifacts } from './tests/e2e/e2e-env';
 
 // Resolve global setup/teardown paths for ESM
 const globalSetupPath = fileURLToPath(new URL('./tests/e2e/global-setup.ts', import.meta.url));
 const globalTeardownPath = fileURLToPath(new URL('./tests/e2e/global-teardown.ts', import.meta.url));
+const e2eDbCleanupCommand = getE2EDatabaseArtifacts()
+  .map((dbPath) => `rm -f ${JSON.stringify(dbPath)}`)
+  .join(' && ');
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -44,7 +48,7 @@ export default defineConfig({
       }
     },
     {
-      command: 'sh -c "cd ../backend && cargo run --release -p opsbox-server -- --port 4001"',
+      command: `sh -c '${e2eDbCleanupCommand} && cd ../backend && cargo run --release -p opsbox-server -- --port 4001'`,
       url: 'http://127.0.0.1:4001/healthy',
       reuseExistingServer: !process.env.CI && process.env.PW_REUSE_SERVER === '1',
       stdout: 'pipe',
@@ -52,7 +56,8 @@ export default defineConfig({
       env: {
         // 让 e2e 时能看到 500 的根因（尤其是 panic/backtrace）
         RUST_LOG: process.env.RUST_LOG ?? 'info',
-        RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1'
+        RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1',
+        OPSBOX_DATABASE_URL: E2E_DATABASE_PATH
       },
       timeout: process.env.CI ? 300000 : 120000 // CI 环境需要更长时间编译
     }

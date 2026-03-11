@@ -358,57 +358,6 @@ impl EntryStreamProcessor {
   }
 }
 
-/// 通用条目流处理函数（支持基于回调的结果处理）
-///
-/// 提供统一的条目流处理方式，可被 Server 和 Agent 复用，避免重复实现核心处理逻辑。
-/// 事件通过回调函数返回，调用方可灵活处理（发送到 channel、生成消息等）。
-pub async fn process_entry_stream_with_callback<F>(
-  stream: Box<dyn EntryStream>,
-  processor: Arc<SearchProcessor>,
-  extra_path_filter: Option<PathFilter>,
-  cancel_token: Option<std::sync::Arc<tokio_util::sync::CancellationToken>>,
-  mut result_callback: F,
-) -> Result<(usize, usize), String>
-where
-  F: FnMut(SearchEvent) -> bool + Send,
-{
-  // 创建条目流处理器
-  let mut stream_processor = EntryStreamProcessor::new(processor);
-  if let Some(filter) = extra_path_filter {
-    stream_processor = stream_processor.with_extra_path_filter(filter);
-  }
-  if let Some(token) = cancel_token {
-    stream_processor = stream_processor.with_cancel_token(token);
-  }
-
-  // 创建结果通道
-  let (tx, mut rx) = tokio::sync::mpsc::channel(128);
-
-  // 后台条目流处理任务
-  let handle = tokio::spawn(async move {
-    let mut stream = stream;
-    let _ = stream_processor.process_stream(&mut *stream, tx).await;
-  });
-
-  let mut processed_count = 0;
-  let mut matched_count = 0;
-
-  // 收集结果并调用回调
-  while let Some(result) = rx.recv().await {
-    processed_count += 1;
-
-    // 回调返回 false 则停止处理
-    if !result_callback(result) {
-      break;
-    }
-
-    matched_count += 1;
-  }
-
-  let _ = handle.await;
-  Ok((processed_count, matched_count))
-}
-
 /// 从 Resource 创建条目流（DFS 版本）
 ///
 /// 根据 Resource 的 endpoint 类型创建对应的条目流：

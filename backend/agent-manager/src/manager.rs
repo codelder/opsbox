@@ -276,16 +276,6 @@ impl AgentManager {
       .map_err(|e| tracing::error!("获取所有标签失败: {}", e))
       .unwrap_or_default()
   }
-
-  /// 清理离线 Agent
-  pub async fn cleanup_offline_agents(&self) -> usize {
-    self
-      .repository
-      .cleanup_offline_agents(self.heartbeat_timeout)
-      .await
-      .map_err(|e| tracing::error!("清理离线 Agent 失败: {}", e))
-      .unwrap_or(0)
-  }
 }
 
 #[cfg(test)]
