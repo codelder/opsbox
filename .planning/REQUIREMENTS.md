@@ -7,10 +7,11 @@
 
 ### 阶段 1: 止血 — 生产稳定性
 
-- [ ] **SAFE-01**: 搜索核心路径 (search_executor.rs, search.rs) 中所有 `.unwrap()` 替换为适当的错误处理
+<!-- SAFE-01 已取消：研究发现搜索路径生产代码已 panic-safe，175+82 个 unwrap 都在测试代码中 -->
+
 - [ ] **SAFE-02**: HTTP handler 中的 `mutex.lock().unwrap()` 修复，防止 mutex 中毒导致 DoS
 - [ ] **SAFE-03**: 边界测试 (boundary_integration.rs) 中 5 个 stub 测试实现真实断言
-- [ ] **SAFE-04**: S3 集成测试 (s3_integration.rs) 跳过的测试实现或移除
+- [ ] **SAFE-04**: S3 集成测试 (s3_integration.rs) 跳过的测试实现（使用 mock）
 
 ### 阶段 2: 结构改进
 
@@ -53,7 +54,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SAFE-01 | Phase 1 | Pending |
+| ~~SAFE-01~~ | ~~Phase 1~~ | **Cancelled** — search path already panic-safe |
 | SAFE-02 | Phase 1 | Pending |
 | SAFE-03 | Phase 1 | Pending |
 | SAFE-04 | Phase 1 | Pending |
@@ -70,8 +71,8 @@
 | FE-04 | Phase 4 | Pending |
 
 **Coverage:**
-- v1 requirements: 15 total
-- Mapped to phases: 15
+- v1 requirements: 14 total (1 cancelled after research)
+- Mapped to phases: 14
 - Unmapped: 0 ✓
 
 ---

@@ -1,30 +1,17 @@
 # Phase 1 Context: Production Stability (止血)
 
-**Phase Goal:** 消除搜索路径 panic 点，修复 mutex 中毒 DoS 风险
+**Phase Goal:** 修复 mutex 中毒 DoS 风险，实现真实集成测试断言
 
 **Decided:** 2026-03-13
 
-## Unwrap 替换策略
+## 研究发现：SAFE-01 已取消
 
-### 分类规则
+研究确认：搜索路径生产代码（search_executor.rs 1-384 行，search.rs 1-861 行）**已经是 panic-safe 的**。175 + 82 个 unwrap 全部在 `#[cfg(test)]` 测试代码中，这是 Rust 惯用写法。
 
-| 类型 | 处理方式 | 示例 |
-|------|----------|------|
-| 不可失败 | `expect("infallible: reason")` | `vec.first().expect("infallible: search results non-empty")` |
-| 有默认值 | `warn!` + `unwrap_or_default()` | `config.parse().unwrap_or_else(\|e\| { warn!(...); default })` |
-| 错误路径 | `?` 传播 | IO 失败、通道关闭、锁获取失败 |
-
-### 优先级
-
-1. `search_executor.rs` (175 个) — 核心搜索路径，最高优先级
-2. `search.rs` (82 个) — 核心搜索路径
-3. 其他文件暂不处理（Phase 1 只覆盖搜索路径）
-
-### 禁止事项
-
-- 不能用 `.expect("unwrap")` — 必须有描述性消息
-- 不能在循环内 `.expect()` — 应该用 `?` 或 `continue`
-- 不能静默吞掉错误 — 至少 `warn!` 日志
+Phase 1 聚焦于：
+- SAFE-02: mutex 中毒修复（**真实风险**）
+- SAFE-03: 边界测试实现
+- SAFE-04: S3 测试实现
 
 ## Mutex 恢复模式
 
@@ -84,11 +71,11 @@
 
 ### 关键文件
 
-- `backend/logseek/src/service/search_executor.rs` — 175 个 unwrap，2942 行（60% 测试）
-- `backend/logseek/src/service/search.rs` — 82 个 unwrap，2152 行（87% 测试）
-- `backend/agent/src/routes.rs` — HTTP handler mutex 中毒风险
+- `backend/agent/src/routes.rs` — HTTP handler mutex 中毒风险（lines 108, 137）
+- `backend/opsbox-server/src/network.rs` — ENV_MUTEX（**不在 Phase 1 范围**）
 - `backend/logseek/tests/boundary_integration.rs` — 5 个 stub 测试
 - `backend/logseek/tests/s3_integration.rs` — 跳过的 S3 测试
+- `backend/test-common/` — Mock 基础设施（MockS3Server, TestFileGenerator, TestDatabase）
 
 ### 现有模式
 
@@ -114,7 +101,6 @@
 
 Phase 1 完成时必须满足：
 
-1. search_executor.rs 和 search.rs 生产代码路径零 unwrap
-2. HTTP handler mutex 操作可从中毒恢复
-3. 5 个边界测试有真实断言
-4. S3 测试有真实断言或被移除并记录
+1. HTTP handler mutex 使用 `tokio::sync::Mutex`（异步）或 `parking_lot::Mutex`（同步）— 不会发生中毒级联
+2. 5 个边界测试有真实断言（编码、路径遍历、并发、权限、大文件）
+3. S3 测试使用 MockS3Server 实现真实断言

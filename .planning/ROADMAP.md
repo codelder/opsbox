@@ -2,7 +2,7 @@
 
 ## Overview
 
-OpsBox is a modular log search platform built on Rust and SvelteKit. The platform works but has accumulated technical debt: 175 `.unwrap()` calls in the core search path can panic and crash searches, 20 `.lock().unwrap()` calls in HTTP handlers can cause mutex poisoning cascades, and the frontend has only 14.85% test coverage. This roadmap systematically addresses production stability, structural quality, performance, and frontend coverage across 4 phases.
+OpsBox is a modular log search platform built on Rust and SvelteKit. The platform works but has accumulated technical debt: 20 `.lock().unwrap()` calls in HTTP handlers can cause mutex poisoning cascades, 5 stub integration tests with no assertions, and the frontend has only 14.85% test coverage. This roadmap systematically addresses production stability, structural quality, performance, and frontend coverage across 4 phases.
 
 ## Phases
 
@@ -14,21 +14,20 @@ OpsBox is a modular log search platform built on Rust and SvelteKit. The platfor
 ## Phase Details
 
 ### Phase 1: Production Stability (止血)
-**Goal**: Eliminate panic points that can crash searches and cause DoS via mutex poisoning
+**Goal**: Fix mutex poisoning DoS risk and implement real integration test assertions
 **Depends on**: Nothing (first phase)
-**Requirements**: SAFE-01, SAFE-02, SAFE-03, SAFE-04
+**Requirements**: SAFE-02, SAFE-03, SAFE-04
+**Note**: SAFE-01 (unwrap cleanup) cancelled after research -- search path production code is already panic-safe. 175+82 unwrap counts were in test code only.
 **Success Criteria** (what must be TRUE):
-  1. Search path (search_executor.rs, search.rs) executes with zero `.unwrap()` in production code paths -- searches never panic
-  2. HTTP handler mutex operations recover from poisoning instead of cascading failures -- agent and logseek endpoints stay available after a panic
-  3. Boundary integration tests (boundary_integration.rs) have real assertions for encoding, path traversal, concurrency, permissions, and large files -- security gaps are actually tested
-  4. S3 integration tests are either implemented with real assertions or removed and tracked as a coverage gap -- no false coverage signals
-**Plans**: 4 plans
+  1. HTTP handler mutex operations use `tokio::sync::Mutex` (async) or `parking_lot::Mutex` (sync) -- no poisoning cascade possible
+  2. Boundary integration tests (boundary_integration.rs) have real assertions for encoding, path traversal, concurrency, permissions, and large files -- security gaps are actually tested
+  3. S3 integration tests implemented with mock server and real assertions -- no false coverage signals
+**Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: Categorize and replace all `.unwrap()` in search_executor.rs and search.rs (175 + 82 occurrences)
-- [ ] 01-02: Fix mutex poisoning in HTTP handlers across agent and server modules
-- [ ] 01-03: Implement 5 stub tests in boundary_integration.rs with real assertions
-- [ ] 01-04: Implement or remove skipped S3 API endpoint test
+- [ ] 01-01: Fix mutex poisoning in HTTP handlers (tokio::sync::Mutex + parking_lot::Mutex)
+- [ ] 01-02: Implement 5 stub tests in boundary_integration.rs with real assertions
+- [ ] 01-03: Implement S3 API endpoint test with MockS3Server
 
 ### Phase 2: Structural Improvement (结构改进)
 **Goal**: Reduce oversized files by extracting inline tests and migrate S3 cache to lock-free concurrent access
@@ -83,7 +82,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Production Stability | 0/4 | Not started | - |
+| 1. Production Stability | 0/3 | Not started | - |
 | 2. Structural Improvement | 0/3 | Not started | - |
 | 3. Performance Optimization | 0/4 | Not started | - |
 | 4. Frontend Coverage | 0/4 | Not started | - |
