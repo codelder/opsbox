@@ -82,4 +82,5 @@ network-tests = []
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
 opsbox-test-common = { path = "../test-common" }
