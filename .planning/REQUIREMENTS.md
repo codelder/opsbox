@@ -11,7 +11,7 @@
 
 - [ ] **SAFE-02**: HTTP handler 中的 `mutex.lock().unwrap()` 修复，防止 mutex 中毒导致 DoS
 - [ ] **SAFE-03**: 边界测试 (boundary_integration.rs) 中 5 个 stub 测试实现真实断言
-- [ ] **SAFE-04**: S3 集成测试 (s3_integration.rs) 跳过的测试实现（使用 mock）
+- [x] **SAFE-04**: S3 集成测试 (s3_integration.rs) 跳过的测试实现（使用 mock）
 
 ### 阶段 2: 结构改进
 
