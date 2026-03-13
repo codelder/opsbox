@@ -6,7 +6,8 @@ use clap::{Parser, Subcommand};
 use logseek::agent::{AgentInfo, AgentStatus};
 use opsbox_core::logging::ReloadHandle;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// LogSeek Agent - 远程搜索代理
 #[derive(Parser, Debug, Clone)]

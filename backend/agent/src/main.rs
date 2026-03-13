@@ -112,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             None
           })
           .unwrap_or_else(|| "info".to_string());
-        *config.current_log_level.lock().unwrap() = level;
+        *config.current_log_level.try_lock().expect("mutex should be available during init") = level;
       }
       info!("日志系统初始化成功");
     }

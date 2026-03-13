@@ -105,7 +105,7 @@ pub async fn handle_cancel(State(_state): State<AppState>, Path(task_id): Path<S
 
 /// 获取日志配置
 pub async fn get_log_config(State(state): State<AppState>) -> Result<Json<LogConfigResponse>> {
-  let current_level = state.config.current_log_level.lock().unwrap().clone();
+  let current_level = state.config.current_log_level.lock().await.clone();
   let response = LogConfigResponse {
     level: current_level,
     retention_count: state.config.log_retention,
@@ -134,7 +134,7 @@ pub async fn update_log_level(
     .map_err(|e| AppError::internal(format!("重载失败: {}", e)))?;
 
   // 更新保存的当前日志级别
-  *state.config.current_log_level.lock().unwrap() = req.level.clone();
+  *state.config.current_log_level.lock().await = req.level.clone();
 
   info!("日志级别已更新为: {}", level);
 
@@ -322,7 +322,8 @@ mod tests {
   use axum::http::{Request, StatusCode};
   use axum::response::Response;
   use std::path::PathBuf;
-  use std::sync::{Arc, Mutex};
+  use std::sync::Arc;
+  use tokio::sync::Mutex;
   use tower::ServiceExt;
 
   fn create_test_config(roots: Vec<String>) -> Arc<AgentConfig> {

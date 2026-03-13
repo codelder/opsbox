@@ -50,6 +50,9 @@ urlencoding = "2"
 # 路径匹配
 mime_guess = "2.0.5"
 
+# 同步上下文的互斥锁
+parking_lot = "0.12"
+
 # 守护进程支持（仅 Unix）
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"

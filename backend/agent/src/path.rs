@@ -248,7 +248,8 @@ mod tests {
   #[test]
   fn test_resolve_target_paths_dir_with_subdir() {
     use crate::config::AgentConfig;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     // 测试 Target::Dir { path: "subdir" } 场景
     // 验证 resolve_target_paths 返回的是完整的解析后路径
@@ -334,7 +335,8 @@ mod tests {
   #[test]
   fn test_resolve_target_paths_files() {
     use crate::config::AgentConfig;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     // 测试 Target::Files 场景
     let temp_dir = tempfile::tempdir().unwrap();

@@ -65,7 +65,7 @@ fn create_test_config(log_dir: std::path::PathBuf, log_retention: usize) -> Arc<
     log_dir: log_dir.clone(),
     log_retention,
     reload_handle: Some(reload_handle.clone()),
-    current_log_level: StdArc::new(std::sync::Mutex::new("info".to_string())),
+    current_log_level: StdArc::new(tokio::sync::Mutex::new("info".to_string())),
   })
 }
 

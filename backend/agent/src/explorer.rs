@@ -184,7 +184,7 @@ impl AgentExplorer {
 mod tests {
   use super::*;
   use std::path::PathBuf;
-  use std::sync::Mutex;
+  use tokio::sync::Mutex;
 
   fn create_test_config(roots: Vec<String>) -> Arc<AgentConfig> {
     Arc::new(AgentConfig {

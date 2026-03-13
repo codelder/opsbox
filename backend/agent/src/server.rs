@@ -185,7 +185,7 @@ mod tests {
       log_dir: std::path::PathBuf::from("/tmp"),
       log_retention: 7,
       reload_handle: None,
-      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
+      current_log_level: Arc::new(tokio::sync::Mutex::new("info".to_string())),
     };
 
     // 3. 执行注册
@@ -226,7 +226,7 @@ mod tests {
       log_dir: std::path::PathBuf::from("/tmp"),
       log_retention: 7,
       reload_handle: None,
-      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
+      current_log_level: Arc::new(tokio::sync::Mutex::new("info".to_string())),
     };
 
     let result = register_to_server(&config).await;
@@ -247,7 +247,7 @@ mod tests {
       log_dir: std::path::PathBuf::from("/tmp"),
       log_retention: 7,
       reload_handle: None,
-      current_log_level: Arc::new(std::sync::Mutex::new("info".to_string())),
+      current_log_level: Arc::new(tokio::sync::Mutex::new("info".to_string())),
     });
 
     let shutdown = Arc::new(Notify::new());
