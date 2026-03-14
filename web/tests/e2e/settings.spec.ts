@@ -155,19 +155,34 @@ test.describe('Settings Page E2E', () => {
 
   test.describe('Theme Toggle', () => {
     test('should toggle between light and dark theme', async ({ page }) => {
-      const themeButton = page.getByRole('button', { name: /theme|主题|toggle/i });
-      const themeCount = await themeButton.count();
+      const themeButton = page.getByRole('button', { name: /toggle/i });
+      await themeButton.waitFor({ state: 'visible', timeout: 5000 });
 
-      if (themeCount > 0) {
-        // 记录初始主题
-        // 点击切换主题
-        await themeButton.first().click();
-        await page.waitForTimeout(300);
+      // 记录初始状态
+      const initialClass = (await page.locator('html').getAttribute('class')) || '';
+      const initialBg = await page.locator('html').evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
+      );
 
-        // 验证主题类存在
-        const newClass = (await page.locator('html').getAttribute('class')) || '';
-        expect(newClass).toBeDefined();
-      }
+      // 切换到深色模式
+      await themeButton.click();
+      await page.waitForTimeout(300);
+      const darkClass = (await page.locator('html').getAttribute('class')) || '';
+      const darkBg = await page.locator('html').evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
+      );
+      expect(darkClass).toContain('dark');
+      expect(darkBg).not.toBe(initialBg);
+
+      // 切换回浅色模式
+      await themeButton.click();
+      await page.waitForTimeout(300);
+      const finalClass = (await page.locator('html').getAttribute('class')) || '';
+      const finalBg = await page.locator('html').evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
+      );
+      expect(finalClass).not.toContain('dark');
+      expect(finalBg).toBe(initialBg);
     });
   });
 
@@ -199,13 +214,10 @@ test.describe('Settings Page E2E', () => {
       await page.goto('/');
       await page.waitForLoadState('networkidle');
 
-      // 查找设置按钮
+      // 查找设置按钮并直接验证
       const settingsButton = page.getByRole('button', { name: /打开设置|settings/i });
-      const count = await settingsButton.count();
-
-      if (count > 0) {
-        await expect(settingsButton.first()).toBeVisible();
-      }
+      await settingsButton.waitFor({ state: 'visible', timeout: 5000 });
+      await expect(settingsButton).toBeVisible();
     });
 
     test('should navigate to settings page', async ({ page }) => {
@@ -214,16 +226,13 @@ test.describe('Settings Page E2E', () => {
 
       // 点击设置按钮
       const settingsButton = page.getByRole('button', { name: /打开设置|settings/i });
-      const count = await settingsButton.count();
+      await settingsButton.waitFor({ state: 'visible', timeout: 5000 });
+      await settingsButton.click();
+      await page.waitForURL(/\/settings(?:\?|$)/);
 
-      if (count > 0) {
-        await settingsButton.first().click();
-        await page.waitForURL(/\/settings(?:\?|$)/);
-
-        // 应该导航到设置页面
-        expect(page.url()).toContain('/settings');
-        await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
-      }
+      // 应该导航到设置页面
+      expect(page.url()).toContain('/settings');
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
     });
   });
 });
