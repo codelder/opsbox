@@ -86,14 +86,17 @@
 **需求**: LOAD-01, LOAD-02, LOAD-03
 
 **任务**:
-1. 添加搜索加载 spinner 验证
-2. 添加骨架屏到内容过渡测试
-3. 添加 Explorer 加载状态测试
+1. [x] 添加搜索加载 spinner 验证 (LOAD-01)
+2. [x] 添加 spinner-to-content 过渡测试 (LOAD-02)
+3. [x] 添加 Explorer 加载状态测试 (LOAD-03)
 
 **成功标准**:
-- [ ] 3 个加载状态测试通过
-- [ ] spinner/skeleton 可见性验证
-- [ ] 加载完成后的状态验证
+- [x] 3 个加载状态测试通过
+- [x] spinner 可见性验证 via waitForFunction
+- [x] 加载完成后的状态验证
+
+**状态**: 完成 (2026-03-14)
+**提交**: `311b7e3`
 
 ---
 
