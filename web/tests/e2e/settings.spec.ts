@@ -20,140 +20,136 @@ test.describe('Settings Page E2E', () => {
 
   test.describe('Page Layout', () => {
     test('should display settings page with navigation tabs', async ({ page }) => {
-      // 验证页面加载
-      await expect(page.locator('body')).toBeVisible();
+      // 验证页面标题可见
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
 
-      // 验证有设置相关内容
-      const pageContent = (await page.locator('body').textContent()) || '';
-      // 页面应该有内容
-      expect(pageContent.length).toBeGreaterThan(0);
+      // 验证所有 5 个导航 Tab 可见
+      await expect(page.getByRole('tab', { name: '对象存储' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'Agent' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: '规划脚本' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: '大模型' })).toBeVisible();
+      await expect(page.getByRole('tab', { name: 'Server 日志' })).toBeVisible();
     });
 
     test('should have theme toggle button', async ({ page }) => {
       const themeButton = page.getByRole('button', { name: /theme|主题|toggle/i });
-      const themeCount = await themeButton.count();
-
-      if (themeCount > 0) {
-        await expect(themeButton.first()).toBeVisible();
-      }
+      await expect(themeButton.first()).toBeVisible();
     });
   });
 
   test.describe('Planner Management (Real API)', () => {
     test('should display planner management section', async ({ page }) => {
-      // 等待页面加载完成
-      await page.waitForLoadState('networkidle');
-
-      // 检查 planner 相关内容是否存在
-      const bodyText = (await page.locator('body').textContent()) || '';
-      // 页面应该正常加载
-      expect(bodyText.length).toBeGreaterThan(0);
+      // 点击规划脚本 Tab 后验证内容
+      await page.getByRole('tab', { name: '规划脚本' }).click();
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+      await expect(page.getByText('规划脚本').first()).toBeVisible();
     });
 
     test('should load existing planner scripts', async ({ page }) => {
-      // 刷新页面
       await page.reload();
-      await page.waitForLoadState('networkidle');
-
-      // 页面应该正常显示
-      await expect(page.locator('body')).toBeVisible();
+      // 点击规划脚本 Tab 后验证内容
+      await page.getByRole('tab', { name: '规划脚本' }).click();
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+      await expect(page.getByText('规划脚本').first()).toBeVisible();
     });
   });
 
   test.describe('LLM Management (Mock)', () => {
     // LLM 需要外部服务，使用 mock
     test('should display LLM backend configuration', async ({ page }) => {
-      // 拦截 LLM API
+      // 拦截 LLM API - 返回正确的响应结构 { backends: [...], default: null }
       await page.route('**/settings/llm/backends**', async (route) => {
         await route.fulfill({
           status: 200,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify([
-            {
-              name: 'ollama-local',
-              provider: 'ollama',
-              base_url: 'http://127.0.0.1:11434',
-              model: 'qwen3:8b',
-              timeout_secs: 60
-            }
-          ])
+          body: JSON.stringify({
+            backends: [
+              {
+                name: 'ollama-local',
+                provider: 'ollama',
+                base_url: 'http://127.0.0.1:11434',
+                model: 'qwen3:8b',
+                timeout_secs: 60
+              }
+            ],
+            default: null
+          })
         });
       });
 
       await page.reload();
-      await page.waitForLoadState('networkidle');
 
-      // 页面应该正常显示
-      await expect(page.locator('body')).toBeVisible();
+      // 点击大模型 Tab 后验证 mock 数据渲染
+      await page.getByRole('tab', { name: '大模型' }).click();
+      await expect(page.getByText('ollama-local')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByText('qwen3:8b')).toBeVisible();
+      // 验证恰好有一个 LLM 后端条目
+      await expect(page.locator('span.font-semibold', { hasText: 'ollama-local' })).toHaveCount(1);
     });
   });
 
   test.describe('S3 Profile Management (Mock)', () => {
     // S3 需要外部服务，使用 mock
     test('should display S3 profile configuration', async ({ page }) => {
-      // 拦截 S3 Profile API
-      await page.route('**/profiles**', async (route) => {
+      // 拦截 S3 Profile API - 后端返回 { profiles: [...] } 格式
+      await page.route('**/api/v1/logseek/profiles', async (route) => {
         await route.fulfill({
           status: 200,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify([
-            {
-              profile_name: 'minio-local',
-              endpoint: 'http://127.0.0.1:9000',
-              access_key: 'minioadmin'
-            }
-          ])
+          body: JSON.stringify({
+            profiles: [
+              {
+                profile_name: 'minio-local',
+                endpoint: 'http://127.0.0.1:9000',
+                access_key: 'minioadmin',
+                secret_key: ''
+              }
+            ]
+          })
         });
       });
 
       await page.reload();
-      await page.waitForLoadState('networkidle');
 
-      // 页面应该正常显示
-      await expect(page.locator('body')).toBeVisible();
+      // 默认 Tab 为对象存储，直接验证 mock 数据渲染
+      await expect(page.getByText('minio-local')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByText('http://127.0.0.1:9000')).toBeVisible();
+      // 验证恰好有一个 S3 Profile 条目
+      await expect(page.locator('span.font-semibold', { hasText: 'minio-local' })).toHaveCount(1);
     });
   });
 
   test.describe('Agent Management (Real API)', () => {
     test('should display agent list from real API', async ({ page }) => {
-      // 等待 API 响应
-      await page.waitForLoadState('networkidle');
-
-      // 页面应该正常显示
-      await expect(page.locator('body')).toBeVisible();
-
-      // 检查是否有 Agent 相关内容
-      const bodyText = (await page.locator('body').textContent()) || '';
-      // 页面应该有内容
-      expect(bodyText.length).toBeGreaterThan(0);
+      // 点击 Agent Tab 后验证内容
+      await page.getByRole('tab', { name: 'Agent' }).click();
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+      await expect(page.getByText('已注册 Agent')).toBeVisible();
     });
 
     test('should handle empty agent list gracefully', async ({ page }) => {
-      // 刷新页面
       await page.reload();
-      await page.waitForLoadState('networkidle');
-
-      // 页面应该正常显示（即使没有 Agent）
-      await expect(page.locator('body')).toBeVisible();
+      // 点击 Agent Tab 后验证内容
+      await page.getByRole('tab', { name: 'Agent' }).click();
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+      await expect(page.getByText('已注册 Agent')).toBeVisible();
     });
   });
 
   test.describe('Server Log Settings (Real API)', () => {
     test('should display log settings section', async ({ page }) => {
-      // 等待页面加载
-      await page.waitForLoadState('networkidle');
-
-      // 检查页面正常
-      await expect(page.locator('body')).toBeVisible();
+      // 点击 Server 日志 Tab 后验证内容
+      await page.getByRole('tab', { name: 'Server 日志' }).click();
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+      await expect(page.getByText('Server 日志设置')).toBeVisible();
     });
 
     test('should load current log configuration', async ({ page }) => {
-      // 刷新页面
       await page.reload();
-      await page.waitForLoadState('networkidle');
-
-      // 页面应该正常显示
-      await expect(page.locator('body')).toBeVisible();
+      // 点击 Server 日志 Tab 后验证内容
+      await page.getByRole('tab', { name: 'Server 日志' }).click();
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+      await expect(page.getByText('Server 日志设置')).toBeVisible();
     });
   });
 
@@ -186,18 +182,15 @@ test.describe('Settings Page E2E', () => {
       );
 
       await page.reload();
-      await page.waitForLoadState('networkidle');
 
-      // 页面应该仍然显示，不应该崩溃
-      await expect(page.locator('body')).toBeVisible();
+      // 页面应该仍然显示标题和 Tab 结构
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+      await expect(page.getByRole('tab').first()).toBeVisible();
     });
 
     test('should show loading state', async ({ page }) => {
-      // 直接导航到设置页面
-      await page.goto('/settings');
-
-      // 页面应该正常加载
-      await expect(page.locator('body')).toBeVisible();
+      // 页面已在 beforeEach 中导航，直接验证加载结果
+      await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
     });
   });
 
