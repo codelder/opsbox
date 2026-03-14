@@ -1,128 +1,34 @@
-# E2E 测试断言收紧 - 路线图
+# Roadmap: OpsBox E2E 测试断言收紧
 
-## Phase 1: 收紧 `settings.spec.ts` 断言
+## Milestones
 
-**目标**: 替换所有 `body` 可见性检查为具体 UI 元素验证
+- ✅ **v1.0 E2E 测试断言收紧** — Phases 1-6 (shipped 2026-03-14)
 
-**需求**: ASSERT-01
+## Phases
 
-**任务**:
-1. 识别所有 `body` 可见性断言（10处）
-2. 替换为具体 heading/form/list 断言
-3. 添加 mock 数据渲染验证
-4. 验证主题切换 class 变化
+<details>
+<summary>✅ v1.0 E2E 测试断言收紧 (Phases 1-6) — SHIPPED 2026-03-14</summary>
 
-**成功标准**:
-- [ ] 零处 `body` 可见性检查
-- [ ] 所有设置页面 section 有具体元素断言
-- [ ] mock 数据渲染验证通过
+- [x] Phase 1: 收紧 settings.spec.ts 断言 (1/1 plan) — completed 2026-03-14
+- [x] Phase 2: 收紧 search.spec.ts 和 search_ux.spec.ts (1/1 plan) — completed 2026-03-14
+- [x] Phase 3: 收紧 integration_explorer.spec.ts (1/1 plan) — completed 2026-03-14
+- [x] Phase 4: 添加错误处理测试 (1/1 plan) — completed 2026-03-14
+- [x] Phase 5: 添加加载状态测试 (1/1 plan) — completed 2026-03-14
+- [x] Phase 6: 添加边界情况和无障碍测试 (1/1 plan) — completed 2026-03-14
 
----
+</details>
 
-## Phase 2: 收紧 `search.spec.ts` 和 `search_ux.spec.ts` 断言
+## Progress
 
-**目标**: 修复正则匹配，移除条件跳过
-
-**需求**: ASSERT-02, ASSERT-03
-
-**任务**:
-1. `search.spec.ts`: 替换 `\d+` 正则为具体数字或空状态验证
-2. `search.spec.ts`: 空状态测试改为 `toContainText('0 个结果')`
-3. `search_ux.spec.ts`: 移除 `if (count > 0)` 嵌套条件
-4. `search_ux.spec.ts`: 添加高亮文本和文件路径验证
-
-**成功标准**:
-- [ ] 零处 `\d+` 正则匹配
-- [ ] 空状态明确验证 0 结果
-- [ ] 所有断言无条件执行
+| Phase                             | Milestone | Plans Complete | Status   | Completed  |
+| --------------------------------- | --------- | -------------- | -------- | ---------- |
+| 1. 收紧 settings.spec.ts          | v1.0      | 1/1            | Complete | 2026-03-14 |
+| 2. 收紧 search/search_ux.spec.ts  | v1.0      | 1/1            | Complete | 2026-03-14 |
+| 3. 收紧 integration_explorer      | v1.0      | 1/1            | Complete | 2026-03-14 |
+| 4. 添加错误处理测试                | v1.0      | 1/1            | Complete | 2026-03-14 |
+| 5. 添加加载状态测试                | v1.0      | 1/1            | Complete | 2026-03-14 |
+| 6. 添加边界情况和无障碍测试        | v1.0      | 1/1            | Complete | 2026-03-14 |
 
 ---
 
-## Phase 3: 收紧 `integration_explorer.spec.ts` 断言
-
-**目标**: 完善下载测试，验证响应体
-
-**需求**: ASSERT-04
-
-**任务**:
-1. 完善下载测试（等待 download 事件）
-2. 验证响应体包含预期字段
-3. 移除条件跳过
-
-**成功标准**:
-- [ ] 下载测试验证文件存在和大小
-- [ ] API 响应体字段验证
-- [ ] 无条件断言跳过
-
----
-
-## Phase 4: 添加错误处理测试
-
-**目标**: 验证错误场景的用户反馈
-
-**需求**: ERROR-01, ERROR-02, ERROR-03, ERROR-04
-
-**任务**:
-1. [x] 创建 `error_handling.spec.ts`
-2. [x] 测试 API 500 错误提示
-3. [x] 测试网络超时处理
-4. [x] 测试错误详情展开/折叠和重试
-5. [x] 测试搜索取消状态清理
-
-**成功标准**:
-- [x] 4 个错误处理测试通过
-- [x] 错误消息具体文本验证 ("搜索出错", "Internal Server Error", "重新搜索", "错误详情")
-- [x] 错误详情交互验证 (details expand/collapse)
-
-**状态**: 完成 (2026-03-14)
-**提交**: `4cc33f6`
-
----
-
-## Phase 5: 添加加载状态测试
-
-**目标**: 验证加载状态 UI
-
-**需求**: LOAD-01, LOAD-02, LOAD-03
-
-**任务**:
-1. [x] 添加搜索加载 spinner 验证 (LOAD-01)
-2. [x] 添加 spinner-to-content 过渡测试 (LOAD-02)
-3. [x] 添加 Explorer 加载状态测试 (LOAD-03)
-
-**成功标准**:
-- [x] 3 个加载状态测试通过
-- [x] spinner 可见性验证 via waitForFunction
-- [x] 加载完成后的状态验证
-
-**状态**: 完成 (2026-03-14)
-**提交**: `311b7e3`
-
----
-
-## Phase 6: 添加边界情况和无障碍测试
-
-**目标**: 覆盖边界条件和键盘导航
-
-**需求**: EDGE-01, EDGE-02, EDGE-03, EDGE-04, A11Y-01, A11Y-02, A11Y-03
-
-**任务**:
-1. [x] 空搜索结果状态测试 (EDGE-01)
-2. [x] 超长查询处理测试 (EDGE-02)
-3. [x] 特殊字符 XSS 防护测试 (EDGE-03)
-4. [x] 空目录浏览测试 (EDGE-04)
-5. [x] 键盘导航流程测试 (A11Y-01)
-6. [x] ARIA 属性验证 (A11Y-02)
-7. [x] 焦点管理测试 (A11Y-03)
-
-**成功标准**:
-- [x] 7 个边界/无障碍测试通过
-- [x] XSS 防护验证 (escapeHtml 转义 < > " ')
-- [x] 键盘导航完整流程 (Tab → 输入 → Enter)
-
-**状态**: 完成 (2026-03-14)
-**提交**: `648e617`
-
----
-
-*Created: 2026-03-14*
+*For milestone archive details, see `.planning/milestones/v1.0-ROADMAP.md`*
