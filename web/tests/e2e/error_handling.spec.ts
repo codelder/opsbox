@@ -132,8 +132,8 @@ test.describe('Error Handling E2E', () => {
     await page.waitForFunction(
       () => {
         const spinner = document.querySelector('.animate-spin');
-        const hasRetry = Array.from(document.querySelectorAll('button')).some(
-          (b) => b.textContent?.includes('重新搜索')
+        const hasRetry = Array.from(document.querySelectorAll('button')).some((b) =>
+          b.textContent?.includes('重新搜索')
         );
         return spinner !== null || !hasRetry;
       },

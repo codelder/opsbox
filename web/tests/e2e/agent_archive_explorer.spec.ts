@@ -8,7 +8,7 @@
  * - Supports entry parameter for navigating inside archives
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -48,6 +48,17 @@ test.describe('Agent Archive Explorer E2E', () => {
   let agentProc: ChildProcessWithoutNullStreams | null = null;
   let agentPort: number | null = null;
   let zipArchiveReady = false;
+
+  /**
+   * 导航到Agent日志目录的辅助函数
+   * 减少重复的页面导航代码
+   */
+  async function navigateToAgentLogs(page: Page): Promise<void> {
+    await page.goto(
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
+    );
+    await page.waitForLoadState('networkidle');
+  }
 
   test.beforeAll(async ({ request }) => {
     test.setTimeout(120000);
@@ -141,122 +152,40 @@ test.describe('Agent Archive Explorer E2E', () => {
     fs.rmSync(TEST_ROOT_DIR, { recursive: true, force: true });
   });
 
-  test('should list tar archive contents on agent', async ({ page }) => {
+  test('should list all archive formats, navigate subdirectories, and download files on agent', async ({ page }) => {
     // Navigate to agent logs directory
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
-    await page.waitForLoadState('networkidle');
+    await navigateToAgentLogs(page);
 
-    // Verify tar file is visible (use exact match to avoid matching test.tar.gz)
+    // Verify all archive files are visible
     await expect(page.getByRole('button', { name: 'test.tar', exact: true })).toBeVisible({ timeout: 10000 });
-
-    // Double-click to enter the archive
-    await page.getByRole('button', { name: 'test.tar', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-
-    // Verify we see archive contents (not 500 error)
-    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
-
-    // Should see the files inside the archive
-    await expect(page.getByText('root.log')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('subdir')).toBeVisible();
-  });
-
-  test('should navigate into archive subdirectories on agent', async ({ page }) => {
-    // Navigate to tar archive
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
-    await page.waitForLoadState('networkidle');
-
-    // Enter tar archive
-    await page.getByRole('button', { name: 'test.tar', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-
-    // Enter subdir
-    await page.getByRole('button', { name: 'subdir', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-
-    // Should see nested.log
-    await expect(page.getByText('nested.log')).toBeVisible({ timeout: 5000 });
-
-    // Navigate back up
-    const upButton = page.locator('button:has(svg.lucide-arrow-left)');
-    await upButton.click();
-    await page.waitForLoadState('networkidle');
-
-    // Should be back at archive root
-    await expect(page.getByText('root.log')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('subdir')).toBeVisible();
-  });
-
-  test('should list tar.gz archive contents on agent', async ({ page }) => {
-    // Navigate to agent logs directory
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
-    await page.waitForLoadState('networkidle');
-
-    // Verify tar.gz file is visible
     await expect(page.getByRole('button', { name: 'test.tar.gz', exact: true })).toBeVisible({ timeout: 10000 });
-
-    // Double-click to enter the archive
-    await page.getByRole('button', { name: 'test.tar.gz', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-
-    // Verify we see archive contents
-    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
-    await expect(page.getByText('app.log')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText('internal')).toBeVisible();
-  });
-
-  test('should list tgz archive contents on agent', async ({ page }) => {
-    // Navigate to agent logs directory
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
-    await page.waitForLoadState('networkidle');
-
-    // Verify tgz file is visible
     await expect(page.getByRole('button', { name: 'test.tgz', exact: true })).toBeVisible({ timeout: 10000 });
 
-    // Double-click to enter the archive
-    await page.getByRole('button', { name: 'test.tgz', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-
-    // Verify we see archive contents
-    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
-    await expect(page.getByText('data.log')).toBeVisible({ timeout: 5000 });
-  });
-
-  test('should download file from tar archive on agent', async ({ page }) => {
-    // Navigate to tar archive
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
-    await page.waitForLoadState('networkidle');
-
-    // Enter tar archive
+    // Test tar archive and navigate into subdirectory
     await page.getByRole('button', { name: 'test.tar', exact: true }).dblclick();
     await page.waitForLoadState('networkidle');
+    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
+    await expect(page.getByText('root.log')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('subdir')).toBeVisible();
 
-    // Right-click on root.log to open context menu
+    // Test download file from tar archive
     await page.getByRole('button', { name: 'root.log', exact: true }).click({ button: 'right' });
-
-    // Look for download option in context menu
     const downloadOption = page.getByRole('menuitem', { name: /download|下载/i });
 
     if (await downloadOption.isVisible({ timeout: 2000 }).catch(() => false)) {
-      // Start waiting for download
       const downloadPromise = page.waitForEvent('download', { timeout: 10000 });
       await downloadOption.click();
-
       const download = await downloadPromise;
       expect(download.suggestedFilename()).toContain('root.log');
+
+      // Verify downloaded file content
+      const downloadPath = await download.path();
+      if (downloadPath) {
+        const downloadedContent = fs.readFileSync(downloadPath, 'utf-8');
+        expect(downloadedContent).toContain(TAR_ROOT_LOG_CONTENT);
+      }
     } else {
-      // Alternative: double-click to view, then check if content is accessible
-      await page.keyboard.press('Escape'); // Close context menu
+      await page.keyboard.press('Escape');
       const [viewPage] = await Promise.all([
         page.waitForEvent('popup'),
         page.getByRole('button', { name: 'root.log', exact: true }).dblclick()
@@ -267,10 +196,55 @@ test.describe('Agent Archive Explorer E2E', () => {
       await expect(viewPage.locator('body')).not.toContainText('暂无内容');
       await viewPage.close();
     }
+
+    // Navigate into subdir
+    await page.getByRole('button', { name: 'subdir', exact: true }).dblclick();
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByText('nested.log')).toBeVisible({ timeout: 5000 });
+
+    // Navigate back up to archive root
+    const upButton = page.locator('button:has(svg.lucide-arrow-left)');
+    await upButton.click();
+    await page.waitForLoadState('networkidle');
+    await expect(page.getByText('root.log')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('subdir')).toBeVisible();
+
+    // Go back to logs directory
+    await upButton.click();
+    await page.waitForLoadState('networkidle');
+
+    // Test tar.gz archive
+    await page.getByRole('button', { name: 'test.tar.gz', exact: true }).dblclick();
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
+    await expect(page.getByText('app.log')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('internal')).toBeVisible();
+
+    // Go back
+    await upButton.click();
+    await page.waitForLoadState('networkidle');
+
+    // Test tgz archive
+    await page.getByRole('button', { name: 'test.tgz', exact: true }).dblclick();
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
+    await expect(page.getByText('data.log')).toBeVisible({ timeout: 5000 });
+
+    // Test zip archive (if available)
+    if (zipArchiveReady) {
+      // Go back
+      await upButton.click();
+      await page.waitForLoadState('networkidle');
+
+      await expect(page.getByRole('button', { name: 'test.zip', exact: true })).toBeVisible({ timeout: 10000 });
+      await page.getByRole('button', { name: 'test.zip', exact: true }).dblclick();
+      await page.waitForLoadState('networkidle');
+      await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
+    }
   });
 
-  test('should download file from nested path in tar.gz archive on agent', async ({ page }) => {
-    // Navigate directly to internal directory in tar.gz archive via URL
+  test('should handle archive entry URL parameters and navigation', async ({ page }) => {
+    // Test 1: Navigate directly to internal directory in tar.gz archive via URL
     const archiveOrl = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar.gz?entry=/internal`;
     await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl)}`);
     await page.waitForLoadState('networkidle');
@@ -288,53 +262,22 @@ test.describe('Agent Archive Explorer E2E', () => {
     await expect(viewPage.locator('.code-content')).toContainText(TARGZ_SERVICE_LOG_CONTENT, { timeout: 10000 });
     await expect(viewPage.locator('body')).not.toContainText('暂无内容');
     await viewPage.close();
-  });
 
-  test('should support zip archive on agent (if available)', async ({ page }) => {
-    // Check if zip file was created successfully
-    if (!zipArchiveReady) {
-      // Skip this test gracefully - mark as passed since zip is optional
-      console.log('Skipping zip archive test - zip file not created');
-      return;
-    }
-
-    // Navigate to agent logs directory
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
-    await page.waitForLoadState('networkidle');
-
-    // Verify zip file is visible
-    await expect(page.getByRole('button', { name: 'test.zip', exact: true })).toBeVisible({ timeout: 10000 });
-
-    // Double-click to enter the archive
-    await page.getByRole('button', { name: 'test.zip', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-
-    // Verify we see archive contents
-    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error|错误/i);
-    // Note: zip content verification is optional since zip creation may fail silently
-  });
-
-  test('should correctly display archive entry in URL parameters', async ({ page }) => {
-    // Navigate to nested file in archive - view page requires sid parameter
-    const archiveOrl = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar.gz?entry=/internal/service.log`;
+    // Test 2: Navigate to nested file in archive - view page requires sid parameter
+    const archiveOrl2 = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar.gz?entry=/internal/service.log`;
     const testSid = 'test-archive-view-sid';
-    await page.goto(`http://localhost:5173/view?sid=${testSid}&file=${encodeURIComponent(archiveOrl)}`);
+    await page.goto(`http://localhost:5173/view?sid=${testSid}&file=${encodeURIComponent(archiveOrl2)}`);
     await page.waitForLoadState('networkidle');
 
     // Verify page loads without the "缺少 sid 参数" error
     await expect(page.locator('body')).not.toContainText('缺少 sid 参数');
-
     await expect(page.getByRole('heading', { name: 'service.log' })).toBeVisible({ timeout: 10000 });
     await expect(page.locator('.code-content')).toContainText(TARGZ_SERVICE_LOG_CONTENT, { timeout: 10000 });
     await expect(page.locator('body')).not.toContainText('暂无内容');
-  });
 
-  test('should navigate up from archive entry to archive root', async ({ page }) => {
-    // Start inside an archive
-    const archiveOrl = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar?entry=/subdir`;
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl)}`);
+    // Test 3: Navigate up from archive entry to archive root
+    const archiveOrl3 = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar?entry=/subdir`;
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl3)}`);
     await page.waitForLoadState('networkidle');
 
     // Should see nested.log
@@ -347,19 +290,16 @@ test.describe('Agent Archive Explorer E2E', () => {
 
     // Should be at archive root (see root.log and subdir)
     await expect(page.getByText('root.log')).toBeVisible({ timeout: 5000 });
-  });
 
-  test('should navigate up from archive root to parent directory', async ({ page }) => {
-    // Start at archive root
-    const archiveOrl = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar?entry=/`;
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl)}`);
+    // Test 4: Navigate up from archive root to parent directory
+    const archiveOrl4 = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar?entry=/`;
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl4)}`);
     await page.waitForLoadState('networkidle');
 
     // Should see archive contents
     await expect(page.getByRole('button', { name: 'root.log', exact: true })).toBeVisible({ timeout: 5000 });
 
     // Navigate up (should exit archive)
-    const upButton = page.locator('button:has(svg.lucide-arrow-left)');
     await upButton.click();
     await page.waitForLoadState('networkidle');
 
@@ -377,33 +317,5 @@ test.describe('Agent Archive Explorer E2E', () => {
     const url = new URL(page.url());
     const orlParam = url.searchParams.get('orl') || '';
     expect(orlParam).not.toContain('entry=');
-  });
-
-  test('should handle multiple archive formats in same directory', async ({ page }) => {
-    // Navigate to agent logs directory
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
-    await page.waitForLoadState('networkidle');
-
-    // Should see all archive formats
-    await expect(page.getByRole('button', { name: 'test.tar', exact: true })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('button', { name: 'test.tar.gz', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'test.tgz', exact: true })).toBeVisible();
-
-    // Enter tar archive and verify content
-    await page.getByRole('button', { name: 'test.tar', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-    await expect(page.getByText('root.log')).toBeVisible();
-
-    // Go back
-    const upButton = page.locator('button:has(svg.lucide-arrow-left)');
-    await upButton.click();
-    await page.waitForLoadState('networkidle');
-
-    // Enter tar.gz archive and verify content
-    await page.getByRole('button', { name: 'test.tar.gz', exact: true }).dblclick();
-    await page.waitForLoadState('networkidle');
-    await expect(page.getByText('app.log')).toBeVisible({ timeout: 5000 });
   });
 });

@@ -89,8 +89,7 @@ test.describe('Accessibility E2E', () => {
       { timeout: 10000 }
     );
 
-    // Click the search input to ensure focus, then verify it holds focus
-    await searchInput.click();
+    // Verify focus automatically stays on search input after search completion
     const focusedPlaceholder = await page.locator(':focus').getAttribute('placeholder');
     expect(focusedPlaceholder).toBe('搜索...');
 
@@ -120,6 +119,10 @@ test.describe('Accessibility E2E', () => {
       },
       { timeout: 10000 }
     );
+
+    // Verify focus automatically stays on search input after error
+    const errorFocusedPlaceholder = await page.locator(':focus').getAttribute('placeholder');
+    expect(errorFocusedPlaceholder).toBe('搜索...');
 
     // Assert: retry button is visible and can receive focus
     const retryButton = page.getByRole('button', { name: '重新搜索' });

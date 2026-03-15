@@ -143,7 +143,7 @@ test.describe('Edge Cases E2E', () => {
       await page.waitForLoadState('networkidle');
 
       // Assert: empty directory message is visible
-      await expect(page.getByText('This directory is empty.')).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText('此目录为空。')).toBeVisible({ timeout: 5000 });
     } finally {
       cleanup();
     }

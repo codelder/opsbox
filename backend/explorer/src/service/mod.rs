@@ -658,18 +658,9 @@ impl ExplorerService {
         // S3 对象存储
         let mut s3_config = self.get_s3_config(&resource.endpoint.identity).await?;
 
-        // 优先使用 endpoint 中的 bucket 信息
-        // 如果 endpoint.bucket 存在，说明 ORL 包含了 bucket (profile:bucket@s3)
-        // 否则，从路径中提取 bucket 名称（兼容旧格式）
-        if let Some(ref bucket) = resource.endpoint.bucket {
-          s3_config.bucket = Some(bucket.clone());
-        } else {
-          // 从路径中提取 bucket 名称作为默认 bucket（兼容旧格式）
-          let path_segments = resource.primary_path.segments();
-          if !path_segments.is_empty() && !path_segments[0].is_empty() {
-            s3_config.bucket = Some(path_segments[0].clone());
-          }
-        }
+        // 使用统一的 bucket 提取方法
+        let (bucket, _) = resource.extract_s3_bucket_and_key();
+        s3_config.bucket = Some(bucket);
 
         let fs = S3Storage::new_async(s3_config)
           .await

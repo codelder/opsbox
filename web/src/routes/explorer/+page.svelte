@@ -925,7 +925,7 @@
                 <tbody class="block max-h-[calc(100vh-16rem)] w-full overflow-y-auto">
                   {#if displayedItems.length === 0 && !loading}
                     <tr class="flex w-full border-t border-border/40 dark:border-gray-700/50">
-                      <td class="w-full p-8 text-center text-muted-foreground"> This directory is empty. </td>
+                      <td class="w-full p-8 text-center text-muted-foreground"> 此目录为空。 </td>
                     </tr>
                   {/if}
                   {#each displayedItems as item (item.path)}
@@ -995,7 +995,7 @@
               <!-- Grid View (Auto-fill) -->
               <div class="grid gap-2 p-2" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));">
                 {#if displayedItems.length === 0 && !loading}
-                  <div class="col-span-full p-8 text-center text-muted-foreground">This directory is empty.</div>
+                  <div class="col-span-full p-8 text-center text-muted-foreground">此目录为空。</div>
                 {/if}
                 {#each displayedItems as item (item.path)}
                   <div class="flex flex-col items-center gap-0">

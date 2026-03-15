@@ -31,10 +31,7 @@ test.describe('Search Loading States', () => {
     await searchInput.press('Enter');
 
     // Wait for spinner to appear
-    await page.waitForFunction(
-      () => document.querySelector('.animate-spin') !== null,
-      { timeout: 10000 }
-    );
+    await page.waitForFunction(() => document.querySelector('.animate-spin') !== null, { timeout: 10000 });
 
     // Assert: search input is disabled during loading
     await expect(searchInput).toBeDisabled();
@@ -56,16 +53,10 @@ test.describe('Search Loading States', () => {
     await searchInput.press('Enter');
 
     // Wait for spinner to appear first
-    await page.waitForFunction(
-      () => document.querySelector('.animate-spin') !== null,
-      { timeout: 10000 }
-    );
+    await page.waitForFunction(() => document.querySelector('.animate-spin') !== null, { timeout: 10000 });
 
     // Wait for spinner to disappear after search completes
-    await page.waitForFunction(
-      () => document.querySelector('.animate-spin') === null,
-      { timeout: 15000 }
-    );
+    await page.waitForFunction(() => document.querySelector('.animate-spin') === null, { timeout: 15000 });
 
     // Assert: result count is no longer "搜索结果" (has transitioned from loading state)
     const resultCountText = await page.locator('h2.text-lg.font-semibold').textContent();
@@ -95,20 +86,14 @@ test.describe('Explorer Loading States', () => {
     await refreshButton.click();
 
     // Wait for spinner to appear on RefreshCw icon
-    await page.waitForFunction(
-      () => document.querySelector('.animate-spin') !== null,
-      { timeout: 10000 }
-    );
+    await page.waitForFunction(() => document.querySelector('.animate-spin') !== null, { timeout: 10000 });
 
     // Assert: back button (title="后退") is disabled during loading
     const backButton = page.getByTitle('后退');
     await expect(backButton).toBeDisabled();
 
     // Wait for spinner to disappear after load completes
-    await page.waitForFunction(
-      () => document.querySelector('.animate-spin') === null,
-      { timeout: 15000 }
-    );
+    await page.waitForFunction(() => document.querySelector('.animate-spin') === null, { timeout: 15000 });
 
     // Assert: back button is enabled after loading completes
     await expect(backButton).toBeEnabled();

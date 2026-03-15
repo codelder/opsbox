@@ -162,6 +162,11 @@ test.describe('Image Viewer E2E', () => {
 
     // 页面应该仍然可访问（没有崩溃）
     await expect(page.locator('body')).toBeVisible();
+
+    // 应该显示错误信息（根据源代码，错误信息为 "无法加载图片" 和 "加载图片资源失败"）
+    const bodyText = (await page.locator('body').textContent()) || '';
+    expect(bodyText).toContain('无法加载图片');
+    expect(bodyText).toContain('加载图片资源失败');
   });
 
   test('should show error for missing sid parameter', async ({ page }) => {
@@ -173,7 +178,7 @@ test.describe('Image Viewer E2E', () => {
 
     // 应该显示错误信息
     const bodyText = (await page.locator('body').textContent()) || '';
-    expect(bodyText).toContain('sid');
+    expect(bodyText).toContain('缺少 sid 参数');
   });
 
   test('should have zoom controls', async ({ page }) => {

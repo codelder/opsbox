@@ -17,7 +17,7 @@
 
 **API Layer:**
 - Purpose: HTTP route handlers and request/response formatting
-- Location: `backend/logseek/src/routes/`, `backend/explorer/src/api/`, `backend/agent-manager/src/routes.rs`
+- Location: `backend/logseek/src/routes.rs` + `routes/` subdirectory, `backend/explorer/src/api.rs`, `backend/agent-manager/src/routes.rs`
 - Contains: Axum route definitions, request validation, response serialization
 - Depends on: Service layer, opsbox-core error types
 - Used by: Axum router in `backend/opsbox-server/src/server.rs`
@@ -143,3 +143,4 @@
 ---
 
 *Architecture analysis: 2026-03-13*
+*Last updated: 2026-03-15*

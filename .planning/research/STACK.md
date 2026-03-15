@@ -2,10 +2,11 @@
 
 > Research document: improving E2E test assertion quality for OpsBox
 > Date: 2026-03-14
+> **Status: v1.0 milestone completed (2026-03-15) — Sections 1 & 5 document historical anti-patterns that have been fixed. Sections 2-4, 6-7 remain useful as ongoing Playwright reference.**
 
 ## Executive Summary
 
-After auditing 20+ E2E test files in `/web/tests/e2e/`, the following categories of weak assertions were identified. This document catalogs the anti-patterns found, recommended replacements, and Playwright-specific best practices.
+After auditing 20+ E2E test files in `/web/tests/e2e/`, the following categories of weak assertions were identified. This document catalogs the anti-patterns found (now fixed), recommended replacements, and Playwright-specific best practices.
 
 ---
 

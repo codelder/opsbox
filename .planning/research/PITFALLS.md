@@ -328,17 +328,24 @@ performCleanup(true, false);  // Clean leftover resources from interrupted runs
 
 **Problem**: Tests exist and pass, but do not meaningfully verify behavior.
 
-**Analysis of OpsBox tests by coverage quality**:
+**Analysis of OpsBox tests by coverage quality** (pre-v1.0 baseline):
 
-| Test File | Total Tests | Trivial Assertions | Real Verification |
-|-----------|-------------|-------------------|-------------------|
-| `settings.spec.ts` | 14 | 12 (86%) | 2 (14%) |
-| `home.spec.ts` | 9 | 6 (67%) | 3 (33%) |
-| `search.spec.ts` | 6 | 4 (67%) | 2 (33%) |
-| `image_viewer.spec.ts` | 15 | 8 (53%) | 7 (47%) |
-| `integration_local.spec.ts` | 4 | 0 (0%) | 4 (100%) |
-| `integration_query_syntax.spec.ts` | 11 | 0 (0%) | 11 (100%) |
-| `integration_explorer.spec.ts` | 12 | 1 (8%) | 11 (92%) |
+| Test File | Total Tests | Trivial Assertions | Real Verification | v1.0 Status |
+|-----------|-------------|-------------------|-------------------|-------------|
+| `settings.spec.ts` | 14 | 12 (86%) | 2 (14%) | ✓ Tightened in Phase 1 |
+| `home.spec.ts` | 9 | 6 (67%) | 3 (33%) | — |
+| `search.spec.ts` | 6 | 4 (67%) | 2 (33%) | ✓ Tightened in Phase 2 |
+| `search_ux.spec.ts` | — | — | — | ✓ Tightened in Phase 2 |
+| `image_viewer.spec.ts` | 15 | 8 (53%) | 7 (47%) | — |
+| `integration_local.spec.ts` | 4 | 0 (0%) | 4 (100%) | — |
+| `integration_query_syntax.spec.ts` | 11 | 0 (0%) | 11 (100%) | — |
+| `integration_explorer.spec.ts` | 12 | 1 (8%) | 11 (92%) | ✓ Tightened in Phase 3 |
+
+**New test files added in v1.0 (Phases 4-6):**
+- `error_handling.spec.ts` — 4 tests (error states)
+- `loading_states.spec.ts` — 3 tests (spinner/transitions)
+- `edge_cases.spec.ts` — 4 tests (boundaries)
+- `accessibility.spec.ts` — 3 tests (keyboard/ARIA/focus)
 
 **Trivial assertion patterns**:
 - `expect(page.locator('body')).toBeVisible()` (15 occurrences)
@@ -747,13 +754,13 @@ Before approving E2E tests:
 
 ## 8. Remediation Priorities
 
-### Priority 1: High Impact, Low Effort
+### Priority 1: High Impact, Low Effort — ✓ COMPLETED (v1.0)
 
-| Issue | Files Affected | Fix |
-|-------|---------------|-----|
-| `body` visibility assertions | 5 files, ~15 occurrences | Replace with content-specific assertions |
-| Catch-all `.catch()` fallback | `search.spec.ts` | Remove fallback, let test fail |
-| `tobeDefined()` tautologies | `settings.spec.ts` | Replace with specific value checks |
+| Issue | Files Affected | Fix | Status |
+|-------|---------------|-----|--------|
+| `body` visibility assertions | 5 files, ~15 occurrences | Replace with content-specific assertions | ✓ Fixed in Phase 1-3 |
+| Catch-all `.catch()` fallback | `search.spec.ts` | Remove fallback, let test fail | ✓ Fixed in Phase 2 |
+| `tobeDefined()` tautologies | `settings.spec.ts` | Replace with specific value checks | ✓ Fixed in Phase 1 |
 
 ### Priority 2: High Impact, Medium Effort
 
@@ -812,3 +819,4 @@ Rate each assertion from 1-5:
 *Document generated: 2026-03-14*
 *Source: Analysis of 17 E2E test files in `web/tests/e2e/`*
 *Total tests analyzed: ~120 test cases*
+*Last updated: 2026-03-15 — v1.0 milestone completed, Priority 1 items addressed*

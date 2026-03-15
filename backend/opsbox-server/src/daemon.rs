@@ -148,12 +148,19 @@ pub fn start_daemon(pid_path: PathBuf) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::sync::Mutex;
+
+  /// Mutex to serialize tests that modify the HOME environment variable.
+  /// Prevents race conditions when `cargo test` runs tests in parallel.
+  #[cfg(unix)]
+  static HOME_LOCK: Mutex<()> = Mutex::new(());
 
   /// Test get_user_home returns HOME environment variable
   #[test]
   #[cfg(unix)]
   fn test_get_user_home() {
-    // SAFETY: 单元测试中设置 HOME 环境变量，测试框架保证串行运行。
+    let _guard = HOME_LOCK.lock().unwrap();
+    // SAFETY: 单元测试中设置 HOME 环境变量，由 HOME_LOCK 保证串行访问。
     unsafe {
       std::env::set_var("HOME", "/home/testuser");
     }
@@ -164,7 +171,8 @@ mod tests {
   #[test]
   #[cfg(unix)]
   fn test_get_user_home_fallback() {
-    // SAFETY: 单元测试中修改环境变量，测试框架保证串行运行。
+    let _guard = HOME_LOCK.lock().unwrap();
+    // SAFETY: 单元测试中修改环境变量，由 HOME_LOCK 保证串行访问。
     unsafe {
       std::env::remove_var("HOME");
     }
@@ -175,7 +183,8 @@ mod tests {
   #[test]
   #[cfg(unix)]
   fn test_resolve_pid_path_with_tilde() {
-    // SAFETY: 单元测试中设置 HOME 环境变量，测试框架保证串行运行。
+    let _guard = HOME_LOCK.lock().unwrap();
+    // SAFETY: 单元测试中设置 HOME 环境变量，由 HOME_LOCK 保证串行访问。
     unsafe {
       std::env::set_var("HOME", "/home/testuser");
     }
@@ -195,7 +204,8 @@ mod tests {
   #[test]
   #[cfg(unix)]
   fn test_resolve_pid_path_default() {
-    // SAFETY: 单元测试中设置 HOME 环境变量，测试框架保证串行运行。
+    let _guard = HOME_LOCK.lock().unwrap();
+    // SAFETY: 单元测试中设置 HOME 环境变量，由 HOME_LOCK 保证串行访问。
     unsafe {
       std::env::set_var("HOME", "/home/testuser");
     }

@@ -44,12 +44,12 @@ opsboard/
 **`backend/logseek/`:**
 - Purpose: Log search module with layered architecture
 - Contains: Search engine, query parser, Starlark planners, encoding detection
-- Key files: `src/lib.rs`, `src/service/search_executor.rs`, `src/service/entry_stream.rs`
+- Key files: `src/lib.rs`, `src/routes.rs` + `src/routes/` subdirectory, `src/service/search_executor.rs`, `src/service/entry_stream.rs`
 
 **`backend/explorer/`:**
 - Purpose: Distributed resource browser across Local/S3/Agent
 - Contains: Resource listing, archive navigation, download support
-- Key files: `src/lib.rs`, `src/service/mod.rs`, `src/api/routes.rs`
+- Key files: `src/lib.rs`, `src/service/mod.rs`, `src/api.rs`
 
 **`backend/agent-manager/`:**
 - Purpose: Agent registry, health monitoring, tag management
@@ -69,7 +69,7 @@ opsboard/
 **`web/src/lib/modules/`:**
 - Purpose: Frontend feature modules mirroring backend
 - Contains: API clients, types, composables per backend module
-- Key files: `logseek/api/*.ts`, `explorer/api.ts`, `agent/api.ts`
+- Key files: `logseek/api/*.ts`, `explorer/api.ts`, `agent/api/agents.ts`, `agent/api/logs.ts`, `agent/api/config.ts`
 
 ## Key File Locations
 
@@ -158,3 +158,4 @@ opsboard/
 ---
 
 *Structure analysis: 2026-03-13*
+*Last updated: 2026-03-15*

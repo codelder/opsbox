@@ -489,25 +489,26 @@ test.describe('Settings Page E2E', () => {
       await themeButton.waitFor({ state: 'visible', timeout: 5000 });
 
       const initialClass = (await page.locator('html').getAttribute('class')) || '';
-      const initialBg = await page.locator('html').evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
-      );
+      const initialBg = await page
+        .locator('html')
+        .evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--background').trim());
+      expect(initialClass).not.toContain('dark');
 
       await themeButton.click();
       await page.waitForTimeout(300);
       const darkClass = (await page.locator('html').getAttribute('class')) || '';
-      const darkBg = await page.locator('html').evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
-      );
+      const darkBg = await page
+        .locator('html')
+        .evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--background').trim());
       expect(darkClass).toContain('dark');
       expect(darkBg).not.toBe(initialBg);
 
       await themeButton.click();
       await page.waitForTimeout(300);
       const finalClass = (await page.locator('html').getAttribute('class')) || '';
-      const finalBg = await page.locator('html').evaluate(() =>
-        getComputedStyle(document.documentElement).getPropertyValue('--background').trim()
-      );
+      const finalBg = await page
+        .locator('html')
+        .evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--background').trim());
       expect(finalClass).not.toContain('dark');
       expect(finalBg).toBe(initialBg);
     });
