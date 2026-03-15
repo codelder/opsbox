@@ -7,8 +7,8 @@ last_updated: "2026-03-15T11:00:00+08:00"
 progress:
   total_phases: 7
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 1
+  completed_plans: 1
 ---
 
 # 项目状态
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md
 - [x] v1.0 里程碑完成 (2026-03-14)
 - [x] v1.1 需求定义 (40 requirements across 8 categories)
 - [x] v1.1 路线图创建 (7 phases)
-- [ ] Phase 7: Settings — S3 Profiles & LLM Backends
+- [x] Phase 7 Plan 1: Settings S3 & LLM CRUD Tests (2026-03-15)
 
 ## 进度条
 
@@ -46,6 +46,7 @@ Phase 7/13 ░░░░░░░░░░░░░░░░░░░░░░░
 | A11Y-03 分两次导航 | 避免 mock route 冲突 | ✓ Applied in accessibility.spec.ts |
 | 用 waitForFunction 替代 waitForTimeout | 事件驱动而非固定延迟 | ✓ Applied in loading_states.spec.ts |
 | page.route() mock 避免后端依赖 | 测试稳定性和速度 | ✓ Pattern for all new tests |
+| 用列表内容断言替代 Alert 断言 | Alert 组件在测试中不渲染 | ✓ Applied in settings.spec.ts |
 
 v1.1 新增规划信息：
 
