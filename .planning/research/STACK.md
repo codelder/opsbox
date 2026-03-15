@@ -1,321 +1,424 @@
-# Stack Research: Platform Quality Improvement
+# Playwright E2E Assertion Best Practices - OpsBox
 
-**Domain:** Rust error handling, SvelteKit testing, search performance optimization
-**Researched:** 2026-03-13
-**Confidence:** MEDIUM (WebSearch unavailable; recommendations based on CLAUDE.md analysis, codebase audit, and training data through early 2025)
+> Research document: improving E2E test assertion quality for OpsBox
+> Date: 2026-03-14
+> **Status: v1.0 milestone completed (2026-03-15) — Sections 1 & 5 document historical anti-patterns that have been fixed. Sections 2-4, 6-7 remain useful as ongoing Playwright reference.**
 
-## Recommended Stack
+## Executive Summary
 
-### Rust Error Handling (unwrap replacement)
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| `clippy::unwrap_used` | built-in | Lint to ban unwrap in production code | Standard Clippy lint; catches unwrap at compile time with clear error messages |
-| `clippy::expect_used` | built-in | Optional stricter lint | Warns on `.expect()` too; use if you want zero panicking code paths |
-| `thiserror` | 2.x | Derive macro for error types | Already in use; enables clean `#[from]` conversions without boilerplate |
-| `anyhow` | 1.x | Context-rich error handling | Use ONLY in binary crates (opsbox-server, agent); NOT in library crates |
-| `color-eyre` / `eyre` | 0.6 | Enhanced error reports | Alternative to anyhow with better formatting; consider for CLI tooling |
-
-### SvelteKit/Svelte 5 Testing
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| `vitest` | 3.2 | Test runner | Already configured; dual project setup (browser + server) is correct |
-| `vitest-browser-svelte` | latest | Svelte component rendering in browser | Required for Svelte 5 component tests; replaces @testing-library/svelte |
-| `@vitest/browser` | latest | Browser test provider | Already using Playwright provider; correct choice |
-| `@testing-library/jest-dom` | latest | DOM assertions | Provides `toBeInTheDocument()`, `toBeDisabled()` etc. |
-| `msw` (Mock Service Worker) | 2.x | API mocking | Better than vi.mock() for API-heavy components; intercepts at network level |
-| `svelte-htm` | latest | Inline Svelte templates | Useful for quick component test scaffolding |
-
-### Search Performance
-
-| Technology | Version | Purpose | Why Recommended |
-|------------|---------|---------|-----------------|
-| `cargo-flamegraph` | latest | CPU profiling | Generates flame graphs; identifies hot paths and expensive clones |
-| `cargo-llvm-cov` | 0.6 | Code coverage | Already in use; verify coverage after refactor |
-| `dashmap` | 6.x | Concurrent HashMap | Replace `Mutex<HashMap>` for S3 client cache; lock-free reads |
-| `arc-swap` | 1.x | Atomic Arc swapping | For read-heavy shared state; cheaper than RwLock |
-| `memmap2` | 0.9 | Memory-mapped file I/O | For large file search; avoids copying file contents |
-| `pprof` | 0.14 | CPU/memory profiling | In-process profiling; generates flame graphs from runtime data |
-
-### Development Tools
-
-| Tool | Purpose | Notes |
-|------|---------|-------|
-| `cargo clippy -- -D clippy::unwrap_used` | Ban unwrap in CI | Add to CI pipeline; catches new unwraps |
-| `cargo-deny` | Dependency auditing | Check for advisories, duplicate deps, license compliance |
-| `cargo-tarpaulin` | Alternative coverage | Linux-only but more accurate than llvm-cov for some metrics |
-| `svelte-check` | TypeScript/Svelte type checking | Run in CI to catch type errors; already available via SvelteKit |
-
-## Installation
-
-```bash
-# Rust profiling tools
-cargo install cargo-flamegraph
-cargo install cargo-llvm-cov  # Already installed
-
-# Add to Cargo.toml [workspace.dependencies]
-dashmap = "6"
-arc-swap = "1"
-memmap2 = "0.9"
-
-# Frontend testing (already installed)
-# vitest, vitest-browser-svelte, @vitest/browser
-```
-
-## Error Handling Patterns for OpsBox
-
-### Pattern 1: Clippy Lint Configuration (Cargo.toml)
-
-Add to workspace `Cargo.toml`:
-
-```toml
-[workspace.lints.clippy]
-unwrap_used = "warn"          # Start with warn, promote to deny after cleanup
-expect_used = "warn"          # Optional: also flag .expect()
-mutex_atomic = "warn"         # Flag Mutex<bool> etc. (use AtomicBool)
-# For test modules, allow unwrap:
-# #[cfg_attr(test, allow(clippy::unwrap_used))]
-```
-
-Per-crate `Cargo.toml`:
-```toml
-[lints]
-workspace = true
-```
-
-**Why this approach:** Workspace-level lint configuration ensures consistency. Starting with `warn` allows incremental cleanup without blocking CI. Promote to `deny` once cleanup is complete.
-
-### Pattern 2: Replacing unwrap() in HTTP Handlers
-
-Current (problematic):
-```rust
-// backend/agent/src/routes.rs:108
-let level = state.config.current_log_level.lock().unwrap();
-```
-
-Recommended replacement:
-```rust
-// Option A: Recover from poisoned mutex
-let level = state.config.current_log_level.lock()
-    .unwrap_or_else(|e| e.into_inner());
-
-// Option B: Return proper error (preferred for HTTP handlers)
-let level = state.config.current_log_level.lock()
-    .map_err(|_| AppError::internal("配置锁被污染"))?;
-
-// Option C: Use parking_lot::Mutex (never poisons)
-use parking_lot::Mutex;
-// Then .lock() never returns Err
-```
-
-**Why Option B:** HTTP handlers should return errors to clients, not panic. The `AppError` type already handles RFC 7807 responses.
-
-### Pattern 3: Replacing unwrap() in Search Path
-
-Current (175 unwraps in search_executor.rs):
-```rust
-let value = some_option.unwrap();
-```
-
-Recommended replacement by context:
-
-```rust
-// When the value MUST exist (programmer error if missing):
-let value = some_option.expect("source_plan must exist after planning phase");
-
-// When missing value is a runtime error:
-let value = some_option.ok_or_else(|| AppError::internal("source plan missing"))?;
-
-// When missing value means "skip this item":
-let Some(value) = some_option else { continue; };
-
-// When you have a sensible default:
-let value = some_option.unwrap_or_default();
-```
-
-**Why differentiate:** Not all unwraps are equal. `expect()` documents invariants. `?` propagates errors. `let-else` handles control flow. Using the right pattern makes intent clear.
-
-### Pattern 4: Mutex Locking Strategy
-
-Current: `std::sync::Mutex` with `.lock().unwrap()`
-
-Recommended migration:
-
-| Context | Use | Why |
-|---------|-----|-----|
-| Async code (tokio) | `tokio::sync::Mutex` | Doesn't block async runtime |
-| Sync code, global cache | `parking_lot::Mutex` | Faster, never poisons |
-| Read-heavy shared data | `arc_swap::ArcSwap` or `RwLock` | Concurrent reads without blocking |
-| S3_CLIENT_CACHE | `dashmap::DashMap` | Lock-free concurrent access |
-
-## SvelteKit Testing Strategy
-
-### Current State Analysis
-
-- 95 tests exist (55 server + 40 browser)
-- Coverage: 14.85% (threshold: 70%)
-- Well-tested: ORL utils (92%), Explorer API (88%), UI primitives (84-100%)
-- Untested: Route components (+page.svelte files), most composables
-
-### Coverage Gap Breakdown
-
-| Area | Files | Current Coverage | Target |
-|------|-------|------------------|--------|
-| API clients | 6 files | ~88% | Maintain |
-| Composables | 5 files | ~40% | 80% |
-| Route components | 8 files | ~5% | 60% |
-| UI components | 15+ files | ~85% | Maintain |
-| Utilities | 8 files | ~93% | Maintain |
-
-### Testing Priority Order
-
-1. **Composables** (highest ROI)
-   - `useSearch.test.ts` exists but needs more scenarios
-   - Add: error states, edge cases, concurrent operations
-   - Pattern: Mock API, test state transitions
-
-2. **Route component logic extraction**
-   - Extract business logic from `+page.svelte` into testable functions/composables
-   - Example: `explorer/+page.svelte` (1104 lines) should have logic in a separate module
-   - Then test the module, not the component
-
-3. **Route component rendering tests**
-   - Use `vitest-browser-svelte` `render()` function
-   - Mock all API calls with `vi.mock()` or `msw`
-   - Test: renders correctly, handles loading/error states, user interactions
-
-### What NOT to Test
-
-| Avoid | Why | Do Instead |
-|-------|-----|------------|
-| Snapshot tests for Svelte components | Brittle, low value | Test behavior and accessibility |
-| 100% line coverage on components | Diminishing returns | Focus on branches and user flows |
-| Testing Svelte internals | Framework tests its own code | Test your component's public interface |
-
-### Example Test Pattern for Route Components
-
-```typescript
-// web/src/routes/search/+page.svelte.test.ts
-import { render } from 'vitest-browser-svelte';
-import { page, userEvent } from '@vitest/browser/context';
-import SearchPage from './+page.svelte';
-
-// Mock the composables
-vi.mock('$lib/modules/logseek/composables/useSearch', () => ({
-  useSearch: vi.fn(() => ({
-    results: [],
-    loading: false,
-    error: null,
-    search: vi.fn()
-  }))
-}));
-
-test('renders empty state when no results', async () => {
-  render(SearchPage, {});
-  const emptyState = await page.getByText('输入关键词开始搜索');
-  await expect.element(emptyState).toBeInTheDocument();
-});
-```
-
-## Search Performance Optimization
-
-### Profiling First, Optimizing Second
-
-Before making ANY performance changes:
-
-```bash
-# 1. Generate flamegraph for search workload
-CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph \
-  --manifest-path backend/Cargo.toml \
-  -p opsbox-server -- \
-  --port 4000
-
-# 2. Then trigger search workload and capture profile
-# 3. Analyze flamegraph for:
-#    - Wide bars (hot functions)
-#    - Clone() calls in stack traces
-#    - Mutex contention
-```
-
-**Why profile first:** The 303 `.clone()` calls and 175 `.unwrap()` calls may NOT be performance bottlenecks. Measure before optimizing.
-
-### Optimization Candidates (from codebase analysis)
-
-| Issue | Location | Fix | Expected Impact |
-|-------|----------|-----|-----------------|
-| Global Mutex for S3 cache | `opsbox-core/storage/s3.rs:54` | Replace with `DashMap` | High - eliminates contention |
-| No file content indexing | `entry_stream.rs` | Add mmap-based offset cache | Medium - avoids re-streaming |
-| Excessive cloning in search | `search_executor.rs` | Use `Arc` for shared data | Medium - depends on profiling |
-| SQLite single-writer | `search_executor.rs:400` | Batch writes, use WAL properly | Low - single-user OK |
-| `std::sync::Mutex` in async | Multiple files | Migrate to `tokio::sync::Mutex` | Medium - prevents blocking |
-
-### S3 Client Cache Optimization
-
-Current (global Mutex):
-```rust
-static S3_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<S3Client>>>> = Lazy::new(...);
-```
-
-Recommended (lock-free reads):
-```rust
-// Option A: DashMap
-static S3_CLIENT_CACHE: Lazy<DashMap<String, Arc<S3Client>>> = Lazy::new(DashMap::new);
-
-// Usage - no explicit lock needed
-if let Some(client) = S3_CLIENT_CACHE.get(profile_name) {
-    return client.clone();
-}
-// Insert with entry API
-let client = S3_CLIENT_CACHE.entry(profile_name.to_string())
-    .or_insert_with(|| Arc::new(build_client(config)))
-    .clone();
-```
-
-**Why DashMap:** Shard-based concurrent HashMap. Reads are lock-free. Writes lock only the relevant shard. Perfect for read-heavy cache patterns.
-
-## Alternatives Considered
-
-| Recommended | Alternative | When to Use Alternative |
-|-------------|-------------|-------------------------|
-| `clippy::unwrap_used` | `#![deny(clippy::unwrap_used)]` per-file | If you want to enforce per-module rather than workspace |
-| `thiserror` | `anyhow` | Only in binary crates where you want context chains, not typed errors |
-| `DashMap` | `RwLock<HashMap>` | When you need atomic multi-key operations (DashMap locks per-shard) |
-| `vitest-browser-svelte` | `@testing-library/svelte` | Testing-library does not support Svelte 5 Runes yet |
-| `cargo-flamegraph` | `perf` + `flamegraph.pl` | perf is more powerful but Linux-only; cargo-flamegraph cross-platform |
-| `memmap2` | `std::io::BufReader` | Use BufReader for <10MB files; mmap for large files with random access |
-
-## What NOT to Use
-
-| Avoid | Why | Use Instead |
-|-------|-----|-------------|
-| `anyhow` in library crates | Hides error types from callers; makes matching impossible | `thiserror` with typed errors |
-| `unsafe` for env var manipulation | Deprecated in Rust 2024 edition for multi-threaded contexts | Config struct passed through app state |
-| `@testing-library/svelte` for Svelte 5 | Does not support Runes `$state`/`$derived` | `vitest-browser-svelte` |
-| `async-tar` AND `tokio-tar` simultaneously | Two competing libraries; maintenance burden | Consolidate to `tokio-tar` only |
-| `.unwrap_or(panic!("..."))` | No better than unwrap; still panics | `.expect("descriptive message")` |
-
-## Version Compatibility Notes
-
-| Concern | Note |
-|---------|------|
-| Svelte 5 + vitest-browser-svelte | Ensure using latest vitest-browser-svelte; Svelte 5 support is recent |
-| Rust 2024 edition | `std::env::set_var` is deprecated; use config struct instead |
-| `clippy::unwrap_used` | Workspace lints require Rust 1.74+ (resolver v3 already in use) |
-| `dashmap` 6.x | API changes from 5.x; check if concurrent entry API is available |
-
-## Sources
-
-- CLAUDE.md — Project architecture and test infrastructure
-- CONCERNS.md — Codebase audit (unwrap counts, mutex patterns, test gaps)
-- STACK.md — Current technology stack
-- Rust Clippy documentation — `unwrap_used` lint configuration
-- Vitest documentation — Coverage configuration and browser testing
-- DashMap documentation — Concurrent HashMap patterns
-- Training data through early 2025 (MEDIUM confidence — verify with official docs)
+After auditing 20+ E2E test files in `/web/tests/e2e/`, the following categories of weak assertions were identified. This document catalogs the anti-patterns found (now fixed), recommended replacements, and Playwright-specific best practices.
 
 ---
 
-*Stack research for: Platform quality improvement (unwrap cleanup, test coverage, search performance)*
-*Researched: 2026-03-13*
-*Confidence: MEDIUM — WebSearch unavailable; based on codebase analysis and training data*
+## 1. Anti-Patterns Found in Current Tests
+
+### 1.1 `await expect(page.locator('body')).toBeVisible()` (Always Passes)
+
+**Found in:** `settings.spec.ts` (lines 24, 59, 87, 113, 123, 137, 147, 156, 192, 200)
+
+The `body` element is always visible if the page loads at all. This assertion never fails, providing zero signal about whether the feature actually rendered.
+
+```typescript
+// BAD: No-op assertion
+await expect(page.locator('body')).toBeVisible();
+
+// GOOD: Assert specific content exists
+await expect(page.getByRole('heading', { name: '系统设置' })).toBeVisible();
+
+// GOOD: Assert specific sections rendered
+await expect(page.getByText('Planner Scripts')).toBeVisible();
+```
+
+### 1.2 `expect(await x).toBeTruthy()` (Not Web-First)
+
+**Found in:** `integration_local.spec.ts` (lines 138, 146, 154, 162), `integration_query_syntax.spec.ts` (line 120)
+
+Using `await` before `expect()` breaks Playwright's auto-retrying web-first assertion model. The value is captured once; if the UI updates slightly after, the assertion does not retry.
+
+```typescript
+// BAD: Captures response.ok() once, no retry
+expect(response.ok()).toBeTruthy();
+
+// GOOD: Web-first assertion on status
+expect(response).toBeOK();
+// Or explicitly check the status:
+expect(response.status()).toBe(200);
+```
+
+### 1.3 Regex Matching Any Value (`/\d+\s*个结果/`)
+
+**Found in:** `search.spec.ts` (lines 35, 64, 96, 115, 135, 160), `search_ux.spec.ts` (lines 70, 114, 134, 173)
+
+The regex `/\d+\s*个结果/` matches "0 个结果" just as well as "42 个结果". Tests that rely on this regex pass even when the search returns nothing, defeating the purpose.
+
+```typescript
+// BAD: Matches "0 个结果" - no real validation
+expect(resultsText).toMatch(/\d+\s*个结果/);
+
+// GOOD: Assert at least 1 result (if that is the expectation)
+await expect(page.locator('.text-lg.font-semibold')).toContainText(/[1-9]\d* 个结果/);
+
+// BETTER: Use toContainText with an exact substring when the count is deterministic
+await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果');
+
+// BEST: Assert specific result content is visible
+await expect(page.getByText('Database connection failed')).toBeVisible();
+```
+
+### 1.4 Conditional Assertions (Silent Skip on Empty Data)
+
+**Found in:** `search.spec.ts` (lines 89-93), `search_ux.spec.ts` (lines 40-56, 94-110, 157-169), `settings.spec.ts` (lines 36-38, 165-174, 213-215)
+
+Tests that check `if (count > 0)` before asserting will pass silently when the data source is empty. This masks regressions where the search feature returns zero results due to a bug.
+
+```typescript
+// BAD: If count is 0, the test does nothing and passes
+if (count > 0) {
+  await expect(cards.first()).toBeVisible();
+}
+
+// GOOD: Test data setup guarantees count > 0, then assert unconditionally
+// In beforeAll: create known test data with specific content
+// In test: assert that specific content appears
+await expect(page.getByText('Expected log line')).toBeVisible();
+
+// GOOD (for truly optional features): Use soft assertions with explicit logging
+test.describe.configure({ mode: 'serial' });
+// ... then assert known content from controlled test data
+```
+
+**Root cause:** Many search tests use generic queries ("error", "exception", "timeout") that may or may not return results depending on the backend state. Tests should use controlled test data with deterministic queries.
+
+### 1.5 Checking Existence Without Validating Value
+
+**Found in:** `settings.spec.ts` (line 173)
+
+```typescript
+// BAD: Only checks the attribute exists, not its value
+const newClass = (await page.locator('html').getAttribute('class')) || '';
+expect(newClass).toBeDefined(); // Always passes since we default to ''
+
+// GOOD: Assert the class changed to the expected value
+await expect(page.locator('html')).toHaveClass(/dark/); // or /light/
+```
+
+### 1.6 Body Content Length Check
+
+**Found in:** `settings.spec.ts` (lines 29, 50, 128)
+
+```typescript
+// BAD: Any page with any content passes
+const pageContent = (await page.locator('body').textContent()) || '';
+expect(pageContent.length).toBeGreaterThan(0);
+
+// GOOD: Check for specific expected text
+await expect(page.getByText('LLM Backends')).toBeVisible();
+await expect(page.getByRole('table')).toBeVisible();
+```
+
+---
+
+## 2. Recommended Assertion Patterns
+
+### 2.1 Text Assertions: `toHaveText()` vs `toContainText()`
+
+| Method | Use When | Example |
+|--------|----------|---------|
+| `toHaveText()` | Exact full text match needed | `await expect(el).toHaveText('1 个结果')` |
+| `toContainText()` | Substring match is sufficient | `await expect(el).toContainText('个结果')` |
+| `toContainText(regex)` | Pattern match with retry | `await expect(el).toContainText(/[1-9]\d* 个结果/)` |
+
+```typescript
+// Exact match for deterministic counts
+await expect(page.locator('.result-count')).toHaveText('1 个结果');
+
+// Substring match for presence check
+await expect(page.getByRole('status')).toContainText('完成');
+
+// Regex match for pattern validation (web-first, auto-retries)
+await expect(page.locator('.result-count')).toContainText(/共 \d+ 条/);
+```
+
+### 2.2 Visibility Assertions
+
+| Pattern | Meaning | When to Use |
+|---------|---------|-------------|
+| `toBeVisible()` | Element is visible in viewport | Positive assertion for UI elements |
+| `not.toBeVisible()` | Element is hidden or does not exist | Negative assertion |
+| `toBeHidden()` | Element explicitly hidden (display:none, visibility:hidden) | Element exists but must be hidden |
+| `not.toBeAttached()` | Element removed from DOM | Element should be removed entirely |
+
+```typescript
+// GOOD: Positive assertion for element that should appear
+await expect(page.getByText('搜索完成')).toBeVisible();
+
+// GOOD: Negative assertion for element that should NOT appear
+await expect(page.getByText('deprecated API')).not.toBeVisible();
+
+// GOOD: Element removed from DOM (stronger than hidden)
+await expect(page.getByText('loading...')).not.toBeAttached();
+```
+
+**Critical note:** Do NOT use `page.locator('body')` for visibility checks. Assert on specific elements instead.
+
+### 2.3 Attribute Assertions
+
+```typescript
+// Validate href contains expected URL pattern
+await expect(link).toHaveAttribute('href', /file=orl%3A%2F%2Flocal/);
+
+// Validate aria attributes for accessibility
+await expect(button).toHaveAttribute('aria-expanded', 'true');
+
+// Validate data attributes
+await expect(card).toHaveAttribute('data-status', 'complete');
+```
+
+### 2.4 Count Assertions
+
+```typescript
+// Exact count
+await expect(page.locator('.result-card')).toHaveCount(3);
+
+// Greater than zero (use sparingly - prefer exact counts when possible)
+const count = await page.locator('.result-card').count();
+expect(count).toBeGreaterThan(0);
+
+// Empty state
+await expect(page.locator('.result-card')).toHaveCount(0);
+```
+
+### 2.5 URL Assertions
+
+```typescript
+// Exact URL match
+await expect(page).toHaveURL('http://localhost:5173/search');
+
+// URL contains substring
+await expect(page).toHaveURL(/\/search\?q=test/);
+
+// URL with encoded parameters
+await expect(page).toHaveURL(/orl=orl%3A%2F%2Flocal/);
+```
+
+---
+
+## 3. Web-First Assertions vs Manual `expect()`
+
+### 3.1 The Rule
+
+Playwright assertions are **auto-retrying**: they wait for the condition to become true (up to the timeout). Manual `expect()` on captured values does NOT retry.
+
+```typescript
+// WEB-FIRST (retries automatically): Use locators directly
+await expect(page.getByText('Done')).toBeVisible(); // Retries until visible or timeout
+
+// NON-RETRYING (evaluates once): Avoid
+const text = await page.getByText('Done').textContent(); // Captures once
+expect(text).toBe('Done'); // Fails immediately if timing is off
+```
+
+### 3.2 When Non-Retrying Is Acceptable
+
+Non-retyring assertions are appropriate for:
+- API response status codes (they don't change after receipt)
+- Input values after user interaction (stable state)
+- Configuration values that should be deterministic
+
+```typescript
+// OK: API responses are final
+const response = await request.post('/api/endpoint', { data: payload });
+expect(response.status()).toBe(201);
+
+// OK: Input value after explicit action
+const inputValue = await searchInput.inputValue();
+expect(inputValue).toContain('OR');
+```
+
+### 3.3 The `response.ok()` Trap
+
+```typescript
+// BAD: response.ok() returns a boolean - no retry mechanism
+expect(response.ok()).toBeTruthy();
+
+// GOOD: Use toBeOK() matcher
+await expect(response).toBeOK();
+
+// GOOD: Explicit status check
+expect(response.status()).toBe(200);
+```
+
+---
+
+## 4. Playwright-Specific Best Practices
+
+### 4.1 Prefer `getByRole()` Over CSS Selectors
+
+```typescript
+// Fragile: relies on CSS class names that may change
+await expect(page.locator('.text-lg.font-semibold')).toBeVisible();
+
+// Robust: uses accessible role and name
+await expect(page.getByRole('heading', { name: /results/i })).toBeVisible();
+```
+
+### 4.2 Use `exact: true` for Ambiguous Text
+
+```typescript
+// May match "logs" inside "travelogs" or other substrings
+await expect(page.getByText('logs')).toBeVisible();
+
+// Exact match only
+await expect(page.getByText('logs', { exact: true })).toBeVisible();
+```
+
+### 4.3 Timeout Configuration
+
+```typescript
+// Per-assertion timeout for slow operations
+await expect(result).toBeVisible({ timeout: 30000 });
+
+// Avoid page.waitForTimeout() for synchronization - it's brittle
+// BAD:
+await page.waitForTimeout(1000);
+
+// GOOD: Wait for specific condition
+await expect(page.getByText('Loading...')).not.toBeVisible();
+```
+
+### 4.4 API Response Validation in Tests
+
+```typescript
+// Intercept and validate response bodies
+const responsePromise = page.waitForResponse('**/api/v1/logseek/search**');
+await searchInput.press('Enter');
+const response = await responsePromise;
+
+// Validate response body structure
+const body = await response.json();
+expect(body.results).toHaveLength(3);
+expect(body.results[0].file).toContain('access.log');
+```
+
+### 4.5 Using `waitForFunction` Carefully
+
+The current codebase uses `waitForFunction` with regex checks. This is acceptable for waiting on dynamic content, but the subsequent assertion should be stricter:
+
+```typescript
+// Acceptable: wait for dynamic content to appear
+await page.waitForFunction(
+  () => /\d+ 个结果/.test(document.querySelector('.result-count')?.textContent || ''),
+  { timeout: 10000 }
+);
+
+// Then: assert specific expected value (not just "any number")
+await expect(page.locator('.result-count')).toContainText('3 个结果');
+```
+
+---
+
+## 5. OpsBox-Specific Recommendations
+
+### 5.1 Controlled Test Data Pattern (Eliminate Conditional Assertions)
+
+The root cause of most conditional assertions is that tests search against uncontrolled backend data. The `integration_local.spec.ts` and `integration_query_syntax.spec.ts` files demonstrate the correct pattern: create test data with unique identifiers in `beforeAll`, then search for those identifiers.
+
+```typescript
+// GOOD PATTERN (already used in integration_local.spec.ts):
+test.beforeAll(async ({ request }) => {
+  // Create test data with unique identifier
+  const UNIQUE_ID = `TEST_${Date.now()}`;
+  fs.writeFileSync(testFile, `[INFO] Log entry ${UNIQUE_ID}\n`);
+
+  // Configure planner to point at test data
+  await request.post('/api/v1/logseek/settings/planners/scripts', {
+    data: { app: testApp, script: `SOURCES = ["orl://local${testDir}"]` }
+  });
+});
+
+test('should find test data', async ({ page }) => {
+  await searchInput.fill(`app:${testApp} "${UNIQUE_ID}"`);
+  await searchInput.press('Enter');
+
+  // Deterministic assertion - always exactly 1 result
+  await expect(page.locator('.result-count')).toContainText('1 个结果');
+  await expect(page.getByText(UNIQUE_ID)).toBeVisible();
+});
+```
+
+### 5.2 Fix List for High-Impact Anti-Patterns
+
+Priority order for fixing (by number of occurrences and severity):
+
+1. **`page.locator('body')).toBeVisible()`** in `settings.spec.ts` - 10 occurrences of no-op assertions
+2. **`/\d+\s*个结果/` regex** in `search.spec.ts`, `search_ux.spec.ts` - passes on "0 results"
+3. **Conditional `if (count > 0)` assertions** in `search_ux.spec.ts` - silent skips
+4. **`expect(response.ok()).toBeTruthy()`** in integration tests - not web-first
+5. **`expect(newClass).toBeDefined()`** in `settings.spec.ts` - no value check
+6. **Body content length checks** in `settings.spec.ts` - meaningless
+
+### 5.3 Test Stability Improvements
+
+- Replace `page.waitForTimeout(300/500/1000)` with condition-based waits where possible
+- Use `await expect(locator).toBeVisible({ timeout: ... })` instead of `waitForSelector` followed by `expect`
+- Add trace-on-first-retry (already configured in `playwright.config.ts`)
+
+---
+
+## 6. Testing Library Comparison
+
+Playwright's assertion model differs from Testing Library (often used with Jest/Vitest):
+
+| Aspect | Playwright | Testing Library |
+|--------|------------|-----------------|
+| Auto-retry | Built-in via web-first assertions | Manual via `waitFor` |
+| Selectors | `getByRole`, `getByText`, `locator` | `getByRole`, `getByText`, `queryBy*` |
+| Negative | `not.toBeVisible()` | `waitFor(() => expect(el).not.toBeVisible())` |
+| API testing | `request` fixture + `expect(response)` | Separate supertest or axios |
+
+Playwright's advantage is the auto-retrying assertions, which eliminate most flakiness from timing issues. The key is to always use locators in `expect()` rather than captured values.
+
+---
+
+## 7. Quick Reference Cheat Sheet
+
+```typescript
+// TEXT
+await expect(locator).toHaveText('exact text')
+await expect(locator).toContainText('substring')
+await expect(locator).toContainText(/regex/)
+
+// VISIBILITY
+await expect(locator).toBeVisible()
+await expect(locator).not.toBeVisible()
+await expect(locator).toBeHidden()
+await expect(locator).not.toBeAttached()
+
+// ATTRIBUTES
+await expect(locator).toHaveAttribute('href', /pattern/)
+await expect(locator).toHaveClass(/dark/)
+await expect(locator).toHaveValue('input value')
+
+// COUNT
+await expect(locator).toHaveCount(3)
+
+// URL
+await expect(page).toHaveURL(/pattern/)
+
+// API RESPONSE
+await expect(response).toBeOK()
+expect(response.status()).toBe(201)
+
+// INPUT VALUE (non-retrying is OK here)
+const value = await locator.inputValue()
+expect(value).toBe('expected')
+```
+
+---
+
+## Sources
+
+- Playwright Assertions docs: https://playwright.dev/docs/test-assertions
+- Playwright Auto-waiting: https://playwright.dev/docs/actionability
+- Web-first assertions: https://playwright.dev/docs/best-practices#assertions
+- OpsBox test files: `/Users/wangyue/workspace/codelder/opsboard/web/tests/e2e/`

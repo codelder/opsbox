@@ -60,13 +60,13 @@
     sid = newSid;
 
     if (!file) {
-      error = 'Invalid parameters: missing file';
+      error = '参数无效：缺少 file 参数';
       loading = false;
       return;
     }
 
     if (!sid) {
-      error = 'Invalid parameters: missing sid';
+      error = '参数无效：缺少 sid 参数';
       loading = false;
       return;
     }
@@ -406,7 +406,7 @@
 
       {#if error}
         <div class="flex flex-col items-center gap-2 p-4 text-center text-destructive">
-          <span class="text-lg font-semibold">Unable to load image</span>
+          <span class="text-lg font-semibold">无法加载图片</span>
           <span class="text-sm opacity-80">{error}</span>
         </div>
       {/if}
@@ -433,7 +433,7 @@
             onload={() => (loading = false)}
             onerror={() => {
               loading = false;
-              error = 'Failed to load image resource';
+              error = '加载图片资源失败';
             }}
             draggable="false"
           />

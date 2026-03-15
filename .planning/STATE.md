@@ -1,74 +1,65 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: milestone
-status: executing
-stopped_at: Completed 01-03 (S3 API endpoint integration tests)
-last_updated: "2026-03-13T10:51:00.000Z"
-last_activity: 2026-03-13 -- Completed 01-03: S3 API endpoint integration tests
+milestone: v1.1
+milestone_name: 全面补充测试覆盖
+status: active
+last_updated: "2026-03-15T11:00:00+08:00"
 progress:
-  total_phases: 4
+  total_phases: 7
   completed_phases: 0
-  total_plans: 3
+  total_plans: 1
   completed_plans: 1
-  percent: 33
 ---
 
-# Project State
+# 项目状态
 
-## Project Reference
+## 项目参考
 
-See: .planning/PROJECT.md (updated 2026-03-13)
+See: .planning/PROJECT.md
 
-**Core value:** 搜索性能和系统可靠性 -- 搜索是核心功能，必须快速、稳定、可靠
-**Current focus:** Phase 1: Production Stability (止血)
+**Core value**: E2E 测试必须覆盖最终用户的所有关键操作路径
+**Current focus**: v1.1 路线图已创建，准备进入 Phase 7 计划
 
-## Current Position
+## 当前进度
 
-Phase: 1 of 4 (Production Stability / 止血)
-Plan: 1 of 3 completed in current phase
-Status: Executing
-Last activity: 2026-03-13 -- Completed 01-03: S3 API endpoint integration tests
+- [x] 代码库地图完成 (v1.0)
+- [x] v1.0 里程碑完成 (2026-03-14)
+- [x] v1.1 需求定义 (40 requirements across 8 categories)
+- [x] v1.1 路线图创建 (7 phases)
+- [x] Phase 7 Plan 1: Settings S3 & LLM CRUD Tests (2026-03-15)
 
-Progress: [███░░░░░░░] 33%
+## 进度条
 
-## Performance Metrics
+```
+Phase 7/13 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  0/7 phases
+```
 
-**Velocity:**
-- Total plans completed: 1
-- Average duration: ~15 minutes
-- Total execution time: ~15 minutes
+## 累积上下文
 
-**By Phase:**
+来自 v1.0 的关键决策和模式：
 
-| Phase | Plans | Total | Avg/Plan |
-|-------|-------|-------|----------|
-| 1. Production Stability | 1/3 | ~15min | ~15min |
-| 2. Structural Improvement | 0/3 | - | - |
-| 3. Performance Optimization | 0/4 | - | - |
-| 4. Frontend Coverage | 0/4 | - | - |
+| Decision | Rationale | Outcome |
+|----------|-----------|---------|
+| 先收紧后添加 | 避免在松散基础上叠加 | ✓ Applied across phases 1-6 |
+| NDJSON mock 格式 | useStreamReader 期望 { type: 'result', data: {...} } | ✓ Applied in EDGE-03 |
+| XSS 断言分开检查 | highlight() 将关键词包在 <mark> 标签中 | ✓ Applied in EDGE-03 |
+| A11Y-03 分两次导航 | 避免 mock route 冲突 | ✓ Applied in accessibility.spec.ts |
+| 用 waitForFunction 替代 waitForTimeout | 事件驱动而非固定延迟 | ✓ Applied in loading_states.spec.ts |
+| page.route() mock 避免后端依赖 | 测试稳定性和速度 | ✓ Pattern for all new tests |
+| 用列表内容断言替代 Alert 断言 | Alert 组件在测试中不渲染 | ✓ Applied in settings.spec.ts |
 
-## Accumulated Context
+v1.1 新增规划信息：
 
-### Decisions
+| Item | Detail |
+|------|--------|
+| Requirements | 40 total (SETTINGS: 10, VIEW: 7, IMGVIEW: 6, EXPLORER: 5, SEARCH: 4, AIMODE: 3, THEME: 3, PROMPT: 2) |
+| Phases | 7 phases (7-13) |
+| Phase grouping | Settings split into 2 (S3/LLM vs Planner/Agent); View + Prompt combined; Search + Explorer combined |
+| Dependency | Phase 12 (AI Mode) depends on Phase 7 (LLM settings must be configurable) |
 
-- [Phase 1]: Prioritize unwrap cleanup in search path (175 + 82 occurrences) before structural refactoring -- unwrap cleanup is a prerequisite for safe refactoring
-- [Phase 1]: Categorize each unwrap before replacing (infallible vs error-path vs has-default) -- avoid mechanical expect-as-replacement pitfall
-- [Phase 4]: Run in parallel with Phases 2-3 (lower priority, no production stability risk)
-- [01-03]: Use axum test router with tower::ServiceExt::oneshot for HTTP-level API testing -- provides full stack coverage from routes to repository
+## 阻塞项
 
-### Pending Todos
+无
 
-None yet.
-
-### Blockers/Concerns
-
-- Phase 3 needs cargo-flamegraph profiling data before optimization can proceed (research flag)
-- Phase 4 needs vitest-browser-svelte Svelte 5 compatibility verification (research flag)
-- Two competing TAR libraries (async-tar + tokio-tar) -- consolidate when touching archive code (not blocking)
-
-## Session Continuity
-
-Last session: 2026-03-13
-Stopped at: Completed 01-03 (S3 API endpoint integration tests), ready for next plan
-Resume file: None
+---
+*Last updated: 2026-03-15 after v1.1 roadmap creation*

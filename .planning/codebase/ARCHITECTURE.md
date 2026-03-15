@@ -4,132 +4,143 @@
 
 ## Pattern Overview
 
-**Overall:** Modular monolith with plugin-based module discovery, layered architecture per module, and a shared core library.
+**Overall:** Modular Monolith with Compile-Time Module Registration
 
 **Key Characteristics:**
-- Compile-time module registration via `inventory` crate -- modules self-register at link time without explicit wiring
-- Layered architecture within each module: API (routes) -> Service -> Repository, with a Domain layer for core models
-- Unified error handling via `AppError` with RFC 7807 Problem Details responses
-- Single SQLite database shared across all modules with automatic schema initialization
-- Embedded SPA frontend compiled into the binary via `rust-embed`
+- Inventory-based automatic module discovery at compile time via `register_module!` macro
+- Layered architecture within each module (API -> Service -> Repository -> Domain)
+- Unified error handling via RFC 7807 Problem Details
+- SPA frontend embedded into the Rust binary via `rust-embed`
+- Shared SQLite database with per-module schema management
 
 ## Layers
 
-**opsbox-core (Shared Foundation):**
-- Purpose: Provides cross-cutting infrastructure used by all modules
-- Location: `backend/opsbox-core/src/`
-- Contains: Module trait, database pool, error types, DFS subsystem, LLM abstraction, middleware, logging, filesystem utilities, S3 repository, agent client
-- Depends on: axum, sqlx, tokio, tracing, aws-sdk-s3
-- Used by: All modules (logseek, explorer, agent-manager, opsbox-server)
+**API Layer:**
+- Purpose: HTTP route handlers and request/response formatting
+- Location: `backend/logseek/src/routes.rs` + `routes/` subdirectory, `backend/explorer/src/api.rs`, `backend/agent-manager/src/routes.rs`
+- Contains: Axum route definitions, request validation, response serialization
+- Depends on: Service layer, opsbox-core error types
+- Used by: Axum router in `backend/opsbox-server/src/server.rs`
 
-**Module Layer (logseek, explorer, agent-manager):**
-- Purpose: Feature-specific business logic, each implementing the `Module` trait
-- Location: `backend/logseek/src/`, `backend/explorer/src/`, `backend/agent-manager/src/`
-- Contains: Own routes, service, repository, domain sub-layers
-- Depends on: opsbox-core, axum
-- Used by: opsbox-server (discovered automatically at startup)
+**Service Layer:**
+- Purpose: Business logic orchestration
+- Location: `backend/logseek/src/service/`, `backend/explorer/src/service/`
+- Contains: Search execution, resource listing, encoding detection
+- Depends on: Repository layer, DFS subsystem, opsbox-core
+- Used by: API layer route handlers
 
-**opsbox-server (Composition Root):**
-- Purpose: Application entry point, CLI parsing, server startup, module orchestration
-- Location: `backend/opsbox-server/src/`
-- Contains: main.rs, config.rs, server.rs, logging.rs, daemon support
-- Depends on: opsbox-core, all modules
-- Used by: End users (binary entry point)
+**Repository Layer:**
+- Purpose: Data access and persistence
+- Location: `backend/logseek/src/repository/`, `backend/agent-manager/src/repository.rs`
+- Contains: Cache management, database CRUD, S3 profile persistence
+- Depends on: sqlx, SQLite pool, opsbox-core database utilities
+- Used by: Service layer
 
-**Frontend (SvelteKit SPA):**
-- Purpose: User interface with modular API clients matching backend module structure
-- Location: `web/src/`
-- Contains: Routes, components, API clients, composables, type definitions
-- Depends on: Vite, SvelteKit, TailwindCSS 4.0
-- Built into: `backend/opsbox-server/static/` (embedded in binary)
+**Domain Layer:**
+- Purpose: Core business models and rules
+- Location: `backend/logseek/src/domain/`, `backend/explorer/src/domain.rs`
+- Contains: Source planner configuration, resource type definitions
+- Depends on: Internal abstractions only
+- Used by: Service layer
+
+**DFS Subsystem (Cross-cutting):**
+- Purpose: Unified distributed filesystem abstraction across Local/S3/Agent
+- Location: `backend/opsbox-core/src/dfs/`
+- Contains: Filesystem trait (`OpbxFileSystem`), ORL parser, backend implementations
+- Depends on: tokio, async-trait
+- Used by: LogSeek search, Explorer resource listing
 
 ## Data Flow
 
-**Request Flow (HTTP):**
+**Search Flow:**
 
-1. Client request arrives at Axum router in `opsbox-server/src/server.rs`
-2. Request is routed to the appropriate module based on API prefix (e.g., `/api/v1/logseek/*` -> logseek module)
-3. Module's route handler processes the request (API layer)
-4. Handler calls into Service layer for business logic
-5. Service layer may call Repository layer for database/storage access
-6. Response flows back through the layers as `Result<T, AppError>`
-7. `AppError` implements `IntoResponse` for automatic RFC 7807 Problem Details formatting
+1. Frontend sends `POST /api/v1/logseek/search.ndjson` with query
+2. API layer (`routes/`) validates request and invokes service
+3. Service layer (`search_executor.rs`) parses query, determines sources via planner scripts
+4. SearchExecutor creates `EntryStream` for each target resource
+5. DFS subsystem resolves ORL identifiers to concrete storage backends
+6. Byte-level regex search via `grep-searcher` streams results as NDJSON
+7. Results cached in SQLite for subsequent `view.cache.json` requests
 
-**Module Discovery Flow:**
+**Explorer Flow:**
 
-1. Each module crate uses `register_module!` macro which calls `inventory::submit!`
-2. At startup, `opsbox-server/src/main.rs` explicitly references optional crate dependencies (`extern crate logseek`)
-3. This forces the linker to include the crate, triggering `inventory::submit!`
-4. `opsbox-core::get_all_modules()` iterates all registered `ModuleFactory` entries
-5. Server calls `configure()`, `init_schema()`, then `router()` on each module
+1. Frontend sends `POST /api/v1/explorer/list` with ORL path
+2. `ExplorerService` resolves ORL to determine endpoint type (Local/S3/Agent)
+3. DFS subsystem `OpbxFileSystem` trait dispatches to appropriate implementation
+4. Archive files are auto-detected and navigable via `?entry=` parameter
+5. Results returned as `ResourceItem` list with metadata
 
-**Search Flow (LogSeek):**
-
-1. POST `/api/v1/logseek/search.ndjson` with ORL resources and query
-2. `SearchExecutor` orchestrates parallel searches across local files, S3, and agents
-3. Results stream back as NDJSON via tokio channels
-4. Frontend `useStreamReader` composable consumes the stream in real-time
+**State Management:**
+- Module-level state via `OnceCell` (e.g., global `AgentManager`)
+- Search state via LRU cache (`backend/logseek/src/repository/cache.rs`)
+- Database state via SQLite WAL mode with connection pooling
 
 ## Key Abstractions
 
-**Module Trait (`opsbox-core/src/module.rs`):**
-- Purpose: Defines the contract all pluggable modules must implement
-- Methods: `name()`, `api_prefix()`, `configure()`, `init_schema()`, `router()`, `cleanup()`
-- Pattern: Trait object (`Arc<dyn Module>`) collected via inventory
+**Module Trait:**
+- Purpose: Plugin interface for automatic module registration
+- Examples: `backend/opsbox-core/src/module.rs`
+- Pattern: Trait + inventory crate + `register_module!` macro
 
-**DFS Subsystem (`opsbox-core/src/dfs/`):**
-- Purpose: Unified abstraction for accessing resources across Local, S3, and Agent endpoints
-- Key types: `OpbxFileSystem` trait, `Resource`, `OrlParser`, `Endpoint`
-- Implementations: `LocalFileSystem`, `S3Storage`, `AgentProxyFS`, `ArchiveFileSystem`
+**OpbxFileSystem Trait:**
+- Purpose: Unified filesystem access across storage backends
+- Examples: `backend/opsbox-core/src/dfs/filesystem.rs`
+- Pattern: Strategy pattern with async trait implementations
 
-**ORL Protocol (`opsbox-core/src/dfs/orl_parser.rs`):**
-- Purpose: Unified resource identifier scheme (`orl://[id]@[type].[addr]/[path]?entry=[entry]`)
-- Enables cross-endpoint resource addressing for local files, S3 objects, agent files, and archive entries
+**ORL (OpsBox Resource Locator):**
+- Purpose: Unified resource addressing scheme
+- Examples: `backend/opsbox-core/src/dfs/orl_parser.rs`
+- Pattern: URI parsing with `orl://[id]@[type].[addr]/[path]?entry=[path]`
 
-**AppError (`opsbox-core/src/error.rs`):**
-- Purpose: Unified error type for all modules with automatic HTTP response generation
-- Variants: Database, Config, Internal, BadRequest, NotFound, ExternalService
-- Pattern: Implements `IntoResponse` for RFC 7807 Problem Details
+**Searchable Trait:**
+- Purpose: Abstracts different search target types
+- Examples: `backend/logseek/src/service/searchable.rs`, `backend/opsbox-core/src/dfs/searchable.rs`
+- Pattern: Polymorphic search interface
 
-**Searchable Trait (`logseek/src/service/searchable.rs`):**
-- Purpose: Abstraction for searchable resources across different backends
-- Used by SearchExecutor to query local files, S3, and agents uniformly
+**AppError:**
+- Purpose: Unified error type with RFC 7807 responses
+- Examples: `backend/opsbox-core/src/error.rs`
+- Pattern: Enum error with `IntoResponse` implementation
 
 ## Entry Points
 
-**Binary Entry (`backend/opsbox-server/src/main.rs`):**
+**Main Binary:**
 - Location: `backend/opsbox-server/src/main.rs`
-- Triggers: CLI invocation or daemon start
-- Responsibilities: Parse CLI args, init logging, init database, discover modules, configure modules, init schemas, start HTTP server
+- Triggers: CLI invocation
+- Responsibilities: CLI parsing, logging init, module discovery, database init, server startup
 
-**Module Registration (each module's `lib.rs`):**
-- Location: e.g., `backend/logseek/src/lib.rs`
-- Triggers: Link time (inventory mechanism)
-- Responsibilities: Register module factory with inventory, implement Module trait
+**Module Registration:**
+- Location: Each module's `lib.rs` (e.g., `backend/logseek/src/lib.rs`)
+- Triggers: Compile-time via `inventory::submit!`
+- Responsibilities: Register module factory for automatic discovery
 
-**HTTP Server (`backend/opsbox-server/src/server.rs`):**
+**Server Router:**
 - Location: `backend/opsbox-server/src/server.rs`
-- Triggers: After all modules are initialized
-- Responsibilities: Build Axum router by nesting all module routers, serve embedded static assets with SPA fallback, graceful shutdown
+- Triggers: `async_main()` after module init
+- Responsibilities: Compose Axum router from all registered modules, serve SPA
+
+**Frontend SPA:**
+- Location: `web/src/routes/+page.svelte`
+- Triggers: Browser navigation
+- Responsibilities: UI rendering, API communication
 
 ## Error Handling
 
-**Strategy:** Unified error type (`AppError`) in opsbox-core, with module-specific error types that convert to `AppError`.
+**Strategy:** Layered error types with unified conversion to `AppError`
 
 **Patterns:**
-- Each module defines its own error enum (e.g., `ServiceError`, `RepositoryError`) in its service/repository layer
-- Module errors convert to `AppError` via `From` implementations (see `logseek/src/lib.rs`)
-- `AppError` converts to HTTP responses with RFC 7807 Problem Details format
-- 5xx errors are logged at `error` level, 4xx at `warn` level
+- Module-level error enums (e.g., `ServiceError`, `RepositoryError`, `FsError`)
+- `From` trait implementations for error conversion up the stack
+- `AppError` implements `IntoResponse` with RFC 7807 Problem Details format
+- HTTP status codes mapped by error variant (400/404/500/502)
 
 ## Cross-Cutting Concerns
 
-**Logging:** `tracing` ecosystem with `tracing-subscriber`, configurable via CLI args and API endpoints (`/api/v1/log/*`)
-**Validation:** Axum extractors for request validation, custom validation in service layer
-**Authentication:** Not implemented (single-user tool)
-**Database:** SQLite via `sqlx` with automatic schema initialization per module, shared pool
-**Memory:** `mimalloc` global allocator with explicit collection on cache cleanup
+**Logging:** `tracing` ecosystem with configurable levels, JSON output, file rotation
+**Validation:** Request validation at API layer using serde deserialization
+**Authentication:** None currently implemented (internal tool assumption)
 
 ---
 
 *Architecture analysis: 2026-03-13*
+*Last updated: 2026-03-15*

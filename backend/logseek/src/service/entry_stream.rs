@@ -417,17 +417,14 @@ pub async fn create_entry_stream_from_resource(
         profile_row.secret_key.clone(),
       );
 
-      // 提取 bucket 名称
-      let (bucket_name, object_key) = path
-        .trim_start_matches('/')
-        .split_once('/')
-        .unwrap_or((path.trim_start_matches('/'), ""));
+      // 提取 bucket 名称和 object key（统一方法）
+      let (bucket_name, object_key) = resource.extract_s3_bucket_and_key();
 
-      let s3_config = s3_config.with_bucket(bucket_name.to_string());
+      let s3_config = s3_config.with_bucket(bucket_name);
 
       let s3_storage = S3Storage::new(s3_config).map_err(|e| format!("创建 S3 存储失败: {}", e))?;
 
-      let resource_path = ResourcePath::parse(object_key);
+      let resource_path = ResourcePath::parse(&object_key);
       s3_storage
         .as_entry_stream(&resource_path, true, &search_config)
         .await
@@ -482,16 +479,14 @@ pub async fn create_search_entry_stream_from_resource(
         profile_row.secret_key.clone(),
       );
 
-      let (bucket_name, object_key) = path
-        .trim_start_matches('/')
-        .split_once('/')
-        .unwrap_or((path.trim_start_matches('/'), ""));
+      // 提取 bucket 名称和 object key（统一方法）
+      let (bucket_name, object_key) = resource.extract_s3_bucket_and_key();
 
-      let s3_storage = S3Storage::new(s3_config.with_bucket(bucket_name.to_string()))
+      let s3_storage = S3Storage::new(s3_config.with_bucket(bucket_name))
         .map_err(|e| format!("创建 S3 存储失败: {}", e))?;
 
       let reader = s3_storage
-        .open_read(&ResourcePath::parse(object_key))
+        .open_read(&ResourcePath::parse(&object_key))
         .await
         .map_err(|e| format!("打开 S3 文件失败: {}", e))?;
 

@@ -5,213 +5,150 @@
 ## Naming Patterns
 
 **Files (Rust):**
-- snake_case for all `.rs` files: `search_executor.rs`, `entry_stream.rs`, `orl_parser.rs`
-- Test files co-located as modules: `search_tests.rs` inside `search.rs`, or integration tests in `tests/` directory
-- Module structure: `mod.rs` for directory modules, `lib.rs` for crate root
+- Snake_case for all file names (`search_executor.rs`, `entry_stream.rs`)
+- Module files: `mod.rs` for directory modules; `lib.rs` for crate root
+- Test files: `*_tests.rs` (submodule), `*_integration.rs` (integration), `*_test.rs` (test)
+- Config files: `config.rs`, `routes.rs`, `models.rs`, `repository.rs`
 
-**Files (SvelteKit/TypeScript):**
-- PascalCase for Svelte components: `AgentManagement.svelte`, `ServerLogSettings.svelte`
-- snake_case or camelCase for utility files: `orl.test.ts`, `highlight.test.ts`
-- API clients: `search.ts`, `view.ts`, `profiles.ts`
-- Test files: `{name}.test.ts` or `{name}.svelte.test.ts`
+**Files (TypeScript/Svelte):**
+- PascalCase for Svelte components (`AgentManagement.svelte`, `SearchResultCard.svelte`)
+- camelCase for utility files (`highlight.ts`, `orl.ts`, `utils.ts`)
+- Test files: `*.test.ts`, `*.svelte.test.ts` (co-located with source)
+- Module index: `index.ts` barrel exports per module directory
 
 **Functions (Rust):**
-- snake_case: `view_cache_json`, `should_process_path`, `process_content`
-- Constructors: `new()`, `new_with_encoding()`
-- Test functions: `test_{function_name}_{scenario}` (e.g., `test_process_content_no_match`)
+- Snake_case: `start_search`, `extract_session_id`, `build_router`
+- Constructor pattern: `::new()` for primary constructors
+- Builder methods: `with_*` pattern for optional configuration (`with_path_filter`)
+- Async functions: plain names without `_async` suffix
 
 **Functions (TypeScript):**
-- camelCase: `startSearch`, `extractSessionId`, `fetchViewCache`
+- camelCase: `startSearch`, `extractSessionId`, `getApiBase`
+- Composables: `use*` prefix (`useSearch`, `useStreamReader`, `useLlmBackends`)
 
 **Variables:**
-- Rust: snake_case throughout
-- TypeScript: camelCase
+- Rust: snake_case (`db_pool`, `io_max_concurrency`, `error_type`)
+- TypeScript: camelCase (`query`, `sessionId`, `hasMore`)
 
 **Types (Rust):**
-- PascalCase: `SearchProcessor`, `AppError`, `LogSeekApiError`, `TestError`
-- Error enums: `{Layer}Error` pattern (e.g., `ServiceError`, `RepositoryError`, `SearchError`)
+- PascalCase: `AppError`, `SearchError`, `CompactLines`, `SessionData`
+- Error enums: `*Error` suffix (`ServiceError`, `RepositoryError`, `SearchError`)
+- Trait: `Module`, `OpbxFileSystem`, `Streamable`
 
 **Types (TypeScript):**
-- PascalCase interfaces/types: `ViewParams`, `SearchBody`, `AgentInfo`
+- PascalCase interfaces: `SearchJsonResult`, `ViewParams`, `ApiProblem`
+- Union types: `KeywordInfo`, `LlmProviderType`
 
 ## Code Style
 
-**Formatting:**
-- Rust: Standard `rustfmt` (2024 edition)
-- Prettier config (shared root `.prettierrc`):
-  - `useTabs: false`, `tabWidth: 2`, `printWidth: 120`
-  - `singleQuote: true`, `trailingComma: "none"`
-- Svelte: Uses `prettier-plugin-svelte` and `prettier-plugin-tailwindcss`
-- Tailwind: Configured via `tailwindStylesheet: "./src/app.css"`
+**Formatting (Rust):**
+- Tool: `rustfmt` with `backend/rustfmt.toml`
+- 2-space indentation (`tab_spaces = 2`)
+- 120-character line width (`max_width = 120`)
+- No tabs (`hard_tabs = false`)
+- Edition: 2024
 
-**Linting (Rust):**
-- No explicit clippy config found, default rustc lints apply
-- `thiserror` for error derivation
+**Formatting (TypeScript/Svelte):**
+- Tool: Prettier with `web/.prettierrc`
+- 2-space indentation (`tabWidth: 2`)
+- 120-character line width (`printWidth: 120`)
+- Single quotes (`singleQuote: true`)
+- No trailing commas (`trailingComma: "none"`)
+- Svelte parser with auto embedded language formatting
+- TailwindCSS plugin for class sorting
 
-**Linting (TypeScript/Svelte):**
-- ESLint with `typescript-eslint` and `eslint-plugin-svelte`
-- `eslint-config-prettier` integration
-- Svelte-specific: `svelte/no-at-html-tags` disabled (controlled HTML rendering)
-- TypeScript `no-undef` disabled (handled by TS)
+**Linting:**
+- ESLint with `eslint-config-prettier` and `eslint-plugin-svelte`
+- TypeScript-ESLint for type-aware linting
+- Prettier checked via `pnpm --dir web lint`
 
 ## Import Organization
 
-**Rust:**
-1. Standard library imports (`std::`)
-2. External crate imports (alphabetical)
-3. Internal crate imports (`crate::`, `opsbox_core::`)
+**Rust Order:**
+1. Standard library (`std::*`)
+2. External crates (`axum`, `tokio`, `serde`, `sqlx`)
+3. Workspace crates (`opsbox_core`, `opsbox_test_common`)
+4. Local module imports (`crate::*`)
 
-Example from `backend/logseek/src/routes/view.rs`:
-```rust
-use axum::{
-  body::Body,
-  extract::{Query, State},
-  http::{HeaderValue, Response as HttpResponse, header::CONTENT_TYPE},
-};
-use opsbox_core::SqlitePool;
-use opsbox_core::dfs::{Location, OrlParser};
-use serde::{Deserialize, Serialize};
-use tracing::debug;
-```
+**TypeScript Order:**
+1. SvelteKit imports (`$app`, `$env`)
+2. External packages (`vitest`, `@vitest/browser`)
+3. Module imports (`$lib/modules/*`)
+4. Type imports with `type` keyword
 
-**TypeScript/Svelte:**
-1. External packages
-2. SvelteKit internal (`$lib/`)
-3. Local relative imports
+**Path Aliases (TypeScript):**
+- `$lib` - Maps to `web/src/lib/`
+- `$env/dynamic/public` - Runtime environment variables
+- Module-relative imports preferred within modules
 
 ## Error Handling
 
-**Rust - Layered Error Architecture:**
+**Rust Patterns:**
+- Unified error type via `opsbox_core::AppError` enum
+- RFC 7807 Problem Details for HTTP responses
+- Custom error types per layer with `From` conversions to `AppError`
+- `Result<T>` type alias: `pub type Result<T> = std::result::Result<T, AppError>`
+- Error constructors: `AppError::config()`, `AppError::internal()`, `AppError::bad_request()`, `AppError::not_found()`, `AppError::external_service()`
+- `thiserror` derive macro for error enums
+- Logging within `IntoResponse`: error-level for 5xx, warn for 4xx
 
-1. **Core errors** (`opsbox-core::error::AppError`):
-   - Unified enum: `Database`, `Config`, `Internal`, `BadRequest`, `NotFound`, `ExternalService`
-   - Implements `IntoResponse` with RFC 7807 Problem Details format
-   - Builder methods: `AppError::config()`, `AppError::internal()`, `AppError::bad_request()`, etc.
-
-2. **Service errors** (`logseek::service::ServiceError`):
-   - Variants: `ConfigError`, `ProcessingError`, `SearchFailed`, `IoError`, `ChannelClosed`, `Repository`
-   - Converts to `AppError` via `From` trait
-
-3. **Repository errors** (`logseek::repository::RepositoryError`):
-   - Variants: `NotFound`, `QueryFailed`, `StorageError`, `CacheFailed`, `Database`
-
-4. **API errors** (`logseek::api::error::LogSeekApiError`):
-   - Aggregates all layer errors
-   - Maps to HTTP status codes with Problem Details JSON
-   - Uses `#[error(transparent)]` for delegation
-
-Error conversion chain: Repository -> Service -> AppError -> LogSeekApiError
-
-**TypeScript:**
-- API errors thrown as `Error` with HTTP status message
-- Error response parsing with JSON fallback to status text
+**TypeScript Patterns:**
+- `try/catch` with typed error extraction
+- Error messages in Chinese for user-facing messages
+- Problem Details parsing from backend responses
+- Console logging for debugging: `console.warn`, `console.info`
 
 ## Logging
 
-**Framework:** `tracing` ecosystem (Rust)
+**Framework:** Rust `tracing` ecosystem with `tracing-subscriber`
 
 **Patterns:**
-- Debug: `tracing::debug!("🔍 Server查找缓存: sid={}, file_url={}", ...)`
-- Info: `tracing::info!("[{}] {}", error_type, error_msg)`
-- Warn: `tracing::warn!("❌ Server缓存未命中: ...")`
-- Error: `tracing::error!("[LogSeek API] [{}] {}", title, detail)`
-- Structured logging with key-value pairs
-- Chinese log messages are common in this codebase
+- `tracing::info!` for request/response logging
+- `tracing::debug!` for configuration details
+- `tracing::warn!` for recoverable issues
+- `tracing::error!` for server errors
+- Span-based HTTP tracing via `tower_http::trace::TraceLayer`
+- Environment-based log level configuration
 
 ## Comments
 
 **When to Comment:**
-- Module-level doc comments with section headers: `// === API Layer ===`
-- Bilingual comments: English doc comments, Chinese inline comments
-- Code organization markers: `// 1. 解析 ORL`, `// 2. 检查缓存`
+- Module-level doc comments (`//!`) for crate/module descriptions
+- Struct/trait/function doc comments (`///`) for public APIs
+- Inline comments for non-obvious logic, especially conversions
+- Section separators using `// ===` for logical grouping
+- Chinese comments for business logic explanations
 
-**TSDoc/Rustdoc:**
-- Module docs at top of `lib.rs`: `//! OpsBox 核心共享库`
-- Function docs in Chinese: `/// 查看缓存中的文件内容`
-- Test descriptions in Chinese: `/// 测试中的响应体最大读取大小（1MB）`
+**JSDoc/TSDoc:**
+- Used for exported functions with `@param`, `@returns` tags
+- Interface/type documentation explaining field purposes
+- Module-level `/** */` comments for API clients
 
 ## Function Design
 
-**Size:** Functions generally kept focused; complex handlers may be 100-200 lines
+**Size:** Small, focused functions. Complex logic extracted to helper functions.
 
 **Parameters:**
-- Extract parameters via Axum extractors: `State(pool): State<SqlitePool>`, `Query(params): Query<ViewParams>`
-- Struct-based params with `#[derive(Deserialize)]`
+- Accept `impl Into<String>` for flexible string parameters
+- Use `&str` for read-only string references
+- Options via builder pattern or `Option<T>` parameters
 
 **Return Values:**
-- Result type aliases: `pub type Result<T> = std::result::Result<T, LogSeekApiError>`
-- HTTP responses built with `HttpResponse::builder().status(200).header(...).body(...)`
+- `Result<T>` for fallible operations
+- `Option<T>` for nullable returns
+- `impl Trait` for iterator returns
 
 ## Module Design
 
-**Rust Module Structure (logseek example):**
-```
-logseek/
-├── src/
-│   ├── lib.rs          # Module root, trait impl, router export
-│   ├── api.rs          # API layer documentation
-│   ├── api/
-│   │   ├── error.rs    # API error types
-│   │   └── models.rs   # Request/Response models
-│   ├── routes/         # HTTP route handlers
-│   ├── service/        # Business logic
-│   ├── repository/     # Data access
-│   ├── domain/         # Core domain models
-│   └── utils/          # Shared utilities
-└── tests/              # Integration tests
-```
+**Exports:**
+- Re-export common types at module root (`pub use error::{AppError, Result}`)
+- Barrel `index.ts` files for TypeScript modules
+- Public API surface minimized; implementation details in private modules
 
-**SvelteKit Module Structure:**
-```
-web/src/lib/modules/
-├── logseek/
-│   ├── api/            # API clients
-│   ├── types/          # TypeScript types
-│   ├── composables/    # Svelte composables
-│   └── components/     # UI components
-├── agent/              # Agent module
-└── explorer/           # Explorer module
-```
-
-## API Layer Conventions
-
-**Route handlers:**
-- Dual layer pattern: `routes.rs` for backward compatibility, `routes/` directory for organized handlers
-- Return `Result<HttpResponse<Body>, LogSeekApiError>`
-- JSON responses use `serde_json::json!()` macro
-
-**Request models:**
-- Derive `Debug, Clone, Deserialize`
-- Named `*Params` for query params, `*Body` for request body
-
-**Response models:**
-- Derive `Debug, Clone, Serialize`
-- Named `*Response` or `*Out`
-
-## Frontend Svelte 5 Conventions
-
-**Component Props:**
-- Use `$props()` rune with destructuring
-- `ref = $bindable(null)` for element refs
-- Spread `...restProps` for HTML attributes
-
-**State Management:**
-- Svelte 5 Runes (`$state`, `$derived`, `$effect`)
-- Composables pattern for reusable logic
-
-## Error Response Format
-
-All API errors return RFC 7807 Problem Details:
-```json
-{
-  "type": "about:blank",
-  "title": "Error Title",
-  "detail": "Detailed error message",
-  "status": 400
-}
-```
-
-Content-Type: `application/problem+json; charset=utf-8`
+**Barrel Files:**
+- TypeScript: `index.ts` in each module directory (`api/index.ts`, `composables/index.ts`)
+- Svelte UI components: `index.ts` re-exporting component files
+- Rust: `mod.rs` with `pub use` for key types
 
 ---
 

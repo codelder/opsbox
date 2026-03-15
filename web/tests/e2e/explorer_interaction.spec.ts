@@ -9,7 +9,7 @@
  * - File operations
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -26,6 +26,25 @@ test.describe('Explorer Interaction E2E', () => {
   const LOGS_DIR = path.join(TEST_DIR, 'logs');
   const NESTED_DIR = path.join(LOGS_DIR, 'nested');
   const APP_LOG_CONTENT = 'Application log content';
+
+  // 公共验证函数
+  async function verifyItemVisible(page: Page, itemName: string, timeout = 5000) {
+    await expect(page.getByText(itemName, { exact: true })).toBeVisible({ timeout });
+  }
+
+  async function navigateToDirectory(page: Page, dirPath: string) {
+    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${dirPath}`)}`);
+    await page.waitForLoadState('networkidle');
+  }
+
+  async function switchToListView(page: Page) {
+    const listBtn = page.locator('button').filter({ has: page.locator('.lucide-layout-list') });
+    const listCount = await listBtn.count();
+    if (listCount > 0) {
+      await listBtn.first().click();
+      await page.waitForTimeout(300);
+    }
+  }
 
   test.beforeAll(async () => {
     // 创建测试目录结构
@@ -65,7 +84,8 @@ test.describe('Explorer Interaction E2E', () => {
     expect(page.url()).toContain('orl=orl');
   });
 
-  test('should navigate to real directory via ORL input', async ({ page }) => {
+  test('should navigate to directory via ORL input and deep navigation', async ({ page }) => {
+    // 通过 ORL 输入导航到测试目录
     const input = page.locator('#orl-input');
     await input.fill(`orl://local${TEST_DIR}`);
     await input.press('Enter');
@@ -75,28 +95,21 @@ test.describe('Explorer Interaction E2E', () => {
     await expect(page).toHaveURL(/orl=orl%3A%2F%2Flocal/);
 
     // 应该看到测试目录内容
-    await expect(page.getByText('logs', { exact: true })).toBeVisible({ timeout: 5000 });
-  });
+    await verifyItemVisible(page, 'logs');
 
-  test('should navigate deep into directory structure', async ({ page }) => {
-    // 导航到测试目录
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${TEST_DIR}`)}`);
-    await page.waitForLoadState('networkidle');
-
-    // 点击 logs 目录
-    await expect(page.getByText('logs', { exact: true })).toBeVisible({ timeout: 5000 });
+    // 深层导航：点击 logs 目录
     await page.getByRole('button', { name: 'logs', exact: true }).dblclick();
     await page.waitForLoadState('networkidle');
 
     // 应该看到 app.log
-    await expect(page.getByText('app.log', { exact: true })).toBeVisible({ timeout: 5000 });
+    await verifyItemVisible(page, 'app.log');
 
     // 点击 nested 目录
     await page.getByRole('button', { name: 'nested', exact: true }).dblclick();
     await page.waitForLoadState('networkidle');
 
     // 应该看到 nested.log
-    await expect(page.getByText('nested.log', { exact: true })).toBeVisible({ timeout: 5000 });
+    await verifyItemVisible(page, 'nested.log');
   });
 
   test('should toggle hidden files visibility', async ({ page }) => {
@@ -116,23 +129,20 @@ test.describe('Explorer Interaction E2E', () => {
     await expect(page.getByText('.hidden_file')).toBeVisible({ timeout: 5000 });
   });
 
-  test('should switch between table and grid view modes', async ({ page }) => {
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${TEST_DIR}`)}`);
-    await page.waitForLoadState('networkidle');
+  test('should switch between table and grid view modes and display file metadata', async ({ page }) => {
+    await navigateToDirectory(page, TEST_DIR);
 
     // 默认是网格视图
-    await expect(page.getByText('logs', { exact: true })).toBeVisible({ timeout: 5000 });
+    await verifyItemVisible(page, 'logs');
 
     // 切换到列表视图
-    const listBtn = page.locator('button').filter({ has: page.locator('.lucide-layout-list') });
-    const listCount = await listBtn.count();
-    if (listCount > 0) {
-      await listBtn.first().click();
-      await page.waitForTimeout(300);
+    await switchToListView(page);
 
-      // 表格应该可见
-      await expect(page.locator('table')).toBeVisible({ timeout: 5000 });
-    }
+    // 表格应该可见
+    await expect(page.locator('table')).toBeVisible({ timeout: 5000 });
+
+    // 验证文件存在（元数据显示）
+    await verifyItemVisible(page, 'app.log');
   });
 
   test('should display right-click menu for file', async ({ page }) => {
@@ -151,8 +161,7 @@ test.describe('Explorer Interaction E2E', () => {
   });
 
   test('should refresh list via toolbar button', async ({ page }) => {
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${TEST_DIR}`)}`);
-    await page.waitForLoadState('networkidle');
+    await navigateToDirectory(page, TEST_DIR);
 
     // 点击刷新按钮
     const refreshBtn = page.getByTitle(/刷新|Refresh/i);
@@ -160,12 +169,11 @@ test.describe('Explorer Interaction E2E', () => {
     await page.waitForLoadState('networkidle');
 
     // 页面应该仍然正常
-    await expect(page.getByText('logs', { exact: true })).toBeVisible({ timeout: 5000 });
+    await verifyItemVisible(page, 'logs');
   });
 
   test('should open file viewer on double click', async ({ page }) => {
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${LOGS_DIR}`)}`);
-    await page.waitForLoadState('networkidle');
+    await navigateToDirectory(page, LOGS_DIR);
 
     // 等待文件出现
     const fileItem = page.getByRole('button', { name: 'app.log', exact: true });
@@ -183,11 +191,10 @@ test.describe('Explorer Interaction E2E', () => {
 
   test('should navigate back using back button', async ({ page }) => {
     // 导航到深层目录
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${NESTED_DIR}`)}`);
-    await page.waitForLoadState('networkidle');
+    await navigateToDirectory(page, NESTED_DIR);
 
     // 应该看到 nested.log
-    await expect(page.getByText('nested.log', { exact: true })).toBeVisible({ timeout: 5000 });
+    await verifyItemVisible(page, 'nested.log');
 
     // 点击后退按钮
     const backBtn = page.locator('button').filter({ has: page.locator('.lucide-arrow-left') });
@@ -195,23 +202,7 @@ test.describe('Explorer Interaction E2E', () => {
     await page.waitForLoadState('networkidle');
 
     // 应该回到 logs 目录
-    await expect(page.getByText('app.log', { exact: true })).toBeVisible({ timeout: 5000 });
-  });
-
-  test('should display file metadata', async ({ page }) => {
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${LOGS_DIR}`)}`);
-    await page.waitForLoadState('networkidle');
-
-    // 切换到列表视图以查看更多元数据
-    const listBtn = page.locator('button').filter({ has: page.locator('.lucide-layout-list') });
-    const listCount = await listBtn.count();
-    if (listCount > 0) {
-      await listBtn.first().click();
-      await page.waitForTimeout(300);
-    }
-
-    // 验证文件存在
-    await expect(page.getByText('app.log', { exact: true })).toBeVisible({ timeout: 5000 });
+    await verifyItemVisible(page, 'app.log');
   });
 
   test('should handle non-existent directory gracefully', async ({ page }) => {

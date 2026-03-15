@@ -92,10 +92,12 @@ SOURCES = [
 ### 2. 多 Agent 混合搜索
 ```python
 # 在所有在线生产环境 Agent 的固定目录下搜索
-SOURCES = [
-    f"orl://{a['id']}@agent/app/logs/"
-    for a in AGENTS if a['tags'].get('env') == 'prod'
-]
+# 注意：f-string 内只能用简单标识符，不能直接用 a.get('id') 或 a['id']
+SOURCES = []
+for a in AGENTS:
+    if a['tags'].get('env') == 'prod':
+        agent_id = a.get('id')  # 先提取变量
+        SOURCES.append(f"orl://{agent_id}@agent/app/logs/")
 ```
 
 ### 3. S3 归档文件查阅
@@ -133,7 +135,8 @@ SOURCES = [
 ```python
 SOURCES = []
 for d in DATES:
-    SOURCES.append(f"orl://local/data/logs/{d['yyyymmdd']}/?glob=*.log")
+    ymd = d['yyyymmdd']
+    SOURCES.append(f"orl://local/data/logs/{ymd}/?glob=*.log")
 ```
 
 ### 模式 B：分片存储的 S3 历史数据
@@ -143,12 +146,14 @@ SOURCES = []
 
 # 检查是否有 S3 配置可用
 if S3_PROFILES:
-    profile_name = S3_PROFILES[0]['profile_name']
+    first_profile = S3_PROFILES[0]
+    profile_name = first_profile['profile_name']
     bucket = "my-bucket"  # 替换为实际的 bucket 名称
 
     for d in DATES:
+        ymd = d['yyyymmdd']
         for hour in range(24):
-            key = f"BBIP/ARCHIVE/{d['yyyymmdd']}/log_{hour:02d}.tar.gz"
+            key = f"BBIP/ARCHIVE/{ymd}/log_{hour:02d}.tar.gz"
             SOURCES.append(f"orl://{profile_name}:{bucket}@s3/{key}")
 ```
 
@@ -162,13 +167,16 @@ SOURCES = [
 # 1. 自动追加历史日期对应的 S3 归档
 # 注意：bucket 名称需要替换为实际值
 for d in DATES:
-    if d['iso'] < TODAY:
-        SOURCES.append(f"orl://oss:my-bucket@s3/history/{d['yyyymmdd']}.tar.gz")
+    iso = d['iso']
+    ymd = d['yyyymmdd']
+    if iso < TODAY:
+        SOURCES.append(f"orl://oss:my-bucket@s3/history/{ymd}.tar.gz")
 
 # 2. 如果包含特定标签的 Agent 在线，也拉取其临时日志
 for a in AGENTS:
     if a['tags'].get('role') == 'worker':
-        SOURCES.append(f"orl://{a['id']}@agent/var/log/worker.log")
+        agent_id = a.get('id')  # 提取变量用于 f-string
+        SOURCES.append(f"orl://{agent_id}@agent/var/log/worker.log")
 ```
 
 ---
@@ -179,6 +187,65 @@ for a in AGENTS:
 2. **测试脚本**: 在管理界面中使用"测试"功能，可以即时看到脚本生成的 `SOURCES` (ORL 列表) 和调试日志。
 3. **性能注意**: 避免在单次查询中生成数千个 ORL，这会显著增加后端的压力。尽量利用 `glob` 模式合并同目录下的多个文件。
 4. **调试**: 可以使用 `print()` 函数输出日志，日志会直接显示在前端的测试反馈区域。
+
+---
+
+## Starlark 语法限制
+
+Starlark 是 Python 的子集，本项目使用 `starlark-rust` 实现（v0.13），已启用 f-string 扩展。
+
+### f-string 中的表达式限制
+
+**关键限制**：f-string 内部**只支持简单标识符**，不支持任何表达式（包括 `.get()` 方法调用和 `[]` 索引）。
+
+```python
+# ❌ 错误：f-string 内不支持方法调用
+f"orl://{a.get('id')}@agent/logs/"
+
+# ❌ 错误：f-string 内不支持索引表达式
+f"orl://{a['id']}@agent/logs/"
+
+# ✅ 正确：先提取变量，再用 f-string
+agent_id = a.get('id')  # 或 a['id']
+f"orl://{agent_id}@agent/logs/"
+
+# ✅ 也可以用字符串拼接（普通表达式中 a['id'] 和 a.get('id') 都支持）
+"orl://" + a['id'] + "@agent/logs/"
+"orl://" + a.get('id') + "@agent/logs/"
+```
+
+### 普通表达式（非 f-string）
+
+在普通表达式中，字典方括号访问和方法调用都是**完全支持**的：
+
+```python
+# ✅ 赋值语句
+name = a['id']
+name = a.get('id')
+
+# ✅ 条件判断
+if a['tags'].get('env') == 'prod':
+    ...
+
+# ✅ 字符串拼接
+"orl://" + a['id'] + "@agent/logs/"
+"orl://" + a.get('id') + "@agent/logs/"
+```
+
+### 推荐风格
+
+```python
+# 条件判断：使用简洁的方括号访问
+if a['tags'].get('env') == 'prod':
+    ...
+
+# f-string：必须先提取变量
+agent_id = a.get('id')  # 或 a['id']
+f"orl://{agent_id}@agent/logs/"
+
+# 或使用字符串拼接（无需提前提取）
+"orl://" + a.get('id') + "@agent/logs/"
+```
 
 ---
 

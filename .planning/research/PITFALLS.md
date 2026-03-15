@@ -1,273 +1,822 @@
-# Domain Pitfalls
+# E2E Testing Pitfalls and Prevention Guide
 
-**Domain:** Code quality improvements — unwrap cleanup, frontend coverage, search performance
-**Researched:** 2026-03-13
-**Confidence:** MEDIUM (project-specific findings from CONCERNS.md HIGH; general Rust/Svelte patterns from domain knowledge)
+Research document for OpsBox E2E testing (Playwright + SvelteKit + Rust backend).
 
-## Critical Pitfalls
+## Table of Contents
 
-### Pitfall 1: Replace unwrap with expect (Still Panics)
-
-**What goes wrong:**
-Team replaces `.unwrap()` with `.expect("message")` across the codebase. The code still panics at runtime, just with a slightly better message. The fundamental problem (unhandled error cases) is not solved.
-
-**Why it happens:**
-Developers treat "remove unwrap" as a mechanical text replacement task. `expect` feels safer because it has a message, but it is still a panic in production. In `search_executor.rs` with 175 unwraps, a mechanical replacement yields 175 expects and zero improvement in reliability.
-
-**How to avoid:**
-- Categorize each unwrap before touching it: (a) truly infallible (e.g., parsing a hardcoded string), (b) should return an error to the caller, (c) has a sensible default.
-- Only use `.expect()` for category (a) where the condition is provably impossible. Document the proof in a comment.
-- Use `?` propagation or `AppError` for category (b).
-- Use `.unwrap_or()` / `.unwrap_or_else()` for category (c).
-
-**Warning signs:**
-- PR shows bulk find-and-replace of `unwrap` with `expect`.
-- No new error variants added to `AppError` despite many unwrap removals.
-- Test suite passes without new test cases for error paths.
-
-**Phase to address:**
-Unwrap cleanup phase. Must be the first step of the phase, not skipped.
+1. [Assertion Pitfalls](#1-assertion-pitfalls)
+2. [Test Design Pitfalls](#2-test-design-pitfalls)
+3. [Coverage Pitfalls](#3-coverage-pitfalls)
+4. [Maintenance Pitfalls](#4-maintenance-pitfalls)
+5. [OpsBox-Specific Observations](#5-opsbox-specific-observations)
+6. [Detection Strategies](#6-detection-strategies)
+7. [Prevention Approaches](#7-prevention-approaches)
+8. [Remediation Priorities](#8-remediation-priorities)
 
 ---
 
-### Pitfall 2: Mutex Poisoning Cascades in HTTP Handlers
+## 1. Assertion Pitfalls
 
-**What goes wrong:**
-`.lock().unwrap()` on mutexes inside HTTP handlers (currently in `backend/agent/src/routes.rs:108,137` and `backend/opsbox-server/src/network.rs:89,112,134`) causes a poisoned mutex to crash every subsequent request. A single panic while holding a lock poisons the mutex permanently.
+### 1.1 False Positives (Tests Pass When They Should Not)
 
-**Why it happens:**
-Rust's `std::sync::Mutex::lock()` returns `Result` because a previous panic while holding the lock marks it as poisoned. Developers assume `.lock()` will always succeed and unwrap the result. In a long-running server, one bad request can DOS the entire endpoint.
+**Problem**: Tests that appear to pass but do not actually verify the intended behavior.
 
-**How to avoid:**
-- Use `.lock().unwrap_or_else(|poisoned| poisoned.into_inner())` to recover from poisoned mutexes in production code.
-- Better: replace `std::sync::Mutex` with `tokio::sync::Mutex` in async contexts, which does not use poisoning.
-- Best: eliminate shared mutable state where possible; use message passing or immutable data.
+**Observed pattern in OpsBox** (`web/tests/e2e/search.spec.ts`):
+```typescript
+// VULNERABLE: Only checks regex matches "digits + result", never validates actual count
+const resultsText = await page.locator('.text-lg.font-semibold').textContent();
+expect(resultsText).toMatch(/\d+\s*个结果/);
+```
 
-**Warning signs:**
-- Grep shows `.lock().unwrap()` in any non-test production code.
-- HTTP handler functions contain mutex lock calls.
-- Error logs show "poisoned lock" after a server restart.
+This assertion passes when results text is "0 个结果", "1 个结果", or "999 个结果". The test cannot distinguish between successful results and empty results.
 
-**Phase to address:**
-Unwrap cleanup phase, prioritized as highest-risk category (mutex locks in request handlers).
+**Other false positive patterns found**:
 
----
+1. **Tautological assertions** (`settings.spec.ts` line 172):
+```typescript
+const newClass = (await page.locator('html').getAttribute('class')) || '';
+expect(newClass).toBeDefined();  // Always passes - string || '' is never undefined
+```
 
-### Pitfall 3: Swallowing Errors Silently (The Over-Correction)
+2. **Body visibility as success indicator** (multiple files):
+```typescript
+// Appears in settings.spec.ts, image_viewer.spec.ts, explorer_interaction.spec.ts
+await expect(page.locator('body')).toBeVisible();
+// Body is ALWAYS visible on any rendered page - even error pages
+```
 
-**What goes wrong:**
-After the unwrap cleanup drive, developers over-correct by using `.unwrap_or_default()` or `let _ = ...` everywhere. Errors are silently swallowed. The system appears stable but data is silently lost or operations silently fail. Search returns incomplete results without any indication.
+3. **Guard clause tests** (`search_ux.spec.ts` lines 40-56):
+```typescript
+if (count > 0) {
+  // assertions here only run when results exist
+}
+// Test passes even with 0 results - the "real" assertion is just regex match
+```
 
-**Why it happens:**
-The pain of panics drives an extreme reaction: "never panic, never propagate." But in a log search platform, a silently failed S3 read or encoding detection means missing search results with no feedback to the user.
+4. **Catch-all fallback** (`search.spec.ts` line 159):
+```typescript
+const resultsText = await page
+  .locator('.text-lg.font-semibold')
+  .textContent()
+  .catch(() => '0 个结果');  // Fallback makes assertion always pass
+expect(resultsText).toMatch(/\d+\s*个结果/);
+```
 
-**How to avoid:**
-- Establish a rule: errors that affect data integrity or search completeness must be propagated to the user, not swallowed.
-- Use `.unwrap_or_default()` only for truly optional data (e.g., an optional header, a display name).
-- Add tracing/warning logs for every error path that does not propagate to the user, so silent failures are at least visible in server logs.
+**Detection**: Mark any assertion that would pass on a blank page, error page, or 0-result state.
 
-**Warning signs:**
-- Increase in `let _ =` patterns in PRs.
-- `.unwrap_or_default()` on `Result` types (not `Option`).
-- No new `tracing::warn!` calls accompanying error suppression.
-
-**Phase to address:**
-Unwrap cleanup phase, enforced during code review.
-
----
-
-### Pitfall 4: Testing Components Instead of Behavior
-
-**What goes wrong:**
-Frontend coverage push leads to tests that verify Svelte component internals (e.g., "component has this CSS class", "this prop is passed to child") rather than user-visible behavior. Coverage numbers rise but regressions still slip through because the tests are coupled to implementation.
-
-**Why it happens:**
-Route components like `explorer/+page.svelte` (1104 lines) are monolithic and hard to test behaviorally. It is tempting to write shallow tests that render the component and check a few attributes, inflating coverage without testing actual user flows.
-
-**How to avoid:**
-- For each route component, define 2-3 user stories before writing tests (e.g., "user navigates to a folder, sees its contents, downloads a file").
-- Prefer `@testing-library/svelte` style queries (`getByRole`, `getByText`) over `querySelector`.
-- Test composables in isolation with unit tests; test page components with integration tests that exercise real API mock responses.
-
-**Warning signs:**
-- Tests contain `querySelector('.some-class')` or check `classList.contains(...)`.
-- Many tests for a component but zero tests exercise the component's event handlers.
-- Coverage report shows 100% line coverage on a component but no test would fail if the component's logic was subtly changed.
-
-**Phase to address:**
-Frontend coverage phase, first week (establish testing patterns before scaling).
+**Prevention**: Use explicit value assertions instead of format assertions:
+```typescript
+// GOOD: Verify actual result count matches expectation
+await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果', {
+  timeout: 10000
+});
+// OR use numeric extraction with explicit bounds
+const count = await getResultCount(page);
+expect(count).toBeGreaterThan(0);
+```
 
 ---
 
-### Pitfall 5: Dual Test Environment Confusion
+### 1.2 Overly Specific Assertions (Brittle Tests)
 
-**What goes wrong:**
-The project has two Vitest environments: browser (Chromium/Playwright) and server (Node.js). Developers write tests assuming one environment, then they fail in the other. Or tests only run in one environment, leaving the other uncovered.
+**Problem**: Assertions that break with minor UI changes unrelated to the feature being tested.
 
-**Why it happens:**
-Some Svelte components use browser APIs (DOM events, `window`, `localStorage`). These fail in the Node.js server environment. Developers either skip these tests (coverage gap) or add browser-only mocks that do not reflect real behavior.
+**Patterns to avoid**:
 
-**How to avoid:**
-- Use `import.meta.env.SSR` or test project tags to explicitly route tests to the correct environment.
-- Put pure logic (API clients, utilities, type guards) in server tests. Put DOM-dependent tests in browser tests.
-- Document which test project to use for which type of test in a `TESTING.md` or similar.
+1. **CSS class selectors** (`search.spec.ts` line 27):
+```typescript
+const el = document.querySelector('.text-lg.font-semibold');
+// Breaks if Tailwind classes change or component refactors
+```
 
-**Warning signs:**
-- Tests with `// @vitest-environment jsdom` comments scattered inconsistently.
-- Browser test count stays flat while server test count grows.
-- PR description says "only added server tests" for UI-heavy changes.
+2. **Icon-based element selection** (`explorer_interaction.spec.ts` line 127):
+```typescript
+const listBtn = page.locator('button').filter({ has: page.locator('.lucide-layout-list') });
+// Breaks if icon library changes or icon name changes
+```
 
-**Phase to address:**
-Frontend coverage phase, initial setup.
+3. **Hardcoded URL patterns** (`integration_explorer.spec.ts` lines 224, 240):
+```typescript
+await expect(gzLink).toHaveAttribute('href', /file=orl%3A%2F%2Flocal%2F.*archive\.tar/);
+// URL encoding assumptions can break across browsers
+```
 
----
-
-### Pitfall 6: Profile Before Optimizing
-
-**What goes wrong:**
-Developers start optimizing clone usage and memory allocation in `search_executor.rs` based on intuition. They replace `.clone()` with `Arc`, restructure data flow, and introduce complexity — but profiling later shows the bottleneck was elsewhere (e.g., SQLite writes, S3 latency, regex compilation).
-
-**Why it happens:**
-303 `.clone()` calls in the search path look obviously wrong. But clone is cheap for small types (`String` under SSO threshold, integers, `Arc`). The real bottlenecks in search are often I/O (disk reads, network calls) or algorithmic (linear scans, redundant work).
-
-**How to avoid:**
-- Generate a `cargo-flamegraph` of a realistic search workload before touching any code.
-- Identify the top 3-5 hot functions from the flamegraph.
-- Only optimize code shown to be hot by the profiler.
-- After optimization, re-profile to confirm improvement.
-
-**Warning signs:**
-- PR description says "reduced clones" without mentioning profiling results.
-- New code uses `Arc` pervasively without evidence of contention.
-- Optimization PR touches 10+ files but does not include before/after benchmarks.
-
-**Phase to address:**
-Search performance phase, must be the first step.
+**Prevention**: Use semantic locators (`getByRole`, `getByLabel`, `getByText` with exact: true) and data-testid attributes.
 
 ---
 
-### Pitfall 7: Blocking the Async Runtime
+### 1.3 Timing Issues (Race Conditions)
 
-**What goes wrong:**
-Search performance optimizations introduce synchronous blocking operations (file reads, CPU-intensive regex matching) inside `async fn` on the Tokio runtime. This blocks the executor thread, reducing overall concurrency. The server becomes unresponsive under concurrent searches.
+**Problem**: Tests rely on timing assumptions rather than deterministic state transitions.
 
-**Why it happens:**
-The `grep-searcher` crate uses synchronous I/O. Wrapping it in `tokio::task::spawn_blocking` is the correct approach, but developers forget or find it cumbersome. They call blocking code directly in async functions, which works fine in tests (low concurrency) but degrades under load.
+**Observed anti-patterns in OpsBox**:
 
-**How to avoid:**
-- Audit all async functions in the search path for synchronous I/O calls.
-- Use `tokio::task::spawn_blocking` for any operation that does disk I/O or CPU-intensive computation.
-- Use `#[tokio::test]` with multiple concurrent search requests to verify no runtime blocking.
+1. **Arbitrary `waitForTimeout`** (found in 8 test files):
+```typescript
+// search_ux.spec.ts line 42, 65, 96, 159
+await page.waitForTimeout(1000);  // "wait for results to render"
+// explorer_interaction.spec.ts line 113, 131, 169
+await page.waitForTimeout(500);   // "wait for theme toggle"
+// image_viewer.spec.ts line 213, 260, 287, 310, etc.
+await page.waitForTimeout(500);   // "wait after keyboard press"
+```
 
-**Warning signs:**
-- Tokio console or logs show "a future has been blocking for over 100ms".
-- Server becomes unresponsive when two searches run simultaneously.
-- `grep-searcher` calls inside `async fn` without `spawn_blocking`.
+2. **Inconsistent timeout values across similar operations**:
+- 200ms in `image_viewer.spec.ts` line 213
+- 300ms in `explorer_interaction.spec.ts` line 131
+- 500ms in `search_ux.spec.ts` line 65
+- 1000ms in `search_ux.spec.ts` line 42
 
-**Phase to address:**
-Search performance phase.
+3. **Fallback to fixed delays when smart waiting fails** (`integration_explorer.spec.ts` lines 83-84):
+```typescript
+} catch (error) {
+  console.log(`Falling back to fixed 10-second wait...`);
+  await new Promise((resolve) => setTimeout(resolve, 10000));
+}
+```
 
----
+**Prevention**: Use Playwright's built-in waiting mechanisms:
+```typescript
+// GOOD: Wait for specific state
+await expect(element).toBeVisible({ timeout: 5000 });
+await page.waitForLoadState('networkidle');
+await page.waitForURL(/expected-pattern/);
 
-### Pitfall 8: SQLite Write Serialization Under Load
-
-**What goes wrong:**
-Search performance optimization improves read speed, but the SQLite single-writer limitation (`max_connections(1)` in `search_executor.rs:400`) becomes the new bottleneck. Concurrent searches serialize on metadata writes, negating read optimizations.
-
-**Why it happens:**
-SQLite WAL mode allows concurrent reads but only one writer at a time. The search executor writes search metadata and cache entries to SQLite. Under concurrent search load, these writes queue up. The team optimizes the read/search path but ignores the write bottleneck.
-
-**How to avoid:**
-- Batch metadata writes instead of writing per-result.
-- Consider in-memory caching with periodic SQLite flushes.
-- Measure write contention separately from read performance.
-- If write contention is the bottleneck, consider write-behind caching or a separate write queue.
-
-**Warning signs:**
-- Profiling shows search is fast but overall request latency is high.
-- SQLite busy timeout errors appear in logs under concurrent load.
-- Flamegraph shows time spent in SQLite write operations.
-
-**Phase to address:**
-Search performance phase, later sub-phase after read-path optimization.
+// GOOD: Wait for API response
+const responsePromise = page.waitForResponse('**/api/v1/logseek/search**');
+await searchInput.press('Enter');
+await responsePromise;
+```
 
 ---
 
-## Technical Debt Patterns
+### 1.4 Element Selection Fragility
 
-| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
-|----------|-------------------|----------------|-----------------|
-| Replace `unwrap` with `expect` | No panics on happy path, easy PR | Still panics in production on edge cases | Only for truly infallible operations (hardcoded parsing) |
-| Add `as any` casts in TypeScript | Fixes type errors immediately | Bypasses all type checking; future refactors break silently | Never in production code; acceptable only as a TODO with a tracking comment |
-| Skip browser tests, only write server tests | Faster test runs, easier setup | UI regressions undetected | Temporarily for pure utility modules; never for route components |
-| Use `Arc<Mutex<>>` for all shared state | Compiles, no borrow checker fights | Lock contention, deadlock risk | When data is genuinely shared across threads and contention is low |
-| Stub tests with TODO comments | Appears to increase coverage | False sense of security; real bugs slip through | Only as a placeholder in a draft PR, never merged to main |
+**Problem**: Locators that are too broad or ambiguous.
 
-## Performance Traps
+**Observed patterns**:
 
-| Trap | Symptoms | Prevention | When It Breaks |
-|------|----------|------------|----------------|
-| Unbounded search result caching | Memory grows over time; server slows after hours | Implement LRU eviction with size limits (already have `lru` crate) | After hundreds of distinct searches |
-| Re-streaming large archive files | Repeated searches on same archive are slow | Add file content hash-based caching for archive entries | Files over 25KB searched more than once |
-| Global S3 client mutex contention | S3 operations queue up; latency spikes | Replace `Mutex<HashMap>` with `DashMap` or `RwLock` | More than ~4 concurrent S3 operations |
-| Regex recompilation | CPU spikes during search | Compile regex once and reuse via `grep-regex::RegexMatcher` | Any concurrent search workload |
-| Clone-heavy search path | High memory allocation rate in profiling | Use `Arc` for shared data; use references where lifetime allows | Search paths longer than ~1000 results |
+1. **Generic selectors that match multiple elements**:
+```typescript
+// search.spec.ts line 53
+const sidebarButtons = page.locator('aside button');
+// Could match any button in any aside element
 
-## Security Mistakes
+// settings.spec.ts line 162
+const themeButton = page.getByRole('button', { name: /theme|主题|toggle/i });
+// Regex is broad - could match unexpected buttons
+```
 
-| Mistake | Risk | Prevention |
-|---------|------|------------|
-| Mutex `.unwrap()` in HTTP handlers | Poisoned mutex causes DOS on that endpoint | Use `.lock().unwrap_or_else(\|p\| p.into_inner())` or `tokio::sync::Mutex` |
-| Stubbed boundary/security tests | Path traversal and injection attacks go undetected | Implement the 5 stub tests in `boundary_integration.rs` with real assertions |
-| No input validation on agent registration | Malformed data stored in DB; potential injection | Add validation for hostname format, port range, URL scheme |
-| Silent error swallowing in search | Users get incomplete results with no indication; security events missed | Propagate errors that affect data integrity; log warnings for suppressed errors |
+2. **Text-based selectors with partial matching risk**:
+```typescript
+// integration_explorer.spec.ts line 222
+const agentItem = page.locator(`text=${AGENT_ID}`).first();
+// Could match partial text in unexpected elements
+```
 
-## Integration Gotchas
+3. **Using `.first()` to resolve ambiguity** (masking potential issues):
+```typescript
+// home.spec.ts line 43-44
+await expect(orButton.first()).toBeVisible();
+await expect(andButton.first()).toBeVisible();
+// If multiple matches exist, which one is "correct"?
+```
 
-| Integration | Common Mistake | Correct Approach |
-|-------------|----------------|------------------|
-| `grep-searcher` (sync I/O) | Calling directly in async functions | Wrap in `tokio::task::spawn_blocking` |
-| `reqwest` proxy detection | Assuming proxy settings are static at startup | Call `init_network_env()` before any `reqwest::Client` creation; `reqwest` caches proxy at first use |
-| `starlark` runtime | Assuming scripts are fast | Set execution timeout; scripts can loop or allocate excessively |
-| SQLite WAL mode | Assuming concurrent writes work | Only one writer at a time; batch writes or use write queue |
-| Vitest dual environments | Assuming tests run everywhere | Explicitly tag tests for `server` or `client` project |
-
-## "Looks Done But Isn't" Checklist
-
-- [ ] **Unwrap cleanup:** Grep shows zero `.unwrap()` in non-test production code — also verify zero `.lock().unwrap()` specifically
-- [ ] **Unwrap cleanup:** Error paths are tested — not just happy path tests pass
-- [ ] **Unwrap cleanup:** No increase in `.unwrap_or_default()` on `Result` types (silent error swallowing)
-- [ ] **Frontend coverage:** Coverage is 70%+ AND route components have behavioral tests (not just line coverage)
-- [ ] **Frontend coverage:** Browser tests and server tests both have new tests added
-- [ ] **Search performance:** Flamegraph shows improvement in the optimized paths — not just "fewer clones"
-- [ ] **Search performance:** Concurrent search latency did not increase (no async runtime blocking)
-- [ ] **Search performance:** Memory usage under sustained search load is stable (no cache leaks)
-
-## Recovery Strategies
-
-| Pitfall | Recovery Cost | Recovery Steps |
-|---------|---------------|----------------|
-| Mechanical unwrap-to-expect replacement merged | MEDIUM | Revert PR; categorize unwraps first; redo with proper error handling |
-| Tests verify implementation not behavior | HIGH | Rewrite tests from user stories; accept temporary coverage drop |
-| Clone optimization without profiling | MEDIUM | Revert changes; profile first; optimize only proven hot paths |
-| Blocking async runtime discovered in production | HIGH | Add `spawn_blocking` wrappers; add Tokio console monitoring; load test before deploy |
-| Silent error swallowing causing data loss | HIGH | Audit all `.unwrap_or_default()` on Results; add tracing to error paths; add integration tests for error scenarios |
-
-## Pitfall-to-Phase Mapping
-
-| Pitfall | Prevention Phase | Verification |
-|---------|------------------|--------------|
-| Expect-as-replacement (still panics) | Unwrap cleanup (Phase 1) | Grep for new `expect` calls; verify each has infallibility comment |
-| Mutex poisoning in handlers | Unwrap cleanup (Phase 1) | Zero `.lock().unwrap()` in non-test code; add poison-recovery test |
-| Silent error over-correction | Unwrap cleanup (Phase 1) | Code review checklist; grep for `let _` increase |
-| Testing implementation not behavior | Frontend coverage (Phase 2) | Review test queries used; prefer `getByRole` over `querySelector` |
-| Dual environment confusion | Frontend coverage (Phase 2) | Both test project counts increase; test tagging documented |
-| Profile-before-optimize | Search performance (Phase 3) | PR includes flamegraph screenshots; benchmark results |
-| Async runtime blocking | Search performance (Phase 3) | Concurrent load test; Tokio console check |
-| SQLite write contention | Search performance (Phase 3) | Concurrent search benchmark; measure write queue depth |
+**Prevention**: Use specific roles, labels, or test IDs:
+```typescript
+// GOOD
+page.getByRole('button', { name: 'Local Machine', exact: true })
+page.getByTestId('sidebar-filter-local')
+page.locator('[data-result-card]').filter({ hasText: expectedContent })
+```
 
 ---
 
-*Pitfalls research for: OpsBox code quality improvements (unwrap cleanup, frontend coverage, search performance)*
-*Researched: 2026-03-13*
-*Sources: CONCERNS.md codebase analysis, Rust/Svelte domain knowledge*
+## 2. Test Design Pitfalls
+
+### 2.1 Testing Implementation vs Behavior
+
+**Problem**: Tests verify how the app works rather than what it accomplishes.
+
+**Observed patterns**:
+
+1. **Testing URL format rather than navigation outcome** (`integration_explorer.spec.ts`):
+```typescript
+// Tests URL encoding rather than "user can see files"
+await expect(page).toHaveURL(new RegExp(encodeURIComponent(agentRootOrl)));
+```
+
+2. **Testing request body fields** (`integration_explorer.spec.ts` lines 128-130):
+```typescript
+expect(requests[0]).toHaveProperty('orl');
+expect(requests[0]).not.toHaveProperty('odfi');
+// This is testing API contract at E2E level - better as API integration test
+```
+
+3. **Checking for absence of error text rather than presence of success** (`explorer_interaction.spec.ts` line 121):
+```typescript
+await expect(page.locator('body')).not.toContainText(/error|错误/i);
+// Absence of error text does not confirm correct behavior
+```
+
+**Prevention**: Focus on user-observable outcomes:
+```typescript
+// GOOD: User can see the files they expect
+await expect(page.getByText('test.txt')).toBeVisible();
+await expect(page.getByText('test.log')).toBeVisible();
+```
+
+---
+
+### 2.2 Excessive Mocking
+
+**Problem**: Mocking undermines the "real integration" value of E2E tests.
+
+**Observed patterns** (`settings.spec.ts`):
+
+1. **Route interception that bypasses real backend** (lines 67-81):
+```typescript
+await page.route('**/settings/llm/backends**', async (route) => {
+  await route.fulfill({
+    status: 200,
+    body: JSON.stringify([{ name: 'ollama-local', ... }])
+  });
+});
+// This tests the UI rendering mock data, not real LLM configuration
+```
+
+2. **Partial mocking creates inconsistent state** (lines 181-186):
+```typescript
+// Mocks only /log/config, leaving other API calls real
+await page.route('**/log/config', (route) =>
+  route.fulfill({ status: 500, body: JSON.stringify({ error: 'Internal error' }) })
+);
+```
+
+**Prevention**: Reserve E2E tests for real integration. Use component tests for mock-based scenarios:
+- E2E: Test with real backend services
+- Component tests: Test UI with mocked API responses
+- API tests: Test backend behavior directly
+
+---
+
+### 2.3 Test Interdependencies
+
+**Problem**: Tests that depend on state from previous tests.
+
+**Observed mitigation** (`integration_local.spec.ts`, `integration_explorer.spec.ts`):
+```typescript
+test.describe.configure({ mode: 'serial' });
+```
+
+**Issues with serial mode**:
+- Slower execution (no parallelism)
+- One failure cascades to all subsequent tests
+- State leaks if cleanup fails
+
+**Observed pattern** (`integration_explorer.spec.ts` line 73):
+```typescript
+const RUN_ID = Date.now();
+const TEST_ROOT_DIR = path.join(__dirname, `temp_explorer_${RUN_ID}`);
+```
+
+This timestamp-based isolation helps, but tests within the same file still share state.
+
+**Prevention**:
+1. Each test creates its own isolated data
+2. Use `test.beforeEach` for setup, not just `test.beforeAll`
+3. Consider Playwright's `storageState` for session isolation
+4. Use unique identifiers per test, not per file
+
+---
+
+### 2.4 Flaky Test Causes and Fixes
+
+**Common causes identified in OpsBox tests**:
+
+| Cause | Example | Fix |
+|-------|---------|-----|
+| Race conditions | `waitForTimeout(500)` after click | Use `waitForResponse` or `waitForLoadState` |
+| Network timing | Backend compilation delays | Increase timeout, use health check polling |
+| Parallel resource contention | Multiple agents on same port | Use `getFreePort()` utility |
+| DOM state assumptions | "body visible" means page works | Assert specific content |
+| Floating timestamps | `Date.now()` in test data | Use `RUN_ID` pattern consistently |
+
+**Observed resilience patterns** (good practices):
+
+1. **Health check polling** (`utils/agent.ts`):
+```typescript
+export async function waitForAgentReady(request, agentId, maxWait, interval) {
+  while (Date.now() - start < maxWait) {
+    const response = await request.get(`http://127.0.0.1:4001/api/v1/agents/${agentId}`);
+    if (response.ok()) return;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+}
+```
+
+2. **Global setup cleanup** (`global-setup.ts`):
+```typescript
+performCleanup(true, false);  // Clean leftover resources from interrupted runs
+```
+
+---
+
+## 3. Coverage Pitfalls
+
+### 3.1 Illusion of Coverage
+
+**Problem**: Tests exist and pass, but do not meaningfully verify behavior.
+
+**Analysis of OpsBox tests by coverage quality** (pre-v1.0 baseline):
+
+| Test File | Total Tests | Trivial Assertions | Real Verification | v1.0 Status |
+|-----------|-------------|-------------------|-------------------|-------------|
+| `settings.spec.ts` | 14 | 12 (86%) | 2 (14%) | ✓ Tightened in Phase 1 |
+| `home.spec.ts` | 9 | 6 (67%) | 3 (33%) | — |
+| `search.spec.ts` | 6 | 4 (67%) | 2 (33%) | ✓ Tightened in Phase 2 |
+| `search_ux.spec.ts` | — | — | — | ✓ Tightened in Phase 2 |
+| `image_viewer.spec.ts` | 15 | 8 (53%) | 7 (47%) | — |
+| `integration_local.spec.ts` | 4 | 0 (0%) | 4 (100%) | — |
+| `integration_query_syntax.spec.ts` | 11 | 0 (0%) | 11 (100%) | — |
+| `integration_explorer.spec.ts` | 12 | 1 (8%) | 11 (92%) | ✓ Tightened in Phase 3 |
+
+**New test files added in v1.0 (Phases 4-6):**
+- `error_handling.spec.ts` — 4 tests (error states)
+- `loading_states.spec.ts` — 3 tests (spinner/transitions)
+- `edge_cases.spec.ts` — 4 tests (boundaries)
+- `accessibility.spec.ts` — 3 tests (keyboard/ARIA/focus)
+
+**Trivial assertion patterns**:
+- `expect(page.locator('body')).toBeVisible()` (15 occurrences)
+- `expect(something).toBeDefined()` (3 occurrences)
+- `expect(content.length).toBeGreaterThan(0)` (4 occurrences)
+- Conditional test bodies with no else clause (7 occurrences)
+
+**Prevention**: Require meaningful assertions:
+```typescript
+// BAD: Illusion of coverage
+test('should display search results', async ({ page }) => {
+  await page.goto('/search');
+  await expect(page.locator('body')).toBeVisible();
+});
+
+// GOOD: Verifies actual behavior
+test('should display search results', async ({ page }) => {
+  await page.goto('/search');
+  await searchInput.fill('test query');
+  await searchInput.press('Enter');
+  await expect(page.locator('[data-result-card]').first()).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText('1 个结果')).toBeVisible();
+});
+```
+
+---
+
+### 3.2 Missing Negative Cases
+
+**Problem**: Tests only verify happy paths.
+
+**Gaps identified in OpsBox**:
+
+1. **Search module**: No tests for:
+   - Invalid query syntax (malformed regex, unmatched quotes)
+   - Query injection attempts
+   - Very long queries (>10000 chars)
+   - Special Unicode in queries
+   - Empty query submission
+
+2. **Explorer module**: No tests for:
+   - Symlink following behavior
+   - Permission denied on file system
+   - Binary file handling
+   - Extremely deep directory nesting
+   - Circular archive entries
+
+3. **Image viewer**: No tests for:
+   - Corrupted image files
+   - Extremely large images (>100MB)
+   - SVG/animated GIF handling
+   - Image with malicious EXIF data
+
+**Prevention**: Implement test matrix:
+```
+For each feature:
+  - Happy path (normal usage)
+  - Boundary values (min/max/empty)
+  - Error conditions (invalid input, missing data)
+  - Security (injection, traversal)
+  - Performance (large inputs)
+```
+
+---
+
+### 3.3 Boundary Condition Gaps
+
+**Problem**: Tests use only "typical" data, missing edge cases.
+
+**Observed in OpsBox**:
+
+1. **Timestamp collision risk** (`integration_local.spec.ts` line 72):
+```typescript
+const RUN_ID = Date.now();
+// If tests run within same millisecond, collision is possible
+```
+
+2. **No empty directory tests**: All directory tests have files
+3. **No single-file directory tests**: Always use multiple files
+4. **No special character tests except Chinese** (`integration_explorer.spec.ts`):
+   - Missing: Arabic RTL, emoji filenames, spaces, quotes, newlines in names
+
+**Prevention**: Add boundary test cases:
+```typescript
+test.describe('Boundary conditions', () => {
+  test('empty directory shows empty state');
+  test('file with spaces in name');
+  test('file with special chars: !@#$%^&()');
+  test('extremely long filename (255 chars)');
+  test('directory with 10000+ files');
+});
+```
+
+---
+
+### 3.4 Error Path Neglect
+
+**Problem**: Error handling is verified with weak assertions.
+
+**Observed pattern** (`explorer_interaction.spec.ts` lines 217-223):
+```typescript
+test('should handle non-existent directory gracefully', async ({ page }) => {
+  await page.goto(`/explorer?orl=${encodeURIComponent('orl://local/non/existent/path/12345')}`);
+  await page.waitForLoadState('networkidle');
+  await expect(page.locator('body')).toBeVisible();  // Just checks page renders
+});
+```
+
+**What should be verified**:
+- Error message is user-friendly
+- Error does not expose internal paths or stack traces
+- User can navigate away from error state
+- Error is logged for debugging
+
+**Prevention**:
+```typescript
+test('should handle non-existent directory gracefully', async ({ page }) => {
+  await page.goto('/explorer?orl=orl://local/nonexistent');
+  await page.waitForLoadState('networkidle');
+
+  // Verify error state
+  await expect(page.getByText(/not found|does not exist/i)).toBeVisible();
+  await expect(page.getByText(/stack trace|panic/i)).not.toBeVisible();
+
+  // Verify recovery path
+  await expect(page.getByRole('button', { name: /back|home/i })).toBeVisible();
+});
+```
+
+---
+
+## 4. Maintenance Pitfalls
+
+### 4.1 Test Rot (Outdated Assertions)
+
+**Problem**: Tests pass but verify obsolete behavior.
+
+**Early warning signs**:
+- Assertions that always pass (see false positives)
+- Tests with commented-out assertions (`integration_query_syntax.spec.ts` line 267):
+```typescript
+// await expect(page.getByText('File not found')).not.toBeVisible();
+```
+- Tests that never fail in CI but "sometimes fail locally"
+
+**Prevention**:
+1. Periodically inject deliberate failures to verify tests catch regressions
+2. Track test execution time - tests that become faster may be skipping work
+3. Review tests when features change
+
+---
+
+### 4.2 Copy-Paste Test Duplication
+
+**Problem**: Tests with nearly identical structure and duplicated logic.
+
+**Observed patterns**:
+
+1. **Repeated wait-for-search-complete block** (appears 15+ times):
+```typescript
+await page.waitForFunction(
+  () => {
+    const el = document.querySelector('.text-lg.font-semibold');
+    const text = el?.textContent || '';
+    return /\d+\s*个结果/.test(text) && !text.includes('搜索结果');
+  },
+  { timeout: 60000 }
+);
+```
+
+2. **Repeated cleanup pattern** (appears 10+ times):
+```typescript
+try {
+  await request.delete(`http://127.0.0.1:4001/api/v1/agents/${AGENT_ID}`);
+} catch {
+  // ignore
+}
+```
+
+3. **Repeated agent spawn boilerplate** (`integration_explorer.spec.ts`):
+   - Lines 46-70: Main agent spawn
+   - Lines 300-329: Multi-root agent spawn
+   - Lines 375-400: Escape test agent spawn
+   - Lines 452-477: Restricted agent spawn
+   - Lines 530-555: Chinese path agent spawn
+
+**Prevention**: Extract common patterns to utility functions:
+```typescript
+// utils/search.ts
+export async function waitForSearchComplete(page: Page, timeout = 60000) {
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('.text-lg.font-semibold');
+      const text = el?.textContent || '';
+      return /\d+\s*个结果/.test(text) && !text.includes('搜索结果');
+    },
+    { timeout }
+  );
+}
+
+// utils/agent.ts (already partially done)
+export async function cleanupAgent(request: APIRequestContext, agentId: string) {
+  try {
+    await request.delete(`http://127.0.0.1:4001/api/v1/agents/${agentId}`);
+  } catch { /* ignore */ }
+}
+```
+
+---
+
+### 4.3 Unclear Test Intent
+
+**Problem**: Test names and comments do not explain what behavior is being verified.
+
+**Examples**:
+
+1. **Vague test name** (`settings.spec.ts` line 22):
+```typescript
+test('should display settings page with navigation tabs', async ({ page }) => {
+  // Actually just checks body is visible and has content
+});
+```
+
+2. **Misleading comments** (`search.spec.ts` lines 20-21):
+```typescript
+// 使用通用搜索词，搜索可能返回结果（从配置的 S3 源）
+await searchInput.fill('error');
+// Comment says "may return results from S3" but test doesn't verify source
+```
+
+3. **Tests that say one thing and verify another** (`image_viewer.spec.ts` line 179):
+```typescript
+test('should have zoom controls', async ({ page }) => {
+  // Actually just counts buttons - doesn't verify they are zoom controls
+  const buttonCount = await buttons.count();
+  expect(buttonCount).toBeGreaterThan(0);
+});
+```
+
+**Prevention**: Follow naming convention:
+```
+should [action] [expected outcome] [when/with condition]
+
+Examples:
+- should display 1 result when searching for unique ID
+- should hide sidebar when clicking collapse button
+- should show error message when API returns 500
+```
+
+---
+
+### 4.4 Missing Test Documentation
+
+**Problem**: Complex test setups lack explanation.
+
+**Well-documented examples** (`integration_explorer.spec.ts` lines 133-137):
+```typescript
+// This test case captures the bug we just fixed:
+// - OrlManager was using effective_id() which mapped empty ID to "localhost"
+// - This caused key to be "agent.localhost" instead of "agent.root"
+// - AgentDiscoveryFileSystem was registered as "agent.root" but couldn't be found
+```
+
+**Undocumented examples** (most other tests):
+- No explanation of why `Date.now()` is used for RUN_ID
+- No explanation of the tar file creation helper's purpose
+- No explanation of why some tests are serial while others are parallel
+
+**Prevention**: Document:
+1. **Why**: What bug/requirement motivated this test?
+2. **Setup**: Why is this specific configuration needed?
+3. **Assertions**: What exactly is being verified and why?
+4. **Known limitations**: What edge cases are NOT covered?
+
+---
+
+## 5. OpsBox-Specific Observations
+
+### 5.1 Architecture-Specific Pitfalls
+
+1. **Backend compilation time**: Agent tests require `cargo run --release` which compiles on first use
+   - **Mitigation**: Global setup pre-compiles agent binary
+   - **Remaining risk**: Parallel tests may still contend for Cargo lock
+
+2. **Port conflicts**: Tests spawn agents on random ports
+   - **Good practice**: `getFreePort()` utility exists
+   - **Risk**: Port may be taken between allocation and binding
+
+3. **Database isolation**: E2E tests use separate database (`opsbox-e2e.db`)
+   - **Good practice**: Database artifacts are cleaned in global setup/teardown
+   - **Risk**: WAL/SHM files may persist if cleanup fails
+
+4. **File system race conditions**: Tests create/delete temp directories
+   - **Mitigation**: Serial mode for file-modifying tests
+   - **Risk**: Cleanup errors are silently ignored
+
+### 5.2 Chinese Localization Considerations
+
+Tests use Chinese text in assertions:
+```typescript
+await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果');
+await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
+```
+
+**Pitfall**: These tests will fail if localization changes or if tested with different locale settings.
+
+**Mitigation**: Use data-testid attributes or test with explicit locale configuration.
+
+### 5.3 ORL Protocol Complexity
+
+The ORL protocol (`orl://id@type/path?entry=...`) adds test complexity:
+- URL encoding varies by browser
+- Deep archive navigation (`?entry=path`) is tested but edge cases are limited
+- Invalid ORL formats are not tested
+
+---
+
+## 6. Detection Strategies
+
+### 6.1 Automated Detection
+
+1. **Assertion strength analysis**:
+   - Flag tests with only `toBeVisible()` on `body`
+   - Flag tests with only `toBeDefined()` assertions
+   - Flag tests with only regex format assertions
+
+2. **Coverage quality metrics**:
+   - Track "trivial vs meaningful" assertion ratio
+   - Require minimum 2 meaningful assertions per test
+   - Flag tests that pass with deliberately broken features
+
+3. **Flakiness detection**:
+   - Track test retry rates in CI
+   - Flag tests with `waitForTimeout` > 200ms
+   - Monitor test duration variance
+
+### 6.2 Manual Review Checklist
+
+Before approving E2E tests:
+
+- [ ] Test name describes the behavior being verified
+- [ ] At least one assertion verifies specific content/state
+- [ ] No `waitForTimeout` without documented reason
+- [ ] Error cases are tested with specific error messages
+- [ ] Test can fail if the feature is broken
+- [ ] Setup/teardown is isolated from other tests
+
+---
+
+## 7. Prevention Approaches
+
+### 7.1 Test Writing Guidelines
+
+1. **Every test must have a negative case**: If test `should show results`, also test `should show no-results message`
+
+2. **Prefer explicit over implicit**:
+   ```typescript
+   // BAD: Implicit success
+   await expect(page.locator('body')).toBeVisible();
+
+   // GOOD: Explicit verification
+   await expect(page.getByText('Search Results')).toBeVisible();
+   await expect(page.getByTestId('result-count')).toHaveText('5 results');
+   ```
+
+3. **Use semantic locators**:
+   ```typescript
+   // BAD: CSS selector
+   page.locator('.text-lg.font-semibold')
+
+   // GOOD: Semantic locator
+   page.getByRole('heading', { level: 2, name: /results/i })
+   // OR: data-testid
+   page.getByTestId('search-result-count')
+   ```
+
+4. **Test behavior, not implementation**:
+   ```typescript
+   // BAD: Testing implementation detail
+   expect(requests[0]).toHaveProperty('orl');
+
+   // GOOD: Testing user-visible behavior
+   await expect(page.getByText('test.txt')).toBeVisible();
+   ```
+
+### 7.2 Code Review Standards
+
+1. **Reject tests with**:
+   - Only `body` visibility assertions
+   - Conditional test bodies (if/else) without corresponding `else` test
+   - `waitForTimeout` without explanation
+   - Assertions that pass on error pages
+
+2. **Require**:
+   - At least one assertion that would fail if feature is broken
+   - Cleanup that handles errors without silent failure
+   - Documentation of what regression is being prevented
+
+### 7.3 CI/CD Integration
+
+1. **Mutation testing**: Periodically break features and verify tests fail
+2. **Retry budget**: Track and limit test retries (current: 2 retries in CI)
+3. **Duration monitoring**: Flag tests that become significantly faster or slower
+
+---
+
+## 8. Remediation Priorities
+
+### Priority 1: High Impact, Low Effort — ✓ COMPLETED (v1.0)
+
+| Issue | Files Affected | Fix | Status |
+|-------|---------------|-----|--------|
+| `body` visibility assertions | 5 files, ~15 occurrences | Replace with content-specific assertions | ✓ Fixed in Phase 1-3 |
+| Catch-all `.catch()` fallback | `search.spec.ts` | Remove fallback, let test fail | ✓ Fixed in Phase 2 |
+| `tobeDefined()` tautologies | `settings.spec.ts` | Replace with specific value checks | ✓ Fixed in Phase 1 |
+
+### Priority 2: High Impact, Medium Effort
+
+| Issue | Files Affected | Fix |
+|-------|---------------|-----|
+| `waitForTimeout` replacements | 8 files, ~20 occurrences | Replace with `waitForResponse`/`waitForLoadState` |
+| Duplicated search-wait logic | 6 files | Extract `waitForSearchComplete()` utility |
+| Duplicated agent spawn/cleanup | 4 files | Use existing `spawnAgent()` utility consistently |
+
+### Priority 3: Medium Impact, Medium Effort
+
+| Issue | Files Affected | Fix |
+|-------|---------------|-----|
+| Add negative test cases | All test files | Create test matrix per feature |
+| Add boundary conditions | `integration_local.spec.ts`, `explorer_interaction.spec.ts` | Add empty dir, special chars, etc. |
+| Improve test documentation | All files | Add "motivated by" and "verifies" comments |
+
+### Priority 4: Low Impact, High Effort
+
+| Issue | Files Affected | Fix |
+|-------|---------------|-----|
+| Replace CSS selectors with semantic locators | Most files | Gradual refactor during feature work |
+| Add mutation testing | N/A | Infrastructure setup required |
+| Locale-independent assertions | Files with Chinese text | Add data-testid attributes |
+
+---
+
+## Appendix A: Assertion Quality Rubric
+
+Rate each assertion from 1-5:
+
+| Score | Description | Example |
+|-------|-------------|---------|
+| 1 | Always passes (trivial) | `expect(body).toBeVisible()` |
+| 2 | Passes on any rendered page | `expect(text.length).toBeGreaterThan(0)` |
+| 3 | Verifies format but not content | `expect(text).toMatch(/\d+ results/)` |
+| 4 | Verifies specific content | `expect(text).toContain('3 results')` |
+| 5 | Verifies content + context + failure mode | `expect(card).toContainText('error.log')` with retry logic |
+
+**Target**: Every test should have at least one assertion scoring 4 or 5.
+
+## Appendix B: Anti-Pattern Quick Reference
+
+| Anti-Pattern | Example | Replacement |
+|-------------|---------|-------------|
+| Body visibility | `expect(body).toBeVisible()` | `expect(page.getByText('Expected')).toBeVisible()` |
+| Blind regex | `.toMatch(/\d+/)` | `.toContainText('3')` |
+| Arbitrary sleep | `waitForTimeout(1000)` | `waitForResponse()` |
+| Conditional skip | `if (count > 0) { test }` | Separate tests for 0 and >0 |
+| Catch fallback | `.catch(() => default)` | Let assertion fail |
+| CSS selector | `.text-lg.font-semibold` | `getByRole('heading')` |
+| Implementation test | `expect(req.body).toHaveProperty('x')` | `expect(page.getByText('result')).toBeVisible()` |
+
+---
+
+*Document generated: 2026-03-14*
+*Source: Analysis of 17 E2E test files in `web/tests/e2e/`*
+*Total tests analyzed: ~120 test cases*
+*Last updated: 2026-03-15 — v1.0 milestone completed, Priority 1 items addressed*

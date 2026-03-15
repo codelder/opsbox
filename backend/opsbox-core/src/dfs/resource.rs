@@ -101,6 +101,46 @@ impl Resource {
   pub fn is_archive(&self) -> bool {
     self.archive_context.is_some()
   }
+
+  /// 提取 S3 bucket 名称和 object key
+  ///
+  /// 优先使用 `endpoint.bucket`（来自 ORL 解析），
+  /// 否则从 `primary_path` 的第一段解析（兼容旧格式）。
+  ///
+  /// # 返回
+  /// `(bucket_name, object_key)` 元组
+  ///
+  /// # 示例
+  /// ```rust
+  /// use opsbox_core::dfs::OrlParser;
+  ///
+  /// // 新格式：bucket 在 ORL 中指定
+  /// let r = OrlParser::parse("orl://default:my-bucket@s3/path/to/file").unwrap();
+  /// let (bucket, key) = r.extract_s3_bucket_and_key();
+  /// assert_eq!(bucket, "my-bucket");
+  /// assert_eq!(key, "path/to/file");
+  ///
+  /// // 旧格式：bucket 从路径提取
+  /// let r = OrlParser::parse("orl://default@s3/my-bucket/path/to/file").unwrap();
+  /// let (bucket, key) = r.extract_s3_bucket_and_key();
+  /// assert_eq!(bucket, "my-bucket");
+  /// assert_eq!(key, "path/to/file");
+  /// ```
+  pub fn extract_s3_bucket_and_key(&self) -> (String, String) {
+    let path = self.primary_path.to_string();
+    let path_trimmed = path.trim_start_matches('/');
+
+    if let Some(ref bucket) = self.endpoint.bucket {
+      // 优先使用 endpoint.bucket（新格式 ORL）
+      (bucket.clone(), path_trimmed.to_string())
+    } else {
+      // Fallback：从路径第一段提取 bucket（兼容旧格式）
+      let (bucket, key) = path_trimmed
+        .split_once('/')
+        .unwrap_or((path_trimmed, ""));
+      (bucket.to_string(), key.to_string())
+    }
+  }
 }
 
 #[cfg(test)]

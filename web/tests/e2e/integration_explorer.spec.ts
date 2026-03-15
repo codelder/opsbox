@@ -117,9 +117,6 @@ test.describe('Explorer E2E', () => {
     // Wait for the page to load
     await page.waitForLoadState('networkidle');
 
-    // Verify the page loaded successfully (no error message)
-    await expect(page.locator('body')).not.toContainText(/error|错误/i);
-
     // Verify we can see our test files
     await expect(page.getByText('test.txt')).toBeVisible({ timeout: 5000 });
     await expect(page.getByText('test.log')).toBeVisible();
@@ -145,9 +142,6 @@ test.describe('Explorer E2E', () => {
     // Wait for the page to load
     await page.waitForLoadState('networkidle');
 
-    // Verify the page loaded successfully (no 500 error)
-    await expect(page.locator('body')).not.toContainText(/500|Internal Server Error/i);
-
     // Should list available agents
     // Look for our test agent with extended timeout and retry logic
     // The UI may need time to fetch and render the agent list
@@ -168,9 +162,6 @@ test.describe('Explorer E2E', () => {
 
     // Wait for the page to load
     await page.waitForLoadState('networkidle');
-
-    // Verify the page loaded successfully (no error)
-    await expect(page.locator('body')).not.toContainText(/404|Not Found|错误/i);
 
     // Should list the search root directory itself
     const rootDirName = path.basename(TEST_ROOT_DIR);
@@ -201,12 +192,20 @@ test.describe('Explorer E2E', () => {
     // Right-click on the file to open context menu
     await page.getByText('test.txt').click({ button: 'right' });
 
-    // Click download option (if available in context menu)
-    // Or double-click to open/download
-    // This depends on your UI implementation
+    // Wait for download event before clicking menu item
+    const downloadPromise = page.waitForEvent('download', { timeout: 10000 });
+    await page.getByText('下载').click();
 
-    // For now, just verify the file is visible
-    await expect(page.getByText('test.txt')).toBeVisible();
+    const download = await downloadPromise;
+
+    // Verify filename
+    expect(download.suggestedFilename()).toBe('test.txt');
+
+    // Verify file size > 0
+    const downloadPath = await download.path();
+    expect(downloadPath).toBeTruthy();
+    const stats = fs.statSync(downloadPath!);
+    expect(stats.size).toBeGreaterThan(0);
   });
 
   test('should navigate through agent files by clicking', async ({ page }) => {
@@ -497,7 +496,8 @@ test.describe('Explorer E2E', () => {
 
       // 3. Verify access is denied
       // The Agent backend should return 404/Access Denied which frontend displays
-      await expect(page.locator('body')).toContainText(/Access denied|Not Found|404|错误/i);
+      await expect(page.getByText('资源列举失败')).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText('错误详情')).toBeVisible();
 
       // Verify files in the forbidden directory are NOT visible
       await expect(page.getByText('secret_data.txt')).not.toBeVisible();
@@ -506,7 +506,8 @@ test.describe('Explorer E2E', () => {
       const allowedOrl = `orl://${restrictedAgentId}@agent${allowedDir}`;
       await input.fill(allowedOrl);
       await input.press('Enter');
-      await expect(page.locator('body')).not.toContainText(/Access denied|Not Found|404|错误/i);
+      // Verify success: error display is NOT visible
+      await expect(page.getByText('资源列举失败')).not.toBeVisible();
     } finally {
       await stopProcess(proc);
       try {

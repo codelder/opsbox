@@ -317,6 +317,20 @@
     startSearch(next);
   }
 
+  // 搜索完成后自动聚焦搜索输入框（无论成功还是失败）
+  $effect(() => {
+    // 当搜索完成（loading 变为 false）且有查询内容时，聚焦搜索输入框
+    if (!searchStore.loading && q) {
+      // 使用 setTimeout 确保 DOM 更新后再聚焦
+      setTimeout(() => {
+        const searchInput = document.getElementById('search');
+        if (searchInput) {
+          searchInput.focus();
+        }
+      }, 0);
+    }
+  });
+
   // 交互逻辑
   function toggleSelection(node: TreeNode) {
     // 检查是否已经选中（是当前选中路径的前缀）

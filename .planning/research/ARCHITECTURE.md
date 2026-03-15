@@ -1,438 +1,636 @@
-# Architecture: Large File Refactoring and Search Optimization
-
-**Domain:** OpsBox Log Search Platform - Code Refactoring
-**Researched:** 2026-03-13
-**Confidence:** HIGH (based on direct codebase analysis)
+# E2E Test Architecture Research: Playwright Patterns for OpsBox
 
 ## Executive Summary
 
-OpsBox has two large files flagged for refactoring: `search_executor.rs` (2942 lines) and `search.rs` (2152 lines). However, direct analysis reveals these files are **not as problematic as their line counts suggest**:
-
-- **search_executor.rs**: ~2557 lines (87%) are inline tests. Production code is only ~383 lines.
-- **search.rs**: ~1290 lines (60%) are inline tests. Production code is ~861 lines.
-
-The primary refactoring task is **extracting inline tests into separate test files**, not decomposing production logic. However, there are legitimate opportunities to extract focused modules and optimize search performance.
-
-## Current File Structure Analysis
-
-### search_executor.rs (2942 lines)
-
-| Section | Lines | Content |
-|---------|-------|---------|
-| SearchExecutorConfig | 15-27 | Configuration struct with defaults |
-| SearchResultHandler | 30-149 | Result caching and event forwarding |
-| format_error_source_display | 153-159 | Display name formatting utility |
-| QueryQualifiers + parse_query_qualifiers | 163-224 | Query qualifier parsing (app:, encoding:, path:) |
-| SearchExecutor | 227-382 | Core executor: plan(), search() |
-| tests module | 385-2942 | 2557 lines of inline tests |
-
-### search.rs (2152 lines)
-
-| Section | Lines | Content |
-|---------|-------|---------|
-| SearchError | 20-26 | Error types |
-| GrepCapability | 48-57 | Capability detection enum |
-| SearchProcessor | 70-560 | Core search logic with grep integration |
-| grep_context | 562-776 | Context-aware grep search |
-| EntrySourceType, SearchResult, SearchEvent | 776-861 | Result types |
-| tests module | 863-2127 | 1264 lines of inline tests |
-| tests_gzip module | 2128-2152 | Gzip-specific tests |
-
-### Existing Good Structure
-
-The codebase already demonstrates good modular decomposition:
-
-```
-service/
-├── search/
-│   ├── sink.rs          (BooleanContextSink for grep)
-│   └── search_tests.rs  (Extracted tests)
-├── search_runner.rs     (Unified search execution)
-├── searchable.rs        (SearchProvider trait)
-├── entry_stream.rs      (Archive streaming)
-├── encoding.rs          (Character encoding)
-├── resource_orl.rs      (ORL construction)
-├── error.rs             (Service errors)
-└── nl2q.rs              (Natural language to query)
-```
-
-## Recommended Refactoring Strategy
-
-### Phase 1: Extract Inline Tests (High Impact, Low Risk)
-
-**Goal:** Reduce file sizes by 60-87% by moving tests to dedicated files.
-
-**search_executor.rs:**
-```rust
-// BEFORE: inline
-#[cfg(test)]
-mod tests {
-  // 2557 lines...
-}
-
-// AFTER: extracted
-#[cfg(test)]
-mod search_executor_tests;  // -> search_executor_tests.rs
-```
-
-**search.rs:**
-```rust
-// BEFORE: inline
-#[cfg(test)]
-mod tests { ... }
-#[cfg(test)]
-mod tests_gzip { ... }
-
-// AFTER: extracted
-#[cfg(test)]
-mod search_tests;  // Move existing search/search_tests.rs + merge inline tests
-#[cfg(test)]
-mod search_gzip_tests;  // -> search_gzip_tests.rs
-```
-
-**Implementation Steps:**
-1. Create `search_executor_tests.rs` in `service/` directory
-2. Move all test code from `search_executor.rs` (lines 385-2942)
-3. Update `use super::*;` to `use super::*;` (should work as-is)
-4. Run `cargo test -p logseek` to verify
-5. Repeat for `search.rs` tests
-
-**Expected Result:**
-- `search_executor.rs`: 2942 -> ~383 lines (87% reduction)
-- `search.rs`: 2152 -> ~861 lines (60% reduction)
-
-### Phase 2: Extract Query Qualifiers Module (Medium Impact, Low Risk)
-
-**Goal:** Isolate query parsing logic for better testability and reuse.
-
-**Extract from search_executor.rs (lines 163-224):**
-
-Create `service/query_qualifiers.rs`:
-```rust
-/// Query qualifier parsing for app:, encoding:, path:, -path:
-pub struct QueryQualifiers {
-  pub app: Option<String>,
-  pub encoding: Option<String>,
-  pub path_includes: Vec<String>,
-  pub path_excludes: Vec<String>,
-  pub cleaned_query: String,
-}
-
-pub fn parse_query_qualifiers(query: &str) -> QueryQualifiers { ... }
-```
-
-**Rationale:** This function is already `pub` and used by the planner test interface. Extracting it makes the API cleaner and allows unit testing without database dependencies.
-
-### Phase 3: Extract Result Handler Module (Medium Impact, Low Risk)
-
-**Goal:** Separate result handling from orchestration logic.
-
-**Extract from search_executor.rs (lines 30-149):**
-
-Create `service/result_handler.rs`:
-```rust
-pub struct SearchResultHandler {
-  resource: Resource,
-  sid: Arc<String>,
-  tx: mpsc::Sender<SearchEvent>,
-  cancel_token: Option<Arc<CancellationToken>>,
-  start_time: Instant,
-}
-
-impl SearchResultHandler {
-  pub async fn handle_stream(self, rx: mpsc::Receiver<SearchEvent>) { ... }
-  // ... other methods
-}
-```
-
-**Rationale:** SearchResultHandler has clear boundaries (receives events, caches, forwards). Extracting it reduces SearchExecutor complexity and allows focused testing.
-
-### Phase 4: Extract Grep Search Module (Medium Impact, Medium Risk)
-
-**Goal:** Isolate the grep-specific search logic from the generic SearchProcessor.
-
-**Extract from search.rs:**
-
-Create `service/grep_search.rs`:
-```rust
-/// Grep capability detection
-pub enum GrepCapability { Direct(String), Gzip(String), None }
-
-/// Check if grep optimization can be used for a path
-pub fn check_grep_capability(path: &str, spec: &Query) -> GrepCapability { ... }
-
-/// Execute grep file search (blocking)
-pub fn grep_file_blocking(path: &str, spec: &Query, ctx: usize, enc: Option<String>)
-  -> Result<Option<SearchResult>, SearchError> { ... }
-
-/// Execute grep gzip search (blocking)
-pub fn grep_reader_blocking_gzip(path: &str, spec: &Query, ctx: usize, enc: Option<String>)
-  -> Result<Option<SearchResult>, SearchError> { ... }
-
-/// Build combined regex pattern from Query terms
-pub fn build_combined_pattern(spec: &Query) -> Result<String, String> { ... }
-```
-
-**Rationale:** The grep-specific code (~200 lines) uses `grep-searcher`, `grep-regex`, and `grep-matcher` crates. Extracting it:
-1. Makes SearchProcessor focus on general search logic
-2. Allows grep-specific optimizations without affecting other code paths
-3. Simplifies testing of grep capabilities
-
-**Risk:** The grep functions are currently private to SearchProcessor. Ensure all necessary types are exported.
+This document analyzes the current E2E test architecture in OpsBox's `web/tests/e2e/` directory (18 spec files) and recommends best practices for test organization, shared utilities, and performance optimization based on Playwright's capabilities and the existing patterns.
 
 ---
 
-## Search Performance Optimization Patterns
+## 1. Current Architecture Analysis
 
-### Pattern 1: Parallel File Search with Work Stealing
+### 1.1 File Structure
 
-**Current:** Semaphore-based concurrency with fixed limit.
-
-```rust
-// Current approach (search_executor.rs:299)
-let _permit = io_sem.acquire_owned().await;
+```
+web/tests/e2e/
+  fixtures.ts              # Custom test fixtures with ResourceTracker
+  e2e-env.ts               # E2E database path configuration
+  global-setup.ts          # Global setup (cleanup, agent pre-compilation)
+  global-teardown.ts       # Global teardown (process/dir cleanup)
+  utils/
+    agent.ts               # Agent spawning and lifecycle utilities
+  home.spec.ts             # Basic home page tests
+  search.spec.ts           # Search functionality tests
+  search_ux.spec.ts        # Search UX interaction tests
+  settings.spec.ts         # Settings page tests (mix of real/mock APIs)
+  image_viewer.spec.ts     # Image viewing tests
+  explorer_interaction.spec.ts  # Explorer UI interaction tests
+  local_gz_archive.spec.ts # Local gzip archive tests
+  s3_archive.spec.ts       # S3 archive tests
+  agent_archive_explorer.spec.ts  # Agent archive explorer tests
+  integration_local.spec.ts       # Local file search integration
+  integration_agent.spec.ts       # Agent-based search integration
+  integration_explorer.spec.ts    # Explorer integration with agents
+  integration_mixed.spec.ts       # Mixed source integration
+  integration_multi_source.spec.ts  # Multi-source search
+  integration_performance.spec.ts   # Performance boundary tests
+  integration_query_syntax.spec.ts  # Query syntax validation
+  integration_relative_glob.spec.ts # Relative glob pattern tests
 ```
 
-**Recommendation:** Consider `tokio::task::JoinSet` with work-stealing for better CPU utilization:
+### 1.2 Current Patterns Observed
 
-```rust
-let mut join_set = tokio::task::JoinSet::new();
-for source in sources {
-  join_set.spawn(async move {
-    // Search task
+#### Strengths
+- **ResourceTracker** (`fixtures.ts`): Well-designed custom fixture for tracking and cleaning up processes, directories, agents, planners, and profiles
+- **Agent Utilities** (`utils/agent.ts`): Centralized agent spawning with `getFreePort()`, `spawnAgent()`, `waitForAgentReady()`
+- **Global Setup/Teardown**: Proper cleanup of orphaned processes and temp directories
+- **Test Isolation**: Unique `RUN_ID` values prevent parallel test interference
+- **Serial Mode**: Tests that write state use `test.describe.configure({ mode: 'serial' })`
+
+#### Weaknesses
+- **Duplicated Helper Functions**: `writeTarFile()`, `writeTarGzFile()`, `writeGzFile()`, `getFreePort()` are copied across multiple spec files
+- **Inline Server/Agent Management**: `ensureBackendUp()`, `ensureWebUp()`, `stopProcess()` duplicated in `integration_agent.spec.ts`
+- **No Page Object Model**: Direct selectors scattered throughout tests
+- **No Shared Assertion Helpers**: Common validation patterns repeated
+- **Mixed Testing Strategies**: Some tests use real APIs, others use mocks inconsistently
+- **Large Test Files**: `integration_explorer.spec.ts` is 765 lines with complex inline setup
+
+---
+
+## 2. Recommended Architecture Patterns
+
+### 2.1 Test Organization Strategy
+
+**Recommendation: Hybrid approach by domain + test type**
+
+Keep the current feature-based organization but add domain-specific directories:
+
+```
+web/tests/e2e/
+  _setup/                  # Shared setup files (replaces root-level files)
+    fixtures.ts            # Extended test fixtures
+    e2e-env.ts             # Environment configuration
+    global-setup.ts        # Global setup
+    global-teardown.ts     # Global teardown
+
+  _helpers/                # Shared utility modules
+    agent.ts               # Agent utilities (existing, enhanced)
+    archive.ts             # Archive creation helpers (NEW)
+    backend.ts             # Backend server management (NEW)
+    data.ts                # Test data factories (NEW)
+    assertions.ts          # Custom assertion helpers (NEW)
+    network.ts             # Network utilities: port allocation, health checks (NEW)
+
+  _page-objects/           # Page Object Models (optional, for complex pages)
+    SearchPage.ts          # Search page interactions
+    ExplorerPage.ts        # Explorer page interactions
+    SettingsPage.ts        # Settings page interactions
+    ViewPage.ts            # File viewer interactions
+
+  search/                  # Search feature tests
+    search-basic.spec.ts
+    search-ux.spec.ts
+    search-query-syntax.spec.ts
+    search-performance.spec.ts
+
+  explorer/                # Explorer feature tests
+    explorer-local.spec.ts
+    explorer-agent.spec.ts
+    explorer-archive.spec.ts
+    explorer-interaction.spec.ts
+
+  integration/             # Cross-feature integration tests
+    integration-local.spec.ts
+    integration-agent.spec.ts
+    integration-mixed.spec.ts
+    integration-multi-source.spec.ts
+
+  settings/                # Settings page tests
+    settings-planner.spec.ts
+    settings-llm.spec.ts
+    settings-agent.spec.ts
+```
+
+### 2.2 Rationale for Current Flat Structure
+
+The current flat structure works for OpsBox because:
+1. **Clear Naming Convention**: Files are prefixed with `integration_` for integration tests
+2. **Low Coupling**: Tests are self-contained with local setup/teardown
+3. **Easy Discovery**: All tests visible at one level
+
+**Recommendation**: Keep the flat structure for now but extract duplicated code into `_helpers/`. Reorganize into directories only when the test count exceeds ~25 files.
+
+---
+
+## 3. Page Object Model (POM) Analysis
+
+### 3.1 Current State: No POM
+
+Tests use direct selectors throughout:
+```typescript
+// Current pattern - scattered selectors
+const searchInput = page.getByPlaceholder('搜索...');
+await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果');
+await expect(page.getByRole('button', { name: '本地文件' })).toBeVisible();
+```
+
+### 3.2 POM Recommendation: Selective Adoption
+
+**When to use POM:**
+- Complex pages with many interactive elements (Explorer, Settings)
+- Pages with multiple test files covering the same UI
+- When selector changes require updates in many places
+
+**When to skip POM:**
+- Simple pages with few interactions
+- One-off tests
+- Tests focused on API integration rather than UI
+
+**Recommended POM Example for Search Page:**
+```typescript
+// _page-objects/SearchPage.ts
+export class SearchPage {
+  constructor(private page: Page) {}
+
+  async goto() {
+    await this.page.goto('/search');
+    await this.page.waitForLoadState('networkidle');
+  }
+
+  async search(query: string) {
+    await this.page.getByPlaceholder('搜索...').fill(query);
+    await this.page.getByPlaceholder('搜索...').press('Enter');
+  }
+
+  async waitForResults(expectedCount?: number) {
+    await this.page.waitForFunction(
+      () => /\d+\s*个结果/.test(
+        document.querySelector('.text-lg.font-semibold')?.textContent || ''
+      ),
+      { timeout: 60000 }
+    );
+    if (expectedCount !== undefined) {
+      await expect(this.page.locator('.text-lg.font-semibold'))
+        .toContainText(`${expectedCount} 个结果`);
+    }
+  }
+
+  getResultCards() {
+    return this.page.locator('[data-result-card]');
+  }
+
+  async getResultCount(): Promise<number> {
+    const text = await this.page.locator('.text-lg.font-semibold').textContent();
+    return parseInt(text?.match(/(\d+)/)?.[1] || '0');
+  }
+}
+```
+
+---
+
+## 4. Shared Utilities Organization
+
+### 4.1 Extract to `_helpers/archive.ts`
+
+**Problem**: `writeTarFile()` is duplicated in 4+ spec files (60+ lines each).
+
+**Solution**:
+```typescript
+// _helpers/archive.ts
+export interface ArchiveEntry {
+  name: string;
+  content: string;
+}
+
+export function writeTarFile(outFile: string, entries: ArchiveEntry[]): void { /* ... */ }
+export function writeTarGzFile(outFile: string, entries: ArchiveEntry[]): void { /* ... */ }
+export function writeGzFile(outFile: string, content: string): void { /* ... */ }
+```
+
+### 4.2 Extract to `_helpers/backend.ts`
+
+**Problem**: Backend/web server lifecycle management duplicated in `integration_agent.spec.ts`.
+
+**Solution**:
+```typescript
+// _helpers/backend.ts
+export interface ServerProcess {
+  proc: ChildProcessWithoutNullStreams | null;
+  started: boolean;
+}
+
+export async function ensureBackendUp(request: APIRequestContext, repoRoot: string): Promise<ServerProcess>
+export async function ensureWebUp(request: APIRequestContext, repoRoot: string): Promise<ServerProcess>
+export async function waitForHttpOk(request: APIRequestContext, url: string, timeoutMs: number): Promise<void>
+```
+
+### 4.3 Extract to `_helpers/network.ts`
+
+**Problem**: Port allocation and health checking duplicated across agent and integration tests.
+
+**Solution**:
+```typescript
+// _helpers/network.ts
+export function getFreePort(): Promise<number>
+export async function waitForHealthy(url: string, timeout?: number, interval?: number): Promise<boolean>
+```
+
+### 4.4 Create `_helpers/data.ts` for Test Data Factories
+
+```typescript
+// _helpers/data.ts
+export function createTestId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
+export function createPlannerScript(sources: string[]): string {
+  return `SOURCES = [${sources.map(s => `"${s}"`).join(', ')}]`;
+}
+
+export function createTestLogContent(id: string, level = 'INFO'): string {
+  return `2025-01-01 12:00:00 [${level}] Test entry ${id}`;
+}
+```
+
+---
+
+## 5. Assertion Organization
+
+### 5.1 Current State: Inline Assertions
+
+Tests use raw Playwright assertions directly:
+```typescript
+await expect(page.locator('.text-lg.font-semibold')).toContainText('1 个结果');
+await expect(page.getByText(UNI_ID)).toBeVisible();
+```
+
+### 5.2 Recommended Custom Assertions
+
+```typescript
+// _helpers/assertions.ts
+export async function expectSearchResults(page: Page, expectedCount: number) {
+  await expect(page.locator('.text-lg.font-semibold'))
+    .toContainText(`${expectedCount} 个结果`, { timeout: 10000 });
+}
+
+export async function expectResultCardVisible(page: Page, text: string) {
+  await expect(page.getByText(text)).toBeVisible();
+}
+
+export async function expectNoErrors(page: Page) {
+  await expect(page.locator('body')).not.toContainText(/error|错误|500/i);
+}
+
+export async function expectSidebarButton(page: Page, name: string) {
+  await expect(page.getByRole('button', { name })).toBeVisible();
+}
+
+export async function expectFileLink(page: Page, filename: string, orlPattern?: RegExp) {
+  const link = page.getByRole('link', { name: filename });
+  await expect(link).toBeVisible();
+  if (orlPattern) {
+    await expect(link).toHaveAttribute('href', orlPattern);
+  }
+}
+```
+
+### 5.3 API Response Validation
+
+```typescript
+// _helpers/assertions.ts
+export async function expectApiSuccess(response: APIResponse) {
+  expect(response.ok()).toBeTruthy();
+  expect(response.status()).toBeLessThan(300);
+}
+
+export async function expectApiError(response: APIResponse, expectedStatus: number) {
+  expect(response.status()).toBe(expectedStatus);
+}
+```
+
+---
+
+## 6. Test Data Strategies
+
+### 6.1 Current Approach: Real Backend + Dynamic Test Data
+
+**Observed Pattern**: Tests create real files and planner scripts, search against real backend.
+
+**Pros**:
+- Tests actual end-to-end behavior
+- No mocking complexity
+- Catches real integration issues
+
+**Cons**:
+- Slower test execution
+- Requires backend compilation
+- Flaky when backend is slow to start
+
+### 6.2 Recommendation: Layered Approach
+
+**Tier 1 - Pure UI Tests** (Fast, mock API responses):
+```typescript
+test('should display search results', async ({ page }) => {
+  await page.route('**/search.ndjson', async (route) => {
+    const mockResults = generateMockSearchResults(10);
+    await route.fulfill({
+      status: 200,
+      headers: { 'Content-Type': 'application/x-ndjson' },
+      body: mockResults
+    });
+  });
+  // ... test UI rendering
+});
+```
+
+**Tier 2 - Integration Tests** (Real backend, test data):
+```typescript
+test('should search local files', async ({ page, request }) => {
+  // Create test files
+  const testDir = createTempDir(tracker, 'search_test');
+  writeTestFile(testDir, 'test.log', 'unique_marker_123');
+
+  // Create planner script via API
+  await createPlannerScript(request, 'test_app', `orl://local${testDir}`);
+
+  // Search and verify
+  await searchPage.search('app:test_app unique_marker_123');
+  await expectSearchResults(page, 1);
+});
+```
+
+**Tier 3 - E2E Tests** (Full stack, minimal):
+- Reserved for critical user flows
+- Run in CI with real backend
+- Maximum 5-10 tests
+
+### 6.3 Test Data Factories
+
+```typescript
+// _helpers/data.ts
+export interface TestLogOptions {
+  lines?: number;
+  level?: string;
+  marker?: string;
+}
+
+export function createTestLogFile(dir: string, filename: string, options: TestLogOptions = {}): string {
+  const { lines = 1, level = 'INFO', marker = createTestId('MARKER') } = options;
+  const content = Array.from({ length: lines }, (_, i) =>
+    `2025-01-01 12:${String(i).padStart(2, '0')}:00 [${level}] Line ${i} ${marker}`
+  ).join('\n');
+
+  const filePath = path.join(dir, filename);
+  fs.writeFileSync(filePath, content);
+  return marker;
+}
+
+export function createMockSearchResult(path: string, text: string, lineNo = 1) {
+  return {
+    type: 'result',
+    data: {
+      path,
+      keywords: [{ type: 'literal', text }],
+      chunks: [{ range: [lineNo, lineNo], lines: [{ no: lineNo, text }] }]
+    }
+  };
+}
+```
+
+---
+
+## 7. Performance Considerations
+
+### 7.1 Current Configuration
+
+```typescript
+// playwright.config.ts
+fullyParallel: true,          // Good - parallel execution
+workers: process.env.CI ? 1 : undefined,  // CI: serial, local: parallel
+retries: process.env.CI ? 2 : 0,         // CI: 2 retries
+globalTimeout: 600000,                    // 10 minutes total
+```
+
+### 7.2 Optimization Recommendations
+
+#### 7.2.1 Test Parallelization
+
+**Current**: All tests in a file run serially if `mode: 'serial'` is set.
+
+**Recommendation**: Group tests that need serial execution:
+```typescript
+test.describe('Agent Integration', () => {
+  // These tests share an agent process - must be serial
+  test.describe.configure({ mode: 'serial' });
+
+  test.describe('Basic Operations', () => {
+    // These don't share state - can run in parallel with other groups
+    test('should list files', ...);
+    test('should navigate directories', ...);
+  });
+});
+```
+
+#### 7.2.2 Shared Browser Contexts
+
+**Current**: Each test creates a new browser context (default Playwright behavior).
+
+**Recommendation**: For read-only tests, consider `storageState`:
+```typescript
+// Pre-authenticated state for settings tests
+test.use({ storageState: 'tests/e2e/.auth/admin.json' });
+```
+
+#### 7.2.3 Resource Cleanup Optimization
+
+**Current**: `ResourceTracker` cleans up everything after each test.
+
+**Recommendation**: Batch cleanup operations:
+```typescript
+// Use global teardown for cross-test cleanup
+// Keep per-test cleanup minimal
+async cleanupAll(): Promise<void> {
+  await Promise.allSettled([
+    this.cleanupProcesses(),
+    this.cleanupApiResources(),
+    this.cleanupDirectories()
+  ]);
+}
+```
+
+#### 7.2.4 Agent Pre-compilation
+
+**Already Implemented**: `global-setup.ts` pre-compiles `opsbox-agent`.
+
+**Enhancement**: Consider pre-compiling all binaries:
+```typescript
+async function globalSetup() {
+  // Pre-compile both agent and server
+  execSync('cargo build --release -p opsbox-agent -p opsbox-server', {
+    cwd: backendDir,
+    timeout: 300000
   });
 }
-
-while let Some(result) = join_set.join_next().await {
-  // Process results as they complete
-}
 ```
 
-**Why:** JoinSet provides:
-- Automatic cleanup of cancelled tasks
-- Natural work-stealing when tasks complete at different rates
-- Better visibility into task completion order
+#### 7.2.5 Database Isolation
 
-**Measurable Impact:** 10-20% faster completion for mixed local/S3/agent sources.
+**Already Implemented**: E2E tests use separate database (`opsbox-e2e.db`).
 
-### Pattern 2: Reduce Clone Overhead with Arc<str>
-
-**Current:** String cloning in hot paths.
-
-```rust
-// search_executor.rs - many String::clone() calls
-let display_name = format!("local:{}", resource.primary_path);
+**Enhancement**: Consider per-worker databases for true parallelism:
+```typescript
+// In worker-specific setup
+const workerId = process.env.TEST_WORKER_INDEX;
+const dbPath = path.join(__dirname, `opsbox-e2e-worker-${workerId}.db`);
 ```
 
-**Recommendation:** Use `Arc<str>` for immutable shared strings:
+### 7.3 Performance Metrics to Track
 
-```rust
-pub struct Resource {
-  pub primary_path: Arc<str>,  // Instead of String
-  pub endpoint: Arc<Endpoint>, // Instead of owned Endpoint
-  // ...
-}
-```
+| Metric | Current | Target |
+|--------|---------|--------|
+| Total test suite time | ~5-10 min | <5 min |
+| Agent compilation time | ~2 min | Pre-compiled |
+| Test isolation overhead | ~1s/test | <500ms |
+| Search result wait time | 10-60s | Configurable |
 
-**Why:** `Arc<str>` is cheaper to clone (just ref count bump) vs `String` (heap allocation + copy).
+---
 
-**Measurable Impact:** Reduce memory allocations in search hot path by ~30%.
+## 8. Cleanup Strategies
 
-### Pattern 3: Query Compilation Cache
+### 8.1 Current Implementation
 
-**Current:** Query regex compiled per-search.
+**Strengths**:
+- `ResourceTracker` fixture cleans up after each test
+- `global-teardown.ts` kills orphaned processes
+- `global-setup.ts` forces cleanup of stale temp directories
 
-**Recommendation:** Cache compiled queries with LRU eviction:
+**Weaknesses**:
+- `afterAll` cleanup in integration tests sometimes fails silently
+- No guaranteed cleanup if test runner crashes
 
-```rust
-static QUERY_CACHE: Lazy<RwLock<LruCache<String, Arc<CompiledQuery>>>> =
-  Lazy::new(|| RwLock::new(LruCache::new(100)));
+### 8.2 Recommended Improvements
 
-pub fn get_or_compile_query(query: &str) -> Arc<CompiledQuery> {
-  if let Some(cached) = QUERY_CACHE.read().unwrap().get(query) {
-    return cached.clone();
-  }
-  let compiled = Arc::new(compile_query(query));
-  QUERY_CACHE.write().unwrap().put(query.to_string(), compiled.clone());
-  compiled
-}
-```
+#### 8.2.1 Add Process PID Tracking
 
-**Why:** Regex compilation is expensive. Repeated searches with the same query pattern benefit from caching.
+```typescript
+// _helpers/cleanup.ts
+const PID_FILE = path.join(__dirname, '.e2e-pids.json');
 
-**Measurable Impact:** 50-90% faster for repeated query patterns.
-
-### Pattern 4: mmap Optimization for Large Files
-
-**Current:** Already uses mmap via grep-searcher for local files >25KB.
-
-**Enhancement:** Add file size-based strategy selection:
-
-```rust
-fn select_search_strategy(metadata: &Metadata) -> SearchStrategy {
-  let size = metadata.len();
-  match size {
-    0..=4096 => SearchStrategy::InMemory,        // Small files: read entirely
-    4097..=262144 => SearchStrategy::Mmap,       // Medium: mmap
-    _ => SearchStrategy::StreamingMmap,          // Large: streaming mmap with chunks
-  }
-}
-```
-
-**Why:** Different file sizes have different optimal search strategies.
-
-**Measurable Impact:** 2-5x faster for small files, better memory usage for large files.
-
-### Pattern 5: SQLite Write Batching
-
-**Current:** Individual writes for each search result cache entry.
-
-**Recommendation:** Batch cache writes:
-
-```rust
-pub struct CacheBatch {
-  entries: Vec<CacheEntry>,
-  flush_threshold: usize,
+export function trackProcess(pid: number, label: string) {
+  const pids = readPidFile();
+  pids.push({ pid, label, started: Date.now() });
+  fs.writeFileSync(PID_FILE, JSON.stringify(pids));
 }
 
-impl CacheBatch {
-  pub async fn add(&mut self, entry: CacheEntry) -> Result<(), Error> {
-    self.entries.push(entry);
-    if self.entries.len() >= self.flush_threshold {
-      self.flush().await?;
+export function cleanupTrackedProcesses() {
+  const pids = readPidFile();
+  for (const { pid, label } of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+      console.log(`[Cleanup] Terminated ${label} (PID ${pid})`);
+    } catch {
+      // Process already dead
     }
-    Ok(())
   }
-
-  pub async fn flush(&mut self) -> Result<(), Error> {
-    if self.entries.is_empty() { return Ok(()); }
-    // Single transaction for all entries
-    let mut tx = self.pool.begin().await?;
-    for entry in &self.entries {
-      sqlx::query("INSERT INTO ...").execute(&mut *tx).await?;
-    }
-    tx.commit().await?;
-    self.entries.clear();
-    Ok(())
-  }
+  fs.unlinkSync(PID_FILE);
 }
 ```
 
-**Why:** SQLite write transactions are expensive. Batching reduces overhead significantly.
+#### 8.2.2 Temp Directory Prefix Standardization
 
-**Measurable Impact:** 5-10x faster cache writes under high concurrency.
+**Current**: Multiple prefixes (`temp_`, `e2e_test_`, `temp_logs_`, `temp_agent_`, etc.)
 
-### Pattern 6: S3 Client Cache with DashMap
-
-**Current:** Global Mutex<HashMap> for S3 client cache (CONCERNS.md:156).
-
-```rust
-// Current (opsbox-core/src/storage/s3.rs)
-static S3_CLIENT_CACHE: Lazy<Mutex<HashMap<String, Arc<S3Client>>>> = ...;
-```
-
-**Recommendation:** Replace with DashMap for concurrent access:
-
-```rust
-use dashmap::DashMap;
-
-static S3_CLIENT_CACHE: Lazy<DashMap<String, Arc<S3Client>>> =
-  Lazy::new(DashMap::new);
-
-pub fn get_or_create_client(profile: &str) -> Arc<S3Client> {
-  if let Some(client) = S3_CLIENT_CACHE.get(profile) {
-    return client.clone();
-  }
-  let client = Arc::new(create_client(profile));
-  S3_CLIENT_CACHE.insert(profile.to_string(), client.clone());
-  client
+**Recommendation**: Standardize on `e2e_temp_` prefix:
+```typescript
+export function createTempDir(baseName: string): string {
+  const dir = path.join(__dirname, `e2e_temp_${baseName}_${Date.now()}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 ```
 
-**Why:** DashMap provides lock-free reads and fine-grained locking for writes.
+---
 
-**Measurable Impact:** Eliminates contention under concurrent S3 searches.
+## 9. Recommended Migration Plan
+
+### Phase 1: Extract Shared Utilities (Low Risk)
+1. Create `_helpers/` directory
+2. Move duplicated functions: `writeTarFile`, `getFreePort`, etc.
+3. Update imports in all spec files
+4. Verify tests still pass
+
+### Phase 2: Add Custom Assertions (Low Risk)
+1. Create `_helpers/assertions.ts`
+2. Add `expectSearchResults`, `expectNoErrors`, etc.
+3. Gradually refactor tests to use new assertions
+
+### Phase 3: Introduce Page Objects (Medium Risk)
+1. Create `_page-objects/` directory
+2. Start with `SearchPage.ts` (most reused)
+3. Migrate one spec file at a time
+4. Keep POMs thin - don't over-abstract
+
+### Phase 4: Organize Test Directories (High Risk)
+1. Only if test count exceeds 25 files
+2. Create domain-specific directories
+3. Move files incrementally
+4. Update CI configuration
 
 ---
 
-## Component Boundaries (Post-Refactoring)
+## 10. Anti-Patterns to Avoid
 
-```
-service/
-├── search_executor.rs         (~383 lines) - Orchestration only
-│   ├── SearchExecutorConfig
-│   ├── SearchExecutor (plan, search)
-│   └── mod query_qualifiers;  - NEW
-│   └── mod result_handler;    - NEW
-├── query_qualifiers.rs        (~70 lines)  - Query parsing
-├── result_handler.rs          (~130 lines) - Result caching/forwarding
-├── search.rs                  (~400 lines) - SearchProcessor (generic)
-├── grep_search.rs             (~250 lines) - Grep-specific logic - NEW
-├── search/
-│   ├── sink.rs                - BooleanContextSink
-│   ├── search_tests.rs        - Merged tests
-│   └── search_gzip_tests.rs   - Gzip tests - NEW
-├── search_runner.rs           - Unified execution
-├── searchable.rs              - SearchProvider trait
-├── entry_stream.rs            - Archive streaming
-├── encoding.rs                - Encoding detection
-├── resource_orl.rs            - ORL construction
-├── error.rs                   - Error types
-└── nl2q.rs                    - NL2Q conversion
+### 10.1 Over-Abstraction
+- Don't create deep inheritance hierarchies
+- Keep Page Objects simple and focused
+- Avoid abstract base classes for test utilities
+
+### 10.2 Shared State Between Tests
+- Never rely on test execution order
+- Always create fresh test data
+- Clean up completely in teardown
+
+### 10.3 Brittle Selectors
+- Avoid CSS class selectors (`.text-lg.font-semibold`)
+- Prefer semantic selectors: `getByRole`, `getByText`, `getByPlaceholder`
+- Use `data-testid` attributes for critical elements
+
+### 10.4 Hardcoded Waits
+```typescript
+// BAD
+await page.waitForTimeout(5000);
+
+// GOOD
+await expect(page.getByText('Results')).toBeVisible({ timeout: 5000 });
 ```
 
 ---
 
-## Refactoring Order (Dependencies)
+## 11. Summary of Recommendations
 
-```
-Phase 1: Extract Tests (no dependencies)
-  ├── search_executor.rs tests -> search_executor_tests.rs
-  └── search.rs tests -> search_tests.rs + search_gzip_tests.rs
-
-Phase 2: Extract Modules (depends on Phase 1 for clean diffs)
-  ├── query_qualifiers.rs (from search_executor.rs)
-  ├── result_handler.rs (from search_executor.rs)
-  └── grep_search.rs (from search.rs)
-
-Phase 3: Performance Optimizations (depends on Phase 2 for clean testing)
-  ├── Replace String with Arc<str> in Resource
-  ├── Add query compilation cache
-  ├── Replace S3 Mutex with DashMap
-  └── Implement SQLite write batching
-```
-
-**Why this order:**
-1. Phase 1 has zero functional risk (tests must still pass)
-2. Phase 2 enables focused testing of extracted modules
-3. Phase 3 optimizations can be validated against extracted module tests
+| Area | Current State | Recommendation | Priority |
+|------|--------------|----------------|----------|
+| Helper Duplication | High (4+ files share code) | Extract to `_helpers/` | High |
+| Page Objects | None | Add for Search, Explorer | Medium |
+| Custom Assertions | None | Add common validators | Medium |
+| Test Organization | Flat, prefixed | Keep flat, add `_setup/`, `_helpers/` | Low |
+| Test Data | Inline creation | Add factory functions | Medium |
+| Mocking | Inconsistent | Define tier strategy | Medium |
+| Cleanup | Good but incomplete | Add PID tracking | Low |
+| Performance | Acceptable | Pre-compile binaries | Medium |
 
 ---
 
-## Performance Metrics to Track
+## 12. References
 
-| Metric | Current (Estimated) | Target | Measurement |
-|--------|---------------------|--------|-------------|
-| search_executor.rs lines | 2942 | <500 | `wc -l` |
-| search.rs lines | 2152 | <500 | `wc -l` |
-| `.unwrap()` count (search path) | 257 | <20 | grep count |
-| `.clone()` count (search path) | ~100 | <50 | grep count |
-| Small file search latency | baseline | -50% | benchmark |
-| Concurrent S3 search | baseline | -70% latency | benchmark |
+### Playwright Best Practices
+- [Playwright Test Fixtures](https://playwright.dev/docs/test-fixtures)
+- [Page Object Model](https://playwright.dev/docs/pom)
+- [Parallel Tests](https://playwright.dev/docs/test-parallel)
+- [Mock APIs](https://playwright.dev/docs/mock)
 
----
-
-## Confidence Assessment
-
-| Area | Confidence | Notes |
-|------|------------|-------|
-| Test extraction | HIGH | Standard Rust pattern, zero functional risk |
-| Module extraction | HIGH | Clear boundaries already exist in code |
-| Grep extraction | MEDIUM | Need to verify all private method access patterns |
-| Performance gains | MEDIUM | Estimates based on general Rust patterns, need benchmarks |
-
-## Sources
-
-- Direct codebase analysis: `/backend/logseek/src/service/`
-- Concerns audit: `.planning/codebase/CONCERNS.md`
-- Architecture analysis: `.planning/codebase/ARCHITECTURE.md`
+### Current Test Infrastructure Files
+- `/Users/wangyue/workspace/codelder/opsboard/web/playwright.config.ts`
+- `/Users/wangyue/workspace/codelder/opsboard/web/tests/e2e/fixtures.ts`
+- `/Users/wangyue/workspace/codelder/opsboard/web/tests/e2e/utils/agent.ts`
+- `/Users/wangyue/workspace/codelder/opsboard/web/tests/e2e/global-setup.ts`
+- `/Users/wangyue/workspace/codelder/opsboard/web/tests/e2e/global-teardown.ts`

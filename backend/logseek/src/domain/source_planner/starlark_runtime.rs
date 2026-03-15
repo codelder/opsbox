@@ -443,4 +443,29 @@ else:
     assert_eq!(res.sources.len(), 1);
     assert_eq!(res.sources[0].primary_path.to_string(), "/20240101");
   }
+
+  /// 测试 f-string 内只支持简单标识符，不支持任何表达式（包括 .get() 方法调用）
+  #[tokio::test]
+  async fn test_plan_with_starlark_fstring_only_identifier() {
+    let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+    crate::init_schema(&pool).await.unwrap();
+    let query = "error";
+    // 正确用法：f-string 内只能用简单标识符，需提前提取变量
+    let script = r#"
+# f-string 内只支持简单标识符，不支持表达式（如 .get() 或 []）
+data = {'id': 'agent-001', 'name': 'test'}
+agent_id = data.get('id')  # 先提取变量
+SOURCES = [f"orl://{agent_id}@agent/logs/"]
+"#;
+    let res = plan_with_starlark_with_script(&pool, Some("test"), query, Some(script))
+      .await
+      .unwrap();
+    assert_eq!(res.sources.len(), 1);
+    assert_eq!(res.sources[0].primary_path.to_string(), "/logs");
+    // 验证 endpoint 中的 agent id 被正确解析
+    assert!(matches!(
+      res.sources[0].endpoint.location,
+      opsbox_core::dfs::endpoint::Location::Remote { .. }
+    ));
+  }
 }

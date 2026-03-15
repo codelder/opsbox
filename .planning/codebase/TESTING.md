@@ -4,374 +4,281 @@
 
 ## Test Framework
 
-**Backend (Rust):**
-- Framework: Built-in `#[test]` and `#[tokio::test]` attributes
-- Assertion library: Standard `assert!`, `assert_eq!`, `assert!(matches!(...))`
-- Test organization: Unit tests in `#[cfg(test)] mod tests`, integration tests in `tests/` directory
-- Coverage tool: `cargo-llvm-cov`
+**Runner (Rust):**
+- Built-in `#[test]` and `#[tokio::test]` for async tests
+- Config: Tests are in-module (`#[cfg(test)] mod tests`) and in `tests/` directory
+- Coverage: `cargo-llvm-cov` with `OPSBOX_NO_PROXY=1` for LLM tests
+
+**Runner (Frontend):**
+- Vitest 3.2.4
+- Config: `web/vitest.config.ts`
+- Dual project setup: browser (Chromium via Playwright) + server (Node.js)
+
+**Assertion Library:**
+- Rust: Built-in `assert!`, `assert_eq!`, `assert_ne!`, `matches!`
+- TypeScript: Vitest `expect` with `@vitest/browser` for component testing
 
 **Run Commands:**
 ```bash
-# Run all tests (requires OPSBOX_NO_PROXY=1 on macOS for LLM tests)
+# Backend tests (requires proxy bypass for LLM tests on macOS)
 OPSBOX_NO_PROXY=1 cargo test --manifest-path backend/Cargo.toml
 
-# Run specific module tests
-cargo test -p logseek
-
-# Run with network tests (disabled by default)
-cargo test -p logseek --features network-tests
+# Frontend tests
+pnpm --dir web test:unit              # All tests
+pnpm --dir web test:unit --run --project=server    # Server (Node.js) only
+pnpm --dir web test:unit --run --project=client    # Browser (Chromium) only
 
 # Coverage
 OPSBOX_NO_PROXY=1 cargo llvm-cov --manifest-path backend/Cargo.toml --workspace --lcov
 ```
 
-**Frontend (TypeScript/Svelte):**
-- Framework: Vitest with dual environments
-- Browser tests: Playwright with Chromium
-- Assertion library: Vitest `expect`
-
-**Run Commands:**
-```bash
-# All tests
-pnpm --dir web test
-
-# Unit tests only (Node.js environment)
-pnpm --dir web test:unit --run --project=server
-
-# Browser tests only
-pnpm --dir web test:unit --run --project=client
-```
-
 ## Test File Organization
 
-**Rust:**
-- Unit tests: Co-located in source file as `#[cfg(test)] mod tests` at bottom
-- Test modules: Separate file like `search_tests.rs` imported conditionally
-- Integration tests: `backend/{module}/tests/` directory with `*_integration.rs` naming
+**Rust Location:**
+- Unit tests: Co-located in source files under `#[cfg(test)] mod tests`
+- Submodule tests: `*_tests.rs` files (e.g., `search/search_tests.rs`)
+- Integration tests: `tests/` directory with `*_integration.rs` naming
 
-Example structure:
+**TypeScript Location:**
+- Unit tests: Co-located with source files (`*.test.ts`, `*.svelte.test.ts`)
+- Separate test directory not used; tests follow source structure
+
+**Structure:**
 ```
-backend/logseek/src/service/search.rs          # Source with inline tests
-backend/logseek/src/service/search/search_tests.rs  # Extended test module
-backend/logseek/tests/view_integration.rs      # Integration tests
-backend/logseek/tests/path_filtering_integration.rs
-```
-
-**TypeScript/Svelte:**
-- API tests: Co-located as `*.test.ts` (e.g., `search.test.ts` next to `search.ts`)
-- Composable tests: `composables/useSearch.test.ts`
-- Component tests: `*.svelte.test.ts` (e.g., `AgentManagement.svelte.test.ts`)
-- Utility tests: `utils/orl.test.ts`
-
-Coverage config in `vite.config.ts`:
-```typescript
-coverage: {
-  provider: 'v8',
-  thresholds: { lines: 70, functions: 70, branches: 60, statements: 70 }
-}
+backend/
+  logseek/src/
+    service/search.rs           # Contains #[cfg(test)] mod tests
+    service/search/search_tests.rs  # Extended test submodule
+  logseek/tests/
+    view_integration.rs         # Integration tests
+    archive_search_integration.rs
+web/src/
+  lib/modules/logseek/api/
+    search.ts                   # Source
+    search.test.ts              # Co-located test
+  lib/modules/logseek/composables/
+    useSearch.svelte.ts         # Source
+    useSearch.test.ts           # Co-located test
+  routes/settings/
+    AgentManagement.svelte      # Component
+    AgentManagement.svelte.test.ts  # Component test
 ```
 
 ## Test Structure
 
-**Rust Unit Tests Pattern:**
+**Rust Suite Organization:**
 ```rust
 #[cfg(test)]
 mod tests {
   use super::*;
 
   #[test]
-  fn test_function_name_scenario() {
-    // Arrange
-    let spec = Arc::new(Query::new(vec![Term::Literal("foo".into())]));
-
-    // Act
-    let result = processor.should_process_path("foo.log");
-
-    // Assert
-    assert!(result);
+  fn test_error_constructors() {
+    let err = AppError::config("config error");
+    assert!(matches!(err, AppError::Config(msg) if msg == "config error"));
   }
 
   #[tokio::test]
-  async fn test_async_function() {
-    // For async tests
+  async fn test_async_operation() {
+    let result = some_async_fn().await;
+    assert!(result.is_ok());
   }
 }
 ```
 
-**Rust Integration Test Pattern:**
-```rust
-#[tokio::test]
-#[cfg_attr(not(feature = "network-tests"), ignore)]
-async fn test_view_cache_json_agent_integration() {
-  // Runtime check for sandbox environments
-  if !logseek::test_utils::is_network_binding_available() {
-    eprintln!("Skip: network binding unavailable");
-    return;
-  }
-
-  // Setup mock server
-  let (host, port) = spawn_mock_agent().await;
-  let pool = SqlitePool::connect(":memory:").await.unwrap();
-
-  // Test logic...
-}
-```
-
-**TypeScript API Test Pattern:**
+**TypeScript Suite Organization:**
 ```typescript
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { startSearch } from './search';
 
 describe('Search API', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('should send request with correct URL and method', async () => {
-    const mockResponse = {
-      ok: true,
-      status: 200,
-      headers: new Headers({ 'X-Logseek-SID': 'test-session-id' })
-    } as unknown as Response;
-
+  it('should send correct request', async () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
-
-    const response = await startSearch('test query');
-
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/search.ndjson'),
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({ q: 'test query' })
-      })
-    );
+    const result = await startSearch('query');
+    expect(globalThis.fetch).toHaveBeenCalledWith(/* ... */);
   });
 });
 ```
 
-**Svelte Component Test Pattern:**
-```typescript
-import { expect, test, vi, beforeEach, afterEach } from 'vitest';
-import { render } from 'vitest-browser-svelte';
-import { page, userEvent } from '@vitest/browser/context';
-
-// Mock API modules
-vi.mock('$lib/modules/agent', () => ({
-  useAgents: vi.fn()
-}));
-
-beforeEach(() => {
-  vi.clearAllMocks();
-  // Reset mock state
-});
-
-test('component renders with agents', async () => {
-  mockAgentsStore.agents = [/* test data */];
-  render(AgentManagement, {});
-
-  const agentName = await page.getByText('Test Agent 1');
-  await expect.element(agentName).toBeInTheDocument();
-});
-```
+**Patterns:**
+- Setup: `beforeEach` for resetting mocks/state
+- Teardown: `afterEach` with `vi.restoreAllMocks()` for TypeScript
+- Assertions: `assert!`/`assert_eq!` for Rust, `expect().toBe/toEqual()` for TypeScript
 
 ## Mocking
 
-**Framework:** Vitest `vi` for TypeScript, manual mocks for Rust
+**Framework:** Vitest `vi` for TypeScript; manual mock structs for Rust
 
-**TypeScript Patterns:**
-```typescript
-// Global fetch mock
-globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
-
-// Module mock
-vi.mock('$lib/modules/agent', () => ({
-  useAgents: vi.fn()
-}));
-
-// Clear mocks between tests
-beforeEach(() => { vi.clearAllMocks(); });
-afterEach(() => { vi.restoreAllMocks(); });
-
-// Type casting for mock responses
-const mockResponse = {
-  ok: true,
-  status: 200,
-  headers: new Headers()
-} as unknown as Response;
-```
-
-**Rust Patterns:**
-- Mock servers: Built with Axum for integration tests
-- In-memory SQLite: `SqlitePool::connect(":memory:")` for database tests
-- Mock utilities in `test-common` crate: `llm_mock`, `s3_mock`, `agent_mock`
-
-## Fixtures and Test Data
-
-**Rust - `test-common` Crate:**
-Location: `backend/test-common/src/`
-
-Modules:
-- `database.rs` - `TestDatabase` with in-memory or file-based SQLite
-- `file_utils.rs` - Temp file creation
-- `archive_utils.rs` - Test archive creation
-- `llm_mock.rs` - LLM client mocks
-- `s3_mock.rs` - S3 service mocks
-- `agent_mock.rs` - Agent server mocks
-- `search_utils.rs` - Search test helpers
-- `orl_utils.rs` - ORL URL test utilities
-
-Constants (`test-common/src/lib.rs`):
+**Rust Mocking Pattern:**
 ```rust
-pub const TEST_DB_CONNECTION: &str = ":memory:";
-pub const TEST_DB_POOL_SIZE: u32 = 5;
-pub const TEST_FILE_DIR_PREFIX: &str = "opsbox_test_";
-```
-
-**Test Data Creation Pattern:**
-```rust
-fn create_test_gzip_file(file_path: &std::path::Path, content: &str) {
-  let file = std::fs::File::create(file_path).unwrap();
-  let mut encoder = GzEncoder::new(file, Compression::default());
-  encoder.write_all(content.as_bytes()).unwrap();
-  encoder.finish().unwrap();
+// Mock module implementation for testing
+struct MockModule;
+#[async_trait]
+impl Module for MockModule {
+  fn name(&self) -> &'static str { "Mock" }
+  fn api_prefix(&self) -> &'static str { "/api/v1/mock" }
+  fn router(&self, _pool: SqlitePool) -> Router {
+    Router::new().route("/test", get(|| async { "mock ok" }))
+  }
+  // ... other trait methods
 }
 ```
 
+**TypeScript Mocking Pattern:**
+```typescript
+// Module-level mocks
+vi.mock('../api', () => ({
+  startUnifiedSearch: vi.fn(),
+  extractSessionId: vi.fn(() => 'test-sid'),
+  deleteSearchSession: vi.fn()
+}));
+
+// Global fetch mock
+globalThis.fetch = vi.fn().mockResolvedValueOnce(mockResponse);
+
+// Component store mock
+vi.mock('$lib/modules/agent', () => ({
+  useAgents: vi.fn()
+}));
+```
+
+**What to Mock:**
+- External API calls (fetch, HTTP clients)
+- Database connections (use `SqlitePool::connect("sqlite::memory:")`)
+- Network services (mock agent servers on random ports)
+- Time-dependent operations
+
+**What NOT to Mock:**
+- Core business logic
+- Data transformations
+- Internal pure functions
+
+## Fixtures and Factories
+
+**Test Data (Rust):**
+```rust
+// Test database helper
+let db = TestDatabase::file_based().await.expect("Failed to create test database");
+let service = ExplorerService::new(db.pool().clone());
+
+// Temp file creation
+let test_dir = TempDir::new().expect("Failed to create test directory");
+fs::write(test_dir.path().join("file1.txt"), "content").await;
+
+// ORL construction for tests
+let orl = format!("orl://local{}", test_dir.path().display());
+```
+
+**Test Data (TypeScript):**
+```typescript
+// Mock response builder
+const mockResponse = {
+  ok: true,
+  status: 200,
+  headers: new Headers({ 'X-Logseek-SID': 'test-session-id' })
+} as unknown as Response;
+
+// Mock data factory
+const mockAgents: AgentInfo[] = [{
+  id: 'agent-1',
+  name: 'Test Agent 1',
+  hostname: 'host1',
+  version: '1.0.0',
+  last_heartbeat: Math.floor(Date.now() / 1000),
+  status: { type: 'Online' },
+  tags: [],
+  search_roots: ['/var/log']
+}];
+```
+
+**Location:**
+- Rust: `backend/test-common/` crate with shared utilities (`TestDatabase`, `agent_mock`, `archive_utils`)
+- TypeScript: Test data inline in test files
+
 ## Coverage
 
-**Backend:**
-- Total: 1,031 tests (99.7% pass rate)
-- Tool: `cargo-llvm-cov`
-- Estimated: ~75-80% overall
-
-**Frontend:**
-- Total: 95 tests (100% pass rate)
-- Server tests: 55 passing
-- Browser tests: 40 passing
-- Current: 14.85% overall (thresholds set to 70%)
+**Requirements:**
+- Backend: ~75-80% overall, tested via `cargo-llvm-cov`
+- Frontend: 70% lines/functions/statements, 60% branches (configured in `vitest.config.ts`)
 
 **View Coverage:**
 ```bash
 # Backend
 OPSBOX_NO_PROXY=1 cargo llvm-cov --manifest-path backend/Cargo.toml --workspace --lcov
 
-# Frontend (generates coverage/ directory)
+# Frontend
 pnpm --dir web test:unit --coverage
 ```
 
 ## Test Types
 
 **Unit Tests:**
-- Scope: Single function/struct
-- Location: Co-located in source files
-- Example: `test_should_process_path`, `test_process_content_no_match`
+- Scope: Single function/module behavior
+- Location: `#[cfg(test)]` modules in source files
+- Examples: Error constructors, encoding detection, path filtering
 
 **Integration Tests:**
-- Scope: Module interaction, API endpoints
-- Location: `tests/` directory with `*_integration.rs`
-- Network-dependent tests gated by `#[cfg_attr(not(feature = "network-tests"), ignore)]`
-- Runtime network check: `logseek::test_utils::is_network_binding_available()`
+- Scope: Multi-module interactions, API endpoints, real I/O
+- Location: `tests/` directory in each crate
+- Examples: Archive navigation, view cache, search execution
+- Uses `TestDatabase` from `test-common` crate
 
-**E2E Tests (Frontend):**
-- Framework: Playwright with Chromium
-- Configuration: `playwright.config.ts`
-- Not included in unit test suite
+**E2E Tests:**
+- Framework: Playwright (configured in `web/package.json`)
+- Commands: `pnpm --dir web test:e2e`
+- Variants: `test:e2e:local`, `test:e2e:mixed`, `test:e2e:search`
 
 ## Common Patterns
 
 **Async Testing (Rust):**
 ```rust
 #[tokio::test]
-async fn test_async_operation() {
-  let pool = SqlitePool::connect(":memory:").await.unwrap();
-  let result = some_async_function(&pool).await;
-  assert!(result.is_ok());
+async fn test_async_search() {
+  let processor = SearchProcessor::new(spec, 0);
+  let mut reader = Cursor::new(b"line 1\nline 2");
+  let result = processor.process_content("test.log".to_string(), &mut reader).await.unwrap();
+  assert!(result.is_some());
 }
 ```
 
-**Error Testing:**
-```rust
-// Pattern matching for specific error types
-assert!(matches!(err, AppError::Config(msg) if msg == "config error"));
-
-// Status code testing for API errors
-let response = api_err.into_response();
-assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-// JSON body extraction helper
-async fn extract_json_body(response: Response) -> serde_json::Value {
-  let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
-  serde_json::from_slice(&bytes).unwrap()
-}
-```
-
-**Temporary File Testing:**
-```rust
-let temp_dir = tempfile::tempdir().unwrap();
-let file_path = temp_dir.path().join("test.log");
-std::fs::write(&file_path, "content").unwrap();
-// temp_dir auto-cleans on drop
-```
-
-**Mock Server Pattern:**
-```rust
-async fn spawn_mock_agent() -> (String, u16) {
-  let app = Router::new()
-    .route("/api/v1/search", post(|Json(body): Json<Value>| async move {
-      // Return mock response
-    }));
-
-  let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-  let addr = listener.local_addr().unwrap();
-  tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-
-  (addr.ip().to_string(), addr.port())
-}
-```
-
-## Testing Configuration
-
-**Environment Variables:**
-- `OPSBOX_NO_PROXY=1` - Required on macOS for LLM tests (disables reqwest proxy detection)
-- `CI=1` - CI environment indicator
-
-**Feature Flags:**
-- `network-tests` - Enables tests requiring network binding
-- `mimalloc-collect` - Enables memory collection in tests
-
-**Vitest Dual Environment:**
+**Async Testing (TypeScript):**
 ```typescript
-projects: [
-  {
-    test: {
-      name: 'client',
-      environment: 'browser',
-      browser: { enabled: true, provider: 'playwright' },
-      include: ['src/**/*.svelte.{test,spec}.{js,ts}']
-    }
-  },
-  {
-    test: {
-      name: 'server',
-      environment: 'node',
-      include: ['src/**/*.{test,spec}.{js,ts}'],
-      exclude: ['src/**/*.svelte.{test,spec}.{js,ts}']
-    }
-  }
-]
+it('should handle async search', async () => {
+  vi.mocked(api.startUnifiedSearch).mockResolvedValueOnce(mockResponse);
+  const state = useSearch();
+  await state.search('test query');
+  expect(state.query).toBe('test query');
+});
 ```
 
-## Test Distribution (Backend)
+**Error Testing (Rust):**
+```rust
+#[test]
+fn test_error_status_codes() {
+  assert_eq!(AppError::bad_request("").status_code(), StatusCode::BAD_REQUEST);
+  assert_eq!(AppError::not_found("").status_code(), StatusCode::NOT_FOUND);
+}
+```
 
-| Module | Unit | Integration | Total |
-|--------|------|-------------|-------|
-| logseek | 413 | 55 | 468 |
-| opsbox-core | 73 | 206 | 279 |
-| agent | 10 | 144 | 154 |
-| explorer | 17 | 9 | 26 |
-| agent-manager | 11 | 11 | 22 |
-| opsbox-server | 27 | - | 27 |
-| test-common | 20 | - | 20 |
+**Error Testing (TypeScript):**
+```typescript
+it('should throw on HTTP error', async () => {
+  globalThis.fetch = vi.fn().mockResolvedValueOnce({ ok: false, status: 500 });
+  await expect(startSearch('query')).rejects.toThrow(/HTTP 500/);
+});
+```
+
+**Network Test Skipping (Rust):**
+```rust
+#[tokio::test]
+async fn test_with_network() {
+  opsbox_core::test_utils::skip_if_no_network();
+  // test code...
+}
+```
 
 ---
 
