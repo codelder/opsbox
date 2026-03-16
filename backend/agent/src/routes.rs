@@ -432,6 +432,43 @@ mod tests {
     assert!(!res["items"].as_array().unwrap().is_empty());
   }
 
+  #[cfg(not(windows))]
+  #[tokio::test]
+  async fn test_list_files_route_rejects_invalid_absolute_parent() {
+    let tmp = tempfile::tempdir().unwrap();
+    let outer_parent = tmp.path().join("outer_parent");
+    let allowed_root = outer_parent.join("allowed_root");
+    std::fs::create_dir_all(&allowed_root).unwrap();
+
+    let normalized_parent = outer_parent
+      .strip_prefix(std::path::Path::new("/"))
+      .expect("temp dir should be absolute on unix");
+    let trap_dir = allowed_root.join(normalized_parent).join("codelder");
+    std::fs::create_dir_all(&trap_dir).unwrap();
+
+    let app = create_router(create_test_config(vec![allowed_root.to_string_lossy().to_string()]));
+
+    let response = app
+      .oneshot(
+        Request::builder()
+          .uri(format!(
+            "/api/v1/list_files?path={}",
+            urlencoding::encode(&outer_parent.to_string_lossy())
+          ))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(
+      response.status(),
+      StatusCode::NOT_FOUND,
+      "absolute parent outside search_roots should fail instead of listing trap dir {:?}",
+      trap_dir
+    );
+  }
+
   #[tokio::test]
   async fn test_get_file_raw_route() {
     let tmp = tempfile::tempdir().unwrap();

@@ -21,6 +21,13 @@ pub fn resolve_target_paths(config: &AgentConfig, target: &ConfigTarget) -> Resu
 }
 
 /// 解析目录路径（强制白名单校验，禁止越权）
+///
+/// 仅支持三类输入：
+/// 1. 白名单内的精确绝对路径
+/// 2. "."（表示 search_roots 本身）
+/// 3. 相对于某个 search_root 的精确路径
+///
+/// 不再尝试 search_root 一级子目录下的模糊匹配，避免把非法父路径错误解析到其他目录。
 pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Result<Vec<PathBuf>, String> {
   let mut resolved_paths = Vec::new();
   let canon_roots = canonicalize_roots(&config.search_roots);
@@ -36,15 +43,11 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
     resolved_paths.push(cand_c);
   }
 
-  // 2. If no paths resolved yet, or even if they did, try treating it as relative to roots
-  // Strip leading slash if present for relative join
-  let normalized_path = relative_path.strip_prefix('/').unwrap_or(relative_path);
-
-  // Only try relative resolution if normalized_path is not empty (or we want to list roots)
-  if !normalized_path.is_empty() {
+  // 2. Relative inputs may be resolved exactly under each search root.
+  if !rel_as_path.is_absolute() && !relative_path.is_empty() {
     for root in &config.search_roots {
       let root_path = PathBuf::from(root);
-      let full_path = root_path.join(normalized_path);
+      let full_path = root_path.join(relative_path);
 
       if full_path.exists()
         && let Ok(cand_c) = canonicalize_existing(&full_path)
@@ -53,23 +56,6 @@ pub fn resolve_directory_path(config: &AgentConfig, relative_path: &str) -> Resu
         && !resolved_paths.contains(&cand_c)
       {
         resolved_paths.push(cand_c);
-      }
-
-      // 尝试在一级子目录下拼接（兼容原先的"模糊子目录"逻辑）
-      if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-          if entry.path().is_dir() {
-            let sub_path = entry.path().join(normalized_path);
-            if sub_path.exists()
-              && let Ok(cand_c) = canonicalize_existing(&sub_path)
-              && let Ok(root_c) = canonicalize_existing(&root_path)
-              && cand_c.starts_with(&root_c)
-              && !resolved_paths.contains(&cand_c)
-            {
-              resolved_paths.push(cand_c);
-            }
-          }
-        }
       }
     }
   }
@@ -377,5 +363,47 @@ mod tests {
     let result = resolve_target_paths(&config, &target).unwrap();
     assert_eq!(result.len(), 1);
     assert!(result[0].ends_with("test1.log"));
+  }
+
+  #[cfg(not(windows))]
+  #[test]
+  fn test_resolve_directory_path_does_not_fuzzy_match_invalid_absolute_parent() {
+    use crate::config::AgentConfig;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let outer_parent = temp_dir.path().join("outer_parent");
+    let allowed_root = outer_parent.join("allowed_root");
+    std::fs::create_dir_all(&allowed_root).unwrap();
+
+    let normalized_parent = outer_parent
+      .strip_prefix(std::path::Path::new("/"))
+      .expect("temp dir should be absolute on unix");
+    let trap_dir = allowed_root.join(normalized_parent).join("codelder");
+    std::fs::create_dir_all(&trap_dir).unwrap();
+
+    let config = AgentConfig {
+      agent_id: "test-agent".to_string(),
+      agent_name: "Test Agent".to_string(),
+      server_endpoint: "http://127.0.0.1:4000".to_string(),
+      search_roots: vec![allowed_root.to_string_lossy().to_string()],
+      listen_port: 4001,
+      enable_heartbeat: false,
+      heartbeat_interval_secs: 30,
+      worker_threads: None,
+      log_dir: std::path::PathBuf::from("/tmp"),
+      log_retention: 7,
+      reload_handle: None,
+      current_log_level: Arc::new(Mutex::new("info".to_string())),
+    };
+
+    let result = resolve_directory_path(&config, &outer_parent.to_string_lossy());
+
+    assert!(
+      result.is_err(),
+      "absolute parent outside search_roots should be rejected instead of fuzzy-matching into {:?}",
+      trap_dir
+    );
   }
 }

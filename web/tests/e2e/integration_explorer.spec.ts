@@ -436,6 +436,82 @@ test.describe('Explorer E2E', () => {
     }
   });
 
+  test('should fall back to agent root instead of listing a fuzzy-matched trap directory after back navigation', async ({
+    page,
+    request
+  }) => {
+    const mismatchAgentId = `${AGENT_ID}-mismatch`;
+    const outerParent = path.join(TEST_ROOT_DIR, 'mismatch_parent');
+    const allowedRoot = path.join(outerParent, 'allowed_root');
+    const validChild = path.join(allowedRoot, 'valid_child');
+    fs.mkdirSync(validChild, { recursive: true });
+    fs.writeFileSync(path.join(validChild, 'inside.txt'), 'inside root');
+
+    const normalizedParent = outerParent.split(path.sep).filter(Boolean);
+    const trapDir = path.join(allowedRoot, ...normalizedParent, 'codelder');
+    fs.mkdirSync(trapDir, { recursive: true });
+    fs.writeFileSync(path.join(trapDir, 'leaked.txt'), 'this should never be listed after back navigation');
+
+    const mismatchPort = await getFreePort();
+    const { command, argsPrefix, cwd } = findAgentCommand(repoRoot);
+    const args = [
+      ...argsPrefix,
+      '--agent-id',
+      mismatchAgentId,
+      '--agent-name',
+      'Mismatch Agent',
+      '--server-endpoint',
+      'http://127.0.0.1:4001',
+      '--search-roots',
+      allowedRoot,
+      '--listen-port',
+      String(mismatchPort),
+      '--no-heartbeat',
+      '--log-dir',
+      path.join(TEST_ROOT_DIR, 'mismatch_agent_logs'),
+      '--log-retention',
+      '1'
+    ];
+
+    const proc = spawn(command, args, {
+      cwd,
+      env: { ...process.env, RUST_LOG: process.env.RUST_LOG ?? 'info' },
+      stdio: 'pipe'
+    });
+    proc.stdout.on('data', (d) => process.stdout.write(d));
+    proc.stderr.on('data', (d) => process.stderr.write(d));
+
+    try {
+      await waitForAgentReady(request, mismatchAgentId, 10000);
+
+      const deepOrl = `orl://${mismatchAgentId}@agent${validChild}`;
+      await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(deepOrl)}`);
+      await page.waitForLoadState('networkidle');
+      await expect(page.getByText('inside.txt')).toBeVisible({ timeout: 10000 });
+
+      const upButton = page.locator('button:has(svg.lucide-arrow-left)');
+
+      await upButton.click();
+      const allowedRootOrl = `orl://${mismatchAgentId}@agent${allowedRoot}`;
+      await expect(page).toHaveURL(new RegExp(encodeURIComponent(allowedRootOrl)));
+      await expect(page.getByText('valid_child')).toBeVisible({ timeout: 10000 });
+
+      await upButton.click();
+      const virtualRootOrl = `orl://${mismatchAgentId}@agent/`;
+      await expect(page).toHaveURL(new RegExp(encodeURIComponent(virtualRootOrl)));
+      await expect(page.getByText('allowed_root')).toBeVisible({ timeout: 10000 });
+      await expect(page.getByText('codelder')).not.toBeVisible();
+      await expect(page.getByText('leaked.txt')).not.toBeVisible();
+    } finally {
+      await stopProcess(proc);
+      try {
+        await request.delete(`http://127.0.0.1:4001/api/v1/agents/${mismatchAgentId}`);
+      } catch {
+        // ignore
+      }
+    }
+  });
+
   test('should prohibit access to paths outside search-roots via manual ORL entry', async ({ page, request }) => {
     // 1. Setup a restricted agent
     const restrictedAgentId = `${AGENT_ID}-restricted`;
