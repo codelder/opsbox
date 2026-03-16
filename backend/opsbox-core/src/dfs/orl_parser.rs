@@ -500,7 +500,7 @@ mod tests {
   fn test_parse_complex_tar_gz_path() {
     // 测试复杂路径中的 .tar.gz 文件
     let resource = OrlParser::parse(
-      "orl://local/Users/wangyue/Downloads/home/BBIP_20_APPLOG_2025-08-18.tar.gz?entry=/home/bbipadm/logs/app.log",
+      "orl://local/var/log/archives/BBIP_20_APPLOG_2025-08-18.tar.gz?entry=/home/bbipadm/logs/app.log",
     )
     .unwrap();
     assert!(resource.is_archive());
