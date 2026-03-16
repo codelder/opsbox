@@ -130,10 +130,10 @@ test.describe('Explorer Interaction E2E', () => {
   });
 
   test('should switch between table and grid view modes and display file metadata', async ({ page }) => {
-    await navigateToDirectory(page, TEST_DIR);
+    await navigateToDirectory(page, LOGS_DIR);
 
-    // 默认是网格视图
-    await verifyItemVisible(page, 'logs');
+    // 默认是网格视图，应该看到 app.log
+    await verifyItemVisible(page, 'app.log');
 
     // 切换到列表视图
     await switchToListView(page);
@@ -141,7 +141,7 @@ test.describe('Explorer Interaction E2E', () => {
     // 表格应该可见
     await expect(page.locator('table')).toBeVisible({ timeout: 5000 });
 
-    // 验证文件存在（元数据显示）
+    // 验证文件在列表视图中仍然可见（元数据显示）
     await verifyItemVisible(page, 'app.log');
   });
 
