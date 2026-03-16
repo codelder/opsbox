@@ -22,7 +22,7 @@
     { label: '-exclude', snippet: '-', title: '排除词，例如 -debug' },
     { label: '"phrase"', snippet: '""', caretOffset: 1, title: '短语匹配：插入一对引号' },
     { label: '/regex/', snippet: '//', caretOffset: 1, title: '正则匹配：插入 /.../' },
-    { label: 'path:glob', snippet: 'path:logs/*.log ', title: '路径限定（glob），示例 path:logs/*.log' }
+    { label: 'path:glob', snippet: 'path:logs/**/*.log ', title: '路径限定（glob），示例 path:logs/**/*.log' }
   ];
 
   const exampleSnippet = '(taxResult OR taxWarn) /"9111[0-9A-Z]{14}"/ dt:20250818 path:ptcr -path:system.log';

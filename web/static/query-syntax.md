@@ -26,9 +26,11 @@
 ### 3. 过滤器与上下文
 - **路径 (Path)**: `path:glob` 或 `-path:glob`。
   - Glob 支持 `*`, `?`, `**`。
+  - `*` 和 `?` 不跨目录（strict glob 模式），`**` 匹配多层目录。
   - 冒号后**没有空格**。
   - 区分大小写。
-  - 示例: `path:src/*.rs -path:tests/*`
+  - 无通配符时，按路径子串匹配。
+  - 示例: `path:src/**/*.rs -path:tests/*`
 - **日期 (Date)** (文件修改时间):
   - `dt:YYYYMMDD` (特定日期)
   - `fdt:YYYYMMDD` (起始日期，包含)
@@ -78,5 +80,4 @@
 | **带上下文**<br>"搜索 myapp 中的 error" | `{"think": "提取应用上下文 'myapp'，扩展 'error'。", "answer": "app:myapp (error OR err OR failure)"}` |
 | **带日期**<br>"昨天的日志 (20250114)" | `{"think": "用户提供了日期 20250114。", "answer": "dt:20250114"}` |
 | **同一行 (无序)**<br>"同一行包含 TXN123 和 'fail'" | `{"think": "用户指定了'同一行'。标准 AND 是文件作用域。必须使用正则 Lookahead。", "answer": "/(?=.*TXN123)(?=.*fail)/"}` |
-| **复杂**<br>"logs/*.log 中的任意 'OOM' 或 crash" | `{"think": "精确 'OOM' OR 语义 'crash'，带路径过滤。", "answer": "(\"OOM\" OR crash OR 崩溃) path:logs/*.log"}` |
-
+| **复杂**<br>"logs 目录下任意层级 .log 中的任意 'OOM' 或 crash" | `{"think": "精确 'OOM' OR 语义 'crash'，带路径过滤。", "answer": "(\"OOM\" OR crash OR 崩溃) path:logs/**/*.log"}` |

@@ -180,11 +180,10 @@ async fn main() {
     // 示例 2: 执行分布式搜索
     {
         let coordinator = state.coordinator.read().await;
-        let mut results = coordinator.search("error path:*.log", 3).await.unwrap();
+        let mut results = coordinator.search("error path:**/*.log", 3).await.unwrap();
         
         while let Some(result) = results.recv().await {
             println!("找到: {} ({} 行)", result.path, result.lines.len());
         }
     }
 }
-

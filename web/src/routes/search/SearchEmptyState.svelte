@@ -171,7 +171,7 @@
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:myapp error</code>
 
                   <span class="text-foreground">组合使用:</span>
-                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:bbip path:logs/*.log timeout</code>
+                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:bbip path:logs/**/*.log timeout</code>
                 </div>
                 <p class="mt-2 text-xs">
                   规划脚本可在<a href={resolve('/settings')} class="text-primary hover:underline">设置</a>中配置
@@ -192,7 +192,7 @@
               <div class="space-y-2 px-4 pt-0 pb-4 text-muted-foreground">
                 <div class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
                   <span class="text-foreground">匹配特定路径:</span>
-                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">path:logs/*.log error</code>
+                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">path:logs/**/*.log error</code>
 
                   <span class="text-foreground">排除某些路径:</span>
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">-path:node_modules/ error</code>
@@ -323,7 +323,7 @@
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:myapp error</code>
 
                   <span class="text-foreground">组合使用:</span>
-                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:bbip path:logs/*.log timeout</code>
+                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">app:bbip path:logs/**/*.log timeout</code>
                 </div>
                 <p class="mt-2 text-xs">
                   规划脚本可在<a href={resolve('/settings')} class="text-primary hover:underline">设置</a>中配置
@@ -367,7 +367,7 @@
                 </p>
                 <div class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
                   <span class="text-foreground">匹配特定路径:</span>
-                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">path:logs/*.log error</code>
+                  <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">path:logs/**/*.log error</code>
 
                   <span class="text-foreground">排除某些路径:</span>
                   <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">-path:node_modules/ error</code>
@@ -497,7 +497,7 @@
                   </li>
                   <li>
                     组合多个限定词可以精确过滤：<code class="rounded bg-muted px-1 py-0.5 font-mono text-xs"
-                      >app:myapp path:logs/*.log error</code
+                      >app:myapp path:logs/**/*.log error</code
                     >
                   </li>
                   <li>使用左侧筛选器可以快速按日志源、路径等筛选结果</li>

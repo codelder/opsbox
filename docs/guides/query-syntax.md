@@ -29,7 +29,8 @@
   - `*` 和 `?` 不跨目录（strict glob 模式），`**` 匹配多层目录。
   - 冒号后**没有空格**。
   - **区分大小写**：`path:` 有效，`PATH:` 无效（会被视为字面量）。
-  - 示例: `path:src/*.rs -path:tests/*`
+  - 无通配符时，按路径子串匹配。
+  - 示例: `path:src/**/*.rs -path:tests/*`
 - **日期 (Date)** (文件修改时间):
   - `dt:YYYYMMDD` (特定日期，**必须是8位数字**)
   - `fdt:YYYYMMDD` (起始日期，包含，**必须是8位数字**)
@@ -87,4 +88,4 @@
 | **带日期**<br>"昨天的日志 (20250114)" | `{"think": "用户提供了日期 20250114。", "answer": "dt:20250114"}` |
 | **同一行 (无序)**<br>"同一行包含 TXN123 和 'fail'" | `{"think": "用户指定了'同一行'。标准 AND 是文件作用域。2项无序可用标准正则。", "answer": "/(TXN123.*fail)\|(fail.*TXN123)/"}` |
 | **同一行 (4+项)**<br>"同一行同时包含 ERR、WARN、INFO 和 DEBUG" | `{"think": "用户指定了'同一行'且4项无序。枚举不可行，必须使用 Lookaround。", "answer": "/(?=.*ERR)(?=.*WARN)(?=.*INFO)(?=.*DEBUG)/"}` |
-| **复杂**<br>"logs/*.log 中的任意 'OOM' 或 crash" | `{"think": "精确短语 OOM，语义扩展 crash，带路径过滤。", "answer": "(\"OOM\" OR crash OR 崩溃) path:logs/*.log"}` |
+| **复杂**<br>"logs 目录下任意层级 .log 中的任意 'OOM' 或 crash" | `{"think": "精确短语 OOM，语义扩展 crash，带路径过滤。", "answer": "(\"OOM\" OR crash OR 崩溃) path:logs/**/*.log"}` |

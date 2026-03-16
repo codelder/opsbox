@@ -246,3 +246,40 @@ async fn test_path_filtering_combinations() {
   assert_eq!(results.len(), 1);
   assert!(results[0].contains("src/lib.rs"));
 }
+
+#[tokio::test]
+async fn test_path_filter_uses_relative_path_for_directory_sources() {
+  let pool = create_test_pool().await;
+
+  // Create a directory tree where the absolute path contains "dir22",
+  // but the relative path under the source root does not.
+  let temp_dir = tempfile::tempdir().unwrap();
+  let source_root = temp_dir.path().join("dir22");
+  let target_dir = source_root.join("home/bbipadm/logs/msk");
+  std::fs::create_dir_all(&target_dir).unwrap();
+
+  let target_file = target_dir.join("nohup-route.log");
+  std::fs::write(&target_file, "abcdef\n").unwrap();
+
+  let planner_script = format!(r#"SOURCES = [ "orl://local/{}" ]"#, escape_path_for_starlark(&source_root));
+  planners::upsert_script(&pool, "relative_path_filter", &planner_script)
+    .await
+    .unwrap();
+  planners::set_default(&pool, Some("relative_path_filter")).await.unwrap();
+
+  let executor = SearchExecutor::new(pool, SearchExecutorConfig::default());
+
+  // This matches against the relative path "home/bbipadm/logs/msk/nohup-route.log".
+  let results = collect_search_results(&executor, "abcdef path:**/nohup*.log").await;
+  assert_eq!(results.len(), 1, "nohup*.log should match the relative path");
+  assert!(results[0].contains("dir22/home/bbipadm/logs/msk/nohup-route.log"));
+
+  // If filtering used the absolute path, *22* would match "dir22".
+  // The current search pipeline strips the source root first, so this should not match.
+  let results = collect_search_results(&executor, "abcdef path:**/*22*/**/nohup*.log").await;
+  assert_eq!(
+    results.len(),
+    0,
+    "dir22 is outside the relative path used by directory-source filtering"
+  );
+}

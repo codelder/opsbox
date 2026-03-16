@@ -158,7 +158,7 @@ fn or_must_be_uppercase() {
   - 排除：-path:<pattern>
 - 注意：仅识别小写 path，且冒号后不可有空格（path:...）。"PATH:" 或 "path :..." 不生效。
 - 模式：
-  - 若包含 * ? [ ] → 作为 glob（自动补全为 **/pattern，除非已以 / 或 **/ 开头）
+  - 若包含 * ? [ ] → 作为 strict glob 原样处理；`*` 和 `?` 不跨目录，`**` 才能跨目录
   - 否则 → 作为“路径包含子串”判断
 - 判定逻辑：先排除（exclude），再检查包含（include / include_contains）。
 
@@ -191,7 +191,7 @@ impl PathFilter {
 ```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=319
 #[test]
 fn path_filter_glob_and_contains() {
-  let spec = parse_github_like("path:logs/*.log -path:node_modules/ foo").expect("parse");
+  let spec = parse_github_like("path:logs/**/*.log -path:node_modules/ foo").expect("parse");
   assert!(spec.path_filter.is_allowed("logs/app/app.log"));
   assert!(!spec.path_filter.is_allowed("app/node_modules/x.js"));
   assert!(!spec.path_filter.is_allowed("logs/app/readme.md"));
@@ -202,7 +202,7 @@ fn path_filter_glob_and_contains() {
 ```rs path=PROJECT_ROOT/backend/logseek/src/query/parser.rs start=474
 #[test]
 fn path_qualifier_requires_no_whitespace() {
-  let a = parse_github_like("path:logs/*.log foo").expect("parse a");
+  let a = parse_github_like("path:logs/**/*.log foo").expect("parse a");
   let b = parse_github_like("path :logs/*.log foo").expect("parse b");
   // a: 仅 logs/*.log 生效
   assert!(a.path_filter.is_allowed("logs/app/app.log"));
@@ -368,7 +368,7 @@ fn span_invalid_path_pattern_from_qualifier() {
 - 问：小写 or 会如何处理？
   - 答：作为普通字面量；需用大写 OR 才是“或”
 - 问：如何限定只查 logs/*.log？
-  - 答："path:logs/*.log foo"
+  - 答："path:logs/**/*.log foo"
 - 问：如何排除 node_modules 目录？
   - 答："foo -path:node_modules/"
 - 问：为什么 PATH:... 不生效？
@@ -486,4 +486,3 @@ let max_concurrency = std::thread::available_parallelism()
 ---
 
 如需在前端或文档中嵌入更多示例，请直接采纳上述“问-答”与 curl 样例；如需扩展语法（例如新增限定符），建议在 query::parser 与 PathFilter 处添加测试用例，并在本文档新增章节与示例。
-

@@ -547,7 +547,7 @@ mod tests {
 
   #[test]
   fn path_qualifier_is_case_sensitive() {
-    let spec = parse_github_like("PATH:logs/*.log foo").expect("parse");
+    let spec = parse_github_like("PATH:logs/**/*.log foo").expect("parse");
     // Uppercase PATH should be treated as literal; no path restriction
     assert!(spec.path_filter.is_allowed("logs/x.log"));
     assert!(spec.path_filter.is_allowed("src/x.log"));

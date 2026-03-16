@@ -317,7 +317,7 @@ pub(super) enum PathPatternRule {
 
 pub(super) fn classify_path_pattern(pattern: &str) -> PathPatternRule {
   if is_glob_pattern(pattern) {
-    PathPatternRule::Glob(normalize_path_glob_pattern(pattern))
+    PathPatternRule::Glob(pattern.to_string())
   } else {
     PathPatternRule::Contains(pattern.to_string())
   }
@@ -330,16 +330,6 @@ pub(super) fn build_strict_path_glob(pattern: &str) -> Result<globset::Glob, glo
 fn is_glob_pattern(pattern: &str) -> bool {
   // 与 parser::parse_github_like 保持同一判定规则，避免语义漂移。
   pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
-}
-
-fn normalize_path_glob_pattern(pattern: &str) -> String {
-  // 与 parser::parse_github_like 保持一致：
-  // 非绝对路径且非 **/ 前缀时，自动补全为 **/xxx。
-  if pattern.starts_with('/') || pattern.starts_with("**/") {
-    pattern.to_string()
-  } else {
-    format!("**/{}", pattern)
-  }
 }
 
 /// 将 glob 表达式转换为 PathFilter（仅包含 include 规则）
@@ -630,4 +620,28 @@ mod tests {
       assert!(filter_contains.is_allowed(path), "路径 '{}' 应被允许", path);
     }
   }
+
+  /// 测试：验证 glob 模式原始语义（去掉 normalize 后）
+  #[test]
+  fn test_glob_raw_semantics_no_normalize() {
+    let path = "Users/wangyue/Downloads/dir22/home/bbipadm/logs/msk/nohup-route.log";
+
+    // 测试 1: **/nohup*.log 应该匹配（任意目录下的 nohup*.log）
+    let filter1 = combine_path_filters(&["**/nohup*.log".to_string()], &[]).unwrap();
+    assert!(filter1.is_allowed(path), "**/nohup*.log 应匹配 {}", path);
+
+    // 测试 2: **/*22*/**/nohup*.log 应该匹配（包含 22 的目录）
+    let filter2 = combine_path_filters(&["**/*22*/**/nohup*.log".to_string()], &[]).unwrap();
+    assert!(filter2.is_allowed(path), "**/*22*/**/nohup*.log 应匹配 {}", path);
+
+    // 测试 3: abc/nohup*.log 不应该匹配（根目录是 Users 不是 abc）
+    let filter3 = combine_path_filters(&["abc/nohup*.log".to_string()], &[]).unwrap();
+    assert!(!filter3.is_allowed(path), "abc/nohup*.log 不应匹配 {}", path);
+
+    // 测试 4: nohup*.log 不应该匹配（没有 **/ 前缀，只匹配根目录)
+    let filter4 = combine_path_filters(&["nohup*.log".to_string()], &[]).unwrap();
+    assert!(!filter4.is_allowed(path), "nohup*.log 不应匹配 {}", path);
+
+  }
+
 }

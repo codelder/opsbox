@@ -289,10 +289,7 @@ fn parse_date_directives_from_query(q_raw: &str, today: chrono::NaiveDate) -> (S
   } else {
     match (fdt_q, tdt_q) {
       (Some(s), Some(e)) => (s, e),
-      (Some(s), None) => {
-        let e = s.clone();
-        (s, e)
-      }
+      (Some(s), None) => (s, today_str.clone()), // fdt → [fdt, 今天]
       (None, Some(e)) => {
         let s = e.clone();
         (s, e)
@@ -377,6 +374,18 @@ mod tests {
     let (q, range) = parse_date_directives_from_query("fdt:20240101 tdt:20240105 warn", today);
     assert_eq!(q, "warn");
     assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+    assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 5).unwrap());
+
+    // 只有 fdt：从 fdt 到今天
+    let (q, range) = parse_date_directives_from_query("fdt:20240101 error", today);
+    assert_eq!(q, "error");
+    assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+    assert_eq!(range.end, today); // 结束日期是今天 (2024-01-10)
+
+    // 只有 tdt：单日查询（保持原行为）
+    let (q, range) = parse_date_directives_from_query("tdt:20240105 warn", today);
+    assert_eq!(q, "warn");
+    assert_eq!(range.start, NaiveDate::from_ymd_opt(2024, 1, 5).unwrap());
     assert_eq!(range.end, NaiveDate::from_ymd_opt(2024, 1, 5).unwrap());
 
     // 默认日期（今天）
