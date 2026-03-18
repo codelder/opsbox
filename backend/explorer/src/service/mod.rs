@@ -313,6 +313,17 @@ impl ExplorerService {
         use opsbox_core::dfs::impls::ArchiveFileSystem;
 
         let file_path = resource.primary_path.to_string();
+
+        // Windows 路径处理：去掉前导斜杠
+        #[cfg(windows)]
+        let file_path = {
+          if file_path.len() > 2 && file_path.starts_with('/') && file_path.chars().nth(2) == Some(':') {
+            &file_path[1..]
+          } else {
+            &file_path
+          }
+        };
+
         let archive_path = std::path::PathBuf::from(file_path);
 
         // 获取归档文件的父目录作为 LocalFileSystem 的根
