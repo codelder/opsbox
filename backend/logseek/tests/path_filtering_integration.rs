@@ -255,7 +255,7 @@ async fn test_path_filter_uses_relative_path_for_directory_sources() {
   // but the relative path under the source root does not.
   let temp_dir = tempfile::tempdir().unwrap();
   let source_root = temp_dir.path().join("dir22");
-  let target_dir = source_root.join("home/bbipadm/logs/msk");
+  let target_dir = source_root.join("home/appadm/logs/msk");
   std::fs::create_dir_all(&target_dir).unwrap();
 
   let target_file = target_dir.join("nohup-route.log");
@@ -269,10 +269,10 @@ async fn test_path_filter_uses_relative_path_for_directory_sources() {
 
   let executor = SearchExecutor::new(pool, SearchExecutorConfig::default());
 
-  // This matches against the relative path "home/bbipadm/logs/msk/nohup-route.log".
+  // This matches against the relative path "home/appadm/logs/msk/nohup-route.log".
   let results = collect_search_results(&executor, "abcdef path:**/nohup*.log").await;
   assert_eq!(results.len(), 1, "nohup*.log should match the relative path");
-  assert!(results[0].contains("dir22/home/bbipadm/logs/msk/nohup-route.log"));
+  assert!(results[0].contains("dir22/home/appadm/logs/msk/nohup-route.log"));
 
   // If filtering used the absolute path, *22* would match "dir22".
   // The current search pipeline strips the source root first, so this should not match.

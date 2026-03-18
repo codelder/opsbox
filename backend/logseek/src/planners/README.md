@@ -153,7 +153,7 @@ if S3_PROFILES:
     for d in DATES:
         ymd = d['yyyymmdd']
         for hour in range(24):
-            key = f"BBIP/ARCHIVE/{ymd}/log_{hour:02d}.tar.gz"
+            key = f"MYAPP/ARCHIVE/{ymd}/log_{hour:02d}.tar.gz"
             SOURCES.append(f"orl://{profile_name}:{bucket}@s3/{key}")
 ```
 

@@ -624,7 +624,7 @@ mod tests {
   /// 测试：验证 glob 模式原始语义（去掉 normalize 后）
   #[test]
   fn test_glob_raw_semantics_no_normalize() {
-    let path = "Users/wangyue/Downloads/dir22/home/bbipadm/logs/msk/nohup-route.log";
+    let path = "Users/testuser/Downloads/dir22/home/appadm/logs/msk/nohup-route.log";
 
     // 测试 1: **/nohup*.log 应该匹配（任意目录下的 nohup*.log）
     let filter1 = combine_path_filters(&["**/nohup*.log".to_string()], &[]).unwrap();
