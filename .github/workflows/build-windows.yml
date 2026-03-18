@@ -1,9 +1,8 @@
 name: Build Windows
 
 on:
-  # 暂时禁用自动构建，仅支持手动触发
-  # push:
-  #   branches: [ main ]
+  push:
+    branches: [ main ]
   workflow_dispatch:
 
 env:
