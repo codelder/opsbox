@@ -646,7 +646,7 @@ pub fn run_windows_service_with_dispatcher(service_name: &str, args: crate::Args
             None
           })
           .unwrap_or_else(|| "info".to_string());
-        *cfg.current_log_level.lock().unwrap() = level;
+        *cfg.current_log_level.try_lock().expect("mutex should be available during init") = level;
       }
 
       let config = Arc::new(cfg);
