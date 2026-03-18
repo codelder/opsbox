@@ -4,6 +4,7 @@
 
 use explorer::service::ExplorerService;
 use opsbox_test_common::database::TestDatabase;
+use opsbox_core::dfs::local_path_to_orl;
 use tempfile::TempDir;
 use tokio::fs;
 use std::fs::File;
@@ -13,20 +14,6 @@ use flate2::write::GzEncoder;
 
 #[cfg(feature = "agent-manager")]
 use opsbox_test_common::agent_mock;
-
-/// Convert a path to ORL-compatible format (forward slashes)
-/// On Windows, paths like `C:\Users\...` become `/C:/Users/...`
-/// The leading slash ensures proper ORL parsing: `orl://local/C:/Users/...`
-/// On Unix, paths already start with `/` so they remain unchanged
-fn path_to_orl<P: AsRef<std::path::Path>>(path: P) -> String {
-  let path_str = path.as_ref().to_string_lossy().replace('\\', "/");
-  // Ensure path starts with / for proper ORL parsing
-  if path_str.starts_with('/') {
-    path_str
-  } else {
-    format!("/{}", path_str)
-  }
-}
 
 #[tokio::test]
 async fn test_list_local_directory_with_files() {
@@ -46,7 +33,7 @@ async fn test_list_local_directory_with_files() {
         .expect("Failed to create test file file2.log");
 
     // Build ORL for local directory
-    let orl = format!("orl://local{}", path_to_orl(test_dir.path()));
+    let orl = local_path_to_orl(test_dir.path(), None, None);
 
     // Execute: List directory
     let result = service.list(&orl).await;
@@ -71,7 +58,7 @@ async fn test_list_local_empty_directory() {
     let service = ExplorerService::new(db.pool().clone());
 
     let test_dir = TempDir::new().expect("Failed to create test directory");
-    let orl = format!("orl://local{}", path_to_orl(test_dir.path()));
+    let orl = local_path_to_orl(test_dir.path(), None, None);
 
     // Execute
     let result = service.list(&orl).await;
@@ -104,7 +91,7 @@ async fn test_list_local_with_permission_denied() {
         .await
         .expect("Failed to set restricted permissions");
 
-    let orl = format!("orl://local{}", path_to_orl(&restricted_dir));
+    let orl = local_path_to_orl(&restricted_dir, None, None);
 
     // Execute
     let result = service.list(&orl).await;
@@ -307,7 +294,7 @@ async fn assert_download_entire_archive(
         .expect("Failed to read original archive");
 
     // Build ORL for archive WITHOUT entry parameter (download entire file)
-    let orl = format!("orl://local{}", path_to_orl(&archive_path));
+    let orl = local_path_to_orl(&archive_path, None, None);
 
     // Execute: Download entire archive file
     let result = service.download(&orl).await;
@@ -363,10 +350,7 @@ async fn test_navigate_tar_archive() {
     let archive_path = create_test_tar_archive(test_dir.path());
 
     // Build ORL for archive (navigate to logs directory inside archive)
-    let orl = format!(
-        "orl://local{}?entry=logs",
-        path_to_orl(&archive_path)
-    );
+    let orl = local_path_to_orl(&archive_path, Some("logs"), None);
 
     // Execute: List archive contents
     let result = service.list(&orl).await;
@@ -407,10 +391,7 @@ async fn test_navigate_tar_gz_archive() {
     let archive_path = create_test_tar_gz_archive(test_dir.path());
 
     // Build ORL for compressed archive
-    let orl = format!(
-        "orl://local{}?entry=logs",
-        path_to_orl(&archive_path)
-    );
+    let orl = local_path_to_orl(&archive_path, Some("logs"), None);
 
     // Execute: List compressed archive contents
     let result = service.list(&orl).await;
@@ -442,10 +423,7 @@ async fn test_download_archive_entry() {
     let archive_path = create_test_tar_archive(test_dir.path());
 
     // Build ORL for specific file inside archive
-    let orl = format!(
-        "orl://local{}?entry=logs/file1.log",
-        path_to_orl(&archive_path)
-    );
+    let orl = local_path_to_orl(&archive_path, Some("logs/file1.log"), None);
 
     // Execute: Download archive entry
     let result = service.download(&orl).await;
