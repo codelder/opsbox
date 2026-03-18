@@ -1740,8 +1740,24 @@ foo lower
 
   #[test]
   fn test_search_processor_should_process_path_with_filter() {
-    // 使用 path: 过滤器
+    // 使用 path: 过滤器（注意：*.log 只匹配当前目录，**/*.log 匹配任意深度）
     let spec = Arc::new(Query::parse_github_like("path:*.log error").unwrap());
+    let processor = SearchProcessor::new(spec, 0);
+
+    // 测试允许的路径（当前目录下的 .log 文件）
+    assert!(processor.should_process_path("file.log"));
+    // *.log 不匹配嵌套路径（需要 **/*.log）
+    assert!(!processor.should_process_path("path/to/file.log"));
+
+    // 测试被拒绝的路径
+    assert!(!processor.should_process_path("file.txt"));
+    assert!(!processor.should_process_path("file.md"));
+  }
+
+  #[test]
+  fn test_search_processor_should_process_path_with_recursive_filter() {
+    // 使用 **/*.log 匹配任意深度的 .log 文件
+    let spec = Arc::new(Query::parse_github_like("path:**/*.log error").unwrap());
     let processor = SearchProcessor::new(spec, 0);
 
     // 测试允许的路径
@@ -1750,7 +1766,7 @@ foo lower
 
     // 测试被拒绝的路径
     assert!(!processor.should_process_path("file.txt"));
-    assert!(!processor.should_process_path("file.md"));
+    assert!(!processor.should_process_path("path/to/file.md"));
   }
 
   #[test]
