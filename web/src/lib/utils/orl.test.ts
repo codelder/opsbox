@@ -130,7 +130,7 @@ describe('orl', () => {
   describe('archive URL encoding', () => {
     it('handles archive entry paths without double encoding', () => {
       // 模拟后端返回的 ORL（entry 值未编码）
-      const backendOrl = 'orl://local/tmp/test.gz?entry=/home/bbipadm/logs';
+      const backendOrl = 'orl://local/tmp/test.gz?entry=/home/appadm/logs';
 
       // 前端使用 encodeURIComponent 编码整个 ORL
       const encoded = encodeURIComponent(backendOrl);

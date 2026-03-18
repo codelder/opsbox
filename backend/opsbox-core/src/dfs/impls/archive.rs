@@ -1034,19 +1034,19 @@ mod tests {
     {
       let mut builder = Builder::new(&mut tar_data);
 
-      // 创建深层嵌套结构: home/bbipadm/logs/bjbbip-gateway/app_jsonServerMsg.log
+      // 创建深层嵌套结构: home/appadm/logs/myapp-gateway/app_jsonServerMsg.log
       let file_content = b"sample log content";
 
       let mut header = tar::Header::new_gnu();
       header
-        .set_path("home/bbipadm/logs/bjbbip-gateway/app_jsonServerMsg.log")
+        .set_path("home/appadm/logs/myapp-gateway/app_jsonServerMsg.log")
         .unwrap();
       header.set_size(file_content.len() as u64);
       header.set_cksum();
       builder
         .append_data(
           &mut header,
-          "home/bbipadm/logs/bjbbip-gateway/app_jsonServerMsg.log",
+          "home/appadm/logs/myapp-gateway/app_jsonServerMsg.log",
           file_content.as_slice(),
         )
         .unwrap();
@@ -1074,11 +1074,11 @@ mod tests {
   /// Bug 测试：验证归档根目录中的目录条目 path 正确性
   ///
   /// 这个测试重现了 bug：当列出归档根目录时，目录条目的 path 应该
-  /// 是相对路径（如 "/home"），而不是完整路径（如 "/home/bbipadm/logs/..."）。
+  /// 是相对路径（如 "/home"），而不是完整路径（如 "/home/appadm/logs/..."）。
   ///
   /// 用户报告的问题：
   /// - 双击归档根目录中的 "home" 目录
-  /// - 前端收到的 path 是 "orl://...tar.gz?entry=/home/bbipadm/logs/bjbbip-gateway/app_jsonServerMsg.log"
+  /// - 前端收到的 path 是 "orl://...tar.gz?entry=/home/appadm/logs/myapp-gateway/app_jsonServerMsg.log"
   /// - 应该是 "orl://...tar.gz?entry=/home"
   #[tokio::test]
   async fn test_nested_tar_gz_dir_entry_path_bug() {
@@ -1098,7 +1098,7 @@ mod tests {
     // Bug 检查：目录的 path 应该是 "/home"，而不是完整路径
     let path_str = home_entry.path.to_string();
 
-    // 当前有 bug：path 是完整路径 "/home/bbipadm/logs/bjbbip-gateway/app_jsonServerMsg.log"
+    // 当前有 bug：path 是完整路径 "/home/appadm/logs/myapp-gateway/app_jsonServerMsg.log"
     // 期望：path 应该是 "/home"
     assert_eq!(
       path_str, "/home",
@@ -1109,8 +1109,8 @@ mod tests {
     // 验证可以正确进入 home 目录
     let home_entries = archive_fs.read_dir(&ResourcePath::parse("/home")).await.unwrap();
     assert!(
-      home_entries.iter().any(|e| e.name == "bbipadm"),
-      "应该在 home 目录中找到 bbipadm"
+      home_entries.iter().any(|e| e.name == "appadm"),
+      "应该在 home 目录中找到 appadm"
     );
     assert!(
       home_entries.iter().any(|e| e.name == "readme.txt"),

@@ -285,7 +285,7 @@
             <Input
               id="planner-app"
               bind:value={app}
-              placeholder="例如：bbip"
+              placeholder="例如：myapp"
               disabled={!!editingApp || saving}
               required
             />

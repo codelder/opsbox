@@ -21,7 +21,7 @@
   - [3) 路径限定符 path:](#3-路径限定符-path)
   - [4) 正则表达式](#4-正则表达式)
   - [5) 文件级布尔求值与输出行选取](#5-文件级布尔求值与输出行选取)
-- [三、日期指令（BBIP 特有扩展）](#三日期指令bbip-特有扩展)
+- [三、日期指令（特有扩展）](#三日期指令特有扩展)
 - [四、错误与诊断](#四错误与诊断)
 - [五、实践与例子（便于大模型检索的“问-答”对）](#五实践与例子便于大模型检索的问-答对)
 - [六、返回内容与高亮策略](#六返回内容与高亮策略)
@@ -252,7 +252,7 @@ if !spec.eval_file(&occurs) { return Ok(None); }
 
 ---
 
-## 三、日期指令（BBIP 特有扩展）
+## 三、日期指令（特有扩展）
 
 - 用途：仅在本地 NDJSON 模式下用于推导文件集合；会从 q 中剥离日期令牌，保留 cleaned_query 参与内容检索。
 - 令牌：
@@ -266,7 +266,7 @@ if !spec.eval_file(&occurs) { return Ok(None); }
   - 无效日期会被忽略；若最终都无效，也回退为“昨天”
   - 清理：从 q 中删除 dt/fdt/tdt 令牌，重组 cleaned_query
 
-```rs path=PROJECT_ROOT/backend/logseek/src/bbip_service.rs start=47
+```rs path=PROJECT_ROOT/backend/logseek/src/date_service.rs start=47
 /// 内部：从 q 中解析日期指令，返回（清理后的 q，日期区间）
 fn parse_date_directives_from_query(q_raw: &str, today: NaiveDate) -> (String, DateRange) {
   ...
