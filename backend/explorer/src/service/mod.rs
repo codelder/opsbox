@@ -143,8 +143,16 @@ impl ExplorerService {
     let resource = self.auto_detect_archive(resource).await?;
 
     // 对于归档资源，使用专门的归档处理逻辑
+    // 但如果 inner_path 是根路径（用户想下载整个归档文件），则走普通文件下载
     if let Some(ctx) = &resource.archive_context {
-      return self.download_archive(&resource, ctx).await;
+      // 检查 inner_path 是否是根路径（segments 为空或路径为 "/"）
+      let is_root_path = ctx.inner_path.segments().is_empty()
+        || ctx.inner_path.to_string() == "/";
+
+      if !is_root_path {
+        return self.download_archive_entry(&resource, ctx).await;
+      }
+      // 否则继续走普通文件下载逻辑，下载整个归档文件
     }
 
     // 创建适当的文件系统
@@ -276,7 +284,7 @@ impl ExplorerService {
   /// - 远程文件（S3/Agent）：
   ///   - Tar/TarGz/Gz：流式提取目标 entry
   ///   - Zip：小文件内存提取，超阈值回退到临时文件（Zip 读取需要 Seek）
-  async fn download_archive(
+  async fn download_archive_entry(
     &self,
     resource: &Resource,
     ctx: &opsbox_core::dfs::archive::ArchiveContext,

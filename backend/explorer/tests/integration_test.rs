@@ -269,6 +269,73 @@ fn create_test_tar_gz_archive(dir: &std::path::Path) -> std::path::PathBuf {
     gz_path
 }
 
+/// Helper function to test downloading entire archive files
+/// Used to verify that archives can be downloaded as-is without extraction
+async fn assert_download_entire_archive(
+    create_archive_fn: fn(&std::path::Path) -> std::path::PathBuf,
+    expected_filename_contains: &str,
+) {
+    use tokio::io::AsyncReadExt;
+
+    // Create test database and service
+    let db = TestDatabase::file_based()
+        .await
+        .expect("Failed to create test database");
+    let service = ExplorerService::new(db.pool().clone());
+
+    // Create test archive using provided function
+    let test_dir = TempDir::new().expect("Failed to create test dir");
+    let archive_path = create_archive_fn(test_dir.path());
+
+    // Read original archive bytes for comparison
+    let original_bytes = tokio::fs::read(&archive_path)
+        .await
+        .expect("Failed to read original archive");
+
+    // Build ORL for archive WITHOUT entry parameter (download entire file)
+    let orl = format!("orl://local{}", archive_path.display());
+
+    // Execute: Download entire archive file
+    let result = service.download(&orl).await;
+
+    // Assert: Should succeed (not fail with "Entry '/' not found in archive")
+    assert!(
+        result.is_ok(),
+        "Download entire archive should succeed, but got error: {:?}",
+        result.err()
+    );
+
+    let (filename, size, mut stream) = result.unwrap();
+
+    // Verify filename is the archive name
+    assert!(
+        filename.contains(expected_filename_contains),
+        "Filename should contain '{}', got: {}",
+        expected_filename_contains,
+        filename
+    );
+
+    // Verify size matches original
+    assert_eq!(
+        size,
+        Some(original_bytes.len() as u64),
+        "Downloaded size should match original archive size"
+    );
+
+    // Read downloaded content
+    let mut downloaded_content = Vec::new();
+    stream
+        .read_to_end(&mut downloaded_content)
+        .await
+        .expect("Failed to read downloaded content");
+
+    // Verify content matches original archive (byte-for-byte)
+    assert_eq!(
+        downloaded_content, original_bytes,
+        "Downloaded content should match original archive bytes"
+    );
+}
+
 #[tokio::test]
 async fn test_navigate_tar_archive() {
     // Create test database and service
@@ -399,4 +466,26 @@ async fn test_download_archive_entry() {
         "log content 1\n",
         "Downloaded content should match original test data"
     );
+}
+
+/// Test: Download entire archive file (not a specific entry)
+///
+/// When user wants to download the whole archive file without specifying
+/// an entry parameter, the system should return the complete archive file
+/// instead of trying to extract an entry.
+///
+/// Bug scenario: auto_detect_archive() sets archive_context with inner_path="/",
+/// then download() tries to extract entry "/" which doesn't exist.
+#[tokio::test]
+async fn test_download_entire_archive_file() {
+    assert_download_entire_archive(create_test_tar_gz_archive, ".tar.gz").await;
+}
+
+/// Test: Download entire TAR archive file (local backend)
+///
+/// Similar to test_download_entire_archive_file but for uncompressed TAR.
+/// Verifies the fix works for all archive types.
+#[tokio::test]
+async fn test_download_entire_tar_file_local() {
+    assert_download_entire_archive(create_test_tar_archive, "test.tar").await;
 }
