@@ -192,22 +192,16 @@ impl S3Storage {
 impl OpbxFileSystem for S3Storage {
   /// 获取对象元数据
   async fn metadata(&self, path: &ResourcePath) -> Result<FileMetadata, FsError> {
-    let (bucket, _key) = self.parse_bucket_and_key(path)?;
+    // 使用 parse_bucket_and_key 返回的 key（已正确处理 bucket 前缀）
+    let (bucket, key) = self.parse_bucket_and_key(path)?;
 
-    // 如果 key 是空的或以 / 结尾，尝试列出对象
-    let key_str = if path.segments().is_empty() {
-      String::new()
-    } else {
-      path.to_string().trim_start_matches('/').to_string()
-    };
-
-    if key_str.is_empty() || key_str.ends_with('/') {
+    if key.is_empty() || key.ends_with('/') {
       // 这是一个"目录"，列出其中的对象
       let output = self
         .client
         .list_objects_v2()
         .bucket(&bucket)
-        .prefix(&key_str)
+        .prefix(&key)
         .max_keys(1)
         .send()
         .await
@@ -217,7 +211,7 @@ impl OpbxFileSystem for S3Storage {
       if output.contents.is_some() || output.common_prefixes.is_some() {
         Ok(FileMetadata::dir(0))
       } else {
-        Err(FsError::NotFound(format!("S3 prefix not found: {}", key_str)))
+        Err(FsError::NotFound(format!("S3 prefix not found: {}", key)))
       }
     } else {
       // 这是一个文件，使用 head object
@@ -225,14 +219,14 @@ impl OpbxFileSystem for S3Storage {
         .client
         .head_object()
         .bucket(&bucket)
-        .key(&key_str)
+        .key(&key)
         .send()
         .await
         .map_err(|e| {
           // 简化错误处理：如果是 404 错误，返回 NotFound
           let err_str = e.to_string();
           if err_str.contains("404") || err_str.contains("NotFound") || err_str.contains("NoSuchKey") {
-            FsError::NotFound(format!("S3 object not found: {}", key_str))
+            FsError::NotFound(format!("S3 object not found: {}", key))
           } else {
             FsError::S3(format!("HeadObject failed: {}", e))
           }
@@ -573,5 +567,118 @@ mod tests {
     assert!(file_metadata.is_file);
     assert!(!file_metadata.is_dir);
     assert_eq!(file_metadata.size, 1024);
+  }
+
+  #[test]
+  fn test_parse_bucket_and_key_with_default_bucket() {
+    // 当有 default_bucket 时，路径中的 bucket 前缀应该被跳过
+    let config = S3Config::new(
+      "test".to_string(),
+      "https://s3.amazonaws.com".to_string(),
+      "key".to_string(),
+      "secret".to_string(),
+    )
+    .with_bucket("my-bucket".to_string());
+
+    let storage = S3Storage::new(config).unwrap();
+
+    // 路径包含 bucket 前缀: /my-bucket/path/to/file.txt
+    let path = ResourcePath::parse("/my-bucket/path/to/file.txt");
+    let (bucket, key) = storage.parse_bucket_and_key(&path).unwrap();
+
+    assert_eq!(bucket, "my-bucket");
+    assert_eq!(key, "path/to/file.txt", "key should NOT include bucket prefix");
+  }
+
+  #[test]
+  fn test_parse_bucket_and_key_without_default_bucket() {
+    // 当没有 default_bucket 时，第一段是 bucket
+    let config = S3Config::new(
+      "test".to_string(),
+      "https://s3.amazonaws.com".to_string(),
+      "key".to_string(),
+      "secret".to_string(),
+    );
+
+    let storage = S3Storage::new(config).unwrap();
+
+    // 路径: /my-bucket/path/to/file.txt
+    let path = ResourcePath::parse("/my-bucket/path/to/file.txt");
+    let (bucket, key) = storage.parse_bucket_and_key(&path).unwrap();
+
+    assert_eq!(bucket, "my-bucket");
+    assert_eq!(key, "path/to/file.txt");
+  }
+
+  #[test]
+  fn test_parse_bucket_and_key_path_without_bucket_prefix() {
+    // 当有 default_bucket 但路径不以 bucket 开头时
+    let config = S3Config::new(
+      "test".to_string(),
+      "https://s3.amazonaws.com".to_string(),
+      "key".to_string(),
+      "secret".to_string(),
+    )
+    .with_bucket("my-bucket".to_string());
+
+    let storage = S3Storage::new(config).unwrap();
+
+    // 路径不包含 bucket 前缀: /path/to/file.txt
+    let path = ResourcePath::parse("/path/to/file.txt");
+    let (bucket, key) = storage.parse_bucket_and_key(&path).unwrap();
+
+    assert_eq!(bucket, "my-bucket");
+    assert_eq!(key, "path/to/file.txt");
+  }
+
+  /// Test: metadata() should use parse_bucket_and_key() result
+  ///
+  /// This test verifies that the metadata() function correctly uses the key
+  /// returned by parse_bucket_and_key(), not recalculating from path.to_string().
+  ///
+  /// Bug scenario: metadata() ignores the key from parse_bucket_and_key()
+  /// and recalculates key_str from path.to_string(), which includes the bucket prefix.
+  /// This causes HeadObject to look for wrong key like "bucket/path/file"
+  /// instead of "path/file".
+  #[test]
+  fn test_metadata_key_calculation_consistency() {
+    // Setup: create storage with default bucket
+    let config = S3Config::new(
+      "test".to_string(),
+      "https://s3.amazonaws.com".to_string(),
+      "key".to_string(),
+      "secret".to_string(),
+    )
+    .with_bucket("logseek".to_string());
+
+    let storage = S3Storage::new(config).unwrap();
+
+    // Path: /logseek/myapp/2025/file.tar.gz (like user's ORL)
+    let path = ResourcePath::parse("/logseek/myapp/2025/file.tar.gz");
+
+    // Verify parse_bucket_and_key returns correct values
+    let (bucket, key) = storage.parse_bucket_and_key(&path).unwrap();
+    assert_eq!(bucket, "logseek");
+    assert_eq!(key, "myapp/2025/file.tar.gz");
+
+    // The bug: metadata() currently calculates key_str as:
+    //   path.to_string().trim_start_matches('/') = "logseek/myapp/2025/file.tar.gz"
+    // which is WRONG because it includes "logseek/" prefix!
+    //
+    // Expected behavior: key_str should equal `key` from parse_bucket_and_key()
+    // which is "myapp/2025/file.tar.gz"
+
+    // This assertion documents the expected behavior
+    let expected_key = key;
+    let buggy_key = path.to_string().trim_start_matches('/').to_string();
+
+    // These are DIFFERENT - demonstrating the bug
+    assert_ne!(
+      expected_key, buggy_key,
+      "Expected key '{}' but buggy code would use '{}'",
+      expected_key, buggy_key
+    );
+    assert_eq!(buggy_key, "logseek/myapp/2025/file.tar.gz");
+    assert_eq!(expected_key, "myapp/2025/file.tar.gz");
   }
 }

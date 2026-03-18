@@ -500,22 +500,22 @@ mod tests {
   fn test_parse_complex_tar_gz_path() {
     // 测试复杂路径中的 .tar.gz 文件
     let resource = OrlParser::parse(
-      "orl://local/var/log/archives/BBIP_20_APPLOG_2025-08-18.tar.gz?entry=/home/bbipadm/logs/app.log",
+      "orl://local/var/log/archives/MYAPP_20_APPLOG_2025-08-18.tar.gz?entry=/home/appadm/logs/app.log",
     )
     .unwrap();
     assert!(resource.is_archive());
     let ctx = resource.archive_context.as_ref().unwrap();
-    assert_eq!(ctx.inner_path.to_string(), "/home/bbipadm/logs/app.log");
+    assert_eq!(ctx.inner_path.to_string(), "/home/appadm/logs/app.log");
     assert_eq!(ctx.archive_type, Some(ArchiveType::TarGz));
   }
 
   #[test]
   fn test_parse_s3_with_bucket_in_endpoint() {
     // 测试 profile:bucket@s3 格式正确解析 bucket
-    let resource = OrlParser::parse("orl://default:backupdr@s3/bbos").unwrap();
+    let resource = OrlParser::parse("orl://default:backupdr@s3/mybucket").unwrap();
     assert_eq!(resource.endpoint.identity, "default");
     assert_eq!(resource.endpoint.bucket, Some("backupdr".to_string()));
-    assert_eq!(resource.primary_path.to_string(), "/bbos");
+    assert_eq!(resource.primary_path.to_string(), "/mybucket");
   }
 
   #[test]
