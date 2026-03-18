@@ -9,6 +9,11 @@ use tar::Builder;
 use tempfile::TempDir;
 use zip::write::FileOptions;
 
+/// Helper to escape paths for ORL URLs (forward slashes)
+fn escape_path_for_orl(path: &std::path::Path) -> String {
+  path.to_string_lossy().replace('\\', "/")
+}
+
 /// Helper function to create a test tar archive
 fn create_test_tar_archive(dir: &std::path::Path) -> std::path::PathBuf {
   let archive_path = dir.join("test.tar");
@@ -66,7 +71,7 @@ fn test_local_archive_tar_read() {
   let archive_path = create_test_tar_archive(temp_dir.path());
 
   // Build ORL for archive entry
-  let orl = format!("orl://local{}?entry=logs/file1.log", archive_path.display());
+  let orl = format!("orl://local/{}?entry=logs/file1.log", escape_path_for_orl(&archive_path));
 
   // Parse ORL
   let resource = OrlParser::parse(&orl).expect("Should parse ORL");
@@ -74,10 +79,10 @@ fn test_local_archive_tar_read() {
   // Verify: Archive context detected
   assert!(resource.archive_context.is_some(), "Should detect archive");
 
-  // Verify: Correct path
+  // Verify: Correct path (compare with forward slashes for cross-platform)
   assert_eq!(
-    resource.primary_path.to_string(),
-    archive_path.display().to_string(),
+    resource.primary_path.to_string().replace('\\', "/"),
+    escape_path_for_orl(&archive_path),
     "Primary path should match archive path"
   );
 
@@ -97,7 +102,7 @@ fn test_local_archive_zip_read() {
   let archive_path = create_test_zip_archive(temp_dir.path());
 
   // Build ORL for zip entry
-  let orl = format!("orl://local{}?entry=logs/file1.log", archive_path.display());
+  let orl = format!("orl://local/{}?entry=logs/file1.log", escape_path_for_orl(&archive_path));
 
   // Parse ORL
   let resource = OrlParser::parse(&orl).expect("Should parse ORL");

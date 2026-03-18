@@ -111,8 +111,17 @@ impl OrlParser {
     // 解析查询参数（归档上下文和 glob 过滤）
     let (archive_context, filter_glob) = Self::parse_query_params(query_str, path_str)?;
 
-    // 构建 path
-    let path = format!("/{path_str}");
+    // 构建 path - 对于 Windows 绝对路径（如 C:/...），不添加前导斜杠
+    let path = if path_str.len() >= 2
+      && path_str.chars().nth(1) == Some(':')
+      && path_str.chars().nth(0).map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+    {
+      // Windows 绝对路径 (C:/...)
+      path_str.to_string()
+    } else {
+      // Unix 路径或其他路径，添加前导斜杠
+      format!("/{path_str}")
+    };
 
     let mut resource = Resource::new(endpoint, path.into(), archive_context);
     resource.filter_glob = filter_glob;

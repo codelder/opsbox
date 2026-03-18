@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, toLocalOrl, toLocalOrlForScript } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
@@ -114,19 +114,19 @@ test.describe('Local Integration E2E', () => {
     const absRoot = path.resolve(TEST_LOG_DIR);
 
     const scriptDir = `
-SOURCES = ["orl://local${absRoot}?glob=*.log"]
+SOURCES = ["${toLocalOrlForScript(absRoot, '?glob=*.log')}"]
 `;
 
     const scriptArchive = `
-SOURCES = ["orl://local${absRoot}/e2e-archive.tar?glob=**/*.log"]
+SOURCES = ["${toLocalOrlForScript(absRoot, '/e2e-archive.tar?glob=**/*.log')}"]
 `;
 
     const scriptGz = `
-SOURCES = ["orl://local${absRoot}/e2e-compressed.log.gz"]
+SOURCES = ["${toLocalOrlForScript(absRoot, '/e2e-compressed.log.gz')}"]
 `;
 
     const scriptDirGz = `
-SOURCES = ["orl://local${absRoot}?glob=*.gz"]
+SOURCES = ["${toLocalOrlForScript(absRoot, '?glob=*.gz')}"]
 `;
 
     const responseDir = await request.post(`${API_BASE}/settings/planners/scripts`, {

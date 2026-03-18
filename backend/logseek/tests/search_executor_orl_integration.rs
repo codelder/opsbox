@@ -13,6 +13,11 @@ use std::io::Write;
 use std::str::FromStr;
 use tempfile::tempdir;
 
+/// Helper to escape paths for Starlark string literals (forward slashes)
+fn escape_path_for_starlark(path: &std::path::Path) -> String {
+  path.to_string_lossy().replace('\\', "/")
+}
+
 /// 创建测试用的内存数据库连接池
 async fn create_test_pool() -> SqlitePool {
   let connect_options = SqliteConnectOptions::from_str("sqlite::memory:")
@@ -40,12 +45,12 @@ async fn test_search_with_orl_local_source() {
   writeln!(file, "2025-01-01 INFO This is a test log line UNIQUE_MARKER_123").unwrap();
   drop(file);
 
-  let abs_path = temp_dir.path().to_string_lossy().to_string();
+  let abs_path = escape_path_for_starlark(temp_dir.path());
 
   // 使用 ORL 格式的脚本
   let script = format!(
     r#"
-SOURCES = ["orl://local{}?glob=*.log"]
+SOURCES = ["orl://local/{}?glob=*.log"]
 "#,
     abs_path
   );
@@ -148,12 +153,12 @@ async fn test_search_with_relative_glob_pattern() {
   writeln!(f, "TARGET_LOG_CONTENT_789 should match").unwrap();
   drop(f);
 
-  let abs_root = root.to_string_lossy().to_string();
+  let abs_root = escape_path_for_starlark(root);
 
   // 使用相对 glob 模式
   let script = format!(
     r#"
-SOURCES = ["orl://local{}?glob=*/*.log"]
+SOURCES = ["orl://local/{}?glob=*/*.log"]
 "#,
     abs_root
   );
@@ -232,10 +237,10 @@ async fn test_create_entry_stream_with_orl() {
   writeln!(file, "Factory test content").unwrap();
   drop(file);
 
-  let abs_path = temp_dir.path().to_string_lossy().to_string();
+  let abs_path = escape_path_for_starlark(temp_dir.path());
 
   // 创建 Resource
-  let orl_str = format!("orl://local{}?glob=*.log", abs_path);
+  let orl_str = format!("orl://local/{}?glob=*.log", abs_path);
   let resource = OrlParser::parse(&orl_str).expect("Should parse Resource");
 
   println!("Testing create_entry_stream with Resource: {:?}", resource);

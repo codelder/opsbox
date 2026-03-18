@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, toLocalOrlForScript, toAgentOrlForScript, type APIRequestContext } from './fixtures';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -201,8 +201,8 @@ test.describe('Multi-Source Robustness E2E', () => {
     // Configure Planner with BOTH Agent and Local sources
     const fullLocalPath = path.resolve(LOCAL_ROOT_DIR);
     const script = `SOURCES = [
-      "orl://${AGENT_ID}@agent${AGENT_FILE}",
-      "orl://local${fullLocalPath}?glob=**/*.log"
+      "${toAgentOrlForScript(AGENT_ID, AGENT_FILE)}",
+      "${toLocalOrlForScript(fullLocalPath, '?glob=**/*.log')}"
     ]`;
 
     const scriptResp = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {

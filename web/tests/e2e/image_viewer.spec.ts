@@ -9,7 +9,7 @@
  * - Image counter display
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, toLocalOrl } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
@@ -137,7 +137,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should load real image from local filesystem', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     // 访问图片查看页面
@@ -170,7 +170,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should show error for missing sid parameter', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
 
     // 访问不带 sid 参数的页面
     await page.goto(`/image-view?file=${encodeURIComponent(testImageOrl)}`);
@@ -182,7 +182,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should have zoom controls', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -200,7 +200,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should zoom in and out', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -225,7 +225,7 @@ test.describe('Image Viewer E2E', () => {
 
   test('should have previous/next navigation buttons', async ({ page }) => {
     // 从中间图片开始，确保前后都有图片
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo2.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo2.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -244,7 +244,7 @@ test.describe('Image Viewer E2E', () => {
 
   test('should navigate to next image with keyboard right arrow', async ({ page }) => {
     // 从 photo2 开始，应该能导航到 photo3
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo2.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo2.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -271,7 +271,7 @@ test.describe('Image Viewer E2E', () => {
 
   test('should navigate to previous image with keyboard left arrow', async ({ page }) => {
     // 从 photo3 开始，应该能导航到 photo2
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo3.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo3.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -298,7 +298,7 @@ test.describe('Image Viewer E2E', () => {
 
   test('should not navigate before first image', async ({ page }) => {
     // 从第一张图片开始，按左箭头应该没有效果
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -321,7 +321,7 @@ test.describe('Image Viewer E2E', () => {
 
   test('should not navigate after last image', async ({ page }) => {
     // 从最后一张图片开始，按右箭头应该没有效果
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo4.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo4.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -343,7 +343,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should display image counter', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo2.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo2.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -364,7 +364,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should display file name in header', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -379,7 +379,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should rotate image', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -406,7 +406,7 @@ test.describe('Image Viewer E2E', () => {
   });
 
   test('should support Escape key to close', async ({ page }) => {
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
@@ -429,7 +429,7 @@ test.describe('Image Viewer E2E', () => {
     const images = ['photo1.png', 'photo2.png', 'photo3.png', 'photo4.png'];
 
     for (const imageName of images) {
-      const testImageOrl = `orl://local${TEST_IMAGES_DIR}/${imageName}`;
+      const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/${imageName}`);
 
       await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);
       await page.waitForLoadState('networkidle');
@@ -445,7 +445,7 @@ test.describe('Image Viewer E2E', () => {
   test('should only show image files in navigation', async ({ page }) => {
     // 目录中有 4 个 PNG 文件和 1 个 TXT 文件
     // 导航应该只切换图片文件，跳过 TXT 文件
-    const testImageOrl = `orl://local${TEST_IMAGES_DIR}/photo1.png`;
+    const testImageOrl = toLocalOrl(`${TEST_IMAGES_DIR}/photo1.png`);
     const testSid = 'image-viewer-test';
 
     await page.goto(`/image-view?sid=${testSid}&file=${encodeURIComponent(testImageOrl)}`);

@@ -6,9 +6,6 @@ import { E2E_DATABASE_PATH, getE2EDatabaseArtifacts } from './tests/e2e/e2e-env'
 // Resolve global setup/teardown paths for ESM
 const globalSetupPath = fileURLToPath(new URL('./tests/e2e/global-setup.ts', import.meta.url));
 const globalTeardownPath = fileURLToPath(new URL('./tests/e2e/global-teardown.ts', import.meta.url));
-const e2eDbCleanupCommand = getE2EDatabaseArtifacts()
-  .map((dbPath) => `rm -f ${JSON.stringify(dbPath)}`)
-  .join(' && ');
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -22,7 +19,7 @@ export default defineConfig({
   // Global teardown: cleanup resources from this run
   globalTeardown: globalTeardownPath,
   // Global timeout for entire test run
-  globalTimeout: process.env.CI ? 600000 : 300000,
+  globalTimeout: process.env.CI ? 600000 : 600000,
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry'
@@ -48,7 +45,10 @@ export default defineConfig({
       }
     },
     {
-      command: `sh -c '${e2eDbCleanupCommand} && cd ../backend && cargo run --release -p opsbox-server -- --port 4001'`,
+      // Cross-platform: use node -e for cleanup, then cargo run
+      command: `node -e "const fs=require('fs');[${getE2EDatabaseArtifacts()
+        .map((p) => `'${p}'`)
+        .join(',')}].forEach(p=>{try{fs.unlinkSync(p)}catch(e){}})" && cd ../backend && cargo run --release -p opsbox-server -- --port 4001`,
       url: 'http://127.0.0.1:4001/healthy',
       reuseExistingServer: !process.env.CI && process.env.PW_REUSE_SERVER === '1',
       stdout: 'pipe',
@@ -59,7 +59,7 @@ export default defineConfig({
         RUST_BACKTRACE: process.env.RUST_BACKTRACE ?? '1',
         OPSBOX_DATABASE_URL: E2E_DATABASE_PATH
       },
-      timeout: process.env.CI ? 300000 : 120000 // CI 环境需要更长时间编译
+      timeout: process.env.CI ? 300000 : 300000 // release 编译需要更长时间
     }
   ]
 });

@@ -5,6 +5,11 @@ use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::fs;
 
+/// 跨平台路径匹配：将路径标准化为正斜杠格式进行比较
+fn normalize_path(path: &str) -> String {
+  path.replace('\\', "/")
+}
+
 #[tokio::test]
 async fn test_relative_glob_filtering() -> std::io::Result<()> {
   // 1. 创建测试目录结构
@@ -58,9 +63,9 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
     let mut matched_files = Vec::new();
     while let Some(event) = rx.recv().await {
       if let logseek::service::search::SearchEvent::Success(res) = event {
-        // 存储相对于 root 的路径以便验证
+        // 存储相对于 root 的路径以便验证（标准化为正斜杠格式）
         let rel_path = std::path::Path::new(&res.path).strip_prefix(root).unwrap();
-        matched_files.push(rel_path.to_string_lossy().to_string());
+        matched_files.push(normalize_path(&rel_path.to_string_lossy()));
       }
     }
 
@@ -102,7 +107,7 @@ async fn test_relative_glob_filtering() -> std::io::Result<()> {
     while let Some(event) = rx.recv().await {
       if let logseek::service::search::SearchEvent::Success(res) = event {
         let rel_path = std::path::Path::new(&res.path).strip_prefix(root).unwrap();
-        matched_files.push(rel_path.to_string_lossy().to_string());
+        matched_files.push(normalize_path(&rel_path.to_string_lossy()));
       }
     }
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, toLocalOrl, toLocalOrlForScript } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -63,7 +63,7 @@ test.describe('Performance Boundary Tests', () => {
 
     // 配置 Planner
     const absRoot = path.resolve(TEST_LOG_DIR);
-    const script = `SOURCES = ["orl://local${absRoot}?glob=**/*.log"]`;
+    const script = `SOURCES = ["${toLocalOrlForScript(absRoot, '?glob=**/*.log')}"]`;
 
     const response = await request.post(`${API_BASE}/settings/planners/scripts`, {
       data: { app: TEST_APP, script }

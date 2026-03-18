@@ -611,9 +611,9 @@ mod tests {
   }
 
   #[test]
-  fn test_entry_concurrency_env_var_valid() {
-    // 测试环境变量解析 - 有效值
-    // SAFETY: 单元测试中修改环境变量，测试后恢复。测试框架保证串行运行。
+  fn test_entry_concurrency_env_var() {
+    // 测试环境变量解析
+    // SAFETY: 单元测试中修改环境变量，测试后恢复。合并为一个测试避免并行竞争。
     unsafe {
       let original = std::env::var("ENTRY_CONCURRENCY").ok();
 
@@ -630,22 +630,6 @@ mod tests {
       std::env::set_var("ENTRY_CONCURRENCY", "128");
       let conc = entry_concurrency();
       assert_eq!(conc, 128);
-
-      // 恢复原始值
-      if let Some(val) = original {
-        std::env::set_var("ENTRY_CONCURRENCY", val);
-      } else {
-        std::env::remove_var("ENTRY_CONCURRENCY");
-      }
-    }
-  }
-
-  #[test]
-  fn test_entry_concurrency_env_var_invalid() {
-    // 测试无效环境变量值应使用默认值
-    // SAFETY: 单元测试中修改环境变量，测试后恢复。测试框架保证串行运行。
-    unsafe {
-      let original = std::env::var("ENTRY_CONCURRENCY").ok();
 
       // 测试无效值（非数字）
       std::env::set_var("ENTRY_CONCURRENCY", "not-a-number");

@@ -9,7 +9,7 @@
  * - File operations
  */
 
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, toLocalOrl, type Page } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -33,7 +33,7 @@ test.describe('Explorer Interaction E2E', () => {
   }
 
   async function navigateToDirectory(page: Page, dirPath: string) {
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${dirPath}`)}`);
+    await page.goto(`/explorer?orl=${encodeURIComponent(toLocalOrl(dirPath))}`);
     await page.waitForLoadState('networkidle');
   }
 
@@ -87,7 +87,7 @@ test.describe('Explorer Interaction E2E', () => {
   test('should navigate to directory via ORL input and deep navigation', async ({ page }) => {
     // 通过 ORL 输入导航到测试目录
     const input = page.locator('#orl-input');
-    await input.fill(`orl://local${TEST_DIR}`);
+    await input.fill(toLocalOrl(TEST_DIR));
     await input.press('Enter');
     await page.waitForLoadState('networkidle');
 
@@ -114,7 +114,7 @@ test.describe('Explorer Interaction E2E', () => {
 
   test('should toggle hidden files visibility', async ({ page }) => {
     // 导航到测试目录
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${TEST_DIR}`)}`);
+    await page.goto(`/explorer?orl=${encodeURIComponent(toLocalOrl(TEST_DIR))}`);
     await page.waitForLoadState('networkidle');
 
     // 默认不应该看到隐藏文件
@@ -146,7 +146,7 @@ test.describe('Explorer Interaction E2E', () => {
   });
 
   test('should display right-click menu for file', async ({ page }) => {
-    await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${LOGS_DIR}`)}`);
+    await page.goto(`/explorer?orl=${encodeURIComponent(toLocalOrl(LOGS_DIR))}`);
     await page.waitForLoadState('networkidle');
 
     // 等待文件出现

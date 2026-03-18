@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, toLocalOrl, toLocalOrlForScript } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -44,12 +44,12 @@ test.describe('Relative Glob Filtering E2E', () => {
 
     // Script A: filter_glob = '*/*.log'
     const scriptRelative = `
-SOURCES = ["orl://local${absRoot}?glob=*/*.log"]
+SOURCES = ["${toLocalOrlForScript(absRoot, '?glob=*/*.log')}"]
 `;
 
     // Script B: filter_glob = '**/*.log'
     const scriptRecursive = `
-SOURCES = ["orl://local${absRoot}?glob=**/*.log"]
+SOURCES = ["${toLocalOrlForScript(absRoot, '?glob=**/*.log')}"]
 `;
 
     const res1 = await request.post(`${API_BASE}/settings/planners/scripts`, {

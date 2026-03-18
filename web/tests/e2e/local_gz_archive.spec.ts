@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, toLocalOrl, toLocalOrlForScript } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -45,7 +45,7 @@ test.describe('Local Gzip Archive E2E', () => {
 
   test('should list and navigate into local gz file', async ({ page }) => {
     // Navigate to the directory containing the gz file
-    const orl = `orl://local${TEST_ROOT_DIR}`;
+    const orl = toLocalOrl(TEST_ROOT_DIR);
     await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(orl)}`);
     await page.waitForLoadState('networkidle');
 
@@ -130,7 +130,7 @@ test.describe('Local Gzip Archive E2E', () => {
 
   test('should return proper API response for gz file list', async ({ request }) => {
     // Direct API test - bypass UI
-    const orl = `orl://local${TEST_ROOT_DIR}/app_tranTime.log.gz`;
+    const orl = toLocalOrl(`${TEST_ROOT_DIR}/app_tranTime.log.gz`);
     const maxAttempts = 3;
     let lastStatus = 0;
     let lastBodyText = '';
@@ -192,7 +192,7 @@ test.describe('Local Gzip Archive E2E', () => {
 
   test('should open internal file when double-clicked', async ({ page, context }) => {
     // Navigate to the directory containing the gz file
-    const orl = `orl://local${TEST_ROOT_DIR}`;
+    const orl = toLocalOrl(TEST_ROOT_DIR);
     await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(orl)}`);
     await page.waitForLoadState('networkidle');
 
@@ -224,7 +224,7 @@ test.describe('Local Gzip Archive E2E', () => {
 
   test('should correctly load file content from gz archive', async ({ page, context }) => {
     // Navigate to the directory containing the gz file
-    const orl = `orl://local${TEST_ROOT_DIR}`;
+    const orl = toLocalOrl(TEST_ROOT_DIR);
     await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(orl)}`);
     await page.waitForLoadState('networkidle');
 

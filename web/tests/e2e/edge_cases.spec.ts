@@ -8,7 +8,7 @@
  * - Empty directory display
  */
 
-import { test, expect } from '@playwright/test';
+import { test, expect, toLocalOrl } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -139,7 +139,7 @@ test.describe('Edge Cases E2E', () => {
 
     try {
       // Navigate to explorer with the empty directory
-      await page.goto(`/explorer?orl=${encodeURIComponent(`orl://local${EMPTY_DIR}`)}`);
+      await page.goto(`/explorer?orl=${encodeURIComponent(toLocalOrl(EMPTY_DIR))}`);
       await page.waitForLoadState('networkidle');
 
       // Assert: empty directory message is visible

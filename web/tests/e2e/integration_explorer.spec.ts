@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, toLocalOrl } from './fixtures';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -112,7 +112,7 @@ test.describe('Explorer E2E', () => {
     });
 
     // Navigate to local files in browser
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${TEST_FILES_DIR}`)}`);
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(toLocalOrl(TEST_FILES_DIR))}`);
 
     // Wait for the page to load
     await page.waitForLoadState('networkidle');
@@ -185,7 +185,7 @@ test.describe('Explorer E2E', () => {
   });
 
   test('should download local file by clicking', async ({ page }) => {
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${TEST_FILES_DIR}`)}`);
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(toLocalOrl(TEST_FILES_DIR))}`);
 
     await page.waitForLoadState('networkidle');
 
@@ -678,7 +678,7 @@ test.describe('Explorer E2E', () => {
     execSync(`tar -cf "${archivePath}" -C "${TEST_FILES_DIR}" archive_content`);
 
     // 2. Navigate to the containing folder
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${TEST_FILES_DIR}`)}`);
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(toLocalOrl(TEST_FILES_DIR))}`);
     await page.waitForLoadState('networkidle');
 
     // 3. Double click the archive file to enter it
@@ -734,18 +734,18 @@ test.describe('Explorer E2E', () => {
     fs.mkdirSync(localL2, { recursive: true });
 
     // --- Local Navigation Test ---
-    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://local${localL2}`)}`);
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(toLocalOrl(localL2))}`);
     await page.waitForLoadState('networkidle');
 
     const upButton = page.locator('button:has(svg.lucide-arrow-left)');
 
     // Go Up: level2 -> level1
     await upButton.click();
-    await expect(page).toHaveURL(new RegExp(encodeURIComponent(`orl://local${localL1}`)));
+    await expect(page).toHaveURL(new RegExp(encodeURIComponent(toLocalOrl(localL1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))));
 
     // Go Up: level1 -> TEST_FILES_DIR
     await upButton.click();
-    await expect(page).toHaveURL(new RegExp(encodeURIComponent(`orl://local${TEST_FILES_DIR}`)));
+    await expect(page).toHaveURL(new RegExp(encodeURIComponent(toLocalOrl(TEST_FILES_DIR).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))));
 
     // --- Agent Navigation Test ---
     const navAgentId = `${AGENT_ID}-nav`;

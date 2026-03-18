@@ -608,7 +608,7 @@ mod tests {
 
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     let sid = "test-sid-miss".to_string();
-    let file_url = format!("orl://local{}", file_path.to_str().unwrap());
+    let file_url = format!("orl://local/{}", file_path.to_str().unwrap().trim_start_matches('/'));
 
     let params = ViewParams {
       sid: sid.clone(),
@@ -643,7 +643,7 @@ mod tests {
     std::fs::write(&file_path, png_header).unwrap();
 
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
-    let file_url = format!("orl://local{}", file_path.to_str().unwrap());
+    let file_url = format!("orl://local/{}", file_path.to_str().unwrap().trim_start_matches('/'));
 
     let params = ViewParams {
       sid: "any".into(),
@@ -672,8 +672,8 @@ mod tests {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     let sid = "test-sid-gzip-entry".to_string();
     let file_url = format!(
-      "orl://local{}?entry=/sample.log",
-      gzip_path.to_str().unwrap()
+      "orl://local/{}?entry=/sample.log",
+      gzip_path.to_str().unwrap().trim_start_matches('/')
     );
 
     let params = ViewParams {
@@ -709,8 +709,8 @@ mod tests {
 
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     let file_url = format!(
-      "orl://local{}?entry=/sample.log",
-      gzip_path.to_str().unwrap()
+      "orl://local/{}?entry=/sample.log",
+      gzip_path.to_str().unwrap().trim_start_matches('/')
     );
 
     let params = ViewParams {
@@ -742,8 +742,8 @@ mod tests {
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     let sid = "test-sid-targz-entry".to_string();
     let file_url = format!(
-      "orl://local{}?entry={}",
-      archive_path.to_str().unwrap(),
+      "orl://local/{}?entry={}",
+      archive_path.to_str().unwrap().trim_start_matches('/'),
       entry_name
     );
 
@@ -781,8 +781,8 @@ mod tests {
 
     let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
     let file_url = format!(
-      "orl://local{}?entry={}",
-      archive_path.to_str().unwrap(),
+      "orl://local/{}?entry={}",
+      archive_path.to_str().unwrap().trim_start_matches('/'),
       entry_name
     );
 

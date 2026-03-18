@@ -16,6 +16,57 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
+ * Convert a local filesystem path to a valid ORL URL for E2E tests.
+ * Handles cross-platform path differences (Windows vs Unix).
+ *
+ * @param localPath - The local filesystem path (e.g., "C:\Users\test" or "/home/user/test")
+ * @returns A valid ORL URL string (e.g., "orl://local/C:/Users/test" or "orl://local//home/user/test")
+ *
+ * @example
+ * // On Windows
+ * toLocalOrl('C:\\Users\\test\\logs') // Returns: 'orl://local/C:/Users/test/logs'
+ *
+ * // On Unix
+ * toLocalOrl('/home/user/logs') // Returns: 'orl://local//home/user/logs'
+ */
+export function toLocalOrl(localPath: string): string {
+  // Convert backslashes to forward slashes for URL compatibility
+  const normalizedPath = localPath.replace(/\\/g, '/');
+  // Add leading slash after 'local' endpoint
+  return `orl://local/${normalizedPath}`;
+}
+
+/**
+ * Convert a local filesystem path to an ORL URL for use in Starlark planner scripts.
+ * This is for scripts that need the ORL as a string value.
+ *
+ * @param basePath - The base directory path
+ * @param suffix - Optional suffix (e.g., '?glob=*.log' or '/file.gz')
+ * @returns An ORL URL string suitable for Starlark scripts
+ *
+ * @example
+ * // In a Starlark script template:
+ * const script = `SOURCES = ["${toLocalOrlForScript(absRoot, '?glob=*.log')}"]`;
+ */
+export function toLocalOrlForScript(basePath: string, suffix = ''): string {
+  const normalizedPath = basePath.replace(/\\/g, '/');
+  return `orl://local/${normalizedPath}${suffix}`;
+}
+
+/**
+ * Convert an agent filesystem path to an ORL URL for use in Starlark planner scripts.
+ *
+ * @param agentId - The agent ID
+ * @param agentPath - The path on the agent's filesystem
+ * @param suffix - Optional suffix (e.g., '?glob=*.log')
+ * @returns An ORL URL string for agent sources
+ */
+export function toAgentOrlForScript(agentId: string, agentPath: string, suffix = ''): string {
+  const normalizedPath = agentPath.replace(/\\/g, '/');
+  return `orl://${agentId}@agent${normalizedPath}${suffix}`;
+}
+
+/**
  * Resource Tracker - tracks all resources created during tests
  * and ensures cleanup even if tests fail or timeout.
  */
@@ -234,7 +285,7 @@ export async function waitForHealthy(url: string, timeout = 30000, interval = 50
 export const test = base.extend<{
   resources: ResourceTracker;
 }>({
-  resources: async (_, use) => {
+  resources: async ({}, use) => {
     const tracker = new ResourceTracker();
     await use(tracker);
     // Always cleanup, even if test fails

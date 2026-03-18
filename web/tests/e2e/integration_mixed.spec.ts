@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext } from '@playwright/test';
+import { test, expect, toLocalOrlForScript, toAgentOrlForScript, type APIRequestContext } from './fixtures';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import * as fs from 'fs';
 import * as http from 'http';
@@ -455,12 +455,12 @@ test.describe('Mixed Sources Integration E2E', () => {
     // - S3: archive（暂不支持 dir/files，EntryStreamFactory 会直接报错）
     const script = `
 SOURCES = [
-  "orl://local${LOCAL_DIR_SUBDIR}?glob=**/*.log",
-  "orl://local${LOCAL_FILES_FILE}",
-  "orl://local${LOCAL_ARCHIVE_FILE}?glob=**/*.log",
-  "orl://${AGENT_ID}@agent${AGENT_DIR_SUBDIR}?glob=**/*.log",
-  "orl://${AGENT_ID}@agent${AGENT_FILES_FILE}",
-  "orl://${AGENT_ID}@agent${AGENT_ARCHIVE_FILE}?glob=**/*.log",
+  "${toLocalOrlForScript(LOCAL_DIR_SUBDIR, '?glob=**/*.log')}",
+  "${toLocalOrlForScript(LOCAL_FILES_FILE)}",
+  "${toLocalOrlForScript(LOCAL_ARCHIVE_FILE, '?glob=**/*.log')}",
+  "${toAgentOrlForScript(AGENT_ID, AGENT_DIR_SUBDIR, '?glob=**/*.log')}",
+  "${toAgentOrlForScript(AGENT_ID, AGENT_FILES_FILE)}",
+  "${toAgentOrlForScript(AGENT_ID, AGENT_ARCHIVE_FILE, '?glob=**/*.log')}",
   "orl://${PROFILE}@s3/${BUCKET}/${S3_ARCHIVE_KEY}?glob=**/*.log"
 ]
 `;
