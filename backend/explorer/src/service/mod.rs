@@ -206,6 +206,18 @@ impl ExplorerService {
       opsbox_core::dfs::endpoint::Location::Local => {
         // 本地文件：直接使用原始文件路径，无需复制
         let file_path = resource.primary_path.to_string();
+
+        // Windows 路径处理：去掉前导斜杠
+        // ORL 格式可能是 /C:/Users/... (带有前导斜杠)
+        #[cfg(windows)]
+        let file_path = {
+          if file_path.len() > 2 && file_path.starts_with('/') && file_path.chars().nth(2) == Some(':') {
+            &file_path[1..]
+          } else {
+            &file_path
+          }
+        };
+
         (std::path::PathBuf::from(file_path), None)
       }
       _ => {
