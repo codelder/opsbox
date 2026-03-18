@@ -15,10 +15,17 @@ use flate2::write::GzEncoder;
 use opsbox_test_common::agent_mock;
 
 /// Convert a path to ORL-compatible format (forward slashes)
-/// On Windows, paths like `C:\Users\...` become `C:/Users/...`
-/// On Unix, paths remain unchanged
+/// On Windows, paths like `C:\Users\...` become `/C:/Users/...`
+/// The leading slash ensures proper ORL parsing: `orl://local/C:/Users/...`
+/// On Unix, paths already start with `/` so they remain unchanged
 fn path_to_orl<P: AsRef<std::path::Path>>(path: P) -> String {
-  path.as_ref().to_string_lossy().replace('\\', "/")
+  let path_str = path.as_ref().to_string_lossy().replace('\\', "/");
+  // Ensure path starts with / for proper ORL parsing
+  if path_str.starts_with('/') {
+    path_str
+  } else {
+    format!("/{}", path_str)
+  }
 }
 
 #[tokio::test]
