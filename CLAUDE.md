@@ -6,6 +6,18 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 OpsBox is a modular log search and analysis platform built with Rust backend and SvelteKit frontend. It features a pluggable architecture where modules are automatically discovered and registered at compile time. The platform provides unified resource browsing across local files, S3/MinIO storage, and remote agents.
 
+### Platform Support
+
+OpsBox is a **cross-platform application** supporting:
+- **Windows** (x86_64)
+- **Linux** (x86_64, ARM64)
+- **macOS** (Intel, Apple Silicon)
+
+When writing code, ensure compatibility across all platforms. Pay special attention to:
+- File path handling (use `/` consistently, or `std::path::Path` in Rust)
+- Line endings (configure `.gitattributes` for proper handling)
+- Platform-specific behaviors (use conditional compilation when necessary)
+
 ### Tech Stack
 
 - **Backend**: Rust 2024 edition, `tracing` for logging, `mimalloc` as global allocator

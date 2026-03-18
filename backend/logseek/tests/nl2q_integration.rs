@@ -453,6 +453,8 @@ async fn test_database_fallback_mechanism() {
   // 创建内存数据库但未初始化schema
   // SAFETY: 集成测试运行在独立进程中，每个测试独立执行，无并发风险。
   unsafe { std::env::set_var("OPSBOX_NO_PROXY", "1") };
+  // 设置短超时以加速测试（默认 60 秒太长）
+  unsafe { std::env::set_var("OLLAMA_TIMEOUT_SECS", "1") };
   let pool = sqlx::sqlite::SqlitePool::connect(":memory:").await.unwrap();
 
   // 尝试解析LLM客户端

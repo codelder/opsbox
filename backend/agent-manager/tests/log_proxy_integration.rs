@@ -445,6 +445,10 @@ async fn test_proxy_concurrent_requests() {
 
 #[tokio::test]
 async fn test_proxy_timeout_scenario() {
+  // 设置短超时以加速测试（1秒）
+  // SAFETY: 测试运行在独立进程中，环境变量修改是安全的
+  unsafe { std::env::set_var("OPSBOX_PROXY_TIMEOUT_SECS", "1") };
+
   // 查找可用端口，如果找不到则使用默认端口
   let port = match agent_mock::find_available_port(
     opsbox_test_common::constants::AGENT_PORT_START,
@@ -468,7 +472,8 @@ async fn test_proxy_timeout_scenario() {
         loop {
           if let Ok((mut _socket, _)) = listener.accept().await {
             // 接受连接但不响应，模拟超时
-            tokio::time::sleep(tokio::time::Duration::from_secs(20)).await;
+            // 等待时间略长于代理超时（1秒），确保触发超时
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
           }
         }
       });

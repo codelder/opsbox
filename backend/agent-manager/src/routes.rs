@@ -69,6 +69,18 @@ macro_rules! handle_agent_operation {
     };
 }
 
+/// 获取代理请求超时时间（可配置）
+///
+/// 优先级：环境变量 OPSBOX_PROXY_TIMEOUT_SECS > 默认值 10 秒
+/// 测试环境可设置更短的超时时间以加速测试
+fn get_proxy_timeout() -> std::time::Duration {
+  std::env::var("OPSBOX_PROXY_TIMEOUT_SECS")
+    .ok()
+    .and_then(|s| s.parse().ok())
+    .map(std::time::Duration::from_secs)
+    .unwrap_or_else(|| std::time::Duration::from_secs(10))
+}
+
 /// 从 Agent 信息中提取连接端点 (host 和 port)
 fn extract_agent_endpoint(agent: &AgentInfo) -> Result<(String, u16), (StatusCode, String)> {
   let host = agent
@@ -316,7 +328,7 @@ async fn proxy_agent_log_config(
   let client = manager.http_client();
   let response = client
     .get(&url)
-    .timeout(std::time::Duration::from_secs(10))
+    .timeout(get_proxy_timeout())
     .send()
     .await
     .map_err(|e| {
@@ -369,7 +381,7 @@ async fn proxy_agent_log_level(
   let response = client
     .put(&url)
     .json(&req)
-    .timeout(std::time::Duration::from_secs(10))
+    .timeout(get_proxy_timeout())
     .send()
     .await
     .map_err(|e| {
@@ -423,7 +435,7 @@ async fn proxy_agent_log_retention(
   let response = client
     .put(&url)
     .json(&req)
-    .timeout(std::time::Duration::from_secs(10))
+    .timeout(get_proxy_timeout())
     .send()
     .await
     .map_err(|e| {
