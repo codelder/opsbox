@@ -369,6 +369,70 @@ pub fn build_orl_from_resource(resource: &Resource) -> String {
   )
 }
 
+/// 将本地文件系统路径转换为 ORL 字符串
+///
+/// 此函数处理跨平台路径问题：
+/// - Unix: `/var/log/app.log` → `orl://local/var/log/app.log`
+/// - Windows: `C:\Users\test\file.log` → `orl://local/C:/Users/test/file.log`
+///
+/// # 参数
+/// - `path`: 本地文件系统路径
+/// - `entry`: 可选的归档内路径
+/// - `glob`: 可选的 glob 过滤模式
+///
+/// # 示例
+/// ```rust
+/// use opsbox_core::dfs::local_path_to_orl;
+/// use std::path::Path;
+///
+/// // Unix 路径
+/// #[cfg(unix)]
+/// {
+///   let orl = local_path_to_orl("/var/log/app.log", None, None);
+///   assert_eq!(orl, "orl://local/var/log/app.log");
+/// }
+///
+/// // Windows 路径
+/// #[cfg(windows)]
+/// {
+///   let orl = local_path_to_orl(r"C:\Users\test\file.log", None, None);
+///   assert_eq!(orl, "orl://local/C:/Users/test/file.log");
+/// }
+/// ```
+pub fn local_path_to_orl<P: AsRef<std::path::Path>>(
+  path: P,
+  entry: Option<&str>,
+  glob: Option<&str>,
+) -> String {
+  let path = path.as_ref();
+  let path_str = path.to_string_lossy();
+
+  // 将所有反斜杠替换为正斜杠（Windows 兼容）
+  let normalized_path = path_str.replace('\\', "/");
+
+  // 构建查询参数
+  let mut query_parts = Vec::new();
+  if let Some(entry_path) = entry {
+    let encoded = utf8_percent_encode(entry_path, NON_ALPHANUMERIC).to_string();
+    query_parts.push(format!("entry={encoded}"));
+  }
+  if let Some(glob_pattern) = glob {
+    let encoded = utf8_percent_encode(glob_pattern, NON_ALPHANUMERIC).to_string();
+    query_parts.push(format!("glob={encoded}"));
+  }
+
+  // 构建 ORL
+  if query_parts.is_empty() {
+    format!("orl://local/{}", normalized_path.trim_start_matches('/'))
+  } else {
+    format!(
+      "orl://local/{}?{}",
+      normalized_path.trim_start_matches('/'),
+      query_parts.join("&")
+    )
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

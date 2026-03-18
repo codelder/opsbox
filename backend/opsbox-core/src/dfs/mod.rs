@@ -27,7 +27,7 @@ pub use archive::{ArchiveContext, ArchiveType};
 pub use endpoint::{AccessMethod, Endpoint, Location, StorageBackend};
 pub use filesystem::{DirEntry, FileMetadata, FsError, OpbxFileSystem};
 pub use impls::{AgentClient, AgentProxyFS, ArchiveFileSystem, LocalFileSystem, S3Config, S3Storage};
-pub use orl_parser::{OrlParseError, OrlParser, build_orl, build_orl_from_resource};
+pub use orl_parser::{OrlParseError, OrlParser, build_orl, build_orl_from_resource, local_path_to_orl};
 pub use path::ResourcePath;
 pub use resource::Resource;
 pub use searchable::{SearchConfig, Streamable};
