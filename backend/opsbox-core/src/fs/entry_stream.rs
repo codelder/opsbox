@@ -742,10 +742,17 @@ mod tests {
 
   #[test]
   fn test_normalize_archive_entry_path() {
+    // Normal paths
     assert_eq!(normalize_archive_entry_path("foo/bar"), "foo/bar");
     assert_eq!(normalize_archive_entry_path("./foo/bar"), "foo/bar");
     assert_eq!(normalize_archive_entry_path("/foo/bar"), "foo/bar");
     assert_eq!(normalize_archive_entry_path("///foo/bar"), "foo/bar");
+
+    // Edge cases: root path and empty string
+    // These should return empty string (caller should handle this case)
+    assert_eq!(normalize_archive_entry_path("/"), "");
+    assert_eq!(normalize_archive_entry_path("//"), "");
+    assert_eq!(normalize_archive_entry_path(""), "");
   }
 
   #[test]
