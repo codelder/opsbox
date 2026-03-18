@@ -614,12 +614,35 @@ impl ExplorerService {
             // 这里我们使用路径的根目录作为根
             let path_str = resource.primary_path.to_string();
 
-            // 对于绝对路径，使用根目录 "/"
-            // 对于相对路径，使用当前目录 "."
-            let root = if path_str.starts_with('/') {
-              PathBuf::from("/")
-            } else {
-              PathBuf::from(".")
+            #[cfg(unix)]
+            let root = {
+              // 对于 Unix 绝对路径，使用根目录 "/"
+              // 对于相对路径，使用当前目录 "."
+              if path_str.starts_with('/') {
+                PathBuf::from("/")
+              } else {
+                PathBuf::from(".")
+              }
+            };
+
+            #[cfg(windows)]
+            let root = {
+              // Windows 路径处理：
+              // ORL 格式可能是 /C:/Users/... (带有前导斜杠)
+              // 需要去掉前导斜杠，然后使用驱动器根目录
+              let clean_path = path_str.trim_start_matches('/');
+
+              // 检查是否是驱动器路径 (C:/...)
+              if clean_path.len() >= 2 && clean_path.chars().nth(1) == Some(':') {
+                // 使用驱动器根目录 (C:/)
+                PathBuf::from(&clean_path[..3])
+              } else if path_str.starts_with('/') {
+                // 其他绝对路径，使用当前驱动器根目录
+                PathBuf::from("/")
+              } else {
+                // 相对路径，使用当前目录
+                PathBuf::from(".")
+              }
             };
 
             let fs = LocalFileSystem::new(root).map_err(|e| format!("Failed to create local FS: {}", e))?;
