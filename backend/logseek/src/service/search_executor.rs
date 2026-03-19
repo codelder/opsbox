@@ -7,8 +7,11 @@ use crate::service::search::{SearchEvent, SearchResult};
 use crate::service::searchable::{SearchContext, SearchRequest, create_search_provider};
 use opsbox_core::SqlitePool;
 use opsbox_core::dfs::{ArchiveContext, Location, Resource, ResourcePath, StorageBackend};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::{Semaphore, mpsc};
+use tokio::task::JoinSet;
 
 /// 搜索执行器配置
 #[derive(Debug, Clone)]
@@ -33,6 +36,8 @@ struct SearchResultHandler {
   tx: mpsc::Sender<SearchEvent>,
   cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
   start_time: std::time::Instant,
+  /// 跟踪是否有错误发生（用于判断源是否成功）
+  error_occurred: Arc<AtomicBool>,
 }
 
 impl SearchResultHandler {
@@ -41,6 +46,7 @@ impl SearchResultHandler {
     sid: Arc<String>,
     tx: mpsc::Sender<SearchEvent>,
     cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
+    error_occurred: Arc<AtomicBool>,
   ) -> Self {
     Self {
       resource,
@@ -48,6 +54,7 @@ impl SearchResultHandler {
       tx,
       cancel_token,
       start_time: std::time::Instant::now(),
+      error_occurred,
     }
   }
 
@@ -83,6 +90,8 @@ impl SearchResultHandler {
           }
         }
         SearchEvent::Error { source: _, message, .. } => {
+          // 标记有错误发生
+          self.error_occurred.store(true, Ordering::Relaxed);
           // 转发错误，保持 source 统一
           let _ = self
             .tx
@@ -267,9 +276,11 @@ impl SearchExecutor {
     cancel_token: Option<tokio_util::sync::CancellationToken>,
   ) -> Result<mpsc::Receiver<SearchEvent>, ServiceError> {
     tracing::info!("[SearchExecutor] 开始搜索: q={}", query);
+    let start_time = Instant::now();
 
     let (sources, request) = self.plan(query, context_lines).await?;
-    tracing::info!("[SearchExecutor] 目标源数量: {}", sources.len());
+    let total_sources = sources.len();
+    tracing::info!("[SearchExecutor] 目标源数量: {}", total_sources);
 
     if sources.is_empty() {
       let (tx, rx) = mpsc::channel(1);
@@ -285,6 +296,13 @@ impl SearchExecutor {
     let request = Arc::new(request);
     let token = cancel_token.map(Arc::new);
 
+    // 统计计数器
+    let successful_count = Arc::new(AtomicUsize::new(0));
+    let failed_count = Arc::new(AtomicUsize::new(0));
+
+    // 使用 JoinSet 跟踪所有任务
+    let mut tasks = JoinSet::new();
+
     for source in sources {
       let io_sem = self.io_semaphore.clone();
       let source_resource = source;
@@ -295,11 +313,18 @@ impl SearchExecutor {
       let sid = Arc::clone(&sid);
       let request = Arc::clone(&request);
       let token = token.clone();
+      let successful_count = Arc::clone(&successful_count);
+      let failed_count = Arc::clone(&failed_count);
+      // 每个源一个错误标志
+      let error_occurred = Arc::new(AtomicBool::new(false));
 
-      tokio::spawn(async move {
+      tasks.spawn(async move {
         let _permit = match io_sem.acquire_owned().await {
           Ok(p) => p,
-          Err(_) => return,
+          Err(_) => {
+            failed_count.fetch_add(1, Ordering::Relaxed);
+            return;
+          }
         };
 
         // 0. 分发前归档检测：将结果写回 resource.archive_context
@@ -321,11 +346,13 @@ impl SearchExecutor {
         let (tx_internal, rx_internal) = mpsc::channel(32);
 
         // 2. 启动结果处理任务 (使用 Arc 克隆，成本低)
+        let error_occurred_clone = Arc::clone(&error_occurred);
         let handler = SearchResultHandler::new(
           resource.clone(),
           Arc::clone(&sid),
           tx.clone(),
           token.as_ref().map(Arc::clone),
+          error_occurred_clone,
         );
         let handler_task = tokio::spawn(async move {
           handler.handle_stream(rx_internal).await;
@@ -341,7 +368,7 @@ impl SearchExecutor {
 
         // 4. 获取 Provider 并执行
         let provider_res = create_search_provider(&pool, &resource).await;
-        match provider_res {
+        let result = match provider_res {
           Ok(provider) => {
             // 获取显示名称用于错误报告
             let display_name = format_error_source_display(&resource);
@@ -353,6 +380,9 @@ impl SearchExecutor {
                   recoverable: true,
                 })
                 .await;
+              false // 失败
+            } else {
+              true // 成功
             }
           }
           Err(e) => {
@@ -365,16 +395,53 @@ impl SearchExecutor {
                 recoverable: true,
               })
               .await;
+            false // 失败
           }
-        }
+        };
 
         // 确保 Provider 完成后关闭 tx_internal，触发 handler 完成
         drop(tx_internal);
         drop(ctx);
 
         let _ = handler_task.await;
+
+        // 更新计数器：即使 provider.search() 成功，如果有错误发生也算失败
+        let has_errors = error_occurred.load(Ordering::Relaxed);
+        if result && !has_errors {
+          successful_count.fetch_add(1, Ordering::Relaxed);
+        } else {
+          failed_count.fetch_add(1, Ordering::Relaxed);
+        }
       });
     }
+
+    // 在后台等待所有任务完成并发送 Finished 事件
+    let tx_finished = tx.clone();
+    let successful_count = Arc::clone(&successful_count);
+    let failed_count = Arc::clone(&failed_count);
+    tokio::spawn(async move {
+      // 等待所有任务完成
+      while tasks.join_next().await.is_some() {}
+
+      // 发送 Finished 事件
+      let total_elapsed_ms = start_time.elapsed().as_millis() as u64;
+      let successful = successful_count.load(Ordering::Relaxed);
+      let failed = failed_count.load(Ordering::Relaxed);
+
+      tracing::info!(
+        "[SearchExecutor] 全局搜索完成: total={}, success={}, failed={}, elapsed={}ms",
+        total_sources, successful, failed, total_elapsed_ms
+      );
+
+      let _ = tx_finished
+        .send(SearchEvent::Finished {
+          total_sources,
+          successful_sources: successful,
+          failed_sources: failed,
+          total_elapsed_ms,
+        })
+        .await;
+    });
 
     // 这里的 tx 引用必须 drop 才能让 rx 在所有任务完成后关闭
     drop(tx);
@@ -600,6 +667,9 @@ SOURCES = [
         }
         SearchEvent::Error { .. } => {
           // 错误事件（可能因为 /tmp/test 不存在）
+        }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
         }
       }
     }
@@ -1081,6 +1151,9 @@ SOURCES = [
         SearchEvent::Success(_) => {
           success_events += 1;
         }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
+        }
       }
     }
 
@@ -1144,6 +1217,9 @@ SOURCES = [
         }
         SearchEvent::Success(_) => {
           // 不应该有成功事件
+        }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
         }
       }
     }
@@ -1302,6 +1378,9 @@ SOURCES = [
         SearchEvent::Success(_) => {
           panic!("不应该收到成功事件，因为 Agent 不存在");
         }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
+        }
       }
     }
 
@@ -1361,6 +1440,9 @@ SOURCES = [
         SearchEvent::Success(_) => {
           // 不应该收到成功事件（Agent 不存在）
         }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
+        }
       }
     }
 
@@ -1414,6 +1496,9 @@ SOURCES = [
         }
         SearchEvent::Success(_) => {
           // 不应该收到成功事件（Agent 不存在）
+        }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
         }
       }
     }
@@ -1469,6 +1554,9 @@ SOURCES = [
         SearchEvent::Success(_) => {
           // 不应该收到成功事件（Agent 不存在）
         }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
+        }
       }
     }
 
@@ -1521,6 +1609,9 @@ SOURCES = [
         }
         SearchEvent::Success(_) => {
           // 不应该收到成功事件（Agent 不存在）
+        }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
         }
       }
     }
@@ -1631,6 +1722,9 @@ SOURCES = [
         SearchEvent::Success(_) => {
           // 可能来自 local 数据源
           local_events += 1;
+        }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
         }
       }
     }
@@ -2220,6 +2314,9 @@ SOURCES = [
         SearchEvent::Error { message, .. } => {
           panic!("不应该有错误: {}", message);
         }
+        SearchEvent::Finished { .. } => {
+          // 全局完成事件
+        }
       }
     }
 
@@ -2695,7 +2792,7 @@ SOURCES = [
 
     while let Some(event) = rx.recv().await {
       match event {
-        SearchEvent::Success(_) | SearchEvent::Complete { .. } | SearchEvent::Error { .. } => {
+        SearchEvent::Success(_) | SearchEvent::Complete { .. } | SearchEvent::Error { .. } | SearchEvent::Finished { .. } => {
           event_count += 1;
         }
       }

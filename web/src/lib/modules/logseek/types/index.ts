@@ -244,6 +244,33 @@ export interface SearchCompleteEvent {
   elapsed_ms: number; // 耗时（毫秒）
 }
 
+/**
+ * 全局搜索完成事件（从流中接收）
+ * 表示所有数据源搜索完成
+ */
+export interface SearchFinishedEvent {
+  type: 'finished';
+  total_sources: number; // 计划搜索的总数据源数
+  successful_sources: number; // 成功完成的数据源数
+  failed_sources: number; // 失败的数据源数
+  total_elapsed_ms: number; // 总耗时（毫秒）
+}
+
+/**
+ * 搜索统计信息
+ * 用于在 UI 中展示搜索结果概览
+ */
+export interface SearchStatistics {
+  totalSources: number; // 总数据源数
+  successfulSources: number; // 成功的数据源数
+  failedSources: number; // 失败的数据源数
+  errors: Array<{
+    source: string; // 错误来源（文件路径或 ORL）
+    message: string; // 错误信息
+  }>;
+  totalElapsedMs: number; // 总耗时（毫秒）
+}
+
 // ============ 工具类型 ============
 
 /**

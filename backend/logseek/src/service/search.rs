@@ -829,6 +829,7 @@ impl SearchResult {
 /// - Success: 搜索结果成功
 /// - Error: 搜索过程中发生错误（错误不会立即终止搜索）
 /// - Complete: 单个来源搜索完成
+/// - Finished: 全局搜索完成（所有来源已完成）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum SearchEvent {
@@ -839,7 +840,7 @@ pub enum SearchEvent {
   /// 搜索过程中的错误
   #[serde(rename = "error")]
   Error {
-    /// 错误来源（如源索引、Agent ID 等）
+    /// 错误来源（具体文件路径或 ORL）
     source: String,
     /// 错误信息
     message: String,
@@ -854,6 +855,19 @@ pub enum SearchEvent {
     source: String,
     /// 搜索的总耗时（毫秒）
     elapsed_ms: u64,
+  },
+
+  /// 全局搜索完成 - 所有来源已完成
+  #[serde(rename = "finished")]
+  Finished {
+    /// 计划搜索的总来源数
+    total_sources: usize,
+    /// 成功完成的来源数
+    successful_sources: usize,
+    /// 失败的来源数
+    failed_sources: usize,
+    /// 总耗时（毫秒）
+    total_elapsed_ms: u64,
   },
 }
 

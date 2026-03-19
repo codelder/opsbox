@@ -3,7 +3,12 @@
  * 提供 NDJSON 流分批读取的可复用逻辑
  */
 
-import type { SearchJsonResult, SearchErrorEvent, SearchCompleteEvent } from '../types';
+import type { SearchJsonResult, SearchErrorEvent, SearchCompleteEvent, SearchFinishedEvent } from '../types';
+
+/**
+ * 搜索事件联合类型
+ */
+export type SearchEvent = SearchErrorEvent | SearchCompleteEvent | SearchFinishedEvent;
 
 /**
  * 流式读取器状态 and 方法
@@ -27,13 +32,13 @@ export function useStreamReader() {
    * @param maxItems 最多读取多少条结果事件
    * @param onResult 处理搜索结果
    * @param onError 处理流错误
-   * @param onEvent 处理错误/完成事件
+   * @param onEvent 处理错误/完成/全局完成事件
    */
   async function readBatch(
     maxItems: number = 20,
     onResult: (result: SearchJsonResult) => void,
     onError: (error: string) => void,
-    onEvent?: (event: SearchErrorEvent | SearchCompleteEvent) => void
+    onEvent?: (event: SearchEvent) => void
   ): Promise<{ hasMore: boolean; produced: number }> {
     if (!reader || !decoder) {
       return { hasMore: false, produced: 0 };
@@ -52,7 +57,7 @@ export function useStreamReader() {
         if (obj.type === 'result') {
           onResult(obj.data as SearchJsonResult);
           return true;
-        } else if (obj.type === 'error' || obj.type === 'complete') {
+        } else if (obj.type === 'error' || obj.type === 'complete' || obj.type === 'finished') {
           onEvent?.(obj);
         } else {
           console.warn('未知的搜索事件类型：', obj.type);

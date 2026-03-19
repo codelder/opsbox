@@ -109,6 +109,17 @@ SOURCES = ["orl://local/{}?glob=*.log"]
         complete_count += 1;
         println!("COMPLETE: source={}, elapsed={}ms", source, elapsed_ms);
       }
+      SearchEvent::Finished {
+        total_sources,
+        successful_sources,
+        failed_sources,
+        total_elapsed_ms,
+      } => {
+        println!(
+          "FINISHED: total={}, success={}, failed={}, elapsed={}ms",
+          total_sources, successful_sources, failed_sources, total_elapsed_ms
+        );
+      }
     }
   }
 
@@ -204,6 +215,17 @@ SOURCES = ["orl://local/{}?glob=*/*.log"]
       }
       SearchEvent::Complete { source, elapsed_ms } => {
         println!("COMPLETE: source={}, elapsed={}ms", source, elapsed_ms);
+      }
+      SearchEvent::Finished {
+        total_sources,
+        successful_sources,
+        failed_sources,
+        total_elapsed_ms,
+      } => {
+        println!(
+          "FINISHED: total={}, success={}, failed={}, elapsed={}ms",
+          total_sources, successful_sources, failed_sources, total_elapsed_ms
+        );
       }
     }
   }

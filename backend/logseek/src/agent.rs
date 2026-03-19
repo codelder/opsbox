@@ -385,6 +385,14 @@ impl SearchService for AgentClient {
                   trace!("[Wire] ← Complete");
                   None
                 }
+                Ok(SearchEvent::Finished { total_sources, successful_sources, failed_sources, total_elapsed_ms }) => {
+                  debug!(
+                    "Agent {} 全局搜索完成 (total={}, success={}, failed={}, elapsed={}ms)",
+                    agent_id, total_sources, successful_sources, failed_sources, total_elapsed_ms
+                  );
+                  trace!("[Wire] ← Finished");
+                  None
+                }
                 Err(e) => {
                   warn!("解析 SearchEvent 失败: {} (line: {})", e, line);
                   None

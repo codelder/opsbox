@@ -8,6 +8,7 @@
   import LogSeekLogo from '$lib/components/LogSeekLogo.svelte';
   import ThemeToggle from '$lib/components/ThemeToggle.svelte';
   import Settings from '$lib/components/Settings.svelte';
+  import SearchStatusIndicator from '$lib/components/ui/search-status-indicator.svelte';
   import SearchResultCard from './SearchResultCard.svelte';
   import SearchEmptyState from './SearchEmptyState.svelte';
 
@@ -440,6 +441,11 @@
 
       <!-- 右侧操作区 -->
       <div class="ml-auto flex items-center gap-2">
+        <!-- 搜索状态指示器 -->
+        <SearchStatusIndicator
+          statistics={searchStore.statistics}
+          loading={searchStore.loading}
+        />
         <Settings />
         <ThemeToggle />
       </div>

@@ -3,7 +3,7 @@
  * 提供搜索相关的状态和方法
  */
 
-import type { SearchJsonResult } from '../types';
+import type { SearchJsonResult, SearchStatistics } from '../types';
 import { extractSessionId, startUnifiedSearch, deleteSearchSession } from '../api';
 import { useStreamReader } from './useStreamReader.svelte';
 
@@ -18,6 +18,10 @@ export function useSearch() {
   let sid = $state('');
   let hasMore = $state(true);
   let controller: AbortController | null = $state(null);
+
+  // 新增：错误统计
+  let sourceErrors = $state<Array<{ source: string; message: string }>>([]);
+  let statistics = $state<SearchStatistics | null>(null);
 
   const streamReader = useStreamReader();
 
@@ -42,6 +46,10 @@ export function useSearch() {
     sid = '';
     hasMore = true;
     controller = new AbortController();
+
+    // 重置错误统计
+    sourceErrors = [];
+    statistics = null;
 
     try {
       loading = true;
@@ -82,11 +90,25 @@ export function useSearch() {
         // 处理错误和完成事件
         if (event.type === 'error') {
           console.warn(`[搜索] 数据源 ${event.source} 错误：${event.message}`);
-          // 笔记: Error 事件不中断搜索，其他源会继续发送结果
-          // 如果有必要，可以在此会变更 UI 状态，例如显示警告信息
+          // 收集错误信息
+          sourceErrors = [...sourceErrors, {
+            source: event.source,
+            message: event.message
+          }];
         } else if (event.type === 'complete') {
           console.info(`[搜索] 数据源 ${event.source} 完成, 耗时 ${event.elapsed_ms}ms`);
-          // 可以跟踪各源的完成情况，用于水纳模式的下载较、挺上流量计算等
+        } else if (event.type === 'finished') {
+          // 全局搜索完成，更新统计信息
+          statistics = {
+            totalSources: event.total_sources,
+            successfulSources: event.successful_sources,
+            failedSources: event.failed_sources,
+            errors: sourceErrors,
+            totalElapsedMs: event.total_elapsed_ms
+          };
+          console.info(
+            `[搜索] 全局完成: 总源=${event.total_sources}, 成功=${event.successful_sources}, 失败=${event.failed_sources}, 耗时=${event.total_elapsed_ms}ms`
+          );
         }
       }
     );
@@ -127,6 +149,8 @@ export function useSearch() {
     results = [];
     error = null;
     sid = '';
+    sourceErrors = [];
+    statistics = null;
   }
 
   // 监听页面关闭/刷新事件，确保清理后端会话
@@ -167,6 +191,13 @@ export function useSearch() {
     },
     get hasMore() {
       return hasMore;
+    },
+    // 新增：错误统计状态
+    get sourceErrors() {
+      return sourceErrors;
+    },
+    get statistics() {
+      return statistics;
     },
     // 方法
     search,
