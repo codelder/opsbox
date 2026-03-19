@@ -400,6 +400,7 @@ async fn test_error_recovery_and_propagation() {
         assert!(!message.is_empty());
       }
       SearchEvent::Complete { .. } => complete_count += 1,
+      SearchEvent::Finished { .. } => {} // 全局完成事件，忽略
     }
   }
 
