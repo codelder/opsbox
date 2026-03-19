@@ -39,6 +39,7 @@ async fn http_route_usage(pool: SqlitePool, query: &str) {
           SearchEvent::Error { source, message, .. } => {
             println!("✗ 数据源错误: {} - {}", source, message);
           }
+          SearchEvent::Finished { .. } => {} // 全局完成事件，忽略
         }
       }
     }
