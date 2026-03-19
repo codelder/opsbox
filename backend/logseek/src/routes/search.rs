@@ -39,6 +39,12 @@ enum SearchResponse<'a> {
     source: String,
     elapsed_ms: u64,
   },
+  Finished {
+    total_sources: usize,
+    successful_sources: usize,
+    failed_sources: usize,
+    total_elapsed_ms: u64,
+  },
 }
 
 /// 构建 NDJSON HTTP 响应（包含 X-Logseek-SID 头）
@@ -57,6 +63,9 @@ fn convert_to_ndjson_stream(
           SearchEvent::Success(res) => format!("Success(path={}, lines={})", res.path, res.lines.len()),
           SearchEvent::Error { source, message, .. } => format!("Error(source={}, msg={})", source, message),
           SearchEvent::Complete { source, elapsed_ms } => format!("Complete(source={}, elapsed={}ms)", source, elapsed_ms),
+          SearchEvent::Finished { total_sources, successful_sources, failed_sources, total_elapsed_ms } => {
+            format!("Finished(total={}, success={}, failed={}, elapsed={}ms)", total_sources, successful_sources, failed_sources, total_elapsed_ms)
+          }
         }
       );
 
@@ -78,6 +87,18 @@ fn convert_to_ndjson_stream(
         SearchEvent::Complete { source, elapsed_ms } => {
           tracing::debug!("[Search Route] 完成事件: source={}, elapsed={}ms", source, elapsed_ms);
           serde_json::to_vec(&SearchResponse::Complete { source, elapsed_ms }).ok()
+        }
+        SearchEvent::Finished { total_sources, successful_sources, failed_sources, total_elapsed_ms } => {
+          tracing::debug!(
+            "[Search Route] 全局完成事件: total={}, success={}, failed={}, elapsed={}ms",
+            total_sources, successful_sources, failed_sources, total_elapsed_ms
+          );
+          serde_json::to_vec(&SearchResponse::Finished {
+            total_sources,
+            successful_sources,
+            failed_sources,
+            total_elapsed_ms,
+          }).ok()
         }
       };
 

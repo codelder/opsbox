@@ -48,6 +48,12 @@ impl SearchResultCollector {
           collector.completed_sources.insert(source.clone());
           collector.source_elapsed_ms.insert(source, elapsed_ms);
         }
+        logseek::service::search::SearchEvent::Finished { total_sources, successful_sources, failed_sources, total_elapsed_ms } => {
+          tracing::debug!(
+            "搜索全局完成: total={}, success={}, failed={}, elapsed={}ms",
+            total_sources, successful_sources, failed_sources, total_elapsed_ms
+          );
+        }
       }
     }
 

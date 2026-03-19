@@ -245,7 +245,7 @@ impl EntryStreamProcessor {
                   let error_msg = format!("内容处理失败: {}", e);
                   let _ = tx_clone
                     .send(SearchEvent::Error {
-                      source: "条目流#preload".to_string(),
+                      source: path.clone(),
                       message: error_msg,
                       recoverable: true,
                     })
@@ -253,6 +253,13 @@ impl EntryStreamProcessor {
                 }
                 Err(_) => {
                   warn!("处理预读条目超时: {}", path);
+                  let _ = tx_clone
+                    .send(SearchEvent::Error {
+                      source: path.clone(),
+                      message: format!("处理超时 (超过 {:?})", content_timeout),
+                      recoverable: true,
+                    })
+                    .await;
                 }
               }
             });
@@ -293,13 +300,22 @@ impl EntryStreamProcessor {
                 let error_msg = format!("内容处理失败: {}", e);
                 let _ = tx
                   .send(SearchEvent::Error {
-                    source: "条目流#large".to_string(),
+                    source: meta.path.clone(),
                     message: error_msg,
                     recoverable: true,
                   })
                   .await;
               }
-              Err(_) => warn!("处理大文件条目超时: {}", meta.path),
+              Err(_) => {
+                warn!("处理大文件条目超时: {}", meta.path);
+                let _ = tx
+                  .send(SearchEvent::Error {
+                    source: meta.path.clone(),
+                    message: format!("处理超时 (超过 {:?})", content_timeout),
+                    recoverable: true,
+                  })
+                  .await;
+              }
             }
           }
           Err(e) => {
@@ -308,7 +324,7 @@ impl EntryStreamProcessor {
             let error_msg = format!("预读失败: {}", e);
             let _ = tx
               .send(SearchEvent::Error {
-                source: "条目流#preload-error".to_string(),
+                source: meta.path.clone(),
                 message: error_msg,
                 recoverable: true,
               })
@@ -334,7 +350,7 @@ impl EntryStreamProcessor {
               let error_msg = format!("内容处理失败: {}", e);
               let _ = tx_clone
                 .send(SearchEvent::Error {
-                  source: "条目流#2".to_string(),
+                  source: path.clone(),
                   message: error_msg,
                   recoverable: true,
                 })
@@ -342,6 +358,13 @@ impl EntryStreamProcessor {
             }
             Err(_) => {
               warn!("处理条目超时: {}", path);
+              let _ = tx_clone
+                .send(SearchEvent::Error {
+                  source: path.clone(),
+                  message: format!("处理超时 (超过 {:?})", content_timeout),
+                  recoverable: true,
+                })
+                .await;
             }
           }
         });
