@@ -3,7 +3,7 @@ use std::{io, path::PathBuf, sync::Arc, time::Duration};
 use futures::{StreamExt, stream::FuturesUnordered};
 use num_cpus;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 
 use opsbox_core::SqlitePool;
 use opsbox_core::dfs::archive::{ArchiveType, detect_archive_type};
@@ -80,9 +80,16 @@ pub struct EntryStreamProcessor {
 
 impl EntryStreamProcessor {
   pub fn new(processor: Arc<SearchProcessor>) -> Self {
+    // 临时：从环境变量读取超时，默认 60 秒，用于测试可设置为 1 秒
+    let timeout_secs = std::env::var("LOGSEEK_CONTENT_TIMEOUT_SEC")
+      .ok()
+      .and_then(|v| v.parse().ok())
+      .unwrap_or(60);
+    let content_timeout = Duration::from_secs(timeout_secs);
+    debug!("EntryStreamProcessor content_timeout: {:?}", content_timeout);
     Self {
       processor,
-      content_timeout: Duration::from_secs(60),
+      content_timeout,
       extra_path_filters: Vec::new(),
       cancel_token: None,
       base_path: None,

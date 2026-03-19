@@ -7,7 +7,7 @@ use crate::service::search::{SearchEvent, SearchResult};
 use crate::service::searchable::{SearchContext, SearchRequest, create_search_provider};
 use opsbox_core::SqlitePool;
 use opsbox_core::dfs::{ArchiveContext, Location, Resource, ResourcePath, StorageBackend};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{Semaphore, mpsc};
@@ -36,6 +36,8 @@ struct SearchResultHandler {
   tx: mpsc::Sender<SearchEvent>,
   cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
   start_time: std::time::Instant,
+  /// 跟踪是否有错误发生（用于判断源是否成功）
+  error_occurred: Arc<AtomicBool>,
 }
 
 impl SearchResultHandler {
@@ -44,6 +46,7 @@ impl SearchResultHandler {
     sid: Arc<String>,
     tx: mpsc::Sender<SearchEvent>,
     cancel_token: Option<Arc<tokio_util::sync::CancellationToken>>,
+    error_occurred: Arc<AtomicBool>,
   ) -> Self {
     Self {
       resource,
@@ -51,6 +54,7 @@ impl SearchResultHandler {
       tx,
       cancel_token,
       start_time: std::time::Instant::now(),
+      error_occurred,
     }
   }
 
@@ -86,6 +90,8 @@ impl SearchResultHandler {
           }
         }
         SearchEvent::Error { source: _, message, .. } => {
+          // 标记有错误发生
+          self.error_occurred.store(true, Ordering::Relaxed);
           // 转发错误，保持 source 统一
           let _ = self
             .tx
@@ -309,6 +315,8 @@ impl SearchExecutor {
       let token = token.clone();
       let successful_count = Arc::clone(&successful_count);
       let failed_count = Arc::clone(&failed_count);
+      // 每个源一个错误标志
+      let error_occurred = Arc::new(AtomicBool::new(false));
 
       tasks.spawn(async move {
         let _permit = match io_sem.acquire_owned().await {
@@ -338,11 +346,13 @@ impl SearchExecutor {
         let (tx_internal, rx_internal) = mpsc::channel(32);
 
         // 2. 启动结果处理任务 (使用 Arc 克隆，成本低)
+        let error_occurred_clone = Arc::clone(&error_occurred);
         let handler = SearchResultHandler::new(
           resource.clone(),
           Arc::clone(&sid),
           tx.clone(),
           token.as_ref().map(Arc::clone),
+          error_occurred_clone,
         );
         let handler_task = tokio::spawn(async move {
           handler.handle_stream(rx_internal).await;
@@ -395,8 +405,9 @@ impl SearchExecutor {
 
         let _ = handler_task.await;
 
-        // 更新计数器
-        if result {
+        // 更新计数器：即使 provider.search() 成功，如果有错误发生也算失败
+        let has_errors = error_occurred.load(Ordering::Relaxed);
+        if result && !has_errors {
           successful_count.fetch_add(1, Ordering::Relaxed);
         } else {
           failed_count.fetch_add(1, Ordering::Relaxed);
