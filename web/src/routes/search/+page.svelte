@@ -442,10 +442,7 @@
       <!-- 右侧操作区 -->
       <div class="ml-auto flex items-center gap-2">
         <!-- 搜索状态指示器 -->
-        <SearchStatusIndicator
-          statistics={searchStore.statistics}
-          loading={searchStore.loading}
-        />
+        <SearchStatusIndicator statistics={searchStore.statistics} loading={searchStore.loading} />
         <Settings />
         <ThemeToggle />
       </div>

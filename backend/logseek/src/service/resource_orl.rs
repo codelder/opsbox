@@ -1,6 +1,15 @@
 use opsbox_core::dfs::archive::infer_archive_from_path;
 use opsbox_core::dfs::{ArchiveContext, Location, Resource, ResourcePath, build_orl_from_resource};
 
+fn normalize_result_path(path: &str) -> String {
+  path.replace('\\', "/").trim_start_matches("//?/").to_string()
+}
+
+fn is_windows_absolute_path(path: &str) -> bool {
+  let bytes = path.as_bytes();
+  bytes.len() >= 3 && bytes[1] == b':' && bytes[2] == b'/' && bytes[0].is_ascii_alphabetic()
+}
+
 /// 将搜索结果路径转换为完整 ORL。
 ///
 /// 规则：
@@ -8,10 +17,12 @@ use opsbox_core::dfs::{ArchiveContext, Location, Resource, ResourcePath, build_o
 /// - 若是 Agent 资源且原路径是归档文件（按扩展名推断），为结果补上归档上下文。
 /// - 否则按普通文件/目录路径拼接构造新资源。
 pub fn build_search_result_orl(resource: &Resource, result_path: &str) -> String {
+  let normalized_result_path = normalize_result_path(result_path);
+
   if resource.archive_context.is_some() {
     let mut result_resource = resource.clone();
     if let Some(ref mut result_ctx) = result_resource.archive_context {
-      result_ctx.inner_path = ResourcePath::parse(result_path);
+      result_ctx.inner_path = ResourcePath::parse(&normalized_result_path);
     }
     return build_orl_from_resource(&result_resource);
   }
@@ -19,16 +30,16 @@ pub fn build_search_result_orl(resource: &Resource, result_path: &str) -> String
   let is_agent = matches!(resource.endpoint.location, Location::Remote { .. });
   if is_agent && infer_archive_from_path(&resource.primary_path.to_string()).is_some() {
     let mut result_resource = resource.clone();
-    result_resource.archive_context = Some(ArchiveContext::from_path_str(result_path, None));
+    result_resource.archive_context = Some(ArchiveContext::from_path_str(&normalized_result_path, None));
     return build_orl_from_resource(&result_resource);
   }
 
-  let full_path = if result_path.starts_with('/') {
-    result_path.to_string()
+  let full_path = if normalized_result_path.starts_with('/') || is_windows_absolute_path(&normalized_result_path) {
+    normalized_result_path
   } else {
     let base = resource.primary_path.to_string();
     let base = base.trim_end_matches('/');
-    format!("{}/{}", base, result_path.trim_start_matches('/'))
+    format!("{}/{}", base, normalized_result_path.trim_start_matches('/'))
   };
 
   let result_resource = Resource::new(resource.endpoint.clone(), ResourcePath::parse(&full_path), None);
@@ -77,5 +88,40 @@ mod tests {
 
     assert!(parsed.archive_context.is_none());
     assert_eq!(parsed.primary_path.to_string(), "/tmp/app.log/part-1.log");
+  }
+
+  #[test]
+  fn should_treat_windows_absolute_search_result_as_absolute() {
+    let resource = OrlParser::parse("orl://windows-agent@agent/D%3A/workspace/project").expect("parse agent orl");
+    let result_orl = build_search_result_orl(&resource, r"D:\workspace\project\logs\agent.log");
+    let parsed = OrlParser::parse(&result_orl).expect("parse result orl");
+
+    assert!(parsed.archive_context.is_none());
+    assert_eq!(parsed.endpoint.identity, "windows-agent");
+    assert_eq!(parsed.primary_path.to_string(), "D:/workspace/project/logs/agent.log");
+  }
+
+  #[test]
+  fn should_strip_windows_unc_prefix_from_search_results() {
+    let resource = OrlParser::parse("orl://windows-agent@agent/D%3A/workspace/project").expect("parse agent orl");
+    let result_orl = build_search_result_orl(&resource, r"\\?\D:\workspace\project\logs\agent.log");
+    let parsed = OrlParser::parse(&result_orl).expect("parse result orl");
+
+    assert_eq!(parsed.primary_path.to_string(), "D:/workspace/project/logs/agent.log");
+  }
+
+  #[test]
+  fn should_normalize_windows_archive_entry_paths() {
+    let resource =
+      OrlParser::parse("orl://windows-agent@agent/D%3A/workspace/project/app.tar.gz").expect("parse archive orl");
+    let result_orl = build_search_result_orl(&resource, r"internal\archived.log");
+    let parsed = OrlParser::parse(&result_orl).expect("parse result orl");
+
+    let inner = parsed
+      .archive_context
+      .as_ref()
+      .map(|c| c.inner_path.to_string())
+      .expect("archive context expected");
+    assert_eq!(inner, "internal/archived.log");
   }
 }

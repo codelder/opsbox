@@ -830,7 +830,12 @@ impl ExplorerService {
       format!("{}?entry={}", base, encoded_entry)
     } else {
       // 标准目录遍历
-      if entry_path_str.starts_with('/') {
+      let is_windows_drive_entry = entry_path_str.len() >= 3
+        && entry_path_str.as_bytes()[0].is_ascii_alphabetic()
+        && entry_path_str.as_bytes()[1] == b':'
+        && entry_path_str.as_bytes()[2] == b'/';
+
+      if entry_path_str.starts_with('/') || is_windows_drive_entry {
         // 如果条目已经提供绝对路径
         let auth = self.resource_endpoint_orl(parent_resource);
 
@@ -843,8 +848,10 @@ impl ExplorerService {
           .collect::<Vec<_>>()
           .join("/");
 
-        // 确保路径以 / 开头（对于绝对路径）
-        let path_suffix = if entry.path.is_absolute() && !path_suffix.is_empty() {
+        let is_windows_drive_path = is_windows_drive_entry;
+
+        // 确保路径以 / 开头（对于绝对路径和 Windows 盘符路径）
+        let path_suffix = if (entry.path.is_absolute() || is_windows_drive_path) && !path_suffix.is_empty() {
           format!("/{}", path_suffix)
         } else {
           path_suffix
@@ -951,7 +958,12 @@ impl ExplorerService {
   fn resource_base_orl(&self, resource: &Resource) -> String {
     let endpoint = self.resource_endpoint_orl(resource);
     let path = resource.primary_path.to_string();
-    format!("orl://{}{}", endpoint, path)
+    let is_windows_drive_path = path.len() >= 3
+      && path.as_bytes()[0].is_ascii_alphabetic()
+      && path.as_bytes()[1] == b':'
+      && path.as_bytes()[2] == b'/';
+    let separator = if path.starts_with('/') || is_windows_drive_path { "/" } else { "" };
+    format!("orl://{}{}{}", endpoint, separator, path)
   }
 
   /// 根据文件扩展名推断 MIME 类型
@@ -1010,6 +1022,29 @@ mod tests {
       .map(|ctx| ctx.inner_path.to_string())
       .unwrap_or_default();
     assert_eq!(parsed_entry, entry_path);
+  }
+
+  #[tokio::test]
+  async fn test_map_entry_preserves_leading_slash_for_windows_agent_paths() {
+    let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.expect("pool");
+    let service = ExplorerService::new(pool);
+    let parent = Resource::agent(
+      "127.0.0.1".to_string(),
+      4001,
+      "windows-agent".to_string(),
+      "/",
+    );
+
+    let item = service.map_entry(
+      DirEntry {
+        name: "workspace".to_string(),
+        path: ResourcePath::parse("D:/workspace/project"),
+        metadata: opsbox_core::dfs::filesystem::FileMetadata::dir(0),
+      },
+      &parent,
+    );
+
+    assert_eq!(item.path, "orl://windows-agent@agent/D%3A/workspace/project");
   }
 
   #[tokio::test]

@@ -78,6 +78,15 @@
   let sidebarWidth = $state(256);
   let isResizing = $state(false);
 
+  function normalizeOrl(orl: string): string {
+    let normalized = orl.trim();
+
+    normalized = normalized.replace(/^orl:\/\/local(?=[A-Za-z]:[\\/])/, 'orl://local/');
+    normalized = normalized.replace(/^orl:\/\/([^@]+)@agent(?=[A-Za-z]:[\\/])/, 'orl://$1@agent/');
+
+    return normalized;
+  }
+
   function startResizing(e: MouseEvent) {
     isResizing = true;
     e.preventDefault();
@@ -123,8 +132,9 @@
   // Initial load
   onMount(() => {
     if (urlOrl) {
-      currentOrlStr = urlOrl;
-      loadResources(urlOrl);
+      const normalizedOrl = normalizeOrl(urlOrl);
+      currentOrlStr = normalizedOrl;
+      loadResources(normalizedOrl);
     } else {
       // Default to local root
       currentOrlStr = 'orl://local/';
@@ -149,11 +159,12 @@
   }
 
   async function loadResources(orl: string): Promise<boolean> {
+    const normalizedOrl = normalizeOrl(orl);
     loading = true;
     error = null;
-    console.log('[Explorer] Loading resources for ORL:', orl);
+    console.log('[Explorer] Loading resources for ORL:', normalizedOrl);
     try {
-      items = await listResources(orl);
+      items = await listResources(normalizedOrl);
       return true;
     } catch (e) {
       error = (e as Error).message;
@@ -165,21 +176,22 @@
   }
 
   async function handleNavigate(newOrl: string): Promise<boolean> {
-    currentOrlStr = newOrl;
+    const normalizedOrl = normalizeOrl(newOrl);
+    currentOrlStr = normalizedOrl;
     // Update URL without triggering SvelteKit navigation
     const baseUrl = window.location.origin + window.location.pathname;
 
     // 统一对 ORL 进行编码
     // 后端现在返回未编码的路径（如 ?entry=/home），前端负责统一编码
     // 这样可以避免双重编码问题（%2F → %252F）
-    const encodedOrl = encodeURIComponent(newOrl);
+    const encodedOrl = encodeURIComponent(normalizedOrl);
 
     const newUrl = `${baseUrl}?orl=${encodedOrl}`;
     // 使用 goto 替代 replaceState，确保页面正确更新
     // { noScroll: true } 避免滚动影响用户体验
     // eslint-disable-next-line svelte/no-navigation-without-resolve
     await goto(newUrl, { noScroll: true, keepFocus: true });
-    return await loadResources(newOrl);
+    return await loadResources(normalizedOrl);
   }
 
   let selectedItem: ResourceItem | null = $state(null);
@@ -767,7 +779,7 @@
           id="orl-input"
           class="w-full flex-1 border-none bg-transparent font-mono text-sm font-light outline-none"
           bind:value={currentOrlStr}
-          onkeydown={(e) => e.key === 'Enter' && handleNavigate(currentOrlStr)}
+          onkeydown={(e) => e.key === 'Enter' && handleNavigate((e.currentTarget as HTMLInputElement).value)}
         />
       </div>
 

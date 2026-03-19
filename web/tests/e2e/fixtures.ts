@@ -63,7 +63,8 @@ export function toLocalOrlForScript(basePath: string, suffix = ''): string {
  */
 export function toAgentOrlForScript(agentId: string, agentPath: string, suffix = ''): string {
   const normalizedPath = agentPath.replace(/\\/g, '/');
-  return `orl://${agentId}@agent${normalizedPath}${suffix}`;
+  // Add leading slash after '@agent' endpoint for proper ORL format
+  return `orl://${agentId}@agent/${normalizedPath}${suffix}`;
 }
 
 /**

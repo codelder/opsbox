@@ -128,8 +128,12 @@ export function stringifyOrl(parts: {
 
 export function getDisplayName(path: string, entryPath?: string): string {
   const target = entryPath || path;
-  const parts = target.split('/');
-  return parts[parts.length - 1] || target;
+  const normalized = target
+    .replace(/^\\\\\?\\/, '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
+  const parts = normalized.split('/').filter(Boolean);
+  return parts[parts.length - 1] || normalized || target;
 }
 
 export function isArchive(urlStr: string): boolean {

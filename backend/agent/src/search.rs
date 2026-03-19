@@ -17,6 +17,14 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+fn normalize_agent_search_path(path: &std::path::Path) -> String {
+  path
+    .to_string_lossy()
+    .replace('\\', "/")
+    .trim_start_matches("//?/")
+    .to_string()
+}
+
 /// 执行搜索
 pub async fn execute_search(
   config: Arc<AgentConfig>,
@@ -116,7 +124,7 @@ pub async fn execute_search(
 
     info!("开始搜索路径: {}", search_path.display());
 
-    let path_str = search_path.to_string_lossy().to_string();
+    let path_str = normalize_agent_search_path(search_path);
 
     // 5.1 创建 EntryStream
     // 注意：resolve_target_paths 已经返回解析后的目标路径

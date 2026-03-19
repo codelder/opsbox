@@ -9,7 +9,7 @@
  */
 
 import { test, expect, type Page } from '@playwright/test';
-import { spawn, type ChildProcessWithoutNullStreams, execSync } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams, execSync, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -49,14 +49,38 @@ test.describe('Agent Archive Explorer E2E', () => {
   let agentPort: number | null = null;
   let zipArchiveReady = false;
 
+  function createZipArchive(zipSourceDir: string, zipPath: string) {
+    if (process.platform === 'win32') {
+      execFileSync(
+        'powershell.exe',
+        ['-NoProfile', '-Command', `Compress-Archive -Path '${zipSourceDir}\\*' -DestinationPath '${zipPath}' -Force`],
+        { stdio: 'pipe' }
+      );
+      return;
+    }
+
+    execSync(`cd "${zipSourceDir}" && zip -r "${zipPath}" .`);
+  }
+
   /**
    * 导航到Agent日志目录的辅助函数
    * 减少重复的页面导航代码
    */
+  /**
+   * Build a valid Agent ORL URL for E2E tests.
+   * Handles cross-platform path differences (Windows vs Unix).
+   */
+  function buildAgentOrl(path: string, entry?: string): string {
+    const normalizedPath = path.replace(/\\/g, '/');
+    let orl = `orl://${AGENT_ID}@agent/${normalizedPath}`;
+    if (entry) {
+      orl += `?entry=${entry}`;
+    }
+    return orl;
+  }
+
   async function navigateToAgentLogs(page: Page): Promise<void> {
-    await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_LOGS_DIR}`)}`
-    );
+    await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(buildAgentOrl(TEST_LOGS_DIR))}`);
     await page.waitForLoadState('networkidle');
   }
 
@@ -84,14 +108,14 @@ test.describe('Agent Archive Explorer E2E', () => {
       { name: 'data.log', content: `2025-01-01 12:00:00 [INFO] data log TGZ\n` }
     ]);
 
-    // Create zip archive using system zip command (if available)
+    // Create zip archive using a platform-specific fallback so the test also works on Windows.
     const zipPath = path.join(TEST_LOGS_DIR, 'test.zip');
     try {
       const zipSourceDir = path.join(TEST_ROOT_DIR, 'zip_source');
       fs.mkdirSync(path.join(zipSourceDir, 'config'), { recursive: true });
       fs.writeFileSync(path.join(zipSourceDir, 'info.log'), `2025-01-01 13:00:00 [INFO] info log ZIP\n`);
       fs.writeFileSync(path.join(zipSourceDir, 'config/settings.log'), `2025-01-01 13:01:00 [INFO] settings log ZIP\n`);
-      execSync(`cd "${zipSourceDir}" && zip -r "${zipPath}" .`);
+      createZipArchive(zipSourceDir, zipPath);
       zipArchiveReady = fs.existsSync(zipPath) && fs.statSync(zipPath).size > 0;
       if (!zipArchiveReady) {
         console.log('Skipping zip archive test - zip file is empty or missing');
@@ -245,7 +269,7 @@ test.describe('Agent Archive Explorer E2E', () => {
 
   test('should handle archive entry URL parameters and navigation', async ({ page }) => {
     // Test 1: Navigate directly to internal directory in tar.gz archive via URL
-    const archiveOrl = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar.gz?entry=/internal`;
+    const archiveOrl = buildAgentOrl(`${TEST_LOGS_DIR}/test.tar.gz`, '/internal');
     await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl)}`);
     await page.waitForLoadState('networkidle');
 
@@ -264,7 +288,7 @@ test.describe('Agent Archive Explorer E2E', () => {
     await viewPage.close();
 
     // Test 2: Navigate to nested file in archive - view page requires sid parameter
-    const archiveOrl2 = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar.gz?entry=/internal/service.log`;
+    const archiveOrl2 = buildAgentOrl(`${TEST_LOGS_DIR}/test.tar.gz`, '/internal/service.log');
     const testSid = 'test-archive-view-sid';
     await page.goto(`http://localhost:5173/view?sid=${testSid}&file=${encodeURIComponent(archiveOrl2)}`);
     await page.waitForLoadState('networkidle');
@@ -276,7 +300,7 @@ test.describe('Agent Archive Explorer E2E', () => {
     await expect(page.locator('body')).not.toContainText('暂无内容');
 
     // Test 3: Navigate up from archive entry to archive root
-    const archiveOrl3 = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar?entry=/subdir`;
+    const archiveOrl3 = buildAgentOrl(`${TEST_LOGS_DIR}/test.tar`, '/subdir');
     await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl3)}`);
     await page.waitForLoadState('networkidle');
 
@@ -292,7 +316,7 @@ test.describe('Agent Archive Explorer E2E', () => {
     await expect(page.getByText('root.log')).toBeVisible({ timeout: 5000 });
 
     // Test 4: Navigate up from archive root to parent directory
-    const archiveOrl4 = `orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/test.tar?entry=/`;
+    const archiveOrl4 = buildAgentOrl(`${TEST_LOGS_DIR}/test.tar`, '/');
     await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(archiveOrl4)}`);
     await page.waitForLoadState('networkidle');
 

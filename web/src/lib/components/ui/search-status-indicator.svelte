@@ -70,15 +70,13 @@
     <!-- 展开面板 -->
     {#if isOpen && statistics}
       <div
-        class="absolute right-0 top-full z-50 mt-2 w-80 rounded-lg border border-gray-200 bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-800"
+        class="absolute top-full right-0 z-50 mt-2 w-80 rounded-lg border border-gray-200 bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-800"
         role="dialog"
         aria-label="搜索状态详情"
       >
         <!-- 标题 -->
         <div class="mb-3 flex items-center justify-between">
-          <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100">
-            搜索状态
-          </h3>
+          <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100">搜索状态</h3>
           <button
             class="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
             onclick={() => (isOpen = false)}
@@ -112,19 +110,14 @@
         <!-- 错误列表 -->
         {#if statistics.errors.length > 0}
           <div class="border-t border-gray-200 pt-3 dark:border-gray-700">
-            <h4 class="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-              失败详情
-            </h4>
+            <h4 class="mb-2 text-xs font-medium tracking-wide text-gray-500 uppercase dark:text-gray-400">失败详情</h4>
             <ul class="max-h-48 space-y-2 overflow-y-auto">
               {#each statistics.errors as err}
                 <li class="rounded-md bg-gray-50 p-2 dark:bg-gray-900/50">
                   <div class="flex items-start gap-2">
                     <AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
                     <div class="min-w-0 flex-1">
-                      <div
-                        class="truncate font-mono text-xs text-gray-700 dark:text-gray-300"
-                        title={err.source}
-                      >
+                      <div class="truncate font-mono text-xs text-gray-700 dark:text-gray-300" title={err.source}>
                         {truncatePath(err.source)}
                       </div>
                       <div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">

@@ -31,6 +31,15 @@ test.describe('Explorer E2E', () => {
   let agentProc: ChildProcessWithoutNullStreams | null = null;
   let agentPort: number | null = null;
 
+  /**
+   * Build a valid Agent ORL URL for E2E tests.
+   * Handles cross-platform path differences (Windows vs Unix).
+   */
+  function buildAgentOrl(agentId: string, absPath: string): string {
+    const normalizedPath = absPath.replace(/\\/g, '/');
+    return `orl://${agentId}@agent/${normalizedPath}`;
+  }
+
   test.beforeAll(async ({ request }) => {
     test.setTimeout(120000);
     // Create test files
@@ -174,7 +183,7 @@ test.describe('Explorer E2E', () => {
 
   test('should list agent files', async ({ page }) => {
     await page.goto(
-      `http://localhost:5173/explorer?orl=${encodeURIComponent(`orl://${AGENT_ID}@agent${TEST_FILES_DIR}`)}`
+      `http://localhost:5173/explorer?orl=${encodeURIComponent(buildAgentOrl(AGENT_ID, TEST_FILES_DIR))}`
     );
 
     await page.waitForLoadState('networkidle');
@@ -403,7 +412,7 @@ test.describe('Explorer E2E', () => {
       await waitForAgentReady(request, escapeAgentId, 10000);
 
       // Navigate directly into the root folder
-      const rootOrl = `orl://${escapeAgentId}@agent${innerRoot}`;
+      const rootOrl = buildAgentOrl(escapeAgentId, innerRoot);
       await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(rootOrl)}`);
       await page.waitForLoadState('networkidle');
 
@@ -447,7 +456,7 @@ test.describe('Explorer E2E', () => {
     fs.mkdirSync(validChild, { recursive: true });
     fs.writeFileSync(path.join(validChild, 'inside.txt'), 'inside root');
 
-    const normalizedParent = outerParent.split(path.sep).filter(Boolean);
+    const normalizedParent = path.relative(path.parse(outerParent).root, outerParent).split(path.sep).filter(Boolean);
     const trapDir = path.join(allowedRoot, ...normalizedParent, 'codelder');
     fs.mkdirSync(trapDir, { recursive: true });
     fs.writeFileSync(path.join(trapDir, 'leaked.txt'), 'this should never be listed after back navigation');
@@ -484,7 +493,7 @@ test.describe('Explorer E2E', () => {
     try {
       await waitForAgentReady(request, mismatchAgentId, 10000);
 
-      const deepOrl = `orl://${mismatchAgentId}@agent${validChild}`;
+      const deepOrl = buildAgentOrl(mismatchAgentId, validChild);
       await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(deepOrl)}`);
       await page.waitForLoadState('networkidle');
       await expect(page.getByText('inside.txt')).toBeVisible({ timeout: 10000 });
@@ -492,7 +501,7 @@ test.describe('Explorer E2E', () => {
       const upButton = page.locator('button:has(svg.lucide-arrow-left)');
 
       await upButton.click();
-      const allowedRootOrl = `orl://${mismatchAgentId}@agent${allowedRoot}`;
+      const allowedRootOrl = buildAgentOrl(mismatchAgentId, allowedRoot);
       await expect(page).toHaveURL(new RegExp(encodeURIComponent(allowedRootOrl)));
       await expect(page.getByText('valid_child')).toBeVisible({ timeout: 10000 });
 
@@ -561,7 +570,7 @@ test.describe('Explorer E2E', () => {
 
       // 2. Try to manually navigate to the forbidden directory by typing ORL
       // Note: We use the absolute path of forbiddenDir to test access control
-      const forbiddenOrl = `orl://${restrictedAgentId}@agent${forbiddenDir}`;
+      const forbiddenOrl = buildAgentOrl(restrictedAgentId, forbiddenDir);
 
       await page.goto('http://localhost:5173/explorer');
       await page.waitForLoadState('networkidle');
@@ -579,7 +588,7 @@ test.describe('Explorer E2E', () => {
       await expect(page.getByText('secret_data.txt')).not.toBeVisible();
 
       // Navigate to allowed dir and verify it works
-      const allowedOrl = `orl://${restrictedAgentId}@agent${allowedDir}`;
+      const allowedOrl = buildAgentOrl(restrictedAgentId, allowedDir);
       await input.fill(allowedOrl);
       await input.press('Enter');
       // Verify success: error display is NOT visible
@@ -640,7 +649,7 @@ test.describe('Explorer E2E', () => {
       await waitForAgentReady(request, chineseAgentId, 10000);
 
       // 1. Visit the directory
-      const rootOrl = `orl://${chineseAgentId}@agent${chineseRoot}`;
+      const rootOrl = buildAgentOrl(chineseAgentId, chineseRoot);
       await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(rootOrl)}`);
       await page.waitForLoadState('networkidle');
 
@@ -787,13 +796,13 @@ test.describe('Explorer E2E', () => {
       await waitForAgentReady(request, navAgentId, 10000);
 
       // Start deep in agent
-      const agentDeepOrl = `orl://${navAgentId}@agent${agentSub}`;
+      const agentDeepOrl = buildAgentOrl(navAgentId, agentSub);
       await page.goto(`http://localhost:5173/explorer?orl=${encodeURIComponent(agentDeepOrl)}`);
       await page.waitForLoadState('networkidle');
 
       // Go Up: subdir -> agentRoot
       await upButton.click();
-      const agentRootOrl = `orl://${navAgentId}@agent${agentRoot}`;
+      const agentRootOrl = buildAgentOrl(navAgentId, agentRoot);
       await expect(page).toHaveURL(new RegExp(encodeURIComponent(agentRootOrl)));
 
       // Go Up: agentRoot -> Agent Virtual Root (orl://id@agent/)

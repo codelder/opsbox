@@ -81,11 +81,27 @@ impl AgentProxyFS {
   }
 
   /// 将 ResourcePath 转换为 API 路径
+  ///
+  /// 特殊处理 Windows 驱动器路径（如 D:/path），避免生成 /D:/path 这样的无效路径
   fn resource_path_to_api_path(&self, path: &ResourcePath) -> String {
-    if path.segments().is_empty() {
-      "/".to_string()
+    let segments = path.segments();
+    if segments.is_empty() {
+      return "/".to_string();
+    }
+
+    // 检查是否是 Windows 驱动器路径（第一个 segment 以 : 结尾，如 "D:"）
+    let is_windows_path = segments
+      .first()
+      .map(|s| s.len() == 2 && s.ends_with(':') && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic()))
+      .unwrap_or(false);
+
+    let joined = segments.join("/");
+    if is_windows_path {
+      // Windows 路径不需要前导斜杠：D:/path/to/file
+      joined
     } else {
-      format!("/{}", path.segments().join("/"))
+      // Unix 路径需要前导斜杠：/path/to/file
+      format!("/{}", joined)
     }
   }
 }

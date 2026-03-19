@@ -41,13 +41,41 @@ impl LocalFileSystem {
     Ok(Self { root })
   }
 
+  /// 检查是否是 Windows 驱动器路径（第一个 segment 是 "X:" 格式）
+  fn is_windows_drive_segment(segment: &str) -> bool {
+    segment.len() == 2
+      && segment.ends_with(':')
+      && segment.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+  }
+
   /// 将 ResourcePath 解析为绝对路径
+  ///
+  /// 特殊处理 Windows 驱动器路径：
+  /// - 如果第一个 segment 是驱动器（如 "D:"），直接从驱动器根开始构建路径
+  /// - 否则，从 self.root 开始构建路径
   fn resolve_path(&self, path: &ResourcePath) -> PathBuf {
-    let mut resolved = self.root.clone();
-    for segment in path.segments() {
-      resolved.push(segment);
+    let segments = path.segments();
+
+    // 检查是否是 Windows 驱动器路径
+    if !segments.is_empty() && Self::is_windows_drive_segment(&segments[0]) {
+      // Windows 驱动器路径：直接构建完整路径
+      // segments[0] = "D:", segments[1..] = ["workspace", "path", ...]
+      // 结果：D:/workspace/path
+      // 注意：segments[0] 已经包含冒号，所以只需要添加斜杠和剩余路径
+      let path_str = if segments.len() > 1 {
+        format!("{}/{}", &segments[0], segments[1..].join("/"))
+      } else {
+        format!("{}/", &segments[0])
+      };
+      PathBuf::from(path_str)
+    } else {
+      // Unix 路径或相对路径：从 root 开始
+      let mut resolved = self.root.clone();
+      for segment in segments {
+        resolved.push(segment);
+      }
+      resolved
     }
-    resolved
   }
 }
 

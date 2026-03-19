@@ -63,6 +63,24 @@ describe('orl', () => {
       expect(parsed?.displayName).toBe('my log.txt');
     });
 
+    it('handles windows paths in display names', () => {
+      const url = 'orl://local/C:/workspace/app/logs/agent.log';
+      const parsed = parseOrl(url);
+      expect(parsed?.path).toBe('C:/workspace/app/logs/agent.log');
+      expect(parsed?.displayName).toBe('agent.log');
+    });
+
+    it('parses encoded windows drive paths for agent endpoints', () => {
+      const url = 'orl://windows-agent@agent/D%3A/workspace/project/app.log';
+      const parsed = parseOrl(url);
+
+      expect(parsed).not.toBeNull();
+      expect(parsed?.endpointType).toBe('agent');
+      expect(parsed?.endpointId).toBe('windows-agent');
+      expect(parsed?.path).toBe('D:/workspace/project/app.log');
+      expect(parsed?.displayName).toBe('app.log');
+    });
+
     it('detects archive', () => {
       expect(isArchive('orl://prod:logs@s3/file.tar.gz?entry=x')).toBe(true);
       expect(isArchive('orl://local/file.txt')).toBe(false);
@@ -124,6 +142,23 @@ describe('orl', () => {
           path: 'var/log/my log.txt'
         })
       ).toBe('orl://local/var/log/my%20log.txt');
+    });
+
+    it('round-trips windows drive paths without corrupting the endpoint', () => {
+      const original = {
+        endpointId: 'windows-agent',
+        endpointType: 'agent' as const,
+        path: 'D:/workspace/project/app.log'
+      };
+
+      const orl = stringifyOrl(original);
+      expect(orl).toBe('orl://windows-agent@agent/D:/workspace/project/app.log');
+
+      const reparsed = parseOrl(orl);
+      expect(reparsed).not.toBeNull();
+      expect(reparsed?.endpointId).toBe(original.endpointId);
+      expect(reparsed?.endpointType).toBe(original.endpointType);
+      expect(reparsed?.path).toBe(original.path);
     });
   });
 

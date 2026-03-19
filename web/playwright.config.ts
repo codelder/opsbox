@@ -48,7 +48,9 @@ export default defineConfig({
       // Cross-platform: use node -e for cleanup, then cargo run
       command: `node -e "const fs=require('fs');[${getE2EDatabaseArtifacts()
         .map((p) => `'${p}'`)
-        .join(',')}].forEach(p=>{try{fs.unlinkSync(p)}catch(e){}})" && cd ../backend && cargo run --release -p opsbox-server -- --port 4001`,
+        .join(
+          ','
+        )}].forEach(p=>{try{fs.unlinkSync(p)}catch(e){}})" && cd ../backend && cargo run --release -p opsbox-server -- --port 4001`,
       url: 'http://127.0.0.1:4001/healthy',
       reuseExistingServer: !process.env.CI && process.env.PW_REUSE_SERVER === '1',
       stdout: 'pipe',

@@ -266,6 +266,15 @@ test.describe('Agent Integration E2E', () => {
   let agentProc: ChildProcessWithoutNullStreams | null = null;
   let agentPort: number | null = null;
 
+  /**
+   * Build a valid Agent ORL for Starlark scripts.
+   * Handles cross-platform path differences (Windows vs Unix).
+   */
+  function buildAgentOrl(absPath: string, suffix = ''): string {
+    const normalizedPath = absPath.replace(/\\/g, '/');
+    return `orl://${AGENT_ID}@agent/${normalizedPath}${suffix}`;
+  }
+
   test.beforeAll(async ({ request }) => {
     test.setTimeout(120000);
     const backend = await ensureBackendUp(request, repoRoot);
@@ -340,7 +349,7 @@ test.describe('Agent Integration E2E', () => {
     await waitForHttpOk(request, `${API_AGENT_BASE}/${AGENT_ID}`, 60000);
 
     const script = `
-SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=**/*.log"]
+SOURCES = ["${buildAgentOrl(TEST_LOGS_DIR, '?glob=**/*.log')}"]
 `;
 
     const response = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -352,7 +361,7 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=**/*.log"]
     expect(response.ok()).toBeTruthy();
 
     const scriptArchive = `
-SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/agent-archive.tar?glob=**/*.log"]
+SOURCES = ["${buildAgentOrl(TEST_LOGS_DIR, '/agent-archive.tar?glob=**/*.log')}"]
 `;
 
     const responseArchive = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -364,7 +373,7 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/agent-archive.tar?glob=**/*.
     expect(responseArchive.ok()).toBeTruthy();
 
     const scriptTarGz = `
-SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/agent-archive.tar.gz?glob=**/*.log"]
+SOURCES = ["${buildAgentOrl(TEST_LOGS_DIR, '/agent-archive.tar.gz?glob=**/*.log')}"]
 `;
 
     const responseTarGz = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -376,7 +385,7 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}/agent-archive.tar.gz?glob=**
     expect(responseTarGz.ok()).toBeTruthy();
 
     const scriptDirMultiGz = `
-SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*.log.gz"]
+SOURCES = ["${buildAgentOrl(TEST_LOGS_DIR, '?glob=*.log.gz')}"]
 `;
 
     const responseDirMultiGz = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
@@ -388,7 +397,7 @@ SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*.log.gz"]
     expect(responseDirMultiGz.ok()).toBeTruthy();
 
     const scriptRelativeGlob = `
-SOURCES = ["orl://${AGENT_ID}@agent${TEST_LOGS_DIR}?glob=*/*.log"]
+SOURCES = ["${buildAgentOrl(TEST_LOGS_DIR, '?glob=*/*.log')}"]
 `;
     const responseRelativeGlob = await request.post(`${API_LOGSEEK_BASE}/settings/planners/scripts`, {
       data: {

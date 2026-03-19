@@ -24,7 +24,7 @@ async function globalSetup() {
   // 1. Clean up any leftover resources from previous runs
   // Force cleanup of ALL temp directories (not just old ones)
   // because if we're starting a new run, any existing temp dirs are stale
-  performCleanup(true, false);
+  performCleanup(true, false, false);
 
   // 2. Verify required commands are available
   const requiredCommands = ['node', 'pnpm'];

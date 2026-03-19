@@ -91,10 +91,13 @@ export function useSearch() {
         if (event.type === 'error') {
           console.warn(`[搜索] 数据源 ${event.source} 错误：${event.message}`);
           // 收集错误信息
-          sourceErrors = [...sourceErrors, {
-            source: event.source,
-            message: event.message
-          }];
+          sourceErrors = [
+            ...sourceErrors,
+            {
+              source: event.source,
+              message: event.message
+            }
+          ];
         } else if (event.type === 'complete') {
           console.info(`[搜索] 数据源 ${event.source} 完成, 耗时 ${event.elapsed_ms}ms`);
         } else if (event.type === 'finished') {

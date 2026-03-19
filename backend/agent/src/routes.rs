@@ -169,6 +169,10 @@ pub async fn handle_list_files(
   State(state): State<AppState>,
   Query(req): Query<AgentListRequest>,
 ) -> Result<Json<AgentListResponse>> {
+  fn normalize_agent_path(path: &str) -> String {
+    path.replace('\\', "/").trim_start_matches("//?/").to_string()
+  }
+
   let path_str = decode_path(&req.path);
 
   // Special case: empty path or "/" means list all search roots themselves
@@ -191,7 +195,7 @@ pub async fn handle_list_files(
         Ok(abs_path) => {
           all_items.push(AgentFileItem {
             name,
-            path: abs_path.to_string_lossy().to_string(),
+            path: normalize_agent_path(&abs_path.to_string_lossy()),
             is_dir: true,
             is_symlink: false,
             size: None,
@@ -223,7 +227,7 @@ pub async fn handle_list_files(
         .into_iter()
         .map(|entry| AgentFileItem {
           name: entry.name,
-          path: entry.path,
+          path: normalize_agent_path(&entry.path),
           is_dir: entry.is_dir,
           is_symlink: entry.is_symlink,
           size: Some(entry.size),

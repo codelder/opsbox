@@ -107,20 +107,25 @@ impl OrlParser {
 
     // 分离 path 和 query
     let (path_str, query_str) = path_and_query.split_once('?').unwrap_or((path_and_query, ""));
+    let decoded_path = percent_decode_str(path_str).decode_utf8_lossy().to_string();
 
     // 解析查询参数（归档上下文和 glob 过滤）
-    let (archive_context, filter_glob) = Self::parse_query_params(query_str, path_str)?;
+    let (archive_context, filter_glob) = Self::parse_query_params(query_str, &decoded_path)?;
 
     // 构建 path - 对于 Windows 绝对路径（如 C:/...），不添加前导斜杠
-    let path = if path_str.len() >= 2
-      && path_str.chars().nth(1) == Some(':')
-      && path_str.chars().nth(0).map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+    let path = if decoded_path.len() >= 2
+      && decoded_path.chars().nth(1) == Some(':')
+      && decoded_path
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_alphabetic())
+        .unwrap_or(false)
     {
       // Windows 绝对路径 (C:/...)
-      path_str.to_string()
+      decoded_path
     } else {
       // Unix 路径或其他路径，添加前导斜杠
-      format!("/{path_str}")
+      format!("/{decoded_path}")
     };
 
     let mut resource = Resource::new(endpoint, path.into(), archive_context);
@@ -598,5 +603,12 @@ mod tests {
     assert_eq!(resource.endpoint.identity, "default");
     assert!(resource.endpoint.bucket.is_none());
     assert_eq!(resource.primary_path.to_string(), "/backupdr/path");
+  }
+
+  #[test]
+  fn test_parse_agent_windows_path_with_encoded_drive_letter() {
+    let resource = OrlParser::parse("orl://windows-agent@agent/D%3A/workspace/project").unwrap();
+    assert_eq!(resource.endpoint.identity, "windows-agent");
+    assert_eq!(resource.primary_path.to_string(), "D:/workspace/project");
   }
 }

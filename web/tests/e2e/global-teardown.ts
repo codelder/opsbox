@@ -13,7 +13,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { getE2EDatabaseArtifacts } from './e2e-env';
 
@@ -26,11 +26,51 @@ const TEMP_DIR_PREFIXES = ['temp_', 'e2e_test_', 'e2e_temp_'];
 // Maximum age (in ms) for temp directories before cleanup (30 seconds)
 // Reduced from 5 minutes to ensure faster cleanup in CI
 const MAX_AGE_MS = 30 * 1000;
+const DB_CLEANUP_RETRIES = 8;
+const DB_CLEANUP_DELAY_MS = 250;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 /**
  * Kill orphaned processes
  */
 function killOrphanedProcesses(): void {
+  if (process.platform === 'win32') {
+    // Kill the dedicated backend server if it is still listening on the e2e port.
+    try {
+      const result = execSync(
+        'powershell -NoProfile -Command "Get-NetTCPConnection -LocalPort 4001 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique"',
+        {
+          encoding: 'utf-8',
+          stdio: ['pipe', 'pipe', 'pipe']
+        }
+      );
+      const pids = result.trim().split(/\s+/).filter(Boolean);
+      for (const pid of pids) {
+        try {
+          execSync(`taskkill /PID ${pid} /F /T`, { stdio: 'ignore' });
+          console.log(`[Cleanup] Stopped listener on port 4001 (PID ${pid})`);
+        } catch {
+          // ignore
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // Clean up any leftover agent processes compiled for e2e runs.
+    try {
+      execSync('taskkill /IM opsbox-agent.exe /F /T', { stdio: 'ignore' });
+      console.log('[Cleanup] Stopped orphaned opsbox-agent.exe processes');
+    } catch {
+      // ignore
+    }
+
+    return;
+  }
+
   // 1. Kill any orphaned opsbox-agent processes
   try {
     const result = execSync('pgrep -f "opsbox-agent" 2>/dev/null || true', {
@@ -144,27 +184,67 @@ function cleanupE2EDatabase(): number {
   let removed = 0;
 
   for (const dbPath of getE2EDatabaseArtifacts()) {
-    try {
-      if (!fs.existsSync(dbPath)) continue;
-      fs.rmSync(dbPath, { force: true });
-      removed++;
-      console.log(`[Cleanup] Removed database artifact: ${path.basename(dbPath)}`);
-    } catch (e) {
-      console.error(`[Cleanup] Failed to remove database artifact ${path.basename(dbPath)}:`, (e as Error).message);
+    for (let attempt = 0; attempt < DB_CLEANUP_RETRIES; attempt++) {
+      try {
+        if (!fs.existsSync(dbPath)) break;
+        fs.rmSync(dbPath, { force: true });
+        removed++;
+        console.log(`[Cleanup] Removed database artifact: ${path.basename(dbPath)}`);
+        break;
+      } catch (e) {
+        const error = e as NodeJS.ErrnoException;
+        const isRetryable = error.code === 'EBUSY' || error.code === 'EPERM';
+        const isLastAttempt = attempt === DB_CLEANUP_RETRIES - 1;
+
+        if (!isRetryable || isLastAttempt) {
+          if (isRetryable) {
+            scheduleDeferredDatabaseCleanup(dbPath);
+            console.log(`[Cleanup] Deferred database artifact removal: ${path.basename(dbPath)}`);
+          } else {
+            console.error(`[Cleanup] Failed to remove database artifact ${path.basename(dbPath)}:`, error.message);
+          }
+          break;
+        }
+
+        sleepSync(DB_CLEANUP_DELAY_MS);
+      }
     }
   }
 
   return removed;
 }
 
+function scheduleDeferredDatabaseCleanup(dbPath: string): void {
+  try {
+    if (process.platform === 'win32') {
+      const child = spawn('cmd.exe', ['/d', '/c', `ping 127.0.0.1 -n 4 >nul && del /f /q "${dbPath}"`], {
+        detached: true,
+        stdio: 'ignore'
+      });
+      child.unref();
+      return;
+    }
+
+    const child = spawn('sh', ['-c', `sleep 1.5; rm -f ${JSON.stringify(dbPath)}`], {
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+  } catch {
+    // ignore deferred cleanup failures
+  }
+}
+
 /**
  * Full cleanup routine - can be called at startup or teardown
  */
-export function performCleanup(forceAll = false, cleanupDatabase = true): void {
+export function performCleanup(forceAll = false, cleanupDatabase = true, killProcesses = true): void {
   console.log('\n[Cleanup] Starting...');
 
   // 1. Kill orphaned processes
-  killOrphanedProcesses();
+  if (killProcesses) {
+    killOrphanedProcesses();
+  }
 
   // 2. Clean temp directories
   const { cleaned, size } = cleanupTempDirectories(forceAll);
@@ -190,9 +270,6 @@ export function performCleanup(forceAll = false, cleanupDatabase = true): void {
  */
 async function globalTeardown() {
   console.log('\n[Global Teardown] Starting cleanup...');
-
-  // Kill orphaned processes
-  killOrphanedProcesses();
 
   // Clean temp directories
   const { cleaned, size } = cleanupTempDirectories(false);

@@ -2,7 +2,7 @@ import { test, expect, toLocalOrl, toLocalOrlForScript } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import * as zlib from 'zlib';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,9 +29,9 @@ test.describe('Local Gzip Archive E2E', () => {
     const testLogFile = path.join(TEST_ROOT_DIR, 'app_tranTime.log');
     fs.writeFileSync(testLogFile, ORIGINAL_LOG_CONTENT);
 
-    // Create a gzip compressed version using system gzip command
+    // Create a gzip compressed version using Node zlib so the test works on Windows too.
     const gzFile = path.join(TEST_ROOT_DIR, 'app_tranTime.log.gz');
-    execSync(`gzip -c "${testLogFile}" > "${gzFile}"`);
+    fs.writeFileSync(gzFile, zlib.gzipSync(fs.readFileSync(testLogFile)));
 
     // Verify the gzip file was created
     expect(fs.existsSync(gzFile)).toBe(true);
