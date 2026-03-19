@@ -2,7 +2,7 @@
  * Agents API 测试
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { fetchAgents, fetchAgentTags, setAgentTags, addAgentTag, removeAgentTag, clearAgentTags } from './agents';
 
 describe('Agents API', () => {
@@ -31,7 +31,7 @@ describe('Agents API', () => {
 
       await fetchAgents({ tags: 'tag1', onlineOnly: true });
 
-      const url = (globalThis.fetch as any).mock.calls[0][0];
+      const url = (globalThis.fetch as Mock).mock.calls[0][0] as string;
       const searchParams = new URL(url, 'http://localhost').searchParams;
       expect(searchParams.get('tags')).toBe('tag1');
       expect(searchParams.get('online_only')).toBe('true');

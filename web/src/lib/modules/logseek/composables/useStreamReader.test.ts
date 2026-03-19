@@ -4,9 +4,11 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useStreamReader } from './useStreamReader.svelte';
+import type { SearchJsonResult } from '../types';
+import type { SearchEvent } from './useStreamReader.svelte';
 
 describe('useStreamReader', () => {
-  let streamReader: any;
+  let streamReader: ReturnType<typeof useStreamReader>;
 
   beforeEach(() => {
     streamReader = useStreamReader();
@@ -14,7 +16,7 @@ describe('useStreamReader', () => {
 
   it('initReader 应该初始化 reader 和 decoder', () => {
     const mockReader = { read: vi.fn() };
-    const mockResponse = { body: { getReader: () => mockReader } } as any;
+    const mockResponse = { body: { getReader: () => mockReader } } as unknown as Response;
 
     streamReader.initReader(mockResponse);
 
@@ -33,15 +35,15 @@ describe('useStreamReader', () => {
         .mockResolvedValueOnce({ done: false, value: encoder.encode(data2) })
         .mockResolvedValueOnce({ done: true })
     };
-    const mockResponse = { body: { getReader: () => mockReader } } as any;
+    const mockResponse = { body: { getReader: () => mockReader } } as unknown as Response;
 
     streamReader.initReader(mockResponse);
 
-    const results: any[] = [];
+    const results: SearchJsonResult[] = [];
     const { hasMore, produced } = await streamReader.readBatch(
       10,
-      (r: any) => results.push(r),
-      (e: any) => console.error(e)
+      (result) => results.push(result),
+      (error) => console.error(error)
     );
 
     expect(results.length).toBe(2);
@@ -61,16 +63,16 @@ describe('useStreamReader', () => {
         .mockResolvedValueOnce({ done: false, value: encoder.encode(errorEvent) })
         .mockResolvedValueOnce({ done: true })
     };
-    const mockResponse = { body: { getReader: () => mockReader } } as any;
+    const mockResponse = { body: { getReader: () => mockReader } } as unknown as Response;
 
     streamReader.initReader(mockResponse);
 
-    let eventCaptured: any;
+    let eventCaptured: SearchEvent | undefined;
     await streamReader.readBatch(
       10,
       () => {},
       () => {},
-      (ev: any) => (eventCaptured = ev)
+      (event) => (eventCaptured = event)
     );
 
     expect(eventCaptured).toEqual({ type: 'error', source: 's3', message: 'err' });
@@ -80,7 +82,7 @@ describe('useStreamReader', () => {
     const mockReader = {
       read: vi.fn().mockRejectedValue({ name: 'AbortError' })
     };
-    const mockResponse = { body: { getReader: () => mockReader } } as any;
+    const mockResponse = { body: { getReader: () => mockReader } } as unknown as Response;
 
     streamReader.initReader(mockResponse);
 

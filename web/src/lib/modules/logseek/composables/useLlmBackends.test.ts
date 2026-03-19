@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useLlmBackends } from './useLlmBackends.svelte';
 import * as api from '../api';
+import type { LlmBackendListItem, LlmBackendUpsertPayload } from '../types';
 
 vi.mock('../api', () => ({
   listLlmBackends: vi.fn(),
@@ -19,8 +20,16 @@ describe('useLlmBackends', () => {
   });
 
   it('load 应该加载后端列表', async () => {
-    const mockData = { backends: [{ name: 'b1' }], defaultName: 'b1' };
-    vi.mocked(api.listLlmBackends).mockResolvedValueOnce(mockData as any);
+    const mockBackend: LlmBackendListItem = {
+      name: 'b1',
+      provider: 'ollama',
+      base_url: 'http://localhost:11434',
+      model: 'llama3',
+      timeout_secs: 60,
+      has_api_key: false
+    };
+    const mockData = { backends: [mockBackend], defaultName: 'b1' };
+    vi.mocked(api.listLlmBackends).mockResolvedValueOnce(mockData);
 
     const state = useLlmBackends();
     await state.load();
@@ -34,7 +43,12 @@ describe('useLlmBackends', () => {
     vi.mocked(api.listLlmBackends).mockResolvedValueOnce({ backends: [], defaultName: null });
 
     const state = useLlmBackends();
-    const payload = { name: 'n', provider: 'ollama' } as any;
+    const payload: LlmBackendUpsertPayload = {
+      name: 'n',
+      provider: 'ollama',
+      base_url: 'http://localhost:11434',
+      model: 'llama3'
+    };
     const result = await state.save(payload);
 
     expect(result).toBe(true);

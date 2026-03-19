@@ -286,7 +286,7 @@ export async function waitForHealthy(url: string, timeout = 30000, interval = 50
 export const test = base.extend<{
   resources: ResourceTracker;
 }>({
-  resources: async ({}, use) => {
+  resources: async (_args, use) => {
     const tracker = new ResourceTracker();
     await use(tracker);
     // Always cleanup, even if test fails

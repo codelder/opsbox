@@ -65,7 +65,7 @@ describe('useProfiles', () => {
     vi.mocked(api.saveProfile).mockRejectedValueOnce(new Error('Save failed'));
 
     const profilesState = useProfiles();
-    const result = await profilesState.save({} as any);
+    const result = await profilesState.save({ profile_name: '', endpoint: '', access_key: '', secret_key: '' });
 
     expect(result).toBe(false);
     expect(profilesState.saveError).toBe('Save failed');

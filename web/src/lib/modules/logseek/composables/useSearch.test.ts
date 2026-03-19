@@ -5,7 +5,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useSearch } from './useSearch.svelte';
 import * as api from '../api';
-import * as streamReaderModule from './useStreamReader.svelte';
 
 vi.mock('../api', () => ({
   startUnifiedSearch: vi.fn(),
@@ -30,7 +29,7 @@ describe('useSearch', () => {
 
   it('search 应该初始化并读取第一批数据', async () => {
     const mockResponse = { ok: true };
-    vi.mocked(api.startUnifiedSearch).mockResolvedValueOnce(mockResponse as any);
+    vi.mocked(api.startUnifiedSearch).mockResolvedValueOnce(mockResponse as Response);
 
     const state = useSearch();
     await state.search('test query');

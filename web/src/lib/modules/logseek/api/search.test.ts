@@ -2,7 +2,7 @@
  * Search API 测试
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { startSearch, extractSessionId, startUnifiedSearch } from './search';
 
 describe('Search API', () => {
@@ -219,7 +219,7 @@ describe('Search API', () => {
       const specialQuery = '(error OR warning) AND "message content" AND app:nginx';
       await startSearch(specialQuery);
 
-      const callArgs = (globalThis.fetch as any).mock.calls[0][1];
+      const callArgs = (globalThis.fetch as Mock).mock.calls[0][1] as RequestInit;
       const body = JSON.parse(callArgs.body);
 
       expect(body.q).toBe(specialQuery);
@@ -242,7 +242,7 @@ describe('Search API', () => {
       const queryWithDates = 'error dt:2024-01-15 fdt:2024-01-01 tdt:2024-01-31';
       await startSearch(queryWithDates);
 
-      const callArgs = (globalThis.fetch as any).mock.calls[0][1];
+      const callArgs = (globalThis.fetch as Mock).mock.calls[0][1] as RequestInit;
       const body = JSON.parse(callArgs.body);
 
       expect(body.q).toBe(queryWithDates);

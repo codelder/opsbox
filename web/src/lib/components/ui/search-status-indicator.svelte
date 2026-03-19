@@ -6,7 +6,6 @@
    */
   import { AlertTriangle, CheckCircle, Clock, ChevronDown, ChevronUp, X } from 'lucide-svelte';
   import type { SearchStatistics } from '$lib/modules/logseek/types';
-  import { Button } from '$lib/components/ui/button';
   import { Badge } from '$lib/components/ui/badge';
 
   interface Props {
@@ -112,7 +111,7 @@
           <div class="border-t border-gray-200 pt-3 dark:border-gray-700">
             <h4 class="mb-2 text-xs font-medium tracking-wide text-gray-500 uppercase dark:text-gray-400">失败详情</h4>
             <ul class="max-h-48 space-y-2 overflow-y-auto">
-              {#each statistics.errors as err}
+              {#each statistics.errors as err (`${err.source}:${err.message}`)}
                 <li class="rounded-md bg-gray-50 p-2 dark:bg-gray-900/50">
                   <div class="flex items-start gap-2">
                     <AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />

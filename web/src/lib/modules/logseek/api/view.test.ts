@@ -2,7 +2,7 @@
  * View API 测试
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { fetchViewCache, fetchViewDownload } from './view';
 
 describe('View API', () => {
@@ -32,7 +32,7 @@ describe('View API', () => {
       expect(result).toEqual(mockResult);
       expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringContaining('/view.cache.json?'), expect.any(Object));
 
-      const url = (globalThis.fetch as any).mock.calls[0][0];
+      const url = (globalThis.fetch as Mock).mock.calls[0][0] as string;
       const searchParams = new URL(url, 'http://localhost').searchParams;
       expect(searchParams.get('sid')).toBe('sid1');
       expect(searchParams.get('file')).toBe('orl://local/test.log');
@@ -69,7 +69,7 @@ describe('View API', () => {
       const result = await fetchViewDownload('sid1', 'orl://local/test.log');
 
       expect(result).toBe(mockResponse);
-      const url = (globalThis.fetch as any).mock.calls[0][0];
+      const url = (globalThis.fetch as Mock).mock.calls[0][0] as string;
       const searchParams = new URL(url, 'http://localhost').searchParams;
       expect(searchParams.get('sid')).toBe('sid1');
       expect(searchParams.get('file')).toBe('orl://local/test.log');

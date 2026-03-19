@@ -12,7 +12,7 @@ import {
   listLlmModelsByParams,
   listLlmModelsByBackend
 } from './llm';
-import type { LlmBackendUpsertPayload } from '../types';
+import type { LlmBackendListItem, LlmBackendUpsertPayload } from '../types';
 
 describe('LLM API', () => {
   beforeEach(() => {
@@ -21,20 +21,20 @@ describe('LLM API', () => {
 
   describe('listLlmBackends', () => {
     it('应该正确获取后端列表和默认后端', async () => {
+      const backend: LlmBackendListItem = {
+        name: 'ollama-local',
+        provider: 'ollama',
+        base_url: '...',
+        model: '...',
+        timeout_secs: 60,
+        has_api_key: false
+      };
+
       globalThis.fetch = vi.fn().mockResolvedValueOnce({
         ok: true,
         status: 200,
         json: async () => ({
-          backends: [
-            {
-              name: 'ollama-local',
-              provider: 'ollama',
-              base_url: '...',
-              model: '...',
-              timeout_secs: 60,
-              has_api_key: false
-            }
-          ],
+          backends: [backend],
           default: 'ollama-local'
         })
       } as unknown as Response);
@@ -86,7 +86,9 @@ describe('LLM API', () => {
         json: async () => ({ detail: 'Invalid URL' })
       } as unknown as Response);
 
-      await expect(upsertLlmBackend({} as any)).rejects.toThrow('Invalid URL');
+      await expect(upsertLlmBackend({ name: '', provider: 'ollama', base_url: '', model: '' })).rejects.toThrow(
+        'Invalid URL'
+      );
     });
   });
 

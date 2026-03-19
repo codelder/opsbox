@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useSettings } from './useSettings.svelte';
 import * as api from '../api';
+import type { S3SettingsResponse } from '../types';
 
 vi.mock('../api', () => ({
   fetchS3Settings: vi.fn(),
@@ -17,13 +18,13 @@ describe('useSettings', () => {
   });
 
   it('loadSettings 应该加载 S3 配置', async () => {
-    const mockData = {
+    const mockData: S3SettingsResponse = {
       endpoint: 'http://minio:9000',
       access_key: 'key',
       secret_key: 'secret',
       connection_error: null
     };
-    vi.mocked(api.fetchS3Settings).mockResolvedValueOnce(mockData as any);
+    vi.mocked(api.fetchS3Settings).mockResolvedValueOnce(mockData);
 
     const state = useSettings();
     await state.loadSettings();
@@ -36,7 +37,12 @@ describe('useSettings', () => {
 
   it('save 应该构建 payload 并调用 API', async () => {
     vi.mocked(api.saveS3Settings).mockResolvedValueOnce(undefined);
-    vi.mocked(api.fetchS3Settings).mockResolvedValueOnce({} as any);
+    vi.mocked(api.fetchS3Settings).mockResolvedValueOnce({
+      endpoint: null as unknown as string,
+      access_key: null as unknown as string,
+      secret_key: null as unknown as string,
+      connection_error: null
+    } as unknown as S3SettingsResponse);
 
     const state = useSettings();
     state.endpoint = 'e';

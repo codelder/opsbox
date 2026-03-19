@@ -1,4 +1,4 @@
-import { test, expect, toLocalOrl, toLocalOrlForScript } from './fixtures';
+import { test, expect, toLocalOrlForScript } from './fixtures';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
