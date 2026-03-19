@@ -41,24 +41,23 @@ jobs:
           path: artifacts/opsbox-agent-linux-x86_64-musl
           if_no_artifact_found: fail
 
-      # 暂时禁用 Windows 构建
-      # - name: Download opsbox-server (Windows)
-      #   uses: dawidd6/action-download-artifact@v3
-      #   with:
-      #     workflow: build-windows.yml
-      #     commit: ${{ github.sha }}
-      #     name: opsbox-server-windows-x86_64-msvc
-      #     path: artifacts/opsbox-server-windows-x86_64-msvc
-      #     if_no_artifact_found: fail
-      #
-      # - name: Download opsbox-agent (Windows)
-      #   uses: dawidd6/action-download-artifact@v3
-      #   with:
-      #     workflow: build-windows.yml
-      #     commit: ${{ github.sha }}
-      #     name: opsbox-agent-windows-x86_64-msvc
-      #     path: artifacts/opsbox-agent-windows-x86_64-msvc
-      #     if_no_artifact_found: fail
+      - name: Download opsbox-server (Windows)
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-windows.yml
+          commit: ${{ github.sha }}
+          name: opsbox-server-windows-x86_64-msvc
+          path: artifacts/opsbox-server-windows-x86_64-msvc
+          if_no_artifact_found: fail
+
+      - name: Download opsbox-agent (Windows)
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: build-windows.yml
+          commit: ${{ github.sha }}
+          name: opsbox-agent-windows-x86_64-msvc
+          path: artifacts/opsbox-agent-windows-x86_64-msvc
+          if_no_artifact_found: fail
 
       - name: List downloaded artifacts
         run: |
@@ -97,9 +96,8 @@ jobs:
             - [opsbox-server-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-server-linux-x86_64-musl.tar.gz)
             - [opsbox-agent-linux-x86_64-musl.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-agent-linux-x86_64-musl.tar.gz)
 
-            <!-- 暂时禁用 Windows 构建 -->
-            <!-- #### Windows -->
-            <!-- - [opsbox-server-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-server-windows-x86_64-msvc.tar.gz) -->
-            <!-- - [opsbox-agent-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-agent-windows-x86_64-msvc.tar.gz) -->
+            #### Windows
+            - [opsbox-server-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-server-windows-x86_64-msvc.tar.gz)
+            - [opsbox-agent-windows-x86_64-msvc.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/opsbox-agent-windows-x86_64-msvc.tar.gz)
 
 

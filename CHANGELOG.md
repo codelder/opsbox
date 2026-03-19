@@ -5,175 +5,214 @@ All notable changes to OpsBox will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-03-19
 
-### Added - Tracing 日志系统重构
+### Added - ORL Protocol and Resource Explorer
 
-#### 核心功能
-- **日志框架升级**: 从 `log` + `env_logger` 迁移到 `tracing` 生态系统
-  - 支持结构化日志（key-value pairs）
-  - 支持 Span 追踪（跨函数调用的上下文）
-  - 更好的性能和零成本抽象
-  
-- **滚动日志文件**: 自动按日期滚动日志文件
-  - 每天午夜自动创建新的日志文件
-  - 文件命名格式：`opsbox-server.YYYY-MM-DD.log`
-  - 自动清理超过保留天数的旧日志文件
-  
-- **动态日志配置**: 无需重启即可调整日志设置
-  - 动态修改日志级别（立即生效）
-  - 动态修改日志保留天数（下次滚动时生效）
-  - 配置持久化到 SQLite 数据库
-  
-- **自定义日志路径**: 支持通过命令行参数指定日志目录
-  - Server 默认路径：`~/.opsbox/logs`
-  - Agent 默认路径：`~/.opsbox-agent/logs`
-  - 支持 `--log-dir` 参数自定义路径
-  
-- **日志保留策略**: 灵活的日志保留配置
-  - 支持 `--log-retention` 参数指定保留天数（默认 7 天）
-  - 范围：1-365 天
-  - 自动清理超过保留期的旧日志
+#### Core Features
+- **ORL Protocol Evolution**: Migrated from `odfi://` to `orl://` (OpsBox Resource Locator) protocol
+  - RFC 3986 compliant `fluent-uri` parser
+  - Unified resource identification for Local, Agent, S3 endpoints
+  - Archive entry access support (`?entry=` parameter)
+  - Backward compatible with legacy `odfi://` format
+
+- **Distributed Resource Explorer**: New explorer module
+  - Unified browsing of Local, S3, Agent endpoint resources
+  - Archive file navigation (tar, tar.gz, zip, etc.)
+  - File download functionality (`POST /api/v1/explorer/download`)
+  - Automatic content type detection (MIME types)
+  - Hidden file counts and directory sub-item statistics
+
+- **Agent Manager Enhancements**: agent-manager module improvements
+  - Complete tag CRUD operations (add/remove/clear)
+  - Tag-based agent filtering and organization
+  - Agent log configuration proxy functionality
+
+### Added - DFS (Distributed File System) Subsystem
+
+#### Core Architecture
+- **DFS Module**: New distributed file system abstraction in opsbox-core
+  - Unified file system interface (OpbxFileSystem trait)
+  - Support for Local, S3, and Agent backends
+  - Searchable trait for search integration
+  - Standard tokio::io::AsyncRead trait support
+
+- **S3 Streaming**: Implemented streaming read for S3 objects
+  - Memory-efficient streaming for large files
+  - Proper async/await patterns
+
+- **Archive Support**: Comprehensive archive handling
+  - Unified archive detection with magic bytes support
+  - Common archive module with typed open function
+  - Support for tar, tar.gz, zip formats
+  - Archive navigation and entry browsing
+  - Optimized archive handling with hard links and stream copy
+
+- **Explorer Migration**: Migrated explorer module to DFS
+  - Auto-detect archive files for navigation
+  - Improved archive performance
+  - Consistent file system operations across backends
+
+### Added - Windows Cross-Platform Support
+
+- **Windows Compatibility**: Full support for Windows platform
+  - Handle Windows drive paths (C:\path)
+  - Path normalization in ORL protocol
+  - Cross-platform path handling in DFS subsystem
+  - Fix tokio Mutex for Windows daemon mode
+
+- **CI/CD**: GitHub Actions automatic Windows build
+
+### Added - Search Error Visibility
+
+- **Search Status Indicator**: New frontend UI component
+  - Real-time search progress and error display
+  - Failed sources count and error details
+  - Enhanced error propagation in SearchExecutor
+  - New `search-status-indicator.svelte` component
+
+### Added - Tracing Logging System
+
+#### Core Features
+- **Logging Framework Upgrade**: Migrated from `log` + `env_logger` to `tracing` ecosystem
+  - Structured logging support (key-value pairs)
+  - Span tracing (cross-function call context)
+  - Better performance with zero-cost abstraction
+
+- **Rolling Log Files**: Automatic daily log file rotation
+  - New log file created at midnight each day
+  - File naming format: `opsbox-server.YYYY-MM-DD.log`
+  - Automatic cleanup of log files exceeding retention period
+
+- **Dynamic Log Configuration**: Adjust log settings without restart
+  - Dynamic log level modification (immediate effect)
+  - Dynamic log retention days modification (effective on next rotation)
+  - Configuration persisted to SQLite database
+
+- **Custom Log Path**: Specify log directory via CLI argument
+  - Server default path: `~/.opsbox/logs`
+  - Agent default path: `~/.opsbox-agent/logs`
+  - Support `--log-dir` parameter for custom path
+
+- **Log Retention Policy**: Flexible log retention configuration
+  - Support `--log-retention` parameter for retention days (default 7 days)
+  - Range: 1-365 days
+  - Automatic cleanup of expired logs
 
 #### REST API
-- **Server 日志配置 API**:
-  - `GET /api/v1/log/config` - 获取当前日志配置
-  - `PUT /api/v1/log/level` - 更新日志级别
-  - `PUT /api/v1/log/retention` - 更新日志保留天数
-  
-- **Agent 日志配置 API** (通过 Server 代理):
-  - `GET /api/v1/agents/{agent_id}/log/config` - 获取 Agent 日志配置
-  - `PUT /api/v1/agents/{agent_id}/log/level` - 更新 Agent 日志级别
-  - `PUT /api/v1/agents/{agent_id}/log/retention` - 更新 Agent 日志保留天数
-  
-- **Agent 本地 API**:
-  - `GET /api/v1/log/config` - 获取本地日志配置
-  - `PUT /api/v1/log/level` - 更新本地日志级别
-  - `PUT /api/v1/log/retention` - 更新本地日志保留天数
+- **Server Log Configuration API**:
+  - `GET /api/v1/log/config` - Get current log configuration
+  - `PUT /api/v1/log/level` - Update log level
+  - `PUT /api/v1/log/retention` - Update log retention days
+
+- **Agent Log Configuration API** (via Server proxy):
+  - `GET /api/v1/agents/{agent_id}/log/config` - Get Agent log configuration
+  - `PUT /api/v1/agents/{agent_id}/log/level` - Update Agent log level
+  - `PUT /api/v1/agents/{agent_id}/log/retention` - Update Agent log retention days
+
+- **Agent Local API**:
+  - `GET /api/v1/log/config` - Get local log configuration
+  - `PUT /api/v1/log/level` - Update local log level
+  - `PUT /api/v1/log/retention` - Update local log retention days
 
 #### Web UI
-- **Server 日志管理界面**: 在设置页面添加 "Server 日志" 标签
-  - 日志级别选择器（ERROR/WARN/INFO/DEBUG/TRACE）
-  - 日志保留天数输入框
-  - 日志路径显示（只读）
-  - 实时保存和重置功能
-  
-- **Agent 日志管理界面**: 在 Agent 管理页面添加日志设置区域
-  - 每个 Agent 独立的日志配置
-  - 支持展开/折叠日志设置
-  - Agent 离线时自动禁用配置修改
-  - 通过 Server 代理管理 Agent 日志
+- **Server Log Management Interface**: Added "Server Log" tab in settings page
+  - Log level selector (ERROR/WARN/INFO/DEBUG/TRACE)
+  - Log retention days input
+  - Log path display (read-only)
+  - Real-time save and reset functionality
 
-#### 技术改进
-- **异步日志写入**: 使用后台线程处理日志写入，避免阻塞主线程
-- **多输出目标**: 同时输出到控制台和文件
-  - 控制台：彩色输出（如果终端支持）
-  - 文件：纯文本格式
-- **高效过滤**: 使用 `EnvFilter` 进行高效的日志过滤
-- **性能优化**: 批量写入、缓冲写入、零成本抽象
+- **Agent Log Management Interface**: Added log settings section in Agent management page
+  - Independent log configuration per Agent
+  - Expandable/collapsible log settings
+  - Auto-disable configuration when Agent is offline
+  - Manage Agent logs via Server proxy
 
-#### 文档
-- **用户文档**: [docs/guides/logging-configuration.md](docs/guides/logging-configuration.md)
-  - 日志级别说明
-  - 启动参数配置
-  - 日志文件管理
-  - Web UI 使用指南
-  - 故障排查指南
-  
-- **开发者文档**: 
-  - [docs/architecture/logging-architecture.md](docs/architecture/logging-architecture.md) - 日志系统架构
-  - [docs/guides/tracing-usage.md](docs/guides/tracing-usage.md) - Tracing 使用指南
-  - [docs/api/logging-api.md](docs/api/logging-api.md) - API 文档
+#### Technical Improvements
+- **Async Log Writing**: Background thread handles log writing, avoiding main thread blocking
+- **Multiple Output Targets**: Output to both console and file
+  - Console: Colorized output (if terminal supports)
+  - File: Plain text format
+- **Efficient Filtering**: Use `EnvFilter` for efficient log filtering
+- **Performance Optimization**: Batch writing, buffered writing, zero-cost abstraction
 
-### Added - ORL协议和资源浏览器
+#### Documentation
+- **User Documentation**: [docs/guides/logging-configuration.md](docs/guides/logging-configuration.md)
+  - Log level descriptions
+  - CLI argument configuration
+  - Log file management
+  - Web UI usage guide
+  - Troubleshooting guide
 
-#### 核心功能
-- **ORL协议演进**: 从 `odfi://` 协议迁移到 `orl://` (OpsBox Resource Locator) 协议
-  - 使用 RFC 3986 兼容的 `fluent-uri` 解析器
-  - 统一 Local、Agent、S3 端点资源标识
-  - 支持归档文件内条目访问 (`?entry=` 参数)
-  - 向后兼容旧的 `odfi://` 格式
-
-- **分布式资源浏览器**: 新增 explorer 模块
-  - 统一浏览 Local、S3、Agent 端点资源
-  - 支持归档文件内浏览 (tar、tar.gz、zip 等)
-  - 文件下载功能 (`POST /api/v1/explorer/download`)
-  - 内容类型自动检测 (MIME types)
-  - 隐藏文件计数和目录子项统计
-
-- **代理管理增强**: agent-manager 模块改进
-  - 完整的标签 CRUD 操作 (添加/移除/清空)
-  - 基于标签的代理过滤和组织
-  - 代理日志配置代理功能
-
-#### 技术改进
-- **SearchExecutor 重构**: 简化 EntryStream 创建，提高搜索性能
-- **相对路径 glob 过滤**: 支持相对路径的 glob 模式过滤
-- **增强归档支持**: 添加 async_zip 和 tokio-tar 依赖，支持 ZIP 归档
-- **测试基础设施**: 完整的 E2E 测试套件修复，增加超时时间
-- **内存优化**: mimalloc 分配器优化和显式内存回收
-
-#### REST API
-- **Explorer 模块 API**:
-  - `POST /api/v1/explorer/list` - 列出资源
-  - `POST /api/v1/explorer/download` - 下载文件
+- **Developer Documentation**:
+  - [docs/architecture/logging-architecture.md](docs/architecture/logging-architecture.md) - Logging system architecture
+  - [docs/guides/tracing-usage.md](docs/guides/tracing-usage.md) - Tracing usage guide
+  - [docs/api/logging-api.md](docs/api/logging-api.md) - API documentation
 
 ### Changed
 
-#### 依赖更新
-- **新增依赖**:
-  - `tracing = "0.1"` - 结构化日志和追踪框架
-  - `tracing-subscriber = "0.3"` - Tracing 订阅器（支持 env-filter, json, fmt）
-  - `tracing-appender = "0.2"` - 滚动文件追加器
-  
-- **移除依赖**:
-  - `log = "0.4"` - 已被 tracing 替代
-  - `env_logger = "0.11"` - 已被 tracing-subscriber 替代
+- **SearchExecutor Refactoring**: Simplified EntryStream creation, improved search performance
+- **Relative Path Glob Filtering**: Support for relative path glob pattern filtering
+- **Frontend Module Reorganization**: Restructured frontend module organization
+- **Test Infrastructure**: Enhanced test coverage, configurable E2E test timeouts
+- **Memory Optimization**: mimalloc allocator optimization and explicit memory reclamation
 
-#### 代码迁移
-- **所有 crate 迁移到 tracing**:
-  - `opsbox-server`: 完全迁移到 tracing
-  - `opsbox-core`: 完全迁移到 tracing
-  - `agent`: 完全迁移到 tracing
-  - `agent-manager`: 完全迁移到 tracing
-  - `logseek`: 完全迁移到 tracing
-  
-- **日志调用更新**:
+#### Dependencies
+- **Added Dependencies**:
+  - `tracing = "0.1"` - Structured logging and tracing framework
+  - `tracing-subscriber = "0.3"` - Tracing subscriber (env-filter, json, fmt support)
+  - `tracing-appender = "0.2"` - Rolling file appender
+  - `fluent-uri = "0.3"` - RFC 3986 compliant URI parser
+
+- **Removed Dependencies**:
+  - `log = "0.4"` - Replaced by tracing
+  - `env_logger = "0.11"` - Replaced by tracing-subscriber
+
+#### Code Migration
+- **All crates migrated to tracing**:
+  - `opsbox-server`: Fully migrated to tracing
+  - `opsbox-core`: Fully migrated to tracing
+  - `agent`: Fully migrated to tracing
+  - `agent-manager`: Fully migrated to tracing
+  - `logseek`: Fully migrated to tracing
+  - `explorer`: New module using tracing from start
+
+- **Log call updates**:
   - `log::info!` → `tracing::info!`
   - `log::debug!` → `tracing::debug!`
   - `log::warn!` → `tracing::warn!`
   - `log::error!` → `tracing::error!`
   - `log::trace!` → `tracing::trace!`
 
-#### 日志级别优化
-- 审查并优化所有日志调用的级别
-- 减少 INFO 级别的日志输出
-- 将详细信息移到 DEBUG 级别
-- 确保 ERROR 和 WARN 级别的日志有意义
+### REST API
+
+- **Explorer Module API**:
+  - `POST /api/v1/explorer/list` - List resources
+  - `POST /api/v1/explorer/download` - Download files
 
 ### Breaking Changes
 
-#### 命令行参数
-- **新增参数**:
-  - `--log-dir <DIR>` - 指定日志文件目录
-  - `--log-retention <N>` - 指定日志保留天数（默认 7）
-  
-- **保持兼容**:
-  - `--log-level` - 继续支持（设置初始日志级别）
-  - `-v/-vv/-vvv` - 继续支持（快捷方式）
-  - `RUST_LOG` 环境变量 - 继续支持
+#### CLI Arguments
+- **New Arguments**:
+  - `--log-dir <DIR>` - Specify log file directory
+  - `--log-retention <N>` - Specify log retention days (default 7)
 
-#### 日志格式
-- **控制台输出**: 格式略有变化，但保持可读性
-  - 旧格式: `[2024-01-15 10:30:45] INFO Server started`
-  - 新格式: `2024-01-15T10:30:45.123Z  INFO opsbox_server::server: Server started`
-  
-- **文件输出**: 新增滚动日志文件
-  - 旧行为: 单个日志文件（可能无限增长）
-  - 新行为: 按日期滚动，自动清理旧文件
+- **Backward Compatible**:
+  - `--log-level` - Still supported (sets initial log level)
+  - `-v/-vv/-vvv` - Still supported (shortcuts)
+  - `RUST_LOG` environment variable - Still supported
 
-#### 数据库 Schema
-- **新增表**: `log_config` - 存储日志配置
+#### Log Format
+- **Console Output**: Slightly changed format, but maintains readability
+  - Old format: `[2024-01-15 10:30:45] INFO Server started`
+  - New format: `2024-01-15T10:30:45.123Z  INFO opsbox_server::server: Server started`
+
+- **File Output**: New rolling log files
+  - Old behavior: Single log file (potentially unbounded growth)
+  - New behavior: Daily rotation, automatic cleanup of old files
+
+#### Database Schema
+- **New Table**: `log_config` - Stores log configuration
   ```sql
   CREATE TABLE log_config (
       id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -186,50 +225,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migration Guide
 
-#### 对于用户
+#### For Users
 
-1. **更新启动脚本**（可选）:
+1. **Update Startup Script** (optional):
    ```bash
-   # 旧启动方式（仍然有效）
+   # Old startup (still works)
    ./opsbox-server
-   
-   # 新启动方式（推荐）
+
+   # New startup (recommended)
    ./opsbox-server --log-dir /var/log/opsbox --log-retention 30
    ```
 
-2. **日志文件位置变化**:
-   - 旧位置: 日志输出到 stdout/stderr（或通过重定向）
-   - 新位置: 
+2. **Log File Location Change**:
+   - Old location: Logs to stdout/stderr (or via redirection)
+   - New location:
      - Server: `~/.opsbox/logs/opsbox-server.YYYY-MM-DD.log`
      - Agent: `~/.opsbox-agent/logs/opsbox-agent.YYYY-MM-DD.log`
 
-3. **日志管理**:
-   - 旧方式: 手动管理日志文件
-   - 新方式: 自动滚动和清理，或通过 Web UI 管理
+3. **Log Management**:
+   - Old way: Manual log file management
+   - New way: Automatic rotation and cleanup, or manage via Web UI
 
-#### 对于开发者
+#### For Developers
 
-1. **更新导入语句**:
+1. **Update Import Statements**:
    ```rust
-   // 旧代码
+   // Old code
    use log::{debug, error, info, warn};
-   
-   // 新代码
+
+   // New code
    use tracing::{debug, error, info, warn};
    ```
 
-2. **使用结构化字段**（推荐）:
+2. **Use Structured Fields** (recommended):
    ```rust
-   // 旧代码
+   // Old code
    log::info!("User {} logged in", user_id);
-   
-   // 新代码（推荐）
+
+   // New code (recommended)
    tracing::info!(user_id = user_id, "User logged in");
    ```
 
-3. **使用 instrument 宏**（推荐）:
+3. **Use instrument Macro** (recommended):
    ```rust
-   // 新功能：自动追踪函数调用
+   // New feature: automatic function call tracing
    #[tracing::instrument]
    async fn process_request(user_id: i64) -> Result<Response> {
        tracing::info!("Processing request");
@@ -237,12 +276,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
    }
    ```
 
-4. **测试代码更新**:
+4. **Test Code Update**:
    ```rust
-   // 旧代码
+   // Old code
    env_logger::init();
-   
-   // 新代码
+
+   // New code
    let _ = tracing_subscriber::fmt()
        .with_test_writer()
        .try_init();
@@ -250,22 +289,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- 修复了日志文件可能无限增长的问题（通过滚动和保留策略）
-- 修复了日志输出可能阻塞主线程的问题（通过异步写入）
-- 修复了无法动态调整日志级别的问题（通过 reload handle）
+- Fixed potential unbounded log file growth (via rotation and retention policy)
+- Fixed log output potentially blocking main thread (via async writing)
+- Fixed inability to dynamically adjust log level (via reload handle)
+- Fixed Windows drive path handling in ORL protocol
+- Fixed tokio Mutex issue for Windows daemon mode
 
 ### Performance
 
-- **日志写入性能**: 异步写入可以达到 100,000+ 条/秒
-- **主线程延迟**: < 1μs（仅发送到通道）
-- **内存使用**: 默认缓冲区 8KB，可配置
-- **编译时优化**: 未启用的日志级别会被编译器优化掉
+- **Log Write Performance**: Async writing achieves 100,000+ entries/second
+- **Main Thread Latency**: < 1μs (just send to channel)
+- **Memory Usage**: Default buffer 8KB, configurable
+- **Compile-time Optimization**: Disabled log levels are optimized away by compiler
 
 ### Security
 
-- **路径验证**: 验证日志目录路径，防止路径遍历攻击
-- **权限检查**: 确保日志目录有正确的写入权限
-- **敏感信息过滤**: 避免在日志中记录密码、密钥等敏感信息
+- **Path Validation**: Validate log directory path to prevent path traversal attacks
+- **Permission Check**: Ensure log directory has correct write permissions
+- **Sensitive Information Filtering**: Avoid logging passwords, keys, and other sensitive information
 
 ---
 
@@ -277,12 +318,12 @@ _Previous changelog entries will be added here as the project evolves._
 
 ## Legend
 
-- **Added**: 新功能
-- **Changed**: 现有功能的变更
-- **Deprecated**: 即将移除的功能
-- **Removed**: 已移除的功能
-- **Fixed**: Bug 修复
-- **Security**: 安全相关的修复
-- **Performance**: 性能改进
-- **Breaking Changes**: 不兼容的变更
-- **Migration Guide**: 迁移指南
+- **Added**: New features
+- **Changed**: Changes to existing features
+- **Deprecated**: Features to be removed
+- **Removed**: Removed features
+- **Fixed**: Bug fixes
+- **Security**: Security-related fixes
+- **Performance**: Performance improvements
+- **Breaking Changes**: Incompatible changes
+- **Migration Guide**: Migration instructions
