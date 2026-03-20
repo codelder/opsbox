@@ -1,38 +1,42 @@
 # OpsBox Frontend
 
-SvelteKit-based frontend with modular architecture, built with Svelte 5 and TypeScript.
+SvelteKit 前端位于 `web/`，负责搜索、查看、Explorer 和设置页 UI。
 
-## Architecture
+## 当前结构
 
-The frontend uses a modular architecture with clear separation of concerns:
-
-- **Types** (`src/lib/modules/logseek/types/`): Centralized TypeScript definitions
-- **API Clients** (`src/lib/modules/logseek/api/`): Backend API encapsulation
-- **Utils** (`src/lib/modules/logseek/utils/`): Reusable utility functions
-- **Composables** (`src/lib/modules/logseek/composables/`): Svelte 5 Runes state management
-- **Components** (`src/lib/modules/logseek/components/`): Reusable UI components (future)
-
-See `docs/FRONTEND_DEVELOPMENT.md` for detailed development guide.
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
-pnpm dev
-
-# or start the server and open the app in a new browser tab
-pnpm dev -- --open
+```text
+web/src/lib/modules/
+├── logseek/
+├── agent/
+└── explorer/
 ```
 
-## Building
+页面入口位于 `web/src/routes/`，当前主要页面有：
 
-To create a production version of your app:
+- `/`
+- `/search`
+- `/view`
+- `/image-view`
+- `/explorer`
+- `/settings`
+- `/prompt`
 
-```sh
-pnpm build
+更完整说明见：
+
+- [../docs/guides/frontend-development.md](../docs/guides/frontend-development.md)
+
+## 开发
+
+```bash
+pnpm --dir web install
+pnpm --dir web dev
 ```
 
-You can preview the production build with `pnpm preview`.
+## 构建
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+```bash
+pnpm --dir web build
+pnpm --dir web preview
+```
+
+构建产物会输出到 `backend/opsbox-server/static`，供 `opsbox-server` 嵌入。

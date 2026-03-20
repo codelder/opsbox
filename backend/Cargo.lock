@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "agent-manager"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -1770,7 +1770,7 @@ dependencies = [
 
 [[package]]
 name = "explorer"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "agent-manager",
  "async-trait",
@@ -2888,7 +2888,7 @@ dependencies = [
 
 [[package]]
 name = "logseek"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "agent-manager",
  "aho-corasick",
@@ -3254,7 +3254,7 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
 name = "opsbox-agent"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -3290,7 +3290,7 @@ dependencies = [
 
 [[package]]
 name = "opsbox-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "async-compression",
  "async-tar",
@@ -3340,7 +3340,7 @@ dependencies = [
 
 [[package]]
 name = "opsbox-server"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "agent-manager",
  "async-trait",
@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "opsbox-test-common"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "agent-manager",
  "async-compression",

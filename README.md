@@ -1,258 +1,253 @@
-# OpsBox 日志检索平台
+# OpsBox 日志检索与资源浏览平台
 
-基于 Rust 后端和 SvelteKit 前端的日志搜索分析平台。
+OpsBox 是一个基于 Rust 后端和 SvelteKit 前端的运维工具箱，当前重点提供日志检索、分布式资源浏览、Agent 管理以及 LLM/Planner 配置能力。
 
 ## 架构概览
 
 ### 后端 (`backend/`)
 
-**Monorepo 结构，包含多个 crate：**
+Rust workspace 当前包含以下 crate：
 
-- **opsbox-server** (主程序，输出二进制名 `opsbox-server`)
-  - 模块化结构：config、logging、daemon、server
-  - 内嵌前端静态资源
-  - SQLite 数据库管理
-  - 监听 127.0.0.1:4000
-
-- **opsbox-core** (共享库)
-  - 统一错误处理 (RFC 7807 Problem Details)
-  - 数据库连接池管理
-  - 标准响应格式封装
-  - ORL 协议 (`orl://`) - 统一的跨端点资源定位符
-
-- **logseek** (日志检索模块)
-  - 分层架构：api、service、repository、domain、utils
-  - 支持本地文件系统、S3/MinIO 和远程 Agent
-  - NDJSON 流式搜索
-  - 自然语言转查询（基于 Ollama/OpenAI）
-  - Starlark 脚本化源规划
-
-- **explorer** (分布式资源浏览器模块)
-  - 统一浏览 Local、S3、Agent 端点
-  - 支持归档文件内浏览（tar、tar.gz、zip 等）
-  - 文件下载功能
-  - 内容类型自动检测
-
-- **agent-manager** (代理管理模块)
-  - 代理注册、健康监控和标签管理
-  - 基于标签的代理组织和过滤
-  - 代理日志配置代理
-
-- **agent** (独立代理二进制)
-  - 远程日志访问代理
-  - 支持与主服务器通信
+- `opsbox-server`
+  - 主服务二进制，默认监听 `0.0.0.0:4000`
+  - 负责模块发现、数据库初始化、日志配置 API 和嵌入式前端资源分发
+- `opsbox-core`
+  - 共享基础设施：模块系统、错误模型、数据库、日志、DFS/ORL 抽象、Agent/S3 通用能力
+- `logseek`
+  - 日志检索模块
+  - 提供搜索、文件查看、S3 配置、LLM 后端、Planner 脚本、自然语言转查询等 API
+- `explorer`
+  - 统一资源浏览模块
+  - 支持 Local、Agent、S3 以及归档内浏览与下载
+- `agent-manager`
+  - Agent 注册、心跳、标签管理、Agent 日志配置代理
+- `opsbox-agent`
+  - 独立 Agent 二进制
+  - 向服务端注册并暴露本地搜索、文件浏览、原始文件读取、日志配置接口
+- `test-common`
+  - 集成测试共用工具
 
 ### 前端 (`web/`)
 
-- **SvelteKit** SPA (使用 adapter-static)
-- **模块化架构** (`src/lib/modules/`)
-  - `logseek/`: 日志搜索相关组件和 API 客户端
-  - `explorer/`: 分布式资源浏览器 UI 和 API 客户端
-  - `agent/`: 代理管理相关组件和 API 客户端
-- **Vite** 开发服务器（代理 /api 到后端）
-- **TailwindCSS 4.0** 样式框架
-- **Maple Mono NF CN** 字体系统（5 种字重嵌入）
+- SvelteKit 2 + Svelte 5 + TypeScript
+- 静态构建后输出到 `backend/opsbox-server/static`
+- 主要路由：
+  - `/` 首页查询入口
+  - `/search` 搜索结果
+  - `/view` 文本查看
+  - `/image-view` 图片查看
+  - `/explorer` 资源浏览器
+  - `/settings` 对象存储、Agent、Planner、LLM、Server 日志设置
+  - `/prompt` Prompt 调试页
+- 模块化前端代码位于 `web/src/lib/modules/`
+  - `logseek/`
+  - `agent/`
+  - `explorer/`
 
 ## 快速开始
 
 ### 环境要求
 
-- **Rust**: 1.90.0 (通过 rust-toolchain.toml 固定)
-- **Node.js**: 22 (使用 nvm: `nvm use 22`)
-- **pnpm**: 通过 corepack 启用
+- Rust 1.90.0
+- Node.js 22
+- `corepack` 可用
 
 ### 安装依赖
 
 ```bash
-# 前端依赖
 corepack enable
-corepack prepare pnpm@10.17.1 --activate
+corepack prepare pnpm@10.23.0 --activate
 pnpm --dir web install
 ```
 
-### 启动开发服务器
+### 启动开发环境
 
 ```bash
-# 后端（终端1）
+# 终端 1：后端
 cargo run --manifest-path backend/Cargo.toml -p opsbox-server
 
-# 前端（终端2）
+# 终端 2：前端
 pnpm --dir web dev
 ```
 
-访问：http://localhost:5173
+默认访问：
+
+- 前端：[http://localhost:5173](http://localhost:5173)
+- 后端健康检查：[http://localhost:4000/healthy](http://localhost:4000/healthy)
+
+### 启动 Agent（可选）
+
+```bash
+cargo run --manifest-path backend/Cargo.toml -p opsbox-agent -- \
+  --server-endpoint http://localhost:4000 \
+  --search-roots /var/log,/tmp
+```
+
+`opsbox-agent` 默认监听端口为 `3976`。
 
 ### 生产构建
 
 ```bash
-# 构建前端（输出到 backend/opsbox-server/static，构建前会清空该目录）
+# 构建前端静态资源
 pnpm --dir web build
 
-# 构建后端（会将静态资源嵌入二进制）
+# 构建后端主服务
 cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
+
+# 构建 Agent
+cargo build --manifest-path backend/Cargo.toml -p opsbox-agent --release
 ```
 
 ## 主要功能
 
-### 日志搜索
+### 日志检索
 
-- GitHub 风格的查询语法（AND/OR/NOT、正则、短语）
-- 支持本地文件系统、S3/MinIO 和远程 Agent
-- NDJSON 流式结果返回
-- 上下文窗口和关键词高亮
-- Starlark 脚本化源规划
-- 自然语言转查询（基于 Ollama/OpenAI）
+- GitHub 风格查询语法
+- NDJSON 流式搜索结果
+- 本地文件、S3/MinIO、远程 Agent 混合检索
+- 文件查看、下载、编码识别、上下文高亮
+- 自然语言转查询
+- Starlark Planner 脚本配置
 
-### 分布式资源浏览器
+### 资源浏览
 
-- 统一浏览 Local、S3、Agent 端点
-- 支持归档文件内浏览（tar、tar.gz、zip 等）
-- 文件下载功能
-- 内容类型自动检测
-- 隐藏文件计数和目录子项统计
+- 基于 ORL (`orl://`) 的统一资源定位
+- 浏览 Local、Agent、S3 三类端点
+- 支持 tar、tar.gz、gz、zip 等归档内容浏览
+- 资源下载
 
-### 代理管理
+### Agent 管理
 
-- 代理注册、健康监控和心跳机制
-- 基于标签的代理组织和过滤
-- 完整的标签 CRUD 操作（添加/移除/清空）
-- 代理日志配置代理（级别、保留策略）
+- Agent 注册与心跳
+- 标签 CRUD 与按标签筛选
+- 代理访问 Agent 的日志配置接口
 
-### 对象存储设置（S3 Profiles）
+### 配置管理
 
-- 通过 Web UI 管理多个 S3 Profile（endpoint/bucket/credentials）
-- 首次启动会自动迁移旧的单一 S3 设置到 `default` profile
-- 保留 `/settings/s3` 端点以兼容旧前端，推荐使用 Profiles 管理
+- S3 默认配置与多 Profile 管理
+- 多个 LLM backend 管理（当前支持 `ollama`、`openai`）
+- 默认 LLM backend 选择
+- Planner 脚本 CRUD、测试与默认脚本设置
+- Server 运行日志级别与保留数调整
 
-### ORL 协议（统一资源定位）
+## 运行与配置
 
-- `orl://` 协议统一标识 Local、Agent、S3 资源
-- 支持归档文件内条目访问（`?entry=` 参数）
-- 向后兼容旧的 `odfi://` 格式
+### 服务监听
 
-## 配置
+- 默认：`0.0.0.0:4000`
+- 覆盖方式：
+  - `--host` / `--port`
+  - `--addr`
 
 ### 数据库
 
 - 默认：`$HOME/.opsbox/opsbox.db`
-- 覆盖：`--database-url` 或 `OPSBOX_DATABASE_URL`/`DATABASE_URL` 环境变量
+- 覆盖优先级：
+  - `--database-url`
+  - `OPSBOX_DATABASE_URL`
+  - `DATABASE_URL`
 
-### 日志级别
+### 日志
 
-- `--log-level error|warn|info|debug|trace`
-- 或使用 `-V`/`-VV`/`-VVV`
-- 或设置 `RUST_LOG` 环境变量
-- 检索日志分层建议见 `docs/guides/logging-configuration.md`
+- 服务日志目录默认：`$HOME/.opsbox/logs`
+- Agent 日志目录默认：`$HOME/.opsbox-agent/logs`
+- 服务端可通过以下方式设置日志级别：
+  - `--log-level error|warn|info|debug|trace`
+  - `-v` / `-vv` / `-vvv`
+  - `RUST_LOG`
 
-### 守护进程（macOS/Linux）
+### LogSeek IO 调优
+
+- `LOGSEEK_IO_MAX_CONCURRENCY`
+- `LOGSEEK_IO_TIMEOUT_SEC`
+- `LOGSEEK_IO_MAX_RETRIES`
+- `LOGSEEK_SERVER_ID`
+
+### 前端 API 基址
+
+- `PUBLIC_API_BASE`，默认 `/api/v1/logseek`
+- `PUBLIC_AGENTS_API_BASE`，默认 `/api/v1/agents`
+
+### 守护进程
+
+类 Unix 上 `opsbox-server` 和 `opsbox-agent` 都支持 `start` / `stop` 子命令。
 
 ```bash
-# 启动守护进程
-cargo run -p opsbox-server -- start --daemon
+# 后台启动服务
+cargo run --manifest-path backend/Cargo.toml -p opsbox-server -- start --daemon
 
-# 停止守护进程
-cargo run -p opsbox-server -- stop
+# 停止服务
+cargo run --manifest-path backend/Cargo.toml -p opsbox-server -- stop
 ```
 
-## 📚 开发文档
+## 常用脚本
 
-### 项目文档
-- **架构说明**: [docs/architecture/architecture.md](docs/architecture/architecture.md) - 系统架构设计
-- **项目指南**: [WARP.md](WARP.md) - WARP AI 开发指南
+脚本集中在 `scripts/`，建议直接查看 [scripts/README.md](scripts/README.md)。
 
-### 架构文档
-- **架构复盘**: [docs/architecture/architecture.md](docs/architecture/architecture.md) - 项目架构详细分析
-- **模块架构**: [docs/architecture/module-architecture.md](docs/architecture/module-architecture.md) - 模块系统设计
-- **错误处理**: [docs/architecture/error-handling-architecture.md](docs/architecture/error-handling-architecture.md) - 错误处理架构
-- **日志系统**: [docs/architecture/logging-architecture.md](docs/architecture/logging-architecture.md) - 日志系统架构设计
+当前常用脚本包括：
 
-### 模块文档
-- **Agent Manager**: [docs/modules/agent-manager.md](docs/modules/agent-manager.md) - Agent 管理模块
-- **Agent API**: [docs/modules/agent-api-spec.md](docs/modules/agent-api-spec.md) - Agent HTTP API 规范
+- `scripts/run/start-server.sh`
+- `scripts/run/start-agent.sh`
+- `scripts/run/run-agent.sh`
+- `scripts/build/build-frontend.sh`
+- `scripts/test/bench-ndjson.sh`
+- `scripts/test/bench-logging-performance.sh`
+- `scripts/monitor/run_tests_with_monitoring.sh`
 
-### 功能文档
-- **FileUrl 设计**: [docs/features/file-url.md](docs/features/file-url.md) - 文件 URL 抽象层
-- **S3 Profiles**: [docs/features/s3-profiles.md](docs/features/s3-profiles.md) - S3 配置管理
-- **Agent 标签**: [docs/features/agent-tags.md](docs/features/agent-tags.md) - Agent 标签管理
+## 文档索引
 
-### 使用指南
-- **查询语法**: [docs/guides/query-syntax.md](docs/guides/query-syntax.md) - 搜索查询语法
-- **日志配置**: [docs/guides/logging-configuration.md](docs/guides/logging-configuration.md) - 日志系统配置和管理
-- **Tracing 使用**: [docs/guides/tracing-usage.md](docs/guides/tracing-usage.md) - 开发者日志使用指南
-- **前端开发**: [docs/guides/frontend-development.md](docs/guides/frontend-development.md) - 前端模块化架构
-- **CPU 资源控制**: [docs/guides/cpu-resource-control.md](docs/guides/cpu-resource-control.md) - Agent CPU 资源控制
+- [CLAUDE.md](CLAUDE.md)
+- [docs/README.md](docs/README.md)
+- [docs/architecture/architecture.md](docs/architecture/architecture.md)
+- [docs/guides/query-syntax.md](docs/guides/query-syntax.md)
+- [docs/guides/frontend-development.md](docs/guides/frontend-development.md)
+- [docs/modules/agent-api-spec.md](docs/modules/agent-api-spec.md)
+- [docs/modules/agent-manager.md](docs/modules/agent-manager.md)
+- [docs/features/file-url.md](docs/features/file-url.md)
+- [docs/features/s3-profiles.md](docs/features/s3-profiles.md)
 
-### 脚本工具
-- **运行脚本** (`scripts/run/`):
-  - [start-server.sh](scripts/run/start-server.sh) - 启动 Server
-  - [start-agent.sh](scripts/run/start-agent.sh) - 启动 Agent
-  - [run-agent.sh](scripts/run/run-agent.sh) - 运行 Agent（完整配置）
-- **测试脚本** (`scripts/test/`):
-  - [test-agent-api.sh](scripts/test/test-agent-api.sh) - Agent API 测试
-  - [test-graceful-shutdown.sh](scripts/test/test-graceful-shutdown.sh) - 优雅关闭测试
-  - [bench-ndjson.sh](scripts/test/bench-ndjson.sh) - NDJSON 性能测试
-- **构建脚本** (`scripts/build/`):
-  - [build-frontend.sh](scripts/build/build-frontend.sh) - 构建前端
-- **数据生成脚本** (`scripts/generate/`):
-  - [generate-test-logs.py](scripts/generate/generate-test-logs.py) - 生成测试日志
-
-## 代码规范
+## 代码质量
 
 ### Rust
 
 ```bash
-# 格式化
-cargo fmt --all
-
-# Lint
-cargo clippy --workspace --all-targets -- -D warnings
-
-# 测试
-cargo test
+cargo fmt --manifest-path backend/Cargo.toml --all
+cargo clippy --manifest-path backend/Cargo.toml --workspace --all-targets -- -D warnings
+cargo test --manifest-path backend/Cargo.toml
 ```
 
 ### 前端
 
 ```bash
-# 格式化
 pnpm --dir web format
-
-# Lint
 pnpm --dir web lint
-
-# 类型检查
 pnpm --dir web check
-
-# 测试
 pnpm --dir web test
+pnpm --dir web test:e2e
 ```
 
 ## 技术栈
 
 ### 后端
 
-- Rust 1.90.0 (2024 edition)
-- Axum (HTTP 框架)
-- SQLite + sqlx (数据库)
-- tokio (异步运行时)
-- tracing (结构化日志系统)
-- starlark (脚本化源规划)
-- grep (字节级正则搜索)
-- fluent-uri (RFC 3986 URI 解析)
-- async_zip + tokio-tar (异步归档支持)
-- aws-sdk-s3 (S3 存储支持)
+- Rust 2024 edition
+- Axum
+- Tokio
+- SQLite + sqlx
+- tracing
+- aws-sdk-s3
+- starlark
+- grep
 
 ### 前端
 
-- SvelteKit 2.22 (框架)
-- Svelte 5 (UI 库，Runes API)
-- TypeScript (类型系统)
-- TailwindCSS 4.0 (样式框架，使用 @tailwindcss/vite 插件)
-- Vite 7.0 (构建工具)
-- @tanstack/svelte-virtual (虚拟滚动)
-- lucide-svelte (图标库)
-- bits-ui (UI 组件)
-- Maple Mono NF CN 字体系统（5 种字重嵌入）
+- SvelteKit 2
+- Svelte 5
+- TypeScript
+- Tailwind CSS 4
+- Vite 7
+- Playwright
+- Vitest
 
 ## License
 

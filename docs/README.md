@@ -1,89 +1,78 @@
 # OpsBox 文档目录
 
-本文档目录提供了 OpsBox 项目的完整文档集合。
+本文档目录按“当前实现说明”和“历史设计记录”两类组织。
 
-## 📁 目录结构
+## 目录结构
 
-```
+```text
 docs/
-├── architecture/          # 架构设计文档
-│   ├── architecture.md                    # 项目架构分析
-│   ├── error-handling-architecture.md     # 错误处理架构设计
-│   ├── error-handling-quick-reference.md  # 错误处理快速参考
-│   ├── logging-architecture.md            # 日志系统架构设计
-│   └── module-architecture.md             # 模块化架构设计
-│
-├── api/                   # API 文档
-│   └── logging-api.md                     # 日志配置 API 参考
-│
-├── modules/               # 模块文档
-│   ├── agent-api-spec.md                  # Agent HTTP API 规范
-│   └── agent-manager.md                   # Agent Manager 模块文档
-│
-├── features/              # 功能文档
-│   ├── agent-tag-api.md                  # Agent 标签 API
-│   ├── agent-tags.md                     # Agent 标签功能
-│   ├── file-url.md                       # 文件 URL 设计方案
-│   └── s3-profiles.md                    # S3 Profile 管理功能
-│
-├── guides/                # 使用指南
-│   ├── cpu-resource-control.md           # CPU 资源控制指南
-│   ├── frontend-development.md           # 前端开发指南
-│   ├── logging-configuration.md          # 日志配置和管理指南
-│   ├── query-rag.md                      # 查询语法 RAG 资料
-│   ├── query-syntax.md                   # 查询字符串规范
-│   └── tracing-usage.md                  # Tracing 使用指南
-│
-├── performance/           # 性能文档
-│   └── memory-management.md              # 内存管理优化（mimalloc）
-│
-├── testing/               # 测试文档
-│   └── test-monitoring-guide.md          # 测试监控指南
+├── architecture/   # 当前架构与关键设计说明
+├── api/            # API 参考
+├── examples/       # 示例代码
+├── features/       # 功能说明
+├── guides/         # 开发与使用指南
+├── modules/        # 模块说明
+├── performance/    # 性能相关说明
+├── plans/          # 历史方案与迭代记录
+├── testing/        # 测试说明
+└── unused-code-analysis.md
 ```
 
-## 📚 文档分类说明
+## 当前优先阅读
 
-### 架构文档 (`architecture/`)
-系统架构设计、模块化设计、错误处理架构、日志系统架构等核心设计文档。
+### 入口文档
 
-### API 文档 (`api/`)
-REST API 接口文档，包括请求/响应格式、错误处理等。
+- [README.md](../README.md)
+- [CLAUDE.md](../CLAUDE.md)
 
-### 模块文档 (`modules/`)
-各个模块的详细文档，包括 API 规范和模块说明。
+### 架构
 
-### 功能文档 (`features/`)
-具体功能的详细说明，包括设计思路、使用方法等。
+- [architecture/architecture.md](architecture/architecture.md)
+- [architecture/module-architecture.md](architecture/module-architecture.md)
+- [architecture/logging-architecture.md](architecture/logging-architecture.md)
 
-### 使用指南 (`guides/`)
-面向开发者和用户的使用指南，包括开发指南、配置说明、日志管理等。
+### 开发指南
 
-### 测试文档 (`testing/`)
-测试相关文档，包括测试监控指南等。
+- [guides/query-syntax.md](guides/query-syntax.md)
+- [guides/frontend-development.md](guides/frontend-development.md)
+- [guides/logging-configuration.md](guides/logging-configuration.md)
+- [guides/tracing-usage.md](guides/tracing-usage.md)
 
-## 🔗 快速链接
+### 模块与功能
 
-### 项目文档
-- [项目主 README](../README.md)
-- [WARP 开发指南](../WARP.md)
-- [CHANGELOG](../CHANGELOG.md)
+- [modules/agent-api-spec.md](modules/agent-api-spec.md)
+- [modules/agent-manager.md](modules/agent-manager.md)
+- [features/file-url.md](features/file-url.md)
+- [features/s3-profiles.md](features/s3-profiles.md)
 
-### 架构文档
-- [架构分析](architecture/architecture.md)
-- [模块化架构](architecture/module-architecture.md)
-- [日志系统架构](architecture/logging-architecture.md)
+## 文档分类说明
 
-### 使用指南
-- [日志配置指南](guides/logging-configuration.md)
-- [Tracing 使用指南](guides/tracing-usage.md)
-- [前端开发指南](guides/frontend-development.md)
+### `architecture/`
 
-### API 文档
-- [日志配置 API](api/logging-api.md)
-- [Agent API 规范](modules/agent-api-spec.md)
+描述当前系统结构、模块机制、错误与日志设计。
 
-## 📝 文档维护
+### `modules/`
 
-文档更新时请同步更新最后更新日期。
+对后端模块和 Agent 协议做实现级说明。
 
-**最后审查**: 2026-02-24
+### `features/`
+
+描述 ORL、S3 Profiles、Agent 标签等功能行为。
+
+### `guides/`
+
+开发者常用指南，尽量与当前代码目录和接口保持一致。
+
+### `plans/`
+
+历史设计、覆盖率改进方案、迭代记录。
+
+这些文件保留决策上下文，但不应优先作为“当前实现真相来源”。
+
+## 维护原则
+
+- 优先以代码实现为准
+- 涉及路由、字段、命令、目录结构变更时同步更新文档
+- 设计草案与现状不一致时，优先在当前参考文档中澄清，再保留历史方案
+
+最后审查: 2026-03-20

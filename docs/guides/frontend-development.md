@@ -1,439 +1,238 @@
 # 前端开发指南
 
-**文档版本**: v1.0  
-**最后更新**: 2025-11-10
+**文档版本**: v1.1  
+**最后更新**: 2026-03-20
 
-本文档介绍如何使用 OpsBox 前端的模块化架构进行开发。
+本文档描述当前 `web/` 前端的实际结构和开发约定。
 
-## 📁 目录结构
+## 技术栈
 
-```
-web/src/lib/modules/logseek/
-├── types/           # TypeScript 类型定义
-│   └── index.ts
-├── api/             # API 客户端层
-│   ├── config.ts    # API 配置
-│   ├── search.ts    # 搜索 API
-│   ├── settings.ts  # 设置 API
-│   ├── nl2q.ts      # NL2Q API
-│   ├── view.ts      # 文件查看 API
-│   └── index.ts
-├── utils/           # 工具函数
-│   ├── highlight.ts # 文本处理
-│   └── index.ts
-├── composables/     # 可组合逻辑 (Svelte 5 Runes)
-│   ├── useStreamReader.svelte.ts
-│   ├── useSearch.svelte.ts
-│   ├── useSettings.svelte.ts
-│   └── index.ts
-├── components/      # UI 组件（预留）
-└── index.ts         # 模块统一入口
-```
+- SvelteKit 2
+- Svelte 5
+- TypeScript
+- Tailwind CSS 4
+- Vite 7
+- Vitest
+- Playwright
 
-## 🎯 核心概念
+## 目录结构
 
-### 1. 分层架构
-
-- **types**: 类型定义，确保类型安全
-- **api**: 封装所有后端 API 调用
-- **utils**: 通用工具函数
-- **composables**: Svelte 5 Runes 风格的状态管理
-- **components**: 可复用的 UI 组件
-
-### 2. 导入方式
-
-统一从模块入口导入：
-
-```typescript
-import { 
-  // Types
-  type SearchJsonResult,
-  type S3SettingsPayload,
-  type S3ProfilePayload,
-  
-  // API Clients
-  fetchS3Settings,
-  saveS3Settings,
-  fetchProfiles,
-  saveProfile,
-  startUnifiedSearch,
-  
-  // Utils
-  highlight,
-  snippet,
-  
-  // Composables
-  useSettings,
-  useSearch
-} from '$lib/modules/logseek';
+```text
+web/
+├── src/routes/                  # 页面路由
+├── src/lib/components/          # 通用 UI 组件
+├── src/lib/modules/
+│   ├── logseek/
+│   │   ├── api/
+│   │   ├── composables/
+│   │   ├── types/
+│   │   └── utils/
+│   ├── agent/
+│   │   ├── api/
+│   │   ├── composables/
+│   │   └── types/
+│   └── explorer/
+│       ├── api.ts
+│       ├── types.ts
+│       └── utils.ts
+├── static/
+└── tests/
+    └── e2e/
 ```
 
-## 📝 使用指南
+## 页面与功能对应
 
-### 1. 使用 API 客户端
+- `/`
+  - 首页搜索输入
+  - 支持直接查询和 AI 模式 NL2Q
+- `/search`
+  - 搜索结果展示
+  - 结果按 ORL 解析为本地 / Agent / S3 资源树
+- `/view`
+  - 文本文件查看
+- `/image-view`
+  - 图片查看
+- `/explorer`
+  - ORL 驱动的资源浏览器
+- `/settings`
+  - 五个标签页：
+    - 对象存储
+    - Agent
+    - 规划脚本
+    - 大模型
+    - Server 日志
+- `/prompt`
+  - Prompt 调试页
 
-API 客户端提供类型安全的后端调用。
+## 模块约定
 
-#### 示例：获取和保存 S3 设置（兼容旧 API）
+### `logseek`
 
-```typescript
-import { fetchS3Settings, saveS3Settings } from '$lib/modules/logseek';
+负责：
 
-// 获取默认 S3 设置（向后兼容）
-try {
-  const settings = await fetchS3Settings();
-  console.log(settings.endpoint, settings.bucket);
-} catch (error) {
-  console.error('加载设置失败：', error);
-}
+- 搜索
+- 查看文件
+- S3 默认配置和 Profiles
+- LLM backends
+- planners
+- NL2Q
 
-// 保存默认 S3 设置（向后兼容）
-try {
-  await saveS3Settings({
-    endpoint: 'http://localhost:9000',
-    bucket: 'logs',
-    access_key: 'minioadmin',
-    secret_key: 'minioadmin'
-  });
-  console.log('保存成功');
-} catch (error) {
-  console.error('保存失败：', (error as Error).message);
-}
+统一导出入口：
+
+```ts
+import { useSearch, fetchProfiles, convertNaturalLanguage } from '$lib/modules/logseek';
 ```
 
-**注意**：推荐使用 S3 Profile 管理 API（`fetchProfiles`, `saveProfile` 等），详见 [S3 Profile 管理功能](../features/s3-profiles.md)
+当前导出子模块：
 
-#### 示例：开始搜索
+- `api`
+- `types`
+- `utils`
+- `composables`
 
-```typescript
-import { startUnifiedSearch, extractSessionId } from '$lib/modules/logseek';
+当前 composables：
 
-try {
-  const response = await startUnifiedSearch('error AND timeout');
-  const sessionId = extractSessionId(response);
-  const reader = response.body?.getReader();
-  
-  // 处理流式响应...
-} catch (error) {
-  console.error('搜索失败：', error);
-}
+- `useSearch`
+- `useSettings`
+- `useProfiles`
+- `useStreamReader`
+- `useLlmBackends`
+
+### `agent`
+
+负责：
+
+- Agent 列表
+- 标签管理
+- Agent 日志代理 API
+
+当前 composable：
+
+- `useAgents`
+
+### `explorer`
+
+负责：
+
+- `POST /api/v1/explorer/list`
+- `GET /api/v1/explorer/download`
+- ORL 相关资源项渲染辅助
+
+## API 基址
+
+### LogSeek
+
+`web/src/lib/modules/logseek/api/config.ts`
+
+```ts
+PUBLIC_API_BASE || '/api/v1/logseek'
 ```
 
-#### 示例：自然语言转查询
+### Agent
 
-```typescript
-import { convertNaturalLanguage } from '$lib/modules/logseek';
+`web/src/lib/modules/agent/api/config.ts`
 
-try {
-  const query = await convertNaturalLanguage('查找昨天的错误日志');
-  console.log('生成的查询：', query);
-} catch (error) {
-  console.error('AI 生成失败：', error);
-}
+```ts
+PUBLIC_AGENTS_API_BASE || '/api/v1/agents'
 ```
 
-### 2. 使用 Composables
+### Explorer
 
-Composables 封装了状态管理和业务逻辑，使用 Svelte 5 Runes。
+当前默认直接使用：
 
-#### 示例：使用 `useSettings()`
-
-```svelte
-<script lang="ts">
-  import { useSettings } from '$lib/modules/logseek';
-  
-  const settings = useSettings();
-  
-  // 初始化加载
-  let init = $state(false);
-  $effect(() => {
-    if (init) return;
-    init = true;
-    settings.loadSettings();
-  });
-  
-  async function handleSave() {
-    await settings.save();
-    if (settings.saveSuccess) {
-      alert('保存成功！');
-    }
-  }
-</script>
-
-<form onsubmit={handleSave}>
-  <input bind:value={settings.endpoint} placeholder="Endpoint" />
-  <input bind:value={settings.bucket} placeholder="Bucket" />
-  <input bind:value={settings.accessKey} placeholder="Access Key" />
-  <input bind:value={settings.secretKey} type="password" placeholder="Secret Key" />
-  
-  <button type="submit" disabled={settings.saving}>
-    {settings.saving ? '保存中...' : '保存'}
-  </button>
-  
-  {#if settings.saveError}
-    <p class="error">{settings.saveError}</p>
-  {/if}
-</form>
+```ts
+'/api/v1/explorer'
 ```
 
-#### 示例：使用 `useSearch()`
+## 当前数据模型注意点
 
-```svelte
-<script lang="ts">
-  import { useSearch } from '$lib/modules/logseek';
-  
-  const search = useSearch();
-  
-  // 启动搜索
-  async function handleSearch(query: string) {
-    await search.search(query);
-  }
-  
-  // 加载更多
-  async function loadMore() {
-    await search.loadMore();
-  }
-</script>
+### S3 默认配置
 
-<input 
-  type="text" 
-  onchange={(e) => handleSearch(e.target.value)}
-/>
+`fetchS3Settings()` / `saveS3Settings()` 当前字段只有：
 
-{#if search.loading}
-  <p>搜索中...</p>
-{/if}
+- `endpoint`
+- `access_key`
+- `secret_key`
 
-{#if search.error}
-  <p class="error">{search.error}</p>
-{/if}
+不再包含 `bucket`。
 
-{#each search.results as result}
-  <div>
-    <h3>{result.path}</h3>
-    <!-- 显示结果 -->
-  </div>
-{/each}
+### S3 Profile
 
-{#if search.hasMore}
-  <button onclick={loadMore} disabled={search.loading}>
-    加载更多
-  </button>
-{/if}
+当前 `S3ProfilePayload` 字段：
+
+- `profile_name`
+- `endpoint`
+- `access_key`
+- `secret_key`
+
+`bucket` 不属于 profile 本身，而由 ORL 或搜索规划决定。
+
+### Agent 状态
+
+Agent 状态是 tagged union：
+
+```ts
+type AgentStatus =
+  | { type: 'Online' }
+  | { type: 'Busy'; tasks: number }
+  | { type: 'Offline' };
 ```
 
-### 3. 使用工具函数
+## ORL 约定
 
-工具函数提供文本处理功能。
+前端已经以 ORL 为统一资源标识。
 
-#### 示例：高亮关键词
+常见形式：
 
-```typescript
-import { highlight } from '$lib/modules/logseek';
-
-const line = 'Error: Connection timeout after 30 seconds';
-const keywords = ['Error', 'timeout'];
-const html = highlight(line, keywords);
-
-// 结果: "⟨mark⟩Error⟨/mark⟩: Connection ⟨mark⟩timeout⟨/mark⟩ after 30 seconds"
+```text
+orl://local/var/log/app.log
+orl://agent/
+orl://s3/
+orl://web-01@agent/var/log/app.log
+orl://prod:logs-bucket@s3/path/to/file.log
+orl://local/var/log/archive.tar.gz?entry=inner/file.log
 ```
 
-#### 示例：智能截断长行
+相关代码：
 
-```typescript
-import { snippet } from '$lib/modules/logseek';
+- `web/src/lib/utils/orl.ts`
+- `/search` 页面资源树构建
+- `/explorer` 页面导航与 URL 编码
 
-const longLine = '很长的日志行...';
-const keywords = ['error'];
-const result = snippet(longLine, keywords, { max: 540, context: 230 });
+## 新增功能时的推荐落点
 
-console.log(result.html);        // 带高亮的 HTML
-console.log(result.leftTrunc);   // 是否左侧截断
-console.log(result.rightTrunc);  // 是否右侧截断
-```
+### 新增 LogSeek API
 
-### 4. 使用类型定义
+1. 在 `web/src/lib/modules/logseek/api/` 中新增文件或补充现有文件
+2. 在 `api/index.ts` 导出
+3. 如需状态管理，在 `composables/` 增加对应封装
+4. 补充对应 `*.test.ts`
 
-所有类型都集中在 `types/index.ts`。
+### 新增 Agent 页面行为
 
-#### 示例：定义组件 props
+1. 先在 `agent/api/` 写纯 API 封装
+2. 再在 `agent/composables/` 聚合 UI 需要的状态与动作
 
-```typescript
-import type { SearchJsonResult, JsonLine } from '$lib/modules/logseek';
+### 新增页面
 
-interface ResultCardProps {
-  result: SearchJsonResult;
-  onViewFile: (path: string) => void;
-}
+1. 将页面级逻辑保留在 `src/routes/`
+2. 通用逻辑下沉到 `src/lib/modules/` 或 `src/lib/components/`
 
-function processLines(lines: JsonLine[]) {
-  return lines.map(line => ({
-    no: line.no,
-    text: line.text
-  }));
-}
-```
-
-## 🔧 开发工作流
-
-### 1. 添加新的 API
-
-1. 在 `api/` 目录创建新文件（如 `myapi.ts`）
-2. 定义 API 函数，使用统一的错误处理
-3. 在 `api/index.ts` 中导出
-4. 在 `types/index.ts` 中添加相关类型
-
-```typescript
-// api/myapi.ts
-import { getApiBase, commonHeaders } from './config';
-
-export async function myApiCall(param: string): Promise<MyResponse> {
-  const API_BASE = getApiBase();
-  const response = await fetch(`${API_BASE}/my-endpoint`, {
-    method: 'POST',
-    headers: commonHeaders,
-    body: JSON.stringify({ param })
-  });
-  
-  if (!response.ok) {
-    throw new Error(`请求失败：HTTP ${response.status}`);
-  }
-  
-  return await response.json();
-}
-```
-
-### 2. 添加新的 Composable
-
-1. 在 `composables/` 目录创建 `.svelte.ts` 文件
-2. 使用 Svelte 5 Runes (`$state`, `$derived`, `$effect`)
-3. 返回 getter/setter 对象
-4. 在 `composables/index.ts` 中导出
-
-```typescript
-// composables/useMyFeature.svelte.ts
-export function useMyFeature() {
-  let data = $state<string[]>([]);
-  let loading = $state(false);
-  
-  async function load() {
-    loading = true;
-    try {
-      // API 调用...
-      data = result;
-    } finally {
-      loading = false;
-    }
-  }
-  
-  return {
-    get data() { return data; },
-    get loading() { return loading; },
-    load
-  };
-}
-```
-
-### 3. 添加新的工具函数
-
-1. 在 `utils/` 目录添加或修改文件
-2. 确保函数是纯函数（无副作用）
-3. 添加 JSDoc 注释
-4. 在 `utils/index.ts` 中导出
-
-```typescript
-// utils/myutil.ts
-/**
- * 格式化日志时间戳
- * @param timestamp ISO 8601 时间戳
- * @returns 格式化的时间字符串
- */
-export function formatTimestamp(timestamp: string): string {
-  return new Date(timestamp).toLocaleString('zh-CN');
-}
-```
-
-## ✅ 最佳实践
-
-### 1. 类型安全
-
-- 始终使用 TypeScript 类型
-- 不要使用 `any`，使用 `unknown` 并做类型检查
-- 为 API 响应定义明确的接口
-
-### 2. 错误处理
-
-- API 调用始终使用 try-catch
-- 显示用户友好的中文错误消息
-- 在 composable 中集中处理错误
-
-### 3. 状态管理
-
-- 使用 Svelte 5 Runes (`$state`, `$derived`, `$effect`)
-- 避免在组件间传递过多状态
-- 使用 composables 封装复杂的状态逻辑
-
-### 4. 代码复用
-
-- 提取重复的逻辑到 composables 或工具函数
-- 创建可复用的 UI 组件
-- 避免在多个地方重复 API 调用逻辑
-
-### 5. 性能优化
-
-- 使用 `$derived` 缓存计算结果
-- 避免在 `$effect` 中创建无限循环
-- 对大列表使用虚拟滚动
-
-## 📚 参考资源
-
-- [Svelte 5 文档](https://svelte.dev/docs/svelte/overview)
-- [SvelteKit 文档](https://kit.svelte.dev/docs)
-- [TypeScript 文档](https://www.typescriptlang.org/docs/)
-- [RFC 7807 Problem Details](https://www.rfc-editor.org/rfc/rfc7807)
-
-## 🔍 调试技巧
-
-### 1. API 调试
-
-在浏览器控制台检查网络请求：
-
-```javascript
-// 检查 API 响应
-fetch('/api/v1/logseek/settings/s3')
-  .then(r => r.json())
-  .then(console.log);
-```
-
-### 2. Composable 调试
-
-在组件中打印状态：
-
-```svelte
-<script>
-  import { useSettings } from '$lib/modules/logseek';
-  const settings = useSettings();
-  
-  $effect(() => {
-    console.log('Settings state:', {
-      endpoint: settings.endpoint,
-      loading: settings.loadingSettings,
-      error: settings.loadError
-    });
-  });
-</script>
-```
-
-### 3. 类型检查
-
-运行类型检查命令：
+## 开发命令
 
 ```bash
+pnpm --dir web install
+pnpm --dir web dev
 pnpm --dir web check
+pnpm --dir web lint
+pnpm --dir web test
+pnpm --dir web test:e2e
 ```
 
-## 🚀 下一步
+## 测试约定
 
-- 查看 `web/README.md` 获取前端开发与构建说明
-- 查看 `web/src/lib/modules/logseek/` 的实际代码用法
-- 尝试创建自己的 API 客户端或 composable，并为其编写单元测试
+- API 封装优先配 `*.test.ts`
+- UI 状态逻辑优先测 composable
+- 用户主流程用 Playwright E2E 覆盖
+
+当前 E2E 已覆盖搜索、Explorer、Agent、S3、设置页、可访问性等关键路径。

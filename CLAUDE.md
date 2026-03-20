@@ -1,165 +1,265 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working with code in this repository.
+This file gives coding agents a current, implementation-aligned overview of the OpsBox repository.
 
 ## Project Overview
 
-OpsBox is a modular log search and analysis platform built with Rust backend and SvelteKit frontend. It features a pluggable architecture where modules are automatically discovered and registered at compile time. The platform provides unified resource browsing across local files, S3/MinIO storage, and remote agents.
+OpsBox is a Rust + SvelteKit monorepo focused on log search, distributed resource browsing, and Agent management.
 
-### Platform Support
+Current release line in this repo:
 
-OpsBox is a **cross-platform application** supporting:
-- **Windows** (x86_64)
-- **Linux** (x86_64, ARM64)
-- **macOS** (Intel, Apple Silicon)
+- backend workspace version: `0.2.0`
+- frontend package version: `0.2.0`
 
-When writing code, ensure compatibility across all platforms. Pay special attention to:
-- File path handling (use `/` consistently, or `std::path::Path` in Rust)
-- Line endings (configure `.gitattributes` for proper handling)
-- Platform-specific behaviors (use conditional compilation when necessary)
+## Platform Support
 
-### Tech Stack
+OpsBox targets:
 
-- **Backend**: Rust 2024 edition, `tracing` for logging, `mimalloc` as global allocator
-- **Frontend**: SvelteKit 2.22 + TypeScript, TailwindCSS 4.0, Vite 7.0
-- **Database**: SQLite with automatic schema management
-- **Package Manager**: pnpm 10.23.0
-- **Version**: 0.1.1
+- macOS
+- Linux
+- Windows
 
-### Core Architecture
+Keep cross-platform behavior in mind when editing:
 
-- **Monorepo**: `backend/` (Rust workspace) + `web/` (SvelteKit SPA)
-- **Module System**: `opsbox-core` inventory-based automatic module discovery
-- **ORL Protocol**: Unified resource identifier (`orl://[id]@[type]/[path]?entry=[entry]`)
-- **Modules**: `logseek` (search), `explorer` (file browser), `agent-manager` (agent registry)
+- use `std::path::Path` / `PathBuf`
+- avoid assuming `/tmp` or Unix-only semantics unless guarded
+- use conditional compilation for daemon/service behavior
 
-### Backend Workspace (`backend/`)
+## Tech Stack
+
+- Backend: Rust 2024, Axum, Tokio, SQLite, `tracing`
+- Memory allocator: `mimalloc` globally in `opsbox-server`
+- Frontend: SvelteKit 2.22, Svelte 5, TypeScript, Tailwind CSS 4, Vite 7
+- Package manager: `pnpm@10.23.0`
+
+## Workspace Layout
+
+### Backend crates
 
 | Crate | Purpose |
-|-------|---------|
-| `opsbox-server` | Main binary, HTTP server, CLI |
-| `opsbox-core` | Shared library: error handling, DB, module system, LLM, DFS subsystem |
-| `logseek` | Log search: API → Service → Repository layers, Starlark source planning |
-| `explorer` | Distributed file browser (Local/S3/Agent), archive navigation |
-| `agent-manager` | Agent registry, health monitoring, tag management |
-| `agent` | Standalone agent binary for remote log access |
-| `test-common` | Shared test utilities |
+| --- | --- |
+| `opsbox-server` | Main HTTP server, CLI, embedded frontend |
+| `opsbox-core` | Shared infra: modules, errors, DB, logging, DFS/ORL, Agent/S3 primitives |
+| `logseek` | Search, file viewing, S3 settings/profiles, LLM backends, planners, NL2Q |
+| `explorer` | ORL-based resource listing and download |
+| `agent-manager` | Agent registry, heartbeat, tags, log proxy |
+| `opsbox-agent` | Standalone remote agent binary |
+| `test-common` | Shared test helpers |
 
-### Frontend Structure (`web/`)
+### Frontend
 
-SvelteKit SPA with `adapter-static`. Key modules under `src/lib/modules/`:
-- `logseek/` — API clients, composables, components for log search
-- `explorer/` — File explorer UI, grid/list views
-- `agent/` — Agent management APIs and composables
+Key route files:
 
-Routes: `/` (home), `/search`, `/view`, `/image-view`, `/explorer`, `/settings`, `/prompt`
+- `/` home query entry
+- `/search`
+- `/view`
+- `/image-view`
+- `/explorer`
+- `/settings`
+- `/prompt`
+
+Feature modules live under:
+
+- `web/src/lib/modules/logseek`
+- `web/src/lib/modules/agent`
+- `web/src/lib/modules/explorer`
+
+## Runtime Topology
+
+### `opsbox-server`
+
+- default address: `0.0.0.0:4000`
+- exposes:
+  - `/healthy`
+  - `/api/v1/log/*`
+  - `/api/v1/logseek/*`
+  - `/api/v1/agents/*`
+  - `/api/v1/explorer/*`
+- serves embedded frontend from `backend/opsbox-server/static`
+
+### `opsbox-agent`
+
+- binary name: `opsbox-agent`
+- default listen port: `3976`
+- registers to server at `/api/v1/agents/register`
+- exposes:
+  - `/health`
+  - `/api/v1/info`
+  - `/api/v1/paths`
+  - `/api/v1/search`
+  - `/api/v1/cancel/{task_id}` (currently returns `501`)
+  - `/api/v1/list_files`
+  - `/api/v1/file_raw`
+  - `/api/v1/log/*`
 
 ## Build & Run
 
 ```bash
-# Setup
-corepack enable && corepack prepare pnpm@10.23.0 --activate
+# setup
+corepack enable
+corepack prepare pnpm@10.23.0 --activate
 pnpm --dir web install
 
-# Development
-cargo run --manifest-path backend/Cargo.toml -p opsbox-server  # Backend on :4000
-pnpm --dir web dev                                              # Frontend on :5173
+# backend dev
+cargo run --manifest-path backend/Cargo.toml -p opsbox-server
 
-# Production Build
-pnpm --dir web build                                            # → backend/opsbox-server/static
+# frontend dev
+pnpm --dir web dev
+
+# standalone agent
+cargo run --manifest-path backend/Cargo.toml -p opsbox-agent -- \
+  --server-endpoint http://localhost:4000 \
+  --search-roots /var/log,/tmp
+
+# production build
+pnpm --dir web build
 cargo build --manifest-path backend/Cargo.toml -p opsbox-server --release
+cargo build --manifest-path backend/Cargo.toml -p opsbox-agent --release
 
-# Selective module build
-cargo build -p opsbox-server --no-default-features -F logseek,agent-manager
+# selective module build
+cargo build --manifest-path backend/Cargo.toml -p opsbox-server --no-default-features -F logseek,agent-manager
 ```
 
 ## Testing
 
 ```bash
-# Backend (requires OPSBOX_NO_PROXY=1 on macOS for LLM tests)
-OPSBOX_NO_PROXY=1 cargo test --manifest-path backend/Cargo.toml
+# backend
+cargo test --manifest-path backend/Cargo.toml
 
-# Frontend unit tests
-pnpm --dir web test:unit                    # All tests
-pnpm --dir web test:unit --run --project=server  # Node.js only
-pnpm --dir web test:unit --run --project=client  # Browser only
+# backend coverage
+cargo llvm-cov --manifest-path backend/Cargo.toml --workspace --lcov
 
-# E2E tests (Playwright)
+# frontend unit
+pnpm --dir web test
+
+# frontend e2e
 pnpm --dir web test:e2e
-
-# Coverage
-OPSBOX_NO_PROXY=1 cargo llvm-cov --manifest-path backend/Cargo.toml --workspace --lcov
 ```
 
-**Test counts**: ~1,000 backend tests, ~166 frontend unit tests, ~140 E2E tests
+Notes:
 
-## Key Conventions
+- Some networked tests are easier to run with `OPSBOX_NO_PROXY=1`.
+- Playwright config already exists in `web/playwright.config.ts`.
 
-### Architecture Patterns
-- **Backend**: API → Service → Repository layering; use `opsbox-core::AppError` for errors
-- **Frontend**: Svelte 5 Runes for state; API clients match backend endpoints exactly
-- **Module registration**: Implement `Module` trait + `register_module!` macro
+## API Map
 
-### API Structure
-Each module has its own prefix: `/api/v1/logseek`, `/api/v1/agents`, `/api/v1/explorer`
+### Server-side modules
 
-### ORL Protocol
-```
+- `logseek` prefix: `/api/v1/logseek`
+  - search: `/search.ndjson`
+  - view: `/view.cache.json`, `/view/raw`, `/view/download`, `/view.files.json`
+  - S3 settings: `/settings/s3`
+  - LLM backends: `/settings/llm/*`
+  - planners: `/settings/planners/*`
+  - profiles: `/profiles`
+  - NL2Q: `/nl2q`
+- `agent-manager` prefix: `/api/v1/agents`
+  - register, list, heartbeat, tags, agent log proxy
+- `explorer` prefix: `/api/v1/explorer`
+  - `/list`
+  - `/download`
+- server logs prefix: `/api/v1/log`
+
+## Data & Protocol Conventions
+
+### ORL
+
+OpsBox currently uses `orl://` as the unified resource locator.
+
+Examples:
+
+```text
 orl://local/var/log/nginx/access.log
-orl://web-01@agent.192.168.1.100:4001/app/logs/error.log
-orl://prod@s3/bucket/logs/data.tar.gz?entry=internal/service.log
+orl://web-01@agent/var/log/app.log
+orl://web-01@10.0.0.8:3976@agent/var/log/app.log
+orl://default@s3/my-bucket/path/to/file.log
+orl://prod:my-bucket@s3/path/to/file.log
+orl://local/var/log/archive.tar.gz?entry=inner/file.log
+orl://local/var/log/?glob=*.log
 ```
 
-### Query Qualifiers
-- `app:<name>` — Select planner script for intelligent source planning
-- `dt:/fdt:/tdt:` — Date/time range filtering
+Important:
 
-### Configuration Priority
-1. CLI flags (highest) → 2. Environment variables → 3. Database settings → 4. Defaults
+- S3 ORL accepts both old and new bucket placement:
+  - old: bucket in path
+  - new: bucket in endpoint identity (`profile:bucket@s3`)
+- frontend and explorer are already ORL-based
 
-### Key Environment Variables
+### Search / Agent payloads
+
+- Agent search request includes:
+  - `task_id`
+  - `query`
+  - `context_lines`
+  - `path_filter`
+  - `path_includes`
+  - `path_excludes`
+  - `target`
+  - `encoding`
+
+### Status serialization
+
+`AgentStatus` serializes as tagged JSON:
+
+```json
+{ "type": "Online" }
+```
+
+## Configuration
+
+Priority generally follows:
+
+1. CLI flags
+2. environment variables
+3. persisted DB settings where applicable
+4. defaults
+
+Key variables:
 
 | Variable | Purpose | Default |
-|----------|---------|---------|
-| `OPSBOX_NO_PROXY=1` | Disable proxy for tests (macOS) | — |
-| `LLM_PROVIDER` | `ollama` or `openai` | `ollama` |
-| `OLLAMA_BASE_URL` | Ollama server URL | `http://127.0.0.1:11434` |
-| `OPSBOX_DATABASE_URL` | Custom database path | `~/.opsbox/opsbox.db` |
-| `LOGSEEK_IO_TIMEOUT_SEC` | IO timeout | 60 |
-| `LOGSEEK_IO_MAX_CONCURRENCY` | Max concurrent IO | 12 |
+| --- | --- | --- |
+| `OPSBOX_DATABASE_URL` | Server DB path override | `~/.opsbox/opsbox.db` |
+| `LOGSEEK_IO_MAX_CONCURRENCY` | Shared IO concurrency | `12` |
+| `LOGSEEK_IO_TIMEOUT_SEC` | Shared IO timeout | `60` |
+| `LOGSEEK_IO_MAX_RETRIES` | Shared IO retry count | `5` |
+| `LOGSEEK_SERVER_ID` | Server ID for generated URLs | unset |
+| `PUBLIC_API_BASE` | Frontend logseek base | `/api/v1/logseek` |
+| `PUBLIC_AGENTS_API_BASE` | Frontend agent base | `/api/v1/agents` |
+| `OPSBOX_NO_PROXY` | Disable proxy for reqwest clients | unset |
+
+## Coding Conventions
+
+- backend layering in `logseek`: routes -> service -> repository/domain/utils
+- module registration uses `opsbox_core::register_module!`
+- `opsbox-server/src/main.rs` must explicitly `extern crate` optional modules so inventory registration survives release linking
+- frontend API wrappers should mirror backend routes closely
+- use ORL terminology, not the older ODFI/FileUrl naming, unless updating historical code/comments
 
 ## Common Tasks
 
-### Adding New Module
-1. Create crate in `backend/`, implement `Module` trait
-2. Add to workspace in `backend/Cargo.toml`
-3. Add dependency in `opsbox-server/Cargo.toml`
+### Add a new server module
 
-### Adding API Endpoint
-1. Backend: Add route in module's `routes/`
-2. Frontend: Add API client in module's `api/`
+1. Create a crate under `backend/`
+2. Implement `opsbox_core::Module`
+3. Register with `opsbox_core::register_module!`
+4. Add it as an optional dependency in `backend/opsbox-server/Cargo.toml`
+5. Explicitly reference the crate in `backend/opsbox-server/src/main.rs`
 
-### Database Schema Changes
-Update `init_schema()` in the module (current system recreates tables)
+### Add a frontend-backed API
 
-## Troubleshooting
+1. Add backend route in the module router
+2. Add frontend API client under the corresponding `web/src/lib/modules/*/api`
+3. Expose it from that module's `index.ts`
+4. Cover with unit tests and, if user-visible, E2E
 
-| Problem | Solution |
-|---------|----------|
-| Backend tests: "NULL object" on macOS | Set `OPSBOX_NO_PROXY=1` |
-| Frontend browser tests: port in use | `lsof -ti:63315 \| xargs kill -9` or use `--project=server` |
-| Agent connection refused | Check agent's `host`/`listen_port` tags |
-| Database locked | Ensure single server instance; delete `opsbox.db-wal/shm` if needed |
-| S3 timeout | Set `OPSBOX_NO_PROXY=1` or `HTTP_PROXY` |
-| High memory | Build with `--features mimalloc-collect` |
+## Useful References
 
-## Detailed Documentation
+- `docs/README.md`
+- `docs/architecture/architecture.md`
+- `docs/guides/query-syntax.md`
+- `docs/guides/frontend-development.md`
+- `docs/modules/agent-api-spec.md`
+- `backend/logseek/src/planners/README.md`
+- `web/static/query-syntax.md`
 
-For more details, see:
-- `.planning/codebase/` — Architecture, structure, stack, conventions analysis
-- `.planning/research/` — E2E testing research and best practices
-- `backend/opsbox-server/static/query-syntax.md` — LogSeek query syntax reference
-- `backend/logseek/src/planners/README.md` — Starlark planner documentation
-
----
-*Last updated: 2026-03-15*
+Last updated: 2026-03-20

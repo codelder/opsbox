@@ -1,140 +1,156 @@
-# 内存管理优化
+# 内存管理与缓存回收
 
-## 概述
+**文档版本**: v1.1  
+**最后更新**: 2026-03-20
 
-OpsBox 使用 **mimalloc** 作为全局内存分配器，并在缓存清理时主动回收内存，以优化长时间运行的服务器内存使用。
+本文档描述当前仓库里真实存在的内存管理机制。
 
-## mimalloc 分配器
+## 当前分配器策略
 
-### 为什么选择 mimalloc
+### `opsbox-server`
 
-- **高性能**: 比系统默认分配器快 2-3 倍
-- **低碎片**: 更好的内存布局，减少碎片
-- **跨平台**: 支持 Linux、macOS、Windows
-- **零配置**: 无需额外配置即可获得性能提升
-
-### 配置位置
+主服务使用 `mimalloc` 作为全局分配器：
 
 ```rust
-// backend/opsbox-server/src/main.rs
 use mimalloc::MiMalloc;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 ```
 
-## 自动内存回收
+位置：
 
-### 缓存清理时回收
+- `backend/opsbox-server/src/main.rs`
 
-当搜索结果缓存过期被清理时，系统会自动触发内存回收：
+### `logseek`
 
-```rust
-// backend/logseek/src/repository/cache.rs
-// 每 15 分钟清理一次过期缓存
-// 清理后调用 mi_collect(true) 强制回收内存
+`logseek` 本身没有单独设置全局分配器，但在 `opsbox-server` 中以如下方式启用：
+
+- `logseek` 依赖开启 `mimalloc-collect` feature
+
+这样缓存清理后可以调用：
+
+- `libmimalloc_sys::mi_collect(true)`
+
+尝试把空闲内存归还给系统。
+
+## 当前缓存模型
+
+`logseek` 有一个进程内搜索缓存，定义在：
+
+- `backend/logseek/src/repository/cache.rs`
+
+缓存按 `sid` 组织：
+
+- `keywords: Vec<KeywordHighlight>`
+- `files: HashMap<String, CompactLines>`
+
+其中：
+
+- `keywords` 用于查看页高亮
+- `files` 的 key 是 ORL 字符串
+- 行内容不再按 `Vec<String>` 原样长期存，而是压缩到 `CompactLines`
+
+## `CompactLines` 的作用
+
+当前缓存中的文件内容使用：
+
+- `content: String`
+- `line_starts: Vec<usize>`
+- `encoding: String`
+
+这种结构比直接缓存 `Vec<String>` 更紧凑，优势是：
+
+- 降低小字符串分配数量
+- 减少碎片
+- 切片读取时仍能按行恢复
+
+## TTL 与清理周期
+
+这是两个不同概念：
+
+### TTL
+
+单个会话的缓存 TTL 当前是：
+
+- `15 分钟`
+
+### 后台清理周期
+
+后台 cleaner 当前每：
+
+- `1 分钟`
+
+执行一次扫描，删除超时会话。
+
+也就是说：
+
+- 不是“每 15 分钟清理一次”
+- 而是“每分钟扫描一次，删除超过 15 分钟没触碰的会话”
+
+## 回收触发机制
+
+后台 cleaner 启动后会：
+
+1. 定期扫描并删除过期会话
+2. 统计移除大小和当前活跃缓存大小
+3. 如果启用了 `mimalloc-collect` feature，则异步调用 `mi_collect(true)`
+
+实现特点：
+
+- cleaner 用 `CancellationToken` 支持优雅关闭
+- 回收调用放在 `spawn_blocking` 中，避免阻塞 async 运行时
+- 即使本轮没有删除条目，也会尝试触发一次底层分配器回收
+
+## 日志行为
+
+清理时可能看到类似日志：
+
+```text
+缓存清理完成: 移除 3 个过期会话 (12.50 MB), 当前活跃: 2 个 (4.10 MB)
 ```
 
-### 回收时机
+如果启用了 `mimalloc-collect`，还可能看到：
 
-1. **定期清理**: 每 15 分钟自动清理过期缓存
-2. **内存回收**: 清理后立即触发 `mi_collect(true)`
-3. **异步执行**: 使用 `spawn_blocking` 避免阻塞主线程
-
-### 实现细节
-
-```rust
-// 如果清理了缓存条目，触发内存回收
-if total_removed > 0 {
-  tracing::info!("缓存清理完成: 移除 {} 个条目，触发内存回收", total_removed);
-  
-  tokio::task::spawn_blocking(move || {
-    #[link(name = "mimalloc")]
-    unsafe extern "C" {
-      fn mi_collect(force: bool);
-    }
-    
-    unsafe {
-      // 强制回收内存，将空闲内存返还给操作系统
-      mi_collect(true);
-    }
-    tracing::debug!("内存回收完成");
-  });
-}
+```text
+libmimalloc_sys::mi_collect(true) 调用完成
 ```
 
-## 内存使用场景
+## 生命周期
 
-### 搜索结果缓存
+缓存会在以下场景清理：
 
-- **keywords 缓存**: `sid -> Vec<String>` (高亮关键字)
-- **files 缓存**: `(sid, FileUrl) -> Vec<String>` (搜索结果行)
-- **TTL**: 15 分钟
-- **清理策略**: 基于 `last_touch` 时间
+### 1. 会话主动清理
 
-### 典型内存占用
+搜索页关闭或显式删除会话时：
 
-假设一次搜索返回 100 个文件，每个文件 1000 行，每行 100 字节：
+- `remove_sid(sid)`
 
-```
-100 files × 1000 lines × 100 bytes = 10 MB
-```
+### 2. 被动过期清理
 
-如果有 10 个并发搜索会话：
+超过 TTL 且未访问的会话会被 cleaner 删除。
 
-```
-10 sessions × 10 MB = 100 MB
-```
+### 3. 服务优雅关闭
 
-15 分钟后这些缓存会被清理，内存会被回收。
+`LogSeekModule::cleanup()` 会调用：
 
-## 监控和调优
+- `Cache::stop_cleaner()`
 
-### 日志输出
+停止后台清理任务。
 
-```
-INFO  缓存清理完成: 移除 42 个条目，触发内存回收
-DEBUG 内存回收完成
-```
+## 当前实现边界
 
-### 性能指标
+- 主动内存归还只在 `opsbox-server` 集成 `logseek` 且开启 `mimalloc-collect` 时生效
+- `opsbox-agent` 没有使用同样的全局 `mimalloc` 设置
+- RSS 是否立刻下降取决于分配器和操作系统，不保证每次都可见
+- 当前没有对外暴露专门的内存指标接口
 
-- **清理频率**: 15 分钟/次
-- **回收延迟**: < 10ms (在后台线程执行)
-- **内存回收率**: 通常可回收 80-90% 的缓存内存
+## 结论
 
-### 调优建议
+当前内存管理不是单纯“用了 mimalloc”，而是三层叠加：
 
-1. **增加缓存 TTL**: 如果内存充足，可以延长缓存时间
-2. **减少清理间隔**: 如果内存紧张，可以更频繁清理
-3. **监控内存使用**: 使用系统工具监控 RSS 和 VSZ
+1. `opsbox-server` 使用 `mimalloc`
+2. `logseek` 缓存使用更紧凑的 `CompactLines`
+3. cleaner 定时删除过期会话，并在可用时调用 `mi_collect(true)`
 
-## 与其他分配器对比
-
-### jemalloc (已弃用)
-
-之前使用 jemalloc，需要通过环境变量配置：
-
-```bash
-MALLOC_CONF="background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0"
-```
-
-### mimalloc 优势
-
-- **无需配置**: 开箱即用
-- **更好的性能**: 特别是在多线程场景
-- **更简单的 API**: 直接调用 `mi_collect()`
-- **更好的跨平台支持**: 特别是 Windows
-
-## 最佳实践
-
-1. **定期清理**: 利用现有的缓存清理机制
-2. **异步回收**: 使用 `spawn_blocking` 避免阻塞
-3. **日志记录**: 记录清理和回收事件
-4. **监控内存**: 定期检查内存使用趋势
-
-## 参考资料
-
-- [mimalloc GitHub](https://github.com/microsoft/mimalloc)
-- [mimalloc Rust Crate](https://crates.io/crates/mimalloc)
-- [Memory Management in Rust](https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html)
+这也是当前仓库里和内存相关的主要实现事实。

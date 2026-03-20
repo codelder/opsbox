@@ -76,9 +76,5 @@ sqlite::memory:*
 *wal
 *shm
 
-**/gsd-*
-**/gsd/*.md
-.claude/get-shit-done/*
-
 # Backend test results
 backend/test-results/

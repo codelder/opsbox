@@ -266,28 +266,30 @@ pub type Result<T> = std::result::Result<T, LogSeekApiError>;
 ### 4. Routes 层使用示例
 
 ```rust
-// routes/settings.rs
+// routes/s3.rs
 use crate::api::error::Result;
 
 pub async fn get_s3_settings(
   State(pool): State<SqlitePool>,
 ) -> Result<Json<S3SettingsPayload>> {
-  let settings = repository::settings::load_s3_settings(&pool)
+  let settings = repository::s3::load_s3_settings(&pool)
     .await?;  // RepositoryError 自动转换为 LogSeekApiError
   
-  Ok(Json(settings))
+  let mut payload = settings.map_or_else(S3SettingsPayload::default, Into::into);
+  payload.configured = true;
+  Ok(Json(payload))
 }
 
 pub async fn save_s3_settings(
   State(pool): State<SqlitePool>,
   Json(payload): Json<S3SettingsPayload>,
-) -> Result<Json<S3SettingsPayload>> {
+) -> Result<StatusCode> {
   let settings = S3Settings::from(payload);
   
-  repository::settings::save_s3_settings(&pool, &settings)
+  repository::s3::save_s3_settings(&pool, &settings)
     .await?;  // RepositoryError 自动转换为 LogSeekApiError
   
-  Ok(Json(S3SettingsPayload::from(settings)))
+  Ok(StatusCode::NO_CONTENT)
 }
 ```
 
@@ -319,22 +321,21 @@ pub async fn search_in_s3(
 ### 6. Repository 层使用示例
 
 ```rust
-// repository/settings.rs
+// repository/s3.rs
 use crate::repository::error::Result;
 
 pub async fn load_required_s3_settings(pool: &SqlitePool) 
   -> Result<S3Settings> {
   
-  let row = sqlx::query_as::<_, (String, String, String, String)>(
-    "SELECT endpoint, bucket, access_key, secret_key FROM s3_profiles WHERE profile_name = 'default'"
+  let row = sqlx::query_as::<_, (String, String, String)>(
+    "SELECT endpoint, access_key, secret_key FROM s3_profiles WHERE profile_name = 'default'"
   )
   .fetch_optional(pool)
   .await?;  // sqlx::Error 自动转换为 RepositoryError::Database
   
   row
-    .map(|(endpoint, bucket, access_key, secret_key)| S3Settings {
+    .map(|(endpoint, access_key, secret_key)| S3Settings {
       endpoint,
-      bucket,
       access_key,
       secret_key,
     })
